@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FIX: Análisis IA sin crédito + reclamos sin SKU no se podían consultar
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`
+
+**Motivación:** el usuario probó "Analizar con IA" en el modal nuevo y salió "credit
+balance too low" — y notó que un TV con 33 retornos no mostraba comentarios porque
+"no tiene SKU resuelto", aunque claramente sabemos cuál es (tiene item_id de ML).
+
+**Fix 1 — IA sin crédito:** `/api/returns/ai-analysis` usaba `app/services/claude_client`
+(Anthropic API directa, key fija sin crédito). El proyecto ya tiene
+`app/services/openrouter_client` — cascade de modelos GRATUITOS (Gemma, Llama, Mistral
+vía OpenRouter) que solo cae a Anthropic directo como último recurso — y ya lo usan 5
+otras features (Wizard, health_ai, lanzar, etc.). Mismo interfaz `generate(prompt,
+max_tokens=...)`, swap de un import. Confirmado que `OPENROUTER_API_KEY` está seteada
+en Railway producción (consultado vía Railway GraphQL API) — el cliente puede resolver
+gratis igual que las demás features de IA del dashboard.
+
+**Fix 2 — reclamos sin SKU no identificables:** `claims_history.item_id` se guardaba
+SIEMPRE vacío en `_save_ml_claims_bg` (bug — nunca capturaba `item_d.get("id")` de la
+orden, aunque ya estaba disponible ahí mismo). Sin `sku` NI `item_id` poblados, un
+listing sin `seller_custom_field` (no todos los productos tienen SKU formato BM) quedaba
+imposible de identificar en `claims_history`, aunque sus reclamos sí estaban guardados.
+- `_save_ml_claims_bg` ahora captura `item_id` del order item.
+- `upsert_claims_history` ON CONFLICT ahora también refresca `item_id` (mismo patrón
+  del fix de `account_id` — sin esto un re-sync no sana las filas viejas).
+- `get_claims_history()` acepta filtro `item_id` opcional.
+- `/api/returns/sku-claims-detail` acepta `item_id` como alternativa a `sku`; el modal
+  en `multi_dashboard.html` usa `item_id` como fallback cuando `p.sku` viene vacío.
+
+**Pendiente:** correr "Actualizar reclamos" otra vez en producción para que las filas
+de `claims_history` ya sincronizadas ganen su `item_id` (mismo caveat que el fix de
+`account_id` — un re-sync corrige lo viejo).
+
+---
+
 ## 2026-07-16 — FEAT: Modal de detalle por SKU en "Top Retornos Global" (comentarios, fotos, IA)
 
 **Archivos:** `app/main.py`, `app/templates/multi_dashboard.html`

@@ -1681,6 +1681,7 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                             return
                         resource_id = str(c.get("resource_id", "")) if c.get("resource") == "order" else ""
                         sku = ""
+                        item_id_ml = ""
                         amount_mxn = 0.0
                         if resource_id:
                             try:
@@ -1690,6 +1691,7 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                                     item_d = items_o[0].get("item", {})
                                     sku_raw = item_d.get("seller_custom_field") or item_d.get("seller_sku") or ""
                                     sku = _norm_sku(sku_raw) if sku_raw else ""
+                                    item_id_ml = str(item_d.get("id", "") or "")
                                 amount_mxn = float(order.get("total_amount") or 0)
                             except Exception:
                                 pass
@@ -1724,7 +1726,7 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                             # o el filtro de scope por cuenta en sku-claim-rate/supplier-package
                             # no matchea nada). "nick" solo se usa para logs.
                             "claim_id": claim_id, "platform": "ml", "account_id": uid,
-                            "order_id": resource_id, "item_id": "", "sku": sku,
+                            "order_id": resource_id, "item_id": item_id_ml, "sku": sku,
                             "reason_id": c.get("reason_id", ""), "stage": c.get("stage", ""),
                             "status": c.get("status", ""), "quantity": 1,
                             "amount_mxn": amount_mxn, "buyer_comment": buyer_comment,
@@ -17025,7 +17027,10 @@ async def returns_ai_analysis(request: Request):
     if not (item_id or sku):
         return {"ok": False, "error": "item_id o sku requerido"}
 
-    from app.services import claude_client as _cc
+    # OpenRouter — cascade de modelos gratuitos (Gemma/Llama/Mistral), solo cae a
+    # Anthropic directo como último recurso. Antes usaba claude_client (Anthropic
+    # directo únicamente) — se quedaba sin crédito y la feature dejaba de funcionar.
+    from app.services import openrouter_client as _cc
 
     # Formatear razones como texto
     reasons_text = ""
@@ -18072,23 +18077,29 @@ async def returns_supplier_package(
 
 @app.get("/api/returns/sku-claims-detail")
 async def returns_sku_claims_detail(
-    sku: str = Query(...),
+    sku: str = Query(""),
+    item_id: str = Query("", description="Fallback cuando el listing no tiene SKU BM resuelto"),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
-    """Detalle claim-por-claim de un SKU: comentario del comprador + fotos ya
-    cacheadas, sin filtrar por cuenta (excepción legítima — este endpoint solo lo
-    consume el widget 'Top Retornos Global', que ya es la vista Global explícita —
-    ver CLAUDE.md regla #4). Solo ML: Amazon no expone comentarios ni fotos por su
-    API (ver nota en /api/returns/sku-claim-rate). Requiere haber corrido
-    'Actualizar reclamos' — si claims_history está vacío, devuelve lista vacía."""
+    """Detalle claim-por-claim de un SKU (o item_id ML si no hay SKU resuelto):
+    comentario del comprador + fotos ya cacheadas, sin filtrar por cuenta (excepción
+    legítima — este endpoint solo lo consume el widget 'Top Retornos Global', que ya
+    es la vista Global explícita — ver CLAUDE.md regla #4). Solo ML: Amazon no expone
+    comentarios ni fotos por su API (ver nota en /api/returns/sku-claim-rate).
+    Requiere haber corrido 'Actualizar reclamos' — si claims_history está vacío,
+    devuelve lista vacía."""
     from urllib.parse import quote
     import os as _os_scd
     from app.services import token_store as _ts_scd
 
     sku = sku.strip().upper()
+    item_id = item_id.strip()
+    if not sku and not item_id:
+        return {"sku": sku, "total": 0, "claims": [], "error": "sku o item_id requerido"}
     claims = await _ts_scd.get_claims_history(
-        sku=sku, date_from=date_from or None, date_to=date_to or None, limit=200,
+        sku=sku or None, item_id=item_id or None,
+        date_from=date_from or None, date_to=date_to or None, limit=200,
     )
     if not claims:
         return {"sku": sku, "total": 0, "claims": []}

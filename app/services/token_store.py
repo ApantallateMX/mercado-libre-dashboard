@@ -2961,6 +2961,7 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                     amount_mxn    = CASE WHEN excluded.amount_mxn > 0 THEN excluded.amount_mxn ELSE claims_history.amount_mxn END,
                     buyer_comment = CASE WHEN excluded.buyer_comment != '' THEN excluded.buyer_comment ELSE claims_history.buyer_comment END,
                     sku           = CASE WHEN excluded.sku != '' THEN excluded.sku ELSE claims_history.sku END,
+                    item_id       = CASE WHEN excluded.item_id != '' THEN excluded.item_id ELSE claims_history.item_id END,
                     synced_at     = excluded.synced_at
             """, (
                 r.get("claim_id", ""), r.get("platform", "ml"), r.get("account_id", ""),
@@ -2994,17 +2995,23 @@ async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) ->
 
 async def get_claims_history(
     sku: str = None,
+    item_id: str = None,
     account_id: str = None,
     date_from: str = None,
     date_to: str = None,
     limit: int = 1000,
 ) -> list[dict]:
-    """Lee claims_history con filtros opcionales, más recientes primero."""
+    """Lee claims_history con filtros opcionales, más recientes primero.
+    item_id es fallback cuando el listing no tiene seller_custom_field (sin SKU BM) —
+    sigue siendo posible identificar sus reclamos por el ID de publicación ML."""
     conditions = []
     params: list = []
     if sku:
         conditions.append("sku = ?")
         params.append(sku.upper())
+    if item_id:
+        conditions.append("item_id = ?")
+        params.append(item_id)
     if account_id:
         conditions.append("account_id = ?")
         params.append(account_id)

@@ -1532,8 +1532,8 @@ function openRetDetailModal(i) {
     </div>
     <div id="ret-detail-comments">`;
 
-    if (!p.sku) {
-        html += '<p class="text-xs text-gray-400 py-3">Este producto no tiene SKU resuelto — no se puede buscar su historial de reclamos.</p>';
+    if (!p.sku && !p.item_id) {
+        html += '<p class="text-xs text-gray-400 py-3">Este producto no tiene SKU ni ID de publicación resuelto — no se puede buscar su historial de reclamos.</p>';
     } else if (!hasMl) {
         html += '<p class="text-xs text-gray-400 py-3">Amazon no expone comentarios ni fotos de devolución vía su API — solo el motivo y el monto reembolsado (arriba).</p>';
     } else {
@@ -1543,7 +1543,7 @@ function openRetDetailModal(i) {
 
     document.getElementById('ret-detail-body').innerHTML = html;
 
-    if (p.sku && hasMl) loadRetDetailComments(p.sku);
+    if ((p.sku || p.item_id) && hasMl) loadRetDetailComments(p.sku, p.item_id);
 }
 
 function closeRetDetailModal() {
@@ -1551,9 +1551,10 @@ function closeRetDetailModal() {
     _retDetailProduct = null;
 }
 
-function loadRetDetailComments(sku) {
+function loadRetDetailComments(sku, itemId) {
     const el = document.getElementById('ret-detail-comments');
-    fetch(`/api/returns/sku-claims-detail?sku=${encodeURIComponent(sku)}`)
+    const params = sku ? `sku=${encodeURIComponent(sku)}` : `item_id=${encodeURIComponent(itemId)}`;
+    fetch(`/api/returns/sku-claims-detail?${params}`)
         .then(r => r.json())
         .then(data => {
             if (!data.claims || !data.claims.length) {
