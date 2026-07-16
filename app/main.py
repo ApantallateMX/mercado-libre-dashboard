@@ -16488,224 +16488,327 @@ def _amz_reason_label(reason: str) -> str:
     return _AMZ_REASON_MAP.get((reason or "").upper().strip(), reason or "Devolución Amazon")
 
 
+# ── Unified returns cache (ML + Amazon combinado por SKU) ──────────────────────
+# Antes esto se calculaba en vivo en cada carga del widget, y para resolver el SKU
+# real de un reclamo ML hay que pedir el detalle de LA orden (1 request por reclamo)
+# — carísimo con cientos de reclamos, así que se truncaba a ~30 órdenes/cuenta. Con
+# 4 cuentas ML y cientos de reclamos, eso dejaba sin resolver a la gran mayoría, que
+# caían en buckets de 1 (`orden_X`) y nunca se agregaban a ningún SKU — el ranking
+# quedaba sesgado a favor de Amazon (que sí trae el SKU directo en el refund, sin
+# request extra) aunque ML tuviera muchos más reclamos en total. Fix: cachear 3h
+# (igual que _fetch_amazon_refunds_cached) y resolver TODAS las órdenes sin cap —
+# caro pero solo corre una vez cada 3h, no en cada carga de página.
+_unified_returns_cache: dict = {}   # {days: (ts, {"ml_counts":.., "amz_counts":.., "ml_total":N, "amz_total":N})}
+_UNIFIED_RETURNS_TTL = 3600 * 3
+
+async def _compute_unified_returns(days: int) -> dict:
+    from datetime import datetime as _dt3, timedelta as _td3
+    import aiosqlite as _aio_ur
+
+    _now = _dt3.utcnow()
+    df = (_now - _td3(days=days)).strftime("%Y-%m-%d")
+    dt = _now.strftime("%Y-%m-%d")
+
+    ml_counts: dict = {}
+    amz_counts: dict = {}
+
+    # ── ML claims ────────────────────────────────────────────────────────────
+    ml_accounts = await token_store.get_all_tokens()
+    sem_ml = asyncio.Semaphore(3)
+
+    async def _ml_for_account(acc):
+        async with sem_ml:
+            uid = acc.get("user_id", "")
+            nick = acc.get("nickname") or uid
+            try:
+                cli = await get_meli_client(user_id=uid)
+                if not cli:
+                    return []
+                try:
+                    claims = await _fetch_all_claims_cached(cli, df, dt)
+                    # copy dicts to avoid mutating the shared cache
+                    return [dict(c, _account_id=uid, _account_nickname=nick) for c in claims]
+                finally:
+                    await cli.close()
+            except Exception:
+                return []
+
+    ml_nested = await asyncio.gather(
+        *[_ml_for_account(a) for a in ml_accounts], return_exceptions=True
+    )
+    ml_claims: list = []
+    for r in ml_nested:
+        if isinstance(r, list):
+            ml_claims.extend(r)
+
+    # Group order IDs by account so we reuse ONE client per account
+    oids_by_acc: dict = {}
+    for c in ml_claims:
+        if not c.get("resource_id"):
+            continue
+        oid = str(c["resource_id"])
+        acc_id = c.get("_account_id", "")
+        if acc_id not in oids_by_acc:
+            oids_by_acc[acc_id] = []
+        if oid not in oids_by_acc[acc_id]:
+            oids_by_acc[acc_id].append(oid)
+
+    order_map_u: dict = {}
+    sem_acc_ord = asyncio.Semaphore(3)
+
+    async def _fetch_acc_orders(acc_id: str, oids: list):
+        async with sem_acc_ord:
+            cli = await get_meli_client(user_id=acc_id)
+            if not cli:
+                return
+            try:
+                sem3 = asyncio.Semaphore(6)
+
+                async def _one_order(oid):
+                    async with sem3:
+                        try:
+                            order = await asyncio.wait_for(cli.get(f"/orders/{oid}"), timeout=8.0)
+                            oi = order.get("order_items") or []
+                            if oi:
+                                item = oi[0].get("item", {})
+                                iid = str(item.get("id", ""))
+                                sku = item.get("seller_custom_field") or ""
+                                if not sku and iid:
+                                    try:
+                                        det = await asyncio.wait_for(
+                                            cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,title"}),
+                                            timeout=5.0
+                                        )
+                                        sku = det.get("seller_custom_field") or ""
+                                    except Exception:
+                                        pass
+                                return oid, {
+                                    "title": item.get("title", "") or "",
+                                    "item_id": iid,
+                                    "sku": sku,
+                                    "sale_amount": float(order.get("total_amount") or 0),
+                                }
+                        except Exception:
+                            pass
+                        return oid, {}
+
+                # Sin cap — se resuelven TODAS las órdenes de la muestra (cacheado 3h).
+                results = await asyncio.gather(
+                    *[_one_order(o) for o in oids], return_exceptions=True
+                )
+                for r in results:
+                    if isinstance(r, tuple) and r[1]:
+                        order_map_u[r[0]] = r[1]
+            finally:
+                await cli.close()
+
+    await asyncio.gather(
+        *[_fetch_acc_orders(aid, oids) for aid, oids in oids_by_acc.items()],
+        return_exceptions=True
+    )
+
+    for c in ml_claims:
+        oid = str(c.get("resource_id", ""))
+        info = order_map_u.get(oid, {})
+        raw_sku = info.get("sku", "")
+        sku = normalize_to_bm_sku(raw_sku) if raw_sku else ""
+        title = info.get("title") or ""
+        # sku > title > orden_X (same order groups) > reclamo_X (last resort)
+        key = sku if sku else (title if title else (f"orden_{oid}" if oid else f"reclamo_{c.get('id', '')}"))
+        acc_nick = c.get("_account_nickname", "")
+        reason_lbl = _claim_reason_label(c.get("reason_id", ""))
+
+        if key not in ml_counts:
+            ml_counts[key] = {
+                "title": title or sku or key, "sku": sku,
+                "item_id": info.get("item_id", ""),
+                "count": 0, "opened": 0, "closed": 0,
+                "reasons": {}, "accounts": {},
+                "platforms": {"ml": 0, "amazon": 0},
+                "sale_amount_mxn": 0.0, "refund_usd": 0.0,
+            }
+        if title and not ml_counts[key]["title"]:
+            ml_counts[key]["title"] = title
+        if sku and not ml_counts[key]["sku"]:
+            ml_counts[key]["sku"] = sku
+        if info.get("item_id") and not ml_counts[key]["item_id"]:
+            ml_counts[key]["item_id"] = info["item_id"]
+
+        ml_counts[key]["count"] += 1
+        ml_counts[key]["platforms"]["ml"] += 1
+        ml_counts[key]["sale_amount_mxn"] += info.get("sale_amount", 0.0)
+        if c.get("status") == "opened":
+            ml_counts[key]["opened"] += 1
+        else:
+            ml_counts[key]["closed"] += 1
+        ml_counts[key]["reasons"][reason_lbl] = ml_counts[key]["reasons"].get(reason_lbl, 0) + 1
+        if acc_nick:
+            ml_counts[key]["accounts"][acc_nick] = ml_counts[key]["accounts"].get(acc_nick, 0) + 1
+
+    # ── Amazon refunds ────────────────────────────────────────────────────────
+    try:
+        amz_accounts = await token_store.get_all_amazon_accounts()
+    except Exception:
+        amz_accounts = []
+    sem_amz = asyncio.Semaphore(2)
+
+    async def _amz_for_account(acc):
+        async with sem_amz:
+            seller_id = acc.get("seller_id", "")
+            nick = acc.get("nickname") or seller_id
+            try:
+                refunds = await _fetch_amazon_refunds_cached(seller_id, days)
+                for r in refunds:
+                    r["_account_nickname"] = nick
+                return refunds
+            except Exception:
+                return []
+
+    amz_nested = await asyncio.gather(
+        *[_amz_for_account(a) for a in amz_accounts], return_exceptions=True
+    )
+    amz_refunds: list = []
+    for r in amz_nested:
+        if isinstance(r, list):
+            amz_refunds.extend(r)
+
+    for ref in amz_refunds:
+        sku_raw = (ref.get("sku") or "").strip()
+        sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
+        key = sku if sku else f"amz_{ref.get('order_id', '')}"
+        acc_nick = ref.get("_account_nickname", "Amazon")
+        reason_lbl = _amz_reason_label(ref.get("reason", ""))
+        refund_amt = float(ref.get("amount", 0) or 0)
+        currency = ref.get("currency", "USD")
+        refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
+
+        if key not in amz_counts:
+            amz_counts[key] = {
+                "title": sku or sku_raw or key, "sku": sku,
+                "item_id": "",
+                "count": 0, "opened": 0, "closed": 0,
+                "reasons": {}, "accounts": {},
+                "platforms": {"ml": 0, "amazon": 0},
+                "sale_amount_mxn": 0.0, "refund_usd": 0.0,
+            }
+        elif sku and not amz_counts[key]["sku"]:
+            amz_counts[key]["sku"] = sku
+        amz_counts[key]["count"] += 1
+        amz_counts[key]["platforms"]["amazon"] += 1
+        amz_counts[key]["refund_usd"] = round(amz_counts[key]["refund_usd"] + refund_usd, 2)
+        amz_counts[key]["closed"] += 1  # refunds son operaciones cerradas
+        amz_counts[key]["reasons"][reason_lbl] = amz_counts[key]["reasons"].get(reason_lbl, 0) + 1
+        if acc_nick:
+            amz_counts[key]["accounts"][acc_nick] = amz_counts[key]["accounts"].get(acc_nick, 0) + 1
+
+    # ── Fallback de título vía catálogo BM cuando no se pudo resolver por orden/refund ──
+    try:
+        async with _aio_ur.connect(token_store.DATABASE_PATH) as _db_t:
+            _db_t.row_factory = _aio_ur.Row
+            _cur_t = await _db_t.execute("SELECT sku, title FROM bm_product_catalog")
+            titles_map = {r["sku"]: r["title"] for r in await _cur_t.fetchall()}
+    except Exception:
+        titles_map = {}
+    for _cdict in (ml_counts, amz_counts):
+        for p in _cdict.values():
+            sku = p.get("sku", "")
+            if sku and titles_map.get(sku) and (not p["title"] or p["title"] == sku):
+                p["title"] = titles_map[sku]
+
+    return {
+        "ml_counts": ml_counts, "amz_counts": amz_counts,
+        "ml_total": len(ml_claims), "amz_total": len(amz_refunds),
+    }
+
+
+_unified_returns_inflight: set = set()   # days actualmente calculándose en background
+
+async def _refresh_unified_returns(days: int) -> None:
+    import time as _tu
+    try:
+        data = await _compute_unified_returns(days)
+        _unified_returns_cache[days] = (_tu.time(), data)
+    except Exception as _e:
+        logger.warning(f"[UNIFIED-RETURNS] Error refrescando days={days}: {_e}")
+    finally:
+        _unified_returns_inflight.discard(days)
+
+
+async def _fetch_unified_returns_cached(days: int) -> dict:
+    """Nunca calcula en línea con el request — _compute_unified_returns puede tardar
+    30s+ (resuelve TODAS las órdenes ML sin cap) y Railway mata requests a los ~30s
+    (ver DEVLOG). Si el cache está fresco lo devuelve; si está viejo o no existe,
+    dispara un refresh en background y sirve lo que haya (stale-while-revalidate),
+    o un placeholder 'computing' si es la primera vez que se pide esta ventana."""
+    import time as _tu
+    entry = _unified_returns_cache.get(days)
+    fresh = entry and (_tu.time() - entry[0]) < _UNIFIED_RETURNS_TTL
+    if fresh:
+        return entry[1]
+    if days not in _unified_returns_inflight:
+        _unified_returns_inflight.add(days)
+        asyncio.create_task(_refresh_unified_returns(days))
+    if entry:
+        return entry[1]
+    return {"ml_counts": {}, "amz_counts": {}, "ml_total": 0, "amz_total": 0, "computing": True}
+
+
+def _merge_return_counts(ml_counts: dict, amz_counts: dict) -> dict:
+    """Combina los conteos por-plataforma en un solo dict por SKU para la vista 'Todas'."""
+    merged: dict = {}
+    for src in (ml_counts, amz_counts):
+        for key, v in src.items():
+            if key not in merged:
+                merged[key] = {
+                    "title": v["title"], "sku": v["sku"], "item_id": v.get("item_id", ""),
+                    "count": 0, "opened": 0, "closed": 0,
+                    "reasons": {}, "accounts": {},
+                    "platforms": {"ml": 0, "amazon": 0},
+                    "sale_amount_mxn": 0.0, "refund_usd": 0.0,
+                }
+            m = merged[key]
+            if v.get("title") and (not m["title"] or m["title"] == m.get("sku")):
+                m["title"] = v["title"]
+            if v.get("sku") and not m["sku"]:
+                m["sku"] = v["sku"]
+            if v.get("item_id") and not m["item_id"]:
+                m["item_id"] = v["item_id"]
+            m["count"] += v["count"]
+            m["opened"] += v["opened"]
+            m["closed"] += v["closed"]
+            m["sale_amount_mxn"] += v.get("sale_amount_mxn", 0.0)
+            m["refund_usd"] = round(m["refund_usd"] + v.get("refund_usd", 0.0), 2)
+            m["platforms"]["ml"] += v["platforms"]["ml"]
+            m["platforms"]["amazon"] += v["platforms"]["amazon"]
+            for r, c in v.get("reasons", {}).items():
+                m["reasons"][r] = m["reasons"].get(r, 0) + c
+            for a, c in v.get("accounts", {}).items():
+                m["accounts"][a] = m["accounts"].get(a, 0) + c
+    return merged
+
+
 @app.get("/api/returns/unified-top")
 async def returns_unified_top(
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(10, ge=1, le=20),
     platform: str = Query("all", description="all | ml | amazon"),
 ):
-    """Top N SKUs más retornados/reembolsados sumando ML + Amazon."""
-    from datetime import datetime as _dt3, timedelta as _td3
-
-    _now = _dt3.utcnow()
-    df = (_now - _td3(days=days)).strftime("%Y-%m-%d")
-    dt = _now.strftime("%Y-%m-%d")
-
+    """Top N SKUs más retornados/reembolsados sumando ML + Amazon. Lee de
+    _fetch_unified_returns_cached (3h TTL) — ver comentario ahí."""
+    data = await _fetch_unified_returns_cached(days)
     retail_map = _get_retail_ph_map()
-    counts: dict = {}
-    total_all = 0
-    ml_total_count = 0
-    amz_total_count = 0
 
-    # ── ML claims ────────────────────────────────────────────────────────────
-    if platform in ("all", "ml"):
-        ml_accounts = await token_store.get_all_tokens()
-        sem_ml = asyncio.Semaphore(2)
+    if platform == "ml":
+        counts = data["ml_counts"]
+        total_all = data["ml_total"]
+    elif platform == "amazon":
+        counts = data["amz_counts"]
+        total_all = data["amz_total"]
+    else:
+        counts = _merge_return_counts(data["ml_counts"], data["amz_counts"])
+        total_all = data["ml_total"] + data["amz_total"]
 
-        async def _ml_for_account(acc):
-            async with sem_ml:
-                uid = acc.get("user_id", "")
-                nick = acc.get("nickname") or uid
-                try:
-                    cli = await get_meli_client(user_id=uid)
-                    if not cli:
-                        return []
-                    try:
-                        claims = await _fetch_all_claims_cached(cli, df, dt)
-                        # copy dicts to avoid mutating the shared cache
-                        return [dict(c, _account_id=uid, _account_nickname=nick) for c in claims]
-                    finally:
-                        await cli.close()
-                except Exception:
-                    return []
-
-        ml_nested = await asyncio.gather(
-            *[_ml_for_account(a) for a in ml_accounts], return_exceptions=True
-        )
-        ml_claims: list = []
-        for r in ml_nested:
-            if isinstance(r, list):
-                ml_claims.extend(r)
-
-        # Group order IDs by account so we reuse ONE client per account
-        oids_by_acc: dict = {}
-        for c in ml_claims:
-            if not c.get("resource_id"):
-                continue
-            oid = str(c["resource_id"])
-            acc_id = c.get("_account_id", "")
-            if acc_id not in oids_by_acc:
-                oids_by_acc[acc_id] = []
-            if oid not in oids_by_acc[acc_id]:
-                oids_by_acc[acc_id].append(oid)
-
-        max_per_acc = max(limit * 3, 30)
-        order_map_u: dict = {}
-        sem_acc_ord = asyncio.Semaphore(2)
-
-        async def _fetch_acc_orders(acc_id: str, oids: list):
-            async with sem_acc_ord:
-                cli = await get_meli_client(user_id=acc_id)
-                if not cli:
-                    return
-                try:
-                    sem3 = asyncio.Semaphore(3)
-
-                    async def _one_order(oid):
-                        async with sem3:
-                            try:
-                                order = await asyncio.wait_for(cli.get(f"/orders/{oid}"), timeout=8.0)
-                                oi = order.get("order_items") or []
-                                if oi:
-                                    item = oi[0].get("item", {})
-                                    iid = str(item.get("id", ""))
-                                    sku = item.get("seller_custom_field") or ""
-                                    if not sku and iid:
-                                        try:
-                                            det = await asyncio.wait_for(
-                                                cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,title"}),
-                                                timeout=5.0
-                                            )
-                                            sku = det.get("seller_custom_field") or ""
-                                        except Exception:
-                                            pass
-                                    return oid, {
-                                        "title": item.get("title", "") or "",
-                                        "item_id": iid,
-                                        "sku": sku,
-                                        "sale_amount": float(order.get("total_amount") or 0),
-                                    }
-                            except Exception:
-                                pass
-                            return oid, {}
-
-                    results = await asyncio.gather(
-                        *[_one_order(o) for o in oids[:max_per_acc]], return_exceptions=True
-                    )
-                    for r in results:
-                        if isinstance(r, tuple) and r[1]:
-                            order_map_u[r[0]] = r[1]
-                finally:
-                    await cli.close()
-
-        await asyncio.gather(
-            *[_fetch_acc_orders(aid, oids) for aid, oids in oids_by_acc.items()],
-            return_exceptions=True
-        )
-
-        total_all += len(ml_claims)
-        ml_total_count = len(ml_claims)
-
-        for c in ml_claims:
-            oid = str(c.get("resource_id", ""))
-            info = order_map_u.get(oid, {})
-            raw_sku = info.get("sku", "")
-            sku = normalize_to_bm_sku(raw_sku) if raw_sku else ""
-            title = info.get("title") or ""
-            # sku > title > orden_X (same order groups) > reclamo_X (last resort)
-            key = sku if sku else (title if title else (f"orden_{oid}" if oid else f"reclamo_{c.get('id', '')}"))
-            acc_nick = c.get("_account_nickname", "")
-            reason_lbl = _claim_reason_label(c.get("reason_id", ""))
-
-            if key not in counts:
-                counts[key] = {
-                    "title": title or sku or key, "sku": sku,
-                    "item_id": info.get("item_id", ""),
-                    "count": 0, "opened": 0, "closed": 0,
-                    "reasons": {}, "accounts": {},
-                    "platforms": {"ml": 0, "amazon": 0},
-                    "sale_amount_mxn": 0.0, "refund_usd": 0.0,
-                }
-            if title and not counts[key]["title"]:
-                counts[key]["title"] = title
-            if sku and not counts[key]["sku"]:
-                counts[key]["sku"] = sku
-            if info.get("item_id") and not counts[key]["item_id"]:
-                counts[key]["item_id"] = info["item_id"]
-
-            counts[key]["count"] += 1
-            counts[key]["platforms"]["ml"] += 1
-            counts[key]["sale_amount_mxn"] += info.get("sale_amount", 0.0)
-            if c.get("status") == "opened":
-                counts[key]["opened"] += 1
-            else:
-                counts[key]["closed"] += 1
-            counts[key]["reasons"][reason_lbl] = counts[key]["reasons"].get(reason_lbl, 0) + 1
-            if acc_nick:
-                counts[key]["accounts"][acc_nick] = counts[key]["accounts"].get(acc_nick, 0) + 1
-
-    # ── Amazon refunds ────────────────────────────────────────────────────────
-    if platform in ("all", "amazon"):
-        try:
-            amz_accounts = await token_store.get_all_amazon_accounts()
-        except Exception:
-            amz_accounts = []
-        sem_amz = asyncio.Semaphore(2)
-
-        async def _amz_for_account(acc):
-            async with sem_amz:
-                seller_id = acc.get("seller_id", "")
-                nick = acc.get("nickname") or seller_id
-                try:
-                    refunds = await _fetch_amazon_refunds_cached(seller_id, days)
-                    for r in refunds:
-                        r["_account_nickname"] = nick
-                    return refunds
-                except Exception:
-                    return []
-
-        amz_nested = await asyncio.gather(
-            *[_amz_for_account(a) for a in amz_accounts], return_exceptions=True
-        )
-        amz_refunds: list = []
-        for r in amz_nested:
-            if isinstance(r, list):
-                amz_refunds.extend(r)
-
-        total_all += len(amz_refunds)
-        amz_total_count = len(amz_refunds)
-
-        for ref in amz_refunds:
-            sku_raw = (ref.get("sku") or "").strip()
-            sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
-            key = sku if sku else f"amz_{ref.get('order_id', '')}"
-            acc_nick = ref.get("_account_nickname", "Amazon")
-            reason_lbl = _amz_reason_label(ref.get("reason", ""))
-            refund_amt = float(ref.get("amount", 0) or 0)
-            currency = ref.get("currency", "USD")
-            refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
-
-            if key not in counts:
-                counts[key] = {
-                    "title": sku or sku_raw or key, "sku": sku,
-                    "item_id": "",
-                    "count": 0, "opened": 0, "closed": 0,
-                    "reasons": {}, "accounts": {},
-                    "platforms": {"ml": 0, "amazon": 0},
-                    "sale_amount_mxn": 0.0, "refund_usd": 0.0,
-                }
-            elif sku and not counts[key]["sku"]:
-                counts[key]["sku"] = sku
-            counts[key]["count"] += 1
-            counts[key]["platforms"]["amazon"] += 1
-            counts[key]["refund_usd"] = round(counts[key]["refund_usd"] + refund_usd, 2)
-            counts[key]["closed"] += 1  # refunds son operaciones cerradas
-            counts[key]["reasons"][reason_lbl] = counts[key]["reasons"].get(reason_lbl, 0) + 1
-            if acc_nick:
-                counts[key]["accounts"][acc_nick] = counts[key]["accounts"].get(acc_nick, 0) + 1
-
-    # ── Aggregate & return ────────────────────────────────────────────────────
-    top = sorted(counts.values(), key=lambda x: x["count"], reverse=True)[:limit]
+    top = [dict(p) for p in sorted(counts.values(), key=lambda x: x["count"], reverse=True)[:limit]]
     for p in top:
         sku = p.get("sku", "")
         p["retail_ph_unit"] = retail_map.get(sku, 0.0) if sku else 0.0
@@ -16720,12 +16823,13 @@ async def returns_unified_top(
 
     return {
         "total": total_all,
-        "ml_total": ml_total_count,
-        "amz_total": amz_total_count,
+        "ml_total": data["ml_total"],
+        "amz_total": data["amz_total"],
         "days": days,
         "ml_accounts": ml_accs,
         "amazon_accounts": amz_accs,
         "platform": platform,
+        "computing": data.get("computing", False),
         "products": top,
     }
 

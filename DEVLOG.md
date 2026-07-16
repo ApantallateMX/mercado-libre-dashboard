@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FIX: Sesgo ML vs Amazon en "Top Retornos Global" (widget /multi-dashboard)
+
+**Archivos:** `app/main.py`, `app/templates/multi_dashboard.html`
+
+**Motivación:** usuario notó que el widget mostraba a Amazon dominando el ranking de
+SKUs más retornados aunque ML tenía 8x más reclamos totales (983 vs 125 en 30 días) —
+y que varias entradas solo mostraban el SKU sin título.
+
+**Causa raíz del sesgo:** `/api/returns/unified-top` necesita el detalle de CADA orden
+ML para resolver su SKU (el reclamo no lo trae directo — 1 request por orden). Estaba
+capado a `max(limit*3, 30)` órdenes **por cuenta** para no tardar demasiado. Con 4
+cuentas y cientos de reclamos, solo se resolvía ~12% de los reclamos ML; el resto caía
+en buckets de 1 (`orden_X`) y nunca se agregaba a ningún SKU. Amazon no tenía este
+problema — el refund trae el SKU directo, sin request extra — así que su volumen
+(mucho menor) sí se agregaba correctamente y parecía "ganar".
+
+**Causa del título faltante:** ni las entradas ML sin resolver ni las de Amazon hacían
+fallback al catálogo local (`bm_product_catalog`) cuando no había título de la orden/
+refund.
+
+**Fix:**
+- Nueva función `_compute_unified_returns(days)` resuelve TODAS las órdenes ML sin cap
+  (antes limitado a ~30/cuenta) + fallback de título vía `bm_product_catalog`.
+- Como resolver cientos de órdenes toma 30s+ y Railway mata requests a los ~30s (ver
+  incidentes previos en este DEVLOG), el cálculo **nunca corre en línea con el
+  request**: `_fetch_unified_returns_cached` (cache 3h, mismo patrón que
+  `_fetch_amazon_refunds_cached`) sirve el cache si está fresco; si está viejo o no
+  existe, dispara un refresh en background (`asyncio.create_task`, con guard
+  `_unified_returns_inflight` para no duplicar) y devuelve el cache stale si hay uno,
+  o `{"computing": true}` si es la primera vez. El widget en `multi_dashboard.html`
+  muestra "Calculando por primera vez" y reintenta una sola vez a los 15s.
+- `_merge_return_counts()` nuevo — el cache guarda `ml_counts`/`amz_counts` por
+  separado (nunca mezclados) para que el filtro ML/Amazon/Todas del widget pueda
+  servir el subset correcto sin arrastrar el conteo de la otra plataforma; "Todas"
+  los fusiona en el momento de servir la respuesta.
+
+**Validado localmente:** con la muestra completa (sin cap), el top real a 45 días es
+un TV Onn 65" con 44 retornos (antes el cap dejaba ver máximo ~5 para cualquier SKU ML).
+
+---
+
 ## 2026-07-16 — FIX: Reestructuración de /returns — scope de cuenta roto + UI sobrecargada
 
 **Commits:** (pendiente al hacer commit) · **Archivos:** `app/main.py`, `app/templates/returns.html`, `app/templates/multi_dashboard.html`

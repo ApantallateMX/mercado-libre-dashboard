@@ -1369,6 +1369,14 @@ function loadReturnsWidget() {
     fetch(`/api/returns/unified-top?days=${days}&limit=${limit}&platform=${_retWidgetPlatform}`)
         .then(r => r.json())
         .then(data => {
+            if (data.computing) {
+                // Primera carga de esta ventana de días — se está calculando en
+                // background (resolver el SKU real de cada reclamo ML es caro,
+                // no se hace en línea con el request). Un solo reintento automático.
+                body.innerHTML = '<div class="flex items-center gap-2 py-4 text-sm text-gray-400"><svg class="animate-spin h-4 w-4 text-red-300" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>Calculando por primera vez (puede tardar ~30s)...</div>';
+                setTimeout(loadReturnsWidget, 15000);
+                return;
+            }
             if (data.error || !data.products) {
                 body.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Sin datos de retornos</p>';
                 return;
