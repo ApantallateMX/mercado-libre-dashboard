@@ -2955,6 +2955,7 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                      buyer_comment, date_created, synced_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(claim_id, platform) DO UPDATE SET
+                    account_id    = excluded.account_id,
                     stage         = excluded.stage,
                     status        = excluded.status,
                     amount_mxn    = CASE WHEN excluded.amount_mxn > 0 THEN excluded.amount_mxn ELSE claims_history.amount_mxn END,
