@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FEAT: Modal de detalle por SKU en "Top Retornos Global" (comentarios, fotos, IA)
+
+**Archivos:** `app/main.py`, `app/templates/multi_dashboard.html`
+
+**Motivación:** con el ranking global ya corregido (ver entrada anterior), el usuario
+pidió poder hacer clic en un SKU y ver el detalle — comentarios de compradores, fotos,
+y una recomendación — sin tener que ir a `/returns` de cada cuenta por separado.
+
+**Nuevo endpoint `GET /api/returns/sku-claims-detail?sku=X`:** lee `claims_history` +
+`claim_photos` por SKU **sin filtrar por cuenta** — excepción legítima porque este
+endpoint solo lo consume el widget Global (ver CLAUDE.md regla #4). Devuelve, por cada
+reclamo: cuenta (resuelve nickname desde `user_id`, con fallback si aún quedan filas
+viejas en formato nickname), fecha, motivo, comentario del comprador y fotos ya
+cacheadas localmente. Solo ML — Amazon no expone esto vía su API.
+
+**Modal nuevo en `multi_dashboard.html`:** clic en cualquier fila del widget → abre
+`ret-detail-modal` con:
+- Header: conteo total, SKU, link a ML, pills de cuentas y motivos (datos que el
+  widget ya tenía en memoria, sin request adicional).
+- Botón "🤖 Analizar con IA" — reutiliza `/api/returns/ai-analysis` tal cual (ya era
+  agnóstico de cuenta/plataforma, solo necesita título/razones/conteo). Manual, no
+  automático, para no gastar la API en cada clic.
+- Sección de comentarios/fotos vía el endpoint nuevo; nota clara cuando el SKU es
+  solo-Amazon (sin comentarios/fotos posibles) o cuando no hay SKU resuelto.
+- Link "📦 Paquete proveedor" — reutiliza `/api/returns/supplier-package` sin
+  `account_id` (junta reclamos de TODAS las cuentas para ese SKU, coherente con que
+  el mismo producto puede venderse en varias cuentas).
+
+---
+
 ## 2026-07-16 — FIX: Sesgo ML vs Amazon en "Top Retornos Global" (widget /multi-dashboard)
 
 **Archivos:** `app/main.py`, `app/templates/multi_dashboard.html`

@@ -18070,6 +18070,54 @@ async def returns_supplier_package(
     )
 
 
+@app.get("/api/returns/sku-claims-detail")
+async def returns_sku_claims_detail(
+    sku: str = Query(...),
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Detalle claim-por-claim de un SKU: comentario del comprador + fotos ya
+    cacheadas, sin filtrar por cuenta (excepción legítima — este endpoint solo lo
+    consume el widget 'Top Retornos Global', que ya es la vista Global explícita —
+    ver CLAUDE.md regla #4). Solo ML: Amazon no expone comentarios ni fotos por su
+    API (ver nota en /api/returns/sku-claim-rate). Requiere haber corrido
+    'Actualizar reclamos' — si claims_history está vacío, devuelve lista vacía."""
+    from urllib.parse import quote
+    import os as _os_scd
+    from app.services import token_store as _ts_scd
+
+    sku = sku.strip().upper()
+    claims = await _ts_scd.get_claims_history(
+        sku=sku, date_from=date_from or None, date_to=date_to or None, limit=200,
+    )
+    if not claims:
+        return {"sku": sku, "total": 0, "claims": []}
+
+    accounts = await _ts_scd.get_all_tokens()
+    nick_map = {str(a["user_id"]): (a.get("nickname") or a["user_id"]) for a in accounts}
+
+    out = []
+    for row in claims:
+        photos_raw = await _ts_scd.get_claim_photos(row["claim_id"])
+        photos = [{
+            "url": f"/api/returns/claim-photo-file?path={quote(p['local_path'])}",
+            "filename": _os_scd.path.basename(p["local_path"]),
+        } for p in photos_raw if p.get("local_path")]
+        out.append({
+            "claim_id": row["claim_id"],
+            "account": nick_map.get(row["account_id"], row["account_id"]),
+            "date_created": row["date_created"],
+            "reason_label": _claim_reason_label(row["reason_id"]),
+            "stage": row["stage"],
+            "status": row["status"],
+            "amount_mxn": row["amount_mxn"],
+            "buyer_comment": row["buyer_comment"],
+            "photos": photos,
+        })
+    out.sort(key=lambda r: r["date_created"], reverse=True)
+    return {"sku": sku, "total": len(out), "claims": out}
+
+
 @app.get("/api/planning/production-kpis")
 async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
     """Production KPIs from BinManager Operations Dashboard."""
