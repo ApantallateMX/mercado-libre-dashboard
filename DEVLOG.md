@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FEAT: buscador de SKU en "Top Retornos Global" (todas las cuentas, ML+Amazon)
+
+**Archivos:** `app/main.py`, `app/templates/multi_dashboard.html`
+
+**Motivación:** el usuario quería poder buscar un SKU específico (no solo los del
+Top 5/10/20 visible) y ver todos sus reclamos/discusiones en todas las cuentas,
+respetando el mismo selector de días ya establecido en el widget.
+
+**Backend:** `/api/returns/sku-claims-detail` ahora también devuelve un resumen
+agregado (`title`, `accounts`, `reasons`, `amazon: {count, refund_usd, reasons}`)
+además de la lista de reclamos — el mismo endpoint sirve tanto al clic en una fila
+del ranking como a una búsqueda libre. Nuevo parámetro `days` opcional: si se pasa,
+agrega reembolsos Amazon del mismo SKU en esa ventana (reutiliza
+`_fetch_amazon_refunds_cached`, mismo cache 3h que el widget).
+
+**Bug encontrado y corregido en el camino:** el `return` temprano cuando no había
+reclamos ML (`if not claims: return {...}`) cortaba ANTES de calcular el agregado de
+Amazon — un SKU que solo se vende/retorna en Amazon (sin reclamos ML) mostraba
+falsamente "sin nada" en vez de sus reembolsos Amazon. Se quitó el corte temprano;
+el resto de la función ya maneja listas vacías correctamente.
+
+**Frontend:** input "Buscar SKU específico..." en los controles del widget (Enter o
+botón), usa el mismo selector de días ya visible. Reutiliza el modal de detalle ya
+existente — se extrajo el render de tarjetas de reclamo a `_renderClaimCards()` para
+no duplicar código entre "clic en fila del ranking" y "búsqueda libre".
+
+---
+
 ## 2026-07-16 — FEAT: fotos de compradores también se auto-descargan on-demand por SKU
 
 **Archivos:** `app/main.py`

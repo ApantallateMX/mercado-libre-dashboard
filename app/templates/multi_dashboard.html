@@ -176,6 +176,13 @@
             <option value="10">Top 10</option>
             <option value="20">Top 20</option>
         </select>
+        <div class="flex items-center gap-1 ml-auto">
+            <input id="ret-search-sku" type="text" placeholder="Buscar SKU específico..."
+                   onkeydown="if(event.key==='Enter') searchRetSku()"
+                   class="border border-gray-200 rounded-lg px-2 py-1 text-xs w-40">
+            <button onclick="searchRetSku()"
+                    class="text-xs px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-medium border border-blue-200 transition">🔍 Buscar</button>
+        </div>
     </div>
     <div id="ret-widget-kpis" class="px-4 md:px-5 py-2.5 flex gap-4 flex-wrap border-b border-gray-50"></div>
     <div id="ret-widget-body" class="p-4">
@@ -1551,39 +1558,131 @@ function closeRetDetailModal() {
     _retDetailProduct = null;
 }
 
+function _renderClaimCards(claims) {
+    if (!claims || !claims.length) {
+        return '<p class="text-xs text-gray-400 py-3">Sin reclamos ML en este rango.</p>';
+    }
+    let html = '<div class="space-y-3">';
+    claims.forEach(c => {
+        const photosHtml = (c.photos || []).map(ph =>
+            `<a href="${ph.url}" target="_blank"><img src="${ph.url}" class="w-14 h-14 object-cover rounded-lg border hover:opacity-80 transition" loading="lazy"></a>`
+        ).join('');
+        html += `<div class="bg-gray-50 rounded-lg p-3 border border-gray-100">
+            <div class="flex flex-wrap items-center gap-2 mb-1.5 text-[10px]">
+                <span class="font-semibold text-gray-700">${escapeHtml(c.account)}</span>
+                <span class="text-gray-400">${c.date_created}</span>
+                <span class="px-1.5 py-0.5 bg-gray-200 rounded text-gray-600">${escapeHtml(c.reason_label)}</span>
+                ${c.status === 'opened' ? '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-semibold">Abierto</span>' : ''}
+                ${c.amount_mxn > 0 ? `<span class="text-gray-400 ml-auto">$${c.amount_mxn.toLocaleString('es-MX')} MXN</span>` : ''}
+            </div>
+            ${c.buyer_comment ? `<p class="text-xs text-gray-700">${escapeHtml(c.buyer_comment)}</p>` : '<p class="text-xs text-gray-400 italic">Sin comentario del comprador</p>'}
+            ${photosHtml ? `<div class="flex flex-wrap gap-1.5 mt-2">${photosHtml}</div>` : ''}
+        </div>`;
+    });
+    html += '</div>';
+    return html;
+}
+
 function loadRetDetailComments(sku, itemId) {
     const el = document.getElementById('ret-detail-comments');
     const params = sku ? `sku=${encodeURIComponent(sku)}` : `item_id=${encodeURIComponent(itemId)}`;
     fetch(`/api/returns/sku-claims-detail?${params}`)
         .then(r => r.json())
-        .then(data => {
-            if (!data.claims || !data.claims.length) {
-                el.innerHTML = '<p class="text-xs text-gray-400 py-3">Sin comentarios sincronizados todavía. Si nunca corriste "Actualizar reclamos" en /returns, hazlo primero — puede tardar varios minutos.</p>';
-                return;
-            }
-            let html = '<div class="space-y-3">';
-            data.claims.forEach(c => {
-                const photosHtml = (c.photos || []).map(ph =>
-                    `<a href="${ph.url}" target="_blank"><img src="${ph.url}" class="w-14 h-14 object-cover rounded-lg border hover:opacity-80 transition" loading="lazy"></a>`
-                ).join('');
-                html += `<div class="bg-gray-50 rounded-lg p-3 border border-gray-100">
-                    <div class="flex flex-wrap items-center gap-2 mb-1.5 text-[10px]">
-                        <span class="font-semibold text-gray-700">${escapeHtml(c.account)}</span>
-                        <span class="text-gray-400">${c.date_created}</span>
-                        <span class="px-1.5 py-0.5 bg-gray-200 rounded text-gray-600">${escapeHtml(c.reason_label)}</span>
-                        ${c.status === 'opened' ? '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-semibold">Abierto</span>' : ''}
-                        ${c.amount_mxn > 0 ? `<span class="text-gray-400 ml-auto">$${c.amount_mxn.toLocaleString('es-MX')} MXN</span>` : ''}
-                    </div>
-                    ${c.buyer_comment ? `<p class="text-xs text-gray-700">${escapeHtml(c.buyer_comment)}</p>` : '<p class="text-xs text-gray-400 italic">Sin comentario del comprador</p>'}
-                    ${photosHtml ? `<div class="flex flex-wrap gap-1.5 mt-2">${photosHtml}</div>` : ''}
-                </div>`;
-            });
-            html += '</div>';
-            el.innerHTML = html;
-        })
+        .then(data => { el.innerHTML = _renderClaimCards(data.claims); })
         .catch(() => {
             el.innerHTML = '<p class="text-xs text-red-500 py-3">Error cargando comentarios</p>';
         });
+}
+
+// ─── Búsqueda directa por SKU — todas las cuentas, ML + Amazon ─────────────
+function searchRetSku() {
+    const skuInput = document.getElementById('ret-search-sku').value.trim().toUpperCase();
+    if (!skuInput) return;
+    const days = document.getElementById('ret-widget-days').value || 30;
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(from.getDate() - Number(days));
+    const dateFrom = from.toISOString().slice(0, 10);
+    const dateTo = today.toISOString().slice(0, 10);
+
+    _retDetailProduct = null;
+    document.getElementById('ret-detail-title').textContent = skuInput;
+    document.getElementById('ret-detail-modal').classList.remove('hidden');
+    document.getElementById('ret-detail-body').innerHTML = '<div class="flex items-center gap-2 py-6 text-sm text-gray-400"><svg class="animate-spin h-4 w-4 text-blue-300" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>Buscando en todas las cuentas...</div>';
+
+    fetch(`/api/returns/sku-claims-detail?sku=${encodeURIComponent(skuInput)}&date_from=${dateFrom}&date_to=${dateTo}&days=${days}`)
+        .then(r => r.json())
+        .then(data => _renderSearchResult(skuInput, days, data))
+        .catch(e => {
+            document.getElementById('ret-detail-body').innerHTML = `<p class="text-xs text-red-500 py-4">Error: ${escapeHtml(e.message)}</p>`;
+        });
+}
+
+function _renderSearchResult(sku, days, data) {
+    document.getElementById('ret-detail-title').textContent = data.title || sku;
+
+    const mlTotal = data.total || 0;
+    const amzTotal = (data.amazon || {}).count || 0;
+    if (mlTotal === 0 && amzTotal === 0) {
+        document.getElementById('ret-detail-body').innerHTML = `<p class="text-sm text-gray-400 py-6 text-center">Sin reclamos ni reembolsos para <strong>${escapeHtml(sku)}</strong> en los últimos ${days} días, en ninguna cuenta.</p>`;
+        return;
+    }
+
+    _retDetailProduct = {
+        sku, item_id: data.item_id || '', title: data.title || sku,
+        count: mlTotal, reasons: data.reasons || {},
+        sale_amount_mxn: (data.claims || []).reduce((s, c) => s + (c.amount_mxn || 0), 0),
+    };
+
+    const accountPills = data.accounts ? Object.entries(data.accounts).sort((a, b) => b[1] - a[1]).map((kv, ai) =>
+        `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${RET_ACCT_COLORS[ai % RET_ACCT_COLORS.length]}">${kv[0]} <span class="font-black">${kv[1]}</span></span>`
+    ).join('') : '';
+    const reasonPills = data.reasons ? Object.entries(data.reasons).sort((a, b) => b[1] - a[1]).map(kv =>
+        `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-600 border border-gray-200">${kv[0]} <strong>${kv[1]}</strong></span>`
+    ).join('') : '';
+    const amzReasonPills = (data.amazon && data.amazon.reasons) ? Object.entries(data.amazon.reasons).sort((a, b) => b[1] - a[1]).map(kv =>
+        `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-orange-50 text-orange-700 border border-orange-200">${kv[0]} <strong>${kv[1]}</strong></span>`
+    ).join('') : '';
+
+    let html = `
+    <div class="flex flex-wrap items-center gap-3 mb-2 pb-4 border-b">
+        <span class="text-2xl font-black text-gray-900">${mlTotal}</span>
+        <span class="text-xs text-gray-400">reclamos ML</span>
+        ${amzTotal > 0 ? `<span class="text-lg font-black text-orange-600 ml-2">${amzTotal}</span><span class="text-xs text-gray-400">reembolsos Amazon</span>` : ''}
+        ${data.item_id ? `<a href="https://www.mercadolibre.com.mx/publicaciones/listado/space_management?search=${data.item_id}" target="_blank" class="text-xs px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium ml-auto">🔗 Ver en ML</a>` : ''}
+    </div>
+    <div class="flex flex-wrap gap-1 mb-2">${accountPills}</div>
+    <div class="flex flex-wrap gap-1 mb-2">${reasonPills}</div>`;
+
+    if (amzTotal > 0) {
+        html += `<div class="flex items-center gap-2 mb-1 mt-1">
+            <span class="text-[10px] font-semibold text-orange-700">AMZ — $${data.amazon.refund_usd.toFixed(0)} USD reembolsados</span>
+        </div>
+        <div class="flex flex-wrap gap-1 mb-4">${amzReasonPills}</div>`;
+    } else {
+        html += '<div class="mb-4"></div>';
+    }
+
+    html += `
+    <div class="mb-5">
+        <button onclick="analyzeRetDetailAI()" id="ret-detail-ai-btn"
+                class="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-purple-50 border border-purple-300 text-purple-800 rounded-lg hover:bg-purple-100 transition font-medium">
+            🤖 Analizar con IA
+        </button>
+        <div id="ret-detail-ai-result" class="mt-3"></div>
+    </div>
+
+    <div class="mb-2 flex items-center justify-between">
+        <h3 class="text-sm font-bold text-gray-700">💬 Reclamos, discusiones y fotos (ML) — todas las cuentas</h3>
+        ${mlTotal > 0 ? `<a href="/api/returns/supplier-package?sku=${encodeURIComponent(sku)}" class="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition font-medium">📦 Paquete proveedor</a>` : ''}
+    </div>
+    <div id="ret-detail-comments">${_renderClaimCards(data.claims)}</div>`;
+
+    if (amzTotal > 0 && mlTotal === 0) {
+        html += '<p class="text-xs text-gray-400 mt-2">Amazon no expone comentarios ni fotos de devolución vía su API — solo el motivo y el monto reembolsado (arriba).</p>';
+    }
+
+    document.getElementById('ret-detail-body').innerHTML = html;
 }
 
 function analyzeRetDetailAI() {

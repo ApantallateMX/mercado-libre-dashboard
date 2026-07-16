@@ -18146,6 +18146,7 @@ async def returns_sku_claims_detail(
     item_id: str = Query("", description="Fallback cuando el listing no tiene SKU BM resuelto"),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    days: int = Query(0, description="Si se pasa (>0), también agrega reembolsos Amazon del mismo SKU en esa ventana — mismo cache 3h que el widget Global"),
 ):
     """Detalle claim-por-claim de un SKU (o item_id ML si no hay SKU resuelto):
     comentario del comprador + fotos, sin filtrar por cuenta (excepción legítima —
@@ -18171,8 +18172,9 @@ async def returns_sku_claims_detail(
         sku=sku or None, item_id=item_id or None,
         date_from=date_from or None, date_to=date_to or None, limit=200,
     )
-    if not claims:
-        return {"sku": sku, "total": 0, "claims": []}
+    # NOTA: no hacer return temprano aquí si claims está vacío — un SKU puede no
+    # tener reclamos ML pero sí reembolsos Amazon (agregados más abajo). Cortar
+    # aquí haría que una búsqueda de un SKU solo-Amazon mostrara "sin nada".
 
     # Backfill on-demand de comentario + fotos para los reclamos que aún no los
     # tienen — acotado a esta lista (máx. 60 reclamos), nunca a todo el negocio.
@@ -18278,7 +18280,62 @@ async def returns_sku_claims_detail(
             "photos": photos,
         })
     out.sort(key=lambda r: r["date_created"], reverse=True)
-    return {"sku": sku, "total": len(out), "claims": out}
+
+    accounts_tally: dict = {}
+    reasons_tally: dict = {}
+    for c in out:
+        accounts_tally[c["account"]] = accounts_tally.get(c["account"], 0) + 1
+        reasons_tally[c["reason_label"]] = reasons_tally.get(c["reason_label"], 0) + 1
+
+    # Reembolsos Amazon del mismo SKU — solo si se pidió una ventana de días
+    # (el cache de refunds está keyed por days, igual que el widget Global).
+    amazon_summary = {"count": 0, "refund_usd": 0.0, "reasons": {}}
+    if sku and days > 0:
+        try:
+            amz_accounts = await token_store.get_all_amazon_accounts()
+
+            async def _amz_for_sku(acc):
+                try:
+                    return await _fetch_amazon_refunds_cached(acc.get("seller_id", ""), days)
+                except Exception:
+                    return []
+
+            amz_nested = await asyncio.gather(*[_amz_for_sku(a) for a in amz_accounts], return_exceptions=True)
+            for refunds in amz_nested:
+                if not isinstance(refunds, list):
+                    continue
+                for r in refunds:
+                    r_sku = normalize_to_bm_sku((r.get("sku") or "").strip())
+                    if r_sku != sku:
+                        continue
+                    amazon_summary["count"] += 1
+                    amt = float(r.get("amount", 0) or 0)
+                    cur = r.get("currency", "USD")
+                    amazon_summary["refund_usd"] += amt if cur == "USD" else amt / 18.0
+                    lbl = _amz_reason_label(r.get("reason", ""))
+                    amazon_summary["reasons"][lbl] = amazon_summary["reasons"].get(lbl, 0) + 1
+            amazon_summary["refund_usd"] = round(amazon_summary["refund_usd"], 2)
+        except Exception as _e:
+            logger.warning(f"[SKU-CLAIMS-DETAIL] Error agregando Amazon: {_e}")
+
+    title = ""
+    try:
+        import aiosqlite as _aio_t2
+        async with _aio_t2.connect(DATABASE_PATH) as _db_t2:
+            _db_t2.row_factory = _aio_t2.Row
+            _cur_t2 = await _db_t2.execute("SELECT title FROM bm_product_catalog WHERE sku = ?", (sku,))
+            _row_t2 = await _cur_t2.fetchone()
+            if _row_t2:
+                title = _row_t2["title"]
+    except Exception:
+        pass
+
+    return {
+        "sku": sku, "item_id": item_id, "title": title,
+        "total": len(out), "accounts": accounts_tally, "reasons": reasons_tally,
+        "amazon": amazon_summary,
+        "claims": out,
+    }
 
 
 @app.get("/api/planning/production-kpis")
