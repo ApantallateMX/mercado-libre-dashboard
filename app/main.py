@@ -18174,12 +18174,21 @@ async def returns_sku_claims_detail(
     if not claims:
         return {"sku": sku, "total": 0, "claims": []}
 
-    # Backfill on-demand del comentario para los reclamos que aún no lo tienen —
-    # acotado a esta lista (máx. 60), nunca a todo el negocio.
+    # Backfill on-demand de comentario + fotos para los reclamos que aún no los
+    # tienen — acotado a esta lista (máx. 60 reclamos), nunca a todo el negocio.
+    # Las fotos van en el MISMO request de get_claim_messages (ya trae attachments,
+    # sin llamada extra) y se descargan con un tope duro (30 fotos/request) — el
+    # incidente de disco lleno fue por bajar TODAS las fotos de TODOS los reclamos
+    # de una vez; esto es acotado a un SKU a la vez, con límite explícito.
     missing = [c for c in claims if not c.get("buyer_comment")][:60]
     if missing:
+        import os as _os_bf
+        from urllib.parse import quote as _quote_bf
+
         sem_bf = asyncio.Semaphore(5)
         clients_bf: dict = {}
+        photos_downloaded = [0]
+        _MAX_PHOTOS_PER_REQUEST = 30
 
         async def _backfill_comment(row):
             async with sem_bf:
@@ -18204,6 +18213,41 @@ async def returns_sku_claims_detail(
                     if comment:
                         row["buyer_comment"] = comment
                         await _ts_scd.upsert_claims_history([{**row, "buyer_comment": comment}])
+
+                    already = await _ts_scd.get_claim_photos(row["claim_id"])
+                    seen_files = {p["local_path"] for p in already}
+                    for msg in (msgs if isinstance(msgs, list) else []):
+                        if photos_downloaded[0] >= _MAX_PHOTOS_PER_REQUEST:
+                            break
+                        for att in (msg.get("attachments") or []):
+                            fname = att.get("filename") or att.get("name") or ""
+                            mime = att.get("type") or att.get("mime_type") or ""
+                            is_img = (
+                                mime.startswith("image/") or
+                                any(fname.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"))
+                            )
+                            if not (is_img and fname) or photos_downloaded[0] >= _MAX_PHOTOS_PER_REQUEST:
+                                continue
+                            photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+                            claim_dir = photos_dir / row["claim_id"]
+                            local_path = claim_dir / f"0_{_os_bf.path.basename(fname)}"
+                            rel_path = str(local_path.relative_to(photos_dir.parent))
+                            if rel_path in seen_files:
+                                continue
+                            try:
+                                dl_path = f"/marketplace/v2/claims/{row['claim_id']}/attachments/{_quote_bf(fname)}/download"
+                                content = await cli.download_binary(dl_path)
+                                if not content:
+                                    continue
+                                claim_dir.mkdir(parents=True, exist_ok=True)
+                                local_path.write_bytes(content)
+                                await _ts_scd.save_claim_photos(row["claim_id"], "ml", [{
+                                    "local_path": rel_path, "original_url": dl_path,
+                                    "from_role": msg.get("sender_role", ""),
+                                }])
+                                photos_downloaded[0] += 1
+                            except Exception:
+                                continue
                 except Exception:
                     pass
 

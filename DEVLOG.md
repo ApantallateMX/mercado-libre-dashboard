@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FEAT: fotos de compradores también se auto-descargan on-demand por SKU
+
+**Archivos:** `app/main.py`
+
+**Motivación:** un comprador decía "adjunto foto de la falla" pero el modal no
+mostraba ninguna foto — el backfill on-demand solo resolvía texto, no adjuntos.
+
+**Fix:** el mismo `get_claim_messages()` que ya se pedía para el comentario trae los
+`attachments` de cada mensaje — no hace falta una llamada extra. Ahora se descargan y
+cachean (mismo patrón ya probado en `/api/returns/claim-photo-proxy`) durante el
+backfill de `sku-claims-detail`, con un **tope duro de 30 fotos por request**. Esto es
+deliberadamente distinto del incidente de disco lleno de esta misma sesión (bajaba
+TODAS las fotos de TODOS los reclamos del negocio de una sola vez): aquí solo se tocan
+los reclamos de UN SKU que alguien está viendo activamente, con límite explícito.
+
+**Validado localmente:** el reclamo con "adjunto foto de la falla..." ahora trae 1
+foto (249KB JPEG, servida correctamente vía `/api/returns/claim-photo-file`); varios
+reclamos más del mismo SKU también resolvieron sus fotos en la misma pasada.
+
+---
+
 ## 2026-07-16 — FIX: comentarios de reclamos traían plantillas de ML + HTML crudo sin limpiar
 
 **Archivos:** `app/main.py`
