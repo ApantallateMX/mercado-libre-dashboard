@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FIX: comentarios de reclamos traían plantillas de ML + HTML crudo sin limpiar
+
+**Archivos:** `app/main.py`
+
+**Motivación:** el usuario vio un "comentario del comprador" que en realidad era una
+plantilla de ML dirigida al VENDEDOR ("Hola, BLOW... gracias por tu excelente
+disposición...", el cierre administrativo de un caso ganado), con etiquetas HTML
+crudas (`<p dir="ltr"><strong class="coco-editor-textBold">...`) sin limpiar.
+
+**Causa:** el filtro de mensajes incluía `sender_role in ("complainant", "mediator")`
+— la idea original era que "mediator" es un resumen útil que arma el asistente de ML,
+pero en la práctica también incluye plantillas de cierre de caso dirigidas al
+vendedor, indistinguibles del resumen útil solo por el rol. Además el texto de ML
+viene compuesto en su editor enriquecido (clases `coco-editor-*`) y nunca se limpiaba
+el HTML antes de guardarlo.
+
+**Fix:**
+- Nuevo helper `_strip_html_msg()` — quita etiquetas, decodifica entidades, normaliza
+  saltos de línea.
+- Filtro de mensajes ahora es **solo `complainant`** (el comprador mismo) en los dos
+  lugares que extraen comentarios (`_save_ml_claims_bg` y el backfill on-demand de
+  `sku-claims-detail`), con `_strip_html_msg()` aplicado al texto.
+- Nuevo `GET /api/diag/reset-claim-comments?token=...` — limpia los `buyer_comment` ya
+  contaminados en producción (el `ON CONFLICT` de `upsert_claims_history` no pisa un
+  comentario existente con uno vacío, así que sin este reset la basura ya guardada
+  se hubiera quedado ahí para siempre). Corrido una vez en producción tras el deploy.
+
+---
+
 ## 2026-07-16 — FIX: claims_history dependía de un botón manual desconectado del widget
 
 **Archivos:** `app/main.py`

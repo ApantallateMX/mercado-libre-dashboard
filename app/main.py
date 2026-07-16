@@ -1708,12 +1708,14 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                             msgs = await client.get_claim_messages(claim_id)
                             texts = []
                             for msg in (msgs if isinstance(msgs, list) else []):
-                                # v2 usa "sender_role" en el mensaje (no "from.role"). "mediator" es
-                                # el resumen que arma el asistente virtual de ML del reclamo del
-                                # comprador — casi siempre más útil que el texto crudo del comprador.
+                                # v2 usa "sender_role" en el mensaje (no "from.role"). Solo
+                                # "complainant" — se probó "mediator" y a veces es una plantilla
+                                # administrativa de ML dirigida AL VENDEDOR (ej. "gracias por tu
+                                # excelente disposición..." al cerrar el caso), no una descripción
+                                # del defecto. Mostrar eso como "comentario del comprador" engaña.
                                 role = msg.get("sender_role", "")
-                                if role in ("complainant", "mediator"):
-                                    t = (msg.get("message") or msg.get("text") or "").strip()
+                                if role == "complainant":
+                                    t = _strip_html_msg(msg.get("message") or msg.get("text") or "")
                                     if t:
                                         texts.append(t)
                             buyer_comment = " | ".join(texts)[:2000]
@@ -14407,6 +14409,29 @@ async def diag_emergency_clear_claim_photos(token: str = ""):
     }
 
 
+@app.get("/api/diag/reset-claim-comments")
+async def diag_reset_claim_comments(token: str = ""):
+    """One-time cleanup: limpia buyer_comment en claims_history. Antes se guardaban
+    mensajes de rol 'mediator' junto con 'complainant' — a veces 'mediator' es una
+    plantilla administrativa de ML dirigida AL VENDEDOR (no una descripción del
+    comprador), con HTML crudo sin limpiar. El backfill on-demand en
+    /api/returns/sku-claims-detail ya solo usa 'complainant' + limpia HTML, pero el
+    ON CONFLICT de upsert_claims_history no pisa un comentario existente con uno
+    vacío — hay que limpiar lo ya guardado para que se re-resuelva bien la próxima
+    vez que alguien abra el SKU."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_rc
+    async with _aio_rc.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            "UPDATE claims_history SET buyer_comment = '' WHERE platform = 'ml' AND buyer_comment != ''"
+        )
+        rows_reset = cur.rowcount
+        await db.commit()
+    return {"ok": True, "rows_reset": rows_reset}
+
+
 @app.get("/api/diag/cache-health")
 async def diag_cache_health(token: str = ""):
     """Diagnóstico: salud general del caché BM.
@@ -15477,6 +15502,20 @@ CLAIM_REASON_MAP: dict[str, str] = {
     # Otros
     "CANCEL": "Cancelación",
 }
+
+def _strip_html_msg(text: str) -> str:
+    """Los mensajes de reclamo ML a veces vienen con HTML crudo (compuestos con el
+    editor de texto enriquecido de ML — clases 'coco-editor-*'). Quita las etiquetas
+    y decodifica entidades para dejar texto plano legible."""
+    import re as _re_sh
+    import html as _html_sh
+    if not text:
+        return ""
+    t = _re_sh.sub(r"</p>|<br\s*/?>", "\n", text)
+    t = _re_sh.sub(r"<[^>]+>", "", t)
+    t = _html_sh.unescape(t)
+    return _re_sh.sub(r"\n{3,}", "\n\n", t).strip()
+
 
 def _claim_reason_label(reason_id: str) -> str:
     rid = (reason_id or "").upper().strip()
@@ -18155,8 +18194,10 @@ async def returns_sku_claims_detail(
                     msgs = await cli.get_claim_messages(row["claim_id"])
                     texts = []
                     for msg in (msgs if isinstance(msgs, list) else []):
-                        if msg.get("sender_role") in ("complainant", "mediator"):
-                            t = (msg.get("message") or msg.get("text") or "").strip()
+                        # Solo "complainant" — "mediator" a veces es una plantilla
+                        # administrativa de ML dirigida al vendedor, no del comprador.
+                        if msg.get("sender_role") == "complainant":
+                            t = _strip_html_msg(msg.get("message") or msg.get("text") or "")
                             if t:
                                 texts.append(t)
                     comment = " | ".join(texts)[:2000]
