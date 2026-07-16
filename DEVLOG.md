@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FIX: claims_history dependía de un botón manual desconectado del widget
+
+**Archivos:** `app/main.py`
+
+**Motivación:** el usuario notó algo que no cuadraba: el widget Global YA sabía que
+un TV tenía 33 retornos (los resolvió live vía `_compute_unified_returns`), pero el
+modal de detalle decía "sin comentarios sincronizados — corre Actualizar reclamos" —
+dos fuentes de datos del mismo negocio, desconectadas entre sí, una de las cuales
+requería que alguien recordara ir a otra página y apretar un botón manualmente.
+
+**Fix — una sola fuente de verdad, auto-mantenida:**
+- `_compute_unified_returns` ahora persiste a `claims_history` como efecto secundario
+  de su propio cálculo (que de todas formas ya resuelve cada reclamo ML vía su orden)
+  — cada refresh del cache (cada 3h) deja el registro base (claim_id, cuenta, SKU,
+  item_id, motivo, fecha, monto) sin necesidad de ningún botón. `buyer_comment` queda
+  vacío en este paso — pedirlo (`get_claim_messages`) es una llamada extra por reclamo,
+  no se justifica para reclamos que nadie va a mirar todavía.
+- `/api/returns/sku-claims-detail` ahora hace ese backfill de comentario **on-demand,
+  acotado a los reclamos que realmente se están mostrando** (máx. 60 por request, con
+  Semaphore(5)) — la primera vez que alguien abre el modal de un SKU, los comentarios
+  se resuelven en vivo y quedan guardados para la próxima. El botón "Actualizar
+  reclamos" en `/returns` sigue existiendo (sigue siendo útil para un refresh manual
+  amplio de 180 días), pero ya no es un requisito para que el modal funcione.
+
+**Validado localmente:** con el cache del widget frío, tras un refresh `claims_history`
+pasó de 0 a 44 filas para el TV Onn 65" (antes vacío) con `item_id` e `sku` correctos;
+al abrir el detalle, el backfill trajo un comentario real de comprador en la primera
+consulta, sin tocar ningún botón.
+
+---
+
 ## 2026-07-16 — FIX: Análisis IA sin crédito + reclamos sin SKU no se podían consultar
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`

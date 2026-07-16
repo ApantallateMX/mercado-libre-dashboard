@@ -16609,6 +16609,15 @@ async def _compute_unified_returns(days: int) -> dict:
         return_exceptions=True
     )
 
+    # Filas para persistir en claims_history como efecto secundario — el detalle
+    # (comentarios/fotos) de /returns dependía de que alguien corriera "Actualizar
+    # reclamos" manualmente en otra página, completamente desconectado de este
+    # cálculo que YA resuelve cada reclamo. Ahora cualquier refresh de este cache
+    # (cada 3h) también deja el registro base en claims_history — sin buyer_comment
+    # todavía (eso requiere una llamada extra por reclamo, se resuelve on-demand en
+    # sku-claims-detail solo para los reclamos que el usuario realmente abre).
+    _ch_rows: list = []
+
     for c in ml_claims:
         oid = str(c.get("resource_id", ""))
         info = order_map_u.get(oid, {})
@@ -16619,6 +16628,17 @@ async def _compute_unified_returns(days: int) -> dict:
         key = sku if sku else (title if title else (f"orden_{oid}" if oid else f"reclamo_{c.get('id', '')}"))
         acc_nick = c.get("_account_nickname", "")
         reason_lbl = _claim_reason_label(c.get("reason_id", ""))
+
+        _claim_id = str(c.get("id", ""))
+        if _claim_id:
+            _ch_rows.append({
+                "claim_id": _claim_id, "platform": "ml", "account_id": c.get("_account_id", ""),
+                "order_id": oid, "item_id": info.get("item_id", ""), "sku": sku,
+                "reason_id": c.get("reason_id", ""), "stage": c.get("stage", ""),
+                "status": c.get("status", ""), "quantity": 1,
+                "amount_mxn": info.get("sale_amount", 0.0), "buyer_comment": "",
+                "date_created": (c.get("date_created") or "")[:10],
+            })
 
         if key not in ml_counts:
             ml_counts[key] = {
@@ -16646,6 +16666,12 @@ async def _compute_unified_returns(days: int) -> dict:
         ml_counts[key]["reasons"][reason_lbl] = ml_counts[key]["reasons"].get(reason_lbl, 0) + 1
         if acc_nick:
             ml_counts[key]["accounts"][acc_nick] = ml_counts[key]["accounts"].get(acc_nick, 0) + 1
+
+    if _ch_rows:
+        try:
+            await token_store.upsert_claims_history(_ch_rows)
+        except Exception as _e:
+            logger.warning(f"[UNIFIED-RETURNS] Error persistiendo claims_history: {_e}")
 
     # ── Amazon refunds ────────────────────────────────────────────────────────
     try:
@@ -18083,12 +18109,17 @@ async def returns_sku_claims_detail(
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
     """Detalle claim-por-claim de un SKU (o item_id ML si no hay SKU resuelto):
-    comentario del comprador + fotos ya cacheadas, sin filtrar por cuenta (excepción
-    legítima — este endpoint solo lo consume el widget 'Top Retornos Global', que ya
-    es la vista Global explícita — ver CLAUDE.md regla #4). Solo ML: Amazon no expone
-    comentarios ni fotos por su API (ver nota en /api/returns/sku-claim-rate).
-    Requiere haber corrido 'Actualizar reclamos' — si claims_history está vacío,
-    devuelve lista vacía."""
+    comentario del comprador + fotos, sin filtrar por cuenta (excepción legítima —
+    este endpoint solo lo consume el widget 'Top Retornos Global', que ya es la vista
+    Global explícita — ver CLAUDE.md regla #4). Solo ML: Amazon no expone comentarios
+    ni fotos por su API (ver nota en /api/returns/sku-claim-rate).
+
+    Los registros base (claim_id/sku/item_id/reason/fecha) ya se guardan solos cada
+    vez que el widget refresca su cache (_compute_unified_returns) — no depende de
+    correr 'Actualizar reclamos' manualmente. Lo único que ese cálculo no trae es el
+    TEXTO del comentario (requiere una llamada extra por reclamo, get_claim_messages)
+    — este endpoint lo resuelve aquí mismo, on-demand, SOLO para los reclamos que se
+    están mostrando (acotado, no los miles de reclamos de todo el negocio)."""
     from urllib.parse import quote
     import os as _os_scd
     from app.services import token_store as _ts_scd
@@ -18103,6 +18134,42 @@ async def returns_sku_claims_detail(
     )
     if not claims:
         return {"sku": sku, "total": 0, "claims": []}
+
+    # Backfill on-demand del comentario para los reclamos que aún no lo tienen —
+    # acotado a esta lista (máx. 60), nunca a todo el negocio.
+    missing = [c for c in claims if not c.get("buyer_comment")][:60]
+    if missing:
+        sem_bf = asyncio.Semaphore(5)
+        clients_bf: dict = {}
+
+        async def _backfill_comment(row):
+            async with sem_bf:
+                acc_id = row["account_id"]
+                cli = clients_bf.get(acc_id)
+                if cli is None:
+                    cli = await get_meli_client(user_id=acc_id or None)
+                    clients_bf[acc_id] = cli
+                if not cli:
+                    return
+                try:
+                    msgs = await cli.get_claim_messages(row["claim_id"])
+                    texts = []
+                    for msg in (msgs if isinstance(msgs, list) else []):
+                        if msg.get("sender_role") in ("complainant", "mediator"):
+                            t = (msg.get("message") or msg.get("text") or "").strip()
+                            if t:
+                                texts.append(t)
+                    comment = " | ".join(texts)[:2000]
+                    if comment:
+                        row["buyer_comment"] = comment
+                        await _ts_scd.upsert_claims_history([{**row, "buyer_comment": comment}])
+                except Exception:
+                    pass
+
+        await asyncio.gather(*[_backfill_comment(r) for r in missing], return_exceptions=True)
+        for cli in clients_bf.values():
+            if cli:
+                await cli.close()
 
     accounts = await _ts_scd.get_all_tokens()
     nick_map = {str(a["user_id"]): (a.get("nickname") or a["user_id"]) for a in accounts}
