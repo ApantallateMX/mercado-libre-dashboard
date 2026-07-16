@@ -15691,7 +15691,7 @@ async def returns_summary_partial(
                             sku = ""
                             if items_o:
                                 item_d = items_o[0].get("item", {})
-                                sku = item_d.get("seller_custom_field") or ""
+                                sku = item_d.get("seller_custom_field") or item_d.get("seller_sku") or ""
                             return float(order.get("total_amount") or 0), sku
                         except Exception:
                             return 0.0, ""
@@ -15815,7 +15815,10 @@ async def returns_table_partial(
                         oi = order.get("order_items", [])
                         if oi:
                             item = oi[0].get("item", {})
-                            raw_sku = item.get("seller_custom_field") or ""
+                            # seller_custom_field a veces viene vacío en /orders aunque el
+                            # listing sí tenga SKU — ML también expone seller_sku (mismo dato,
+                            # nombre de campo distinto). Ver DEVLOG 2026-07-16.
+                            raw_sku = item.get("seller_custom_field") or item.get("seller_sku") or ""
                             return oid, {
                                 "title":   item.get("title", ""),
                                 "price":   order.get("total_amount", 0),
@@ -16100,15 +16103,16 @@ async def returns_top_products(
                     if oi:
                         item = oi[0].get("item", {})
                         item_id_str = str(item.get("id", ""))
-                        sku = item.get("seller_custom_field") or ""
-                        # Fallback: ML no siempre devuelve seller_custom_field en /orders
+                        # seller_custom_field a veces viene vacío aunque el listing sí tenga
+                        # SKU — ML también expone seller_sku (mismo dato, campo distinto).
+                        sku = item.get("seller_custom_field") or item.get("seller_sku") or ""
                         if not sku and item_id_str:
                             try:
                                 det = await asyncio.wait_for(
-                                    client.get(f"/items/{item_id_str}", params={"attributes": "seller_custom_field,title"}),
+                                    client.get(f"/items/{item_id_str}", params={"attributes": "seller_custom_field,seller_sku,title"}),
                                     timeout=5.0
                                 )
-                                sku = det.get("seller_custom_field") or ""
+                                sku = det.get("seller_custom_field") or det.get("seller_sku") or ""
                             except Exception:
                                 pass
                         return oid, {
@@ -16411,15 +16415,16 @@ async def returns_global_top(
                     if oi:
                         item = oi[0].get("item", {})
                         item_id_str = str(item.get("id", ""))
-                        sku = item.get("seller_custom_field") or ""
-                        # Fallback: ML no siempre devuelve seller_custom_field en /orders
+                        # seller_custom_field a veces viene vacío aunque el listing sí tenga
+                        # SKU — ML también expone seller_sku (mismo dato, campo distinto).
+                        sku = item.get("seller_custom_field") or item.get("seller_sku") or ""
                         if not sku and item_id_str:
                             try:
                                 det = await asyncio.wait_for(
-                                    client.get(f"/items/{item_id_str}", params={"attributes": "seller_custom_field,title"}),
+                                    client.get(f"/items/{item_id_str}", params={"attributes": "seller_custom_field,seller_sku,title"}),
                                     timeout=5.0
                                 )
-                                sku = det.get("seller_custom_field") or ""
+                                sku = det.get("seller_custom_field") or det.get("seller_sku") or ""
                             except Exception:
                                 pass
                         return oid, {
@@ -16613,14 +16618,20 @@ async def _compute_unified_returns(days: int) -> dict:
                             if oi:
                                 item = oi[0].get("item", {})
                                 iid = str(item.get("id", ""))
-                                sku = item.get("seller_custom_field") or ""
+                                # seller_custom_field a veces viene vacío en /orders aunque el
+                                # listing sí tenga SKU puesto — ML también expone seller_sku
+                                # (mismo dato, campo distinto). Bug real encontrado 2026-07-16:
+                                # un reclamo de un TV Onn 70" no se podía buscar por SKU porque
+                                # solo se revisaba seller_custom_field (vacío), aunque
+                                # seller_sku sí traía "SNTV002237" correctamente.
+                                sku = item.get("seller_custom_field") or item.get("seller_sku") or ""
                                 if not sku and iid:
                                     try:
                                         det = await asyncio.wait_for(
-                                            cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,title"}),
+                                            cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,seller_sku,title"}),
                                             timeout=5.0
                                         )
-                                        sku = det.get("seller_custom_field") or ""
+                                        sku = det.get("seller_custom_field") or det.get("seller_sku") or ""
                                     except Exception:
                                         pass
                                 return oid, {

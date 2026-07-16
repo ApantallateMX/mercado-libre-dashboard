@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FIX: seller_custom_field vacío ocultaba SKUs reales que sí tenían seller_sku
+
+**Archivos:** `app/main.py`
+
+**Motivación:** usuario buscó SNTV002237 y faltaba un reclamo que sabía que existía.
+Dio un número (`2000014019428725`) que resultó ser un **pack_id** de ML (no un
+claim_id) — se investigó en vivo contra la API de ML (`/packs/{id}` → orden
+`2000017417336020` → `/marketplace/v2/claims/search?resource_id=...` → claim real
+`5544560372`, abierto hoy, reason `PDD9946`).
+
+**Causa raíz:** el order item de ML tenía `seller_custom_field: null` pero
+`seller_sku: "SNTV002237"` — el mismo dato en un campo distinto. La mayoría de las
+funciones que resuelven SKU desde una orden (`_compute_unified_returns` del widget
+Global, `returns_top_products`, `returns_global_top`, `returns_summary_partial`) solo
+revisaban `seller_custom_field`, sin fallback a `seller_sku` — a diferencia de
+`_save_ml_claims_bg`, que sí lo tenía desde antes. Cualquier listing con
+`seller_custom_field` vacío (como el TV Onn 65" del hallazgo anterior, y este TV Onn
+70") quedaba con SKU sin resolver en el widget/búsqueda, aunque el dato correcto sí
+existía en ML.
+
+**Fix:** agregado `or item.get("seller_sku")` como fallback en los 4 sitios que
+resuelven SKU desde `order_items[].item` (incluyendo el fallback vía `/items/{id}`,
+que ahora también pide el atributo `seller_sku`).
+
+**Validado localmente:** tras el fix, un cómputo fresco del widget (days=2) resuelve
+correctamente el claim `5544560372` bajo SNTV002237.
+
+---
+
 ## 2026-07-16 — FEAT: buscador de SKU en "Top Retornos Global" (todas las cuentas, ML+Amazon)
 
 **Archivos:** `app/main.py`, `app/templates/multi_dashboard.html`
