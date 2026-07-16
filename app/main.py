@@ -1719,7 +1719,11 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                             pass
 
                         all_rows.append({
-                            "claim_id": claim_id, "platform": "ml", "account_id": nick,
+                            # account_id = user_id (mismo formato que el resto del app —
+                            # get_meli_client, retFilters.account_id, etc. — NUNCA nickname,
+                            # o el filtro de scope por cuenta en sku-claim-rate/supplier-package
+                            # no matchea nada). "nick" solo se usa para logs.
+                            "claim_id": claim_id, "platform": "ml", "account_id": uid,
                             "order_id": resource_id, "item_id": "", "sku": sku,
                             "reason_id": c.get("reason_id", ""), "stage": c.get("stage", ""),
                             "status": c.get("status", ""), "quantity": 1,
@@ -17741,11 +17745,13 @@ async def planning_sync_claims(days: int = Query(180, ge=1, le=365)):
 _ML_ORDER_SEARCH_CAP = 9500  # margen bajo el límite real (~10,000) de ML /orders/search
 
 
-async def _fetch_live_ml_sales_by_sku(date_from: str, date_to: str) -> dict:
-    """Ventas reales por SKU en vivo, TODAS las cuentas ML, partiendo el rango de
-    fechas si una cuenta supera el límite de resultados de ML (igual que
-    generate_purchase_order.py). order_history NO sirve para esto — está muy
-    poco poblado (ver DEVLOG 2026-07-15), solo se llena de forma parcial/fire-and-forget."""
+async def _fetch_live_ml_sales_by_sku(date_from: str, date_to: str, account_id: str = None) -> dict:
+    """Ventas reales por SKU en vivo, partiendo el rango de fechas si una cuenta
+    supera el límite de resultados de ML (igual que generate_purchase_order.py).
+    order_history NO sirve para esto — está muy poco poblado (ver DEVLOG
+    2026-07-15), solo se llena de forma parcial/fire-and-forget.
+    Si account_id se especifica, solo esa cuenta (scope obligatorio — ver CLAUDE.md
+    regla #4). Sin account_id, TODAS las cuentas ML (uso exclusivo de vistas Global)."""
     from datetime import date as _date, timedelta as _td2
     from app.services import token_store as _ts_live
     from app.services.meli_client import MeliClient as _MC
@@ -17764,7 +17770,10 @@ async def _fetch_live_ml_sales_by_sku(date_from: str, date_to: str) -> dict:
     d_from = datetime.strptime(date_from, "%Y-%m-%d").date()
     d_to = datetime.strptime(date_to, "%Y-%m-%d").date()
 
-    accounts = await _ts_live.get_all_tokens()
+    if account_id:
+        accounts = [a for a in await _ts_live.get_all_tokens() if str(a["user_id"]) == str(account_id)]
+    else:
+        accounts = await _ts_live.get_all_tokens()
     sales: dict = {}
 
     async def _process(acc):
@@ -17800,6 +17809,7 @@ async def returns_sku_claim_rate(
     date_from: str = Query(..., description="YYYY-MM-DD"),
     date_to: str = Query(..., description="YYYY-MM-DD"),
     min_claims: int = Query(1, ge=1),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar — vacío solo permitido desde vistas Global explícitas"),
 ):
     """Tasa REAL de reclamos por SKU (unidades reclamadas ÷ vendidas EN VIVO — no usa
     order_history, que está muy poco poblado), no % del total de reclamos como el
@@ -17811,7 +17821,7 @@ async def returns_sku_claim_rate(
     if (datetime.strptime(date_to, "%Y-%m-%d") - datetime.strptime(date_from, "%Y-%m-%d")).days > 180:
         return {"error": "Rango máximo 180 días (fetch en vivo — rangos más amplios se pasan del timeout de Railway)"}
 
-    claims_rows = await _ts_rate.get_claims_history(date_from=date_from, date_to=date_to, limit=5000)
+    claims_rows = await _ts_rate.get_claims_history(date_from=date_from, date_to=date_to, account_id=account_id or None, limit=5000)
     claims_by_sku: dict = {}
     for c in claims_rows:
         sku = c.get("sku", "")
@@ -17830,7 +17840,7 @@ async def returns_sku_claim_rate(
         if c.get("reason_id"):
             agg["reasons"].add(c["reason_id"])
 
-    sales_by_sku = await _fetch_live_ml_sales_by_sku(date_from, date_to)
+    sales_by_sku = await _fetch_live_ml_sales_by_sku(date_from, date_to, account_id=account_id or None)
 
     titles = {}
     try:
@@ -17876,6 +17886,7 @@ async def returns_supplier_package(
     sku: str = Query(...),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar — vacío solo permitido desde vistas Global explícitas"),
 ):
     """Genera un ZIP descargable listo para mandarle al proveedor: resumen.xlsx con
     el detalle de cada reclamo del SKU (fecha, motivo, comentario del comprador, monto)
@@ -17889,7 +17900,7 @@ async def returns_supplier_package(
 
     sku = sku.strip().upper()
     claims = await _ts_pkg.get_claims_history(
-        sku=sku, date_from=date_from or None, date_to=date_to or None, limit=2000,
+        sku=sku, account_id=account_id or None, date_from=date_from or None, date_to=date_to or None, limit=2000,
     )
     if not claims:
         return Response(status_code=404, content=f"Sin reclamos para {sku} en ese rango")

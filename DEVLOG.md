@@ -7,6 +7,90 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-16 — FIX: Reestructuración de /returns — scope de cuenta roto + UI sobrecargada
+
+**Commits:** (pendiente al hacer commit) · **Archivos:** `app/main.py`, `app/templates/returns.html`, `app/templates/multi_dashboard.html`
+
+**Motivación:** usuario reportó que la sección de Retornos "se ve fea" y "no funciona
+correctamente". Auditoría encontró un bug real de scope, no solo un problema visual.
+
+**Bug de scope (violación de la regla "NUNCA mezclar cuentas"):**
+- `/api/returns/sku-claim-rate` y `/api/returns/supplier-package` (card "Tasa Real de
+  Reclamos") nunca recibían `account_id` — agregaban `claims_history` de las 4 cuentas ML
+  aunque el resto de la página (KPIs, timeline, top-products, quality-scores) sí estaba
+  correctamente scoped. Si veías Retornos de LUTEMAMEXICO, esa card te mezclaba las 4
+  cuentas sin avisar.
+- **Causa raíz más profunda:** `_save_ml_claims_bg` (línea ~1722) guardaba
+  `account_id = nickname` (ej. `"APANTALLATEMX"`) en vez de `user_id` (ej. `"523916436"`),
+  el formato que usa el resto del app (`get_meli_client`, `retFilters.account_id`, etc.).
+  Aunque se hubiera agregado el filtro `account_id` a los endpoints, nunca habría
+  matcheado nada. Corregido en el write path — como `claims_history` está vacío en
+  producción (ver incidente de abajo), no requiere migración, el próximo sync ya
+  guarda el formato correcto.
+- Fix: `account_id` agregado a `sku-claim-rate`, `supplier-package` y
+  `_fetch_live_ml_sales_by_sku` (ahora acepta filtrar a una sola cuenta); JS de
+  `returns.html` pasa `retFilters.account_id` en ambos fetches.
+
+**Vista Global duplicada y mal implementada:**
+- El toggle "🌐 Global (todas)" dentro de `/returns` (`setRetMode`) tenía un bug real:
+  buscaba `#ret-timeline-card`, un ID que no existía, así que al activar Global la
+  Tendencia/Quality Score y la card de Tasa Real (que además mezclaba cuentas) se
+  quedaban visibles encima de la vista Global — dos scopes de datos mezclados en pantalla.
+- Además duplicaba funcionalidad que ya existía en `/multi-dashboard` (widget "Top
+  Retornos Global", que ya usaba `/api/returns/unified-top`).
+- Fix: **se eliminó el toggle Global de `/returns`** — la página queda 100% por-cuenta,
+  sin excepciones. El widget "Top Retornos Global" en `/multi-dashboard` se expandió con
+  filtro ML/Amazon/Todas, selectors de días/límite, KPIs y las cards enriquecidas
+  (razones, cuentas, riesgo MXN) que antes vivían en el toggle roto.
+
+**Reorganización visual:**
+- "Top SKUs Retornados" (comparación de 2 períodos + recomendaciones IA, fetch en vivo)
+  y "Tasa Real de Reclamos" (tasa real ÷ ventas + paquete proveedor, requiere sync) eran
+  dos cards apiladas rankeando SKUs de forma distinta — confuso cuál número creer. Se
+  fusionaron visualmente en una sola card ("Análisis de Retornos por SKU") con 2 sub-tabs:
+  "📊 Ranking rápido" y "📦 Tasa real + Proveedor". No se tocaron los pipelines de datos
+  (fuentes distintas: fetch en vivo vs `claims_history` + ventas agregadas).
+- Orden final de la página: Filtros → Alertas → KPIs → Tendencia+Calidad → Análisis SKU
+  (card fusionada) → Tabla operativa+sidebar.
+
+**Pendiente:** correr `/api/planning/sync-claims` en producción para poblar
+`claims_history` con el formato de `account_id` corregido (el sync anterior nunca se
+persistió — ver incidente 2026-07-15 abajo).
+
+---
+
+## 2026-07-15 — FIX URGENTE: Incidente de producción — disco lleno por sync masivo de fotos de reclamos
+
+**Commits:** `30eccb7`, `5ff6c46` · **Archivos:** `app/main.py`
+
+**Incidente:** el sync de reclamos ML (Fase 1, ver entrada de abajo) bajaba TODAS las
+fotos de TODOS los reclamos de una vez. En producción esto llenó el Railway Volume
+(500MB) — 835 fotos = 1.5GB — y SQLite dejó de poder escribir ("database or disk is
+full"), tumbando el login de todo el dashboard (`get_current_user()` no podía refrescar
+tokens ML). Ocurrió poco después de desplegar el botón "Actualizar reclamos" en la UI
+de `/returns` (commit `712c9a9`), que dispara ese mismo sync.
+
+**Fix 1 (`30eccb7`):** `_save_ml_claims_bg` ya no descarga fotos durante el sync — solo
+texto/comentarios. Las fotos se siguen viendo normal: `/api/returns/claim-photos` ya
+tenía un fallback que las cachea de forma perezosa (1 a la vez) cuando alguien abre la
+galería de un reclamo específico. Se agregaron `GET /api/diag/db-size` (diagnóstico de
+tamaño de DB/volumen/tablas) y `GET /api/diag/emergency-clear-claim-photos` (borra fotos
+ya descargadas para liberar espacio — usado para recuperar producción).
+
+**Fix 2 (`5ff6c46`):** el arranque mismo hacía un INSERT (`seed_product_type_templates`)
+antes de aceptar requests; con disco lleno eso lanzaba `sqlite3.OperationalError` sin
+capturar → "Application startup failed" → contenedor completo caído (502 total), sin
+poder ni siquiera llegar al endpoint de emergencia para liberar espacio. Cada paso
+esencial del arranque ahora está en try/except — bootea en modo degradado si algo falla,
+en vez de no bootear nada.
+
+**Verificado post-fix:** `db_file_mb: 309.36`, `claim_photos: 0 archivos` — producción
+estable. Pero `claims_history: 0 filas` — el sync nunca llegó a persistir datos en
+producción (solo se validó localmente). Ver entrada de arriba (2026-07-16) para el
+fix de scope que se aplicó antes de volver a correr el sync en producción.
+
+---
+
 ## 2026-07-15 — FEAT: Persistencia de reclamos ML (claims_history + claim_photos) — Fase 1 de mejora de Reclamos/Retornos
 
 **Archivos:** `app/services/token_store.py`, `app/services/meli_client.py`, `app/main.py`
