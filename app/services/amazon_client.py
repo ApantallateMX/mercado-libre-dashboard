@@ -390,6 +390,62 @@ class AmazonClient:
 
         return sku_sales
 
+    async def get_sku_sales(self, date_from: str, date_to: str) -> dict:
+        """
+        Ventas por SKU en un rango de fechas arbitrario — igual que
+        get_sales_summary_30d() pero con rango configurable y agregando
+        ingreso además de unidades (para la vista SKU, equivalente a
+        /partials/sku-sales-table de ML).
+
+        Args:
+            date_from, date_to: "YYYY-MM-DD"
+
+        Returns:
+            Dict {sku: {"units": int, "revenue": float, "orders": int}}
+
+        ADVERTENCIA: mismo patrón N+1 que get_sales_summary_30d (1 request de
+        items por orden) — usar SIEMPRE detrás de un caché con TTL, nunca en
+        vivo por request (ver _fetch_amazon_sku_sales_cached en main.py).
+        """
+        created_after = f"{date_from}T00:00:00Z"
+        # Amazon rechaza CreatedBefore si no es al menos ~2 min anterior a "ahora"
+        # (falla incluso si el rango solicitado es "hasta hoy" y hoy 23:59:59 aún
+        # no llegó) — se acota al menor entre fin-de-día solicitado y ahora-5min.
+        _requested_before = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        _safe_before = min(_requested_before, datetime.utcnow() - timedelta(minutes=5))
+        created_before = _safe_before.strftime("%Y-%m-%dT%H:%M:%SZ")
+        orders = await self.get_orders(created_after, created_before=created_before)
+
+        sku_sales: dict = {}
+        for order in orders:
+            if order.get("OrderStatus") in ("Cancelled", "Pending"):
+                continue
+            order_id = order.get("AmazonOrderId", "")
+            if not order_id:
+                continue
+            try:
+                items = await self.get_order_items(order_id)
+            except Exception as e:
+                logger.warning(f"[Amazon] Error obteniendo items de orden {order_id}: {e}")
+                continue
+            seen_skus_this_order = set()
+            for item in items:
+                sku = (item.get("SellerSKU") or "").strip()
+                qty = int(item.get("QuantityOrdered", 0) or 0)
+                if not sku or qty <= 0:
+                    continue
+                price = item.get("ItemPrice") or {}
+                amount = float(price.get("Amount", 0) or 0)
+                if sku not in sku_sales:
+                    sku_sales[sku] = {"units": 0, "revenue": 0.0, "orders": 0}
+                sku_sales[sku]["units"] += qty
+                sku_sales[sku]["revenue"] = round(sku_sales[sku]["revenue"] + amount, 2)
+                if sku not in seen_skus_this_order:
+                    sku_sales[sku]["orders"] += 1
+                    seen_skus_this_order.add(sku)
+
+        return sku_sales
+
     # ─────────────────────────────────────────────────────────────────────
     # LISTINGS (PRODUCTOS)
     # ─────────────────────────────────────────────────────────────────────

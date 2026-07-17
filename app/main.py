@@ -1089,9 +1089,9 @@ _NAV_TAB_DEFS = [
          ml_active=["items", "items_health", "sku_inventory", "productos"], amz_active="productos", amz_uses_dispatcher=True,
          section="productos", admin_only=False, amz_gated=False, badge="orphans"),
     dict(id="sku", label="SKU", icon="🔎",
-         ml_href="/sku-sales", amz_href=None,
+         ml_href="/sku-sales", amz_href="/amazon/sku-sales",
          ml_active=["sku_sales", "sku_compare"], amz_active=None, amz_uses_dispatcher=False,
-         section="sku", admin_only=False, amz_gated=False, badge=None),
+         section="sku", admin_only=False, amz_gated=True, badge=None),
     dict(id="ads", label="Ads", icon="📣",
          ml_href="/ads", amz_href=None,
          ml_active=["ads"], amz_active=None, amz_uses_dispatcher=False,
@@ -16887,6 +16887,116 @@ async def _fetch_amazon_returns_report_cached(seller_id: str, days: int) -> list
     except Exception as _exc:
         logger.warning(f"[AMZ-RETURNS-REPORT] Error {seller_id}: {_exc}")
         return []
+
+
+# ── Ventas por SKU Amazon (Fase 2.5 del nav unificado) ─────────────────────────
+# get_sku_sales() es N+1 (1 request de items por orden) — igual que
+# get_sales_summary_30d(), nunca en vivo por request. Stale-while-revalidate
+# igual que _fetch_unified_returns_cached / Finanzas ML. getOrderItems tiene un
+# rate limit propio bastante estricto en SP-API (confirmado: 429/QuotaExceeded
+# incluso con Semaphore(2)) — con el retry-con-backoff ya existente en _request()
+# esto se resuelve solo pero puede tardar; TTL largo (6h, igual que el reporte de
+# devoluciones) para no relanzar el cómputo caro seguido.
+_amz_sku_sales_cache: dict = {}     # {(seller_id, days): (ts, {sku: {...}})}
+_AMZ_SKU_SALES_TTL = 3600 * 6      # 6 horas
+_amz_sku_sales_inflight: set = set()
+
+async def _compute_amz_sku_sales(seller_id: str, days: int) -> dict:
+    from datetime import datetime as _dts, timedelta as _tds
+    from app.services.amazon_client import get_amazon_client as _get_amz_sk
+    client = await _get_amz_sk(seller_id)
+    if not client:
+        return {}
+    try:
+        _now = _dts.utcnow()
+        date_from = (_now - _tds(days=days)).strftime("%Y-%m-%d")
+        date_to = _now.strftime("%Y-%m-%d")
+        return await client.get_sku_sales(date_from, date_to)
+    finally:
+        await client.close()
+
+
+async def _refresh_amz_sku_sales(key: tuple) -> None:
+    import time as _tsk
+    try:
+        seller_id, days = key
+        data = await _compute_amz_sku_sales(seller_id, days)
+        _amz_sku_sales_cache[key] = (_tsk.time(), data)
+    except Exception as _e:
+        logger.warning(f"[AMZ-SKU-SALES] Error refrescando {key}: {_e}")
+    finally:
+        _amz_sku_sales_inflight.discard(key)
+
+
+async def _fetch_amz_sku_sales_cached(seller_id: str, days: int) -> dict:
+    import time as _tsk
+    key = (seller_id, days)
+    entry = _amz_sku_sales_cache.get(key)
+    fresh = entry and (_tsk.time() - entry[0]) < _AMZ_SKU_SALES_TTL
+    if fresh:
+        return entry[1]
+    if key not in _amz_sku_sales_inflight:
+        _amz_sku_sales_inflight.add(key)
+        asyncio.create_task(_refresh_amz_sku_sales(key))
+    if entry:
+        return entry[1]
+    return {}
+
+
+@app.get("/partials/amazon-sku-sales-table")
+async def amazon_sku_sales_table(
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """Ventas por SKU Amazon — columnas calcadas de sku_sales_table.html (ML):
+    SKU, Producto, Cantidad, Ingreso, Stock BM, Retail PH, %Recuperado."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"error": "No hay cuenta Amazon activa", "computing": False, "rows": []}
+    sales = await _fetch_amz_sku_sales_cached(sid, days)
+    is_computing = not sales and (sid, days) in _amz_sku_sales_inflight
+    if is_computing:
+        return {"computing": True, "rows": []}
+
+    try:
+        listings = await token_store.get_amazon_listings_for_account(sid)
+        title_map = {l["sku"]: l["title"] for l in listings if l.get("title")}
+    except Exception:
+        title_map = {}
+    retail_map = _get_retail_ph_map()
+
+    rows = []
+    for sku, d in sales.items():
+        bm_sku = normalize_to_bm_sku(sku)
+        retail_ph = retail_map.get(bm_sku, 0.0)
+        revenue_usd = d["revenue"] / (_manual_fx_rate if _manual_fx_rate > 0 else 18.0)
+        pct_recuperado = round(revenue_usd / (retail_ph * d["units"]) * 100, 1) if retail_ph > 0 and d["units"] > 0 else None
+        _bm_entry = _bm_stock_cache.get(bm_sku)
+        bm_stock = _bm_entry[1].get("avail_total") if _bm_entry else None
+        rows.append({
+            "sku": sku, "title": title_map.get(sku, sku),
+            "units": d["units"], "revenue_mxn": d["revenue"], "orders": d["orders"],
+            "bm_stock": bm_stock, "retail_ph_usd": retail_ph,
+            "pct_recuperado": pct_recuperado,
+        })
+    rows.sort(key=lambda r: r["units"], reverse=True)
+    return {"computing": False, "days": days, "rows": rows, "total_skus": len(rows)}
+
+
+@app.get("/amazon/sku-sales", response_class=HTMLResponse)
+async def amazon_sku_sales_page(request: Request):
+    """SKU Amazon como pestaña propia — equivalente de /sku-sales de ML."""
+    user = await get_current_user()
+    ctx = await _accounts_ctx(request)
+    active_amazon_id = ctx.get("active_amazon_id")
+    amazon_account = None
+    if active_amazon_id:
+        amazon_account = await token_store.get_amazon_account(active_amazon_id)
+    ctx["amazon_account"] = amazon_account
+    ctx["active_platform"] = "amz"
+    ctx["active"] = "sku_sales"
+    ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
+    return templates.TemplateResponse(request, "amazon_sku_sales.html", {"user": user, **ctx})
 
 
 # Severidad por código de razón Amazon (mismo formato que _REASON_SEVERITY de ML,
