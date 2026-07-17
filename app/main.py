@@ -1049,10 +1049,124 @@ async def logout(request: Request):
 
 
 _AMZ_ONLY_PATHS = {"/amazon"}  # prefix — startswith check below
+
+# ── Nav unificado ML ↔ Amazon ────────────────────────────────────────────
+# Fuente única de verdad para el nav (desktop + mobile, ambas plataformas) y
+# para los sets de rutas exclusivas usados en el switch de cuentas. Antes
+# _ML_ONLY_PATHS era una lista aparte que se desincronizaba de las rutas
+# reales (bug: tenía "/retornos" en vez de "/returns", etc.) — ahora se
+# deriva de aquí, así no puede volver a quedar obsoleta.
+#
+# Cada tab: id, label, icon (emoji/glifo, mismo en desktop y mobile),
+# ml_href/amz_href (None = no disponible en esa plataforma → se muestra
+# deshabilitado, nunca se oculta salvo por permisos), ml_active (valores de
+# ctx["active"] que la resaltan), amz_active + amz_uses_dispatcher (si la
+# pestaña vive dentro del router de tabs de /amazon o es una ruta standalone
+# como /planning que también sirve para Amazon), section (clave de
+# dashboard_user.allowed_sections; None = sin gating), admin_only, y
+# amz_gated (si el gating por section también aplica del lado Amazon —
+# solo para pestañas nuevas que no existían antes ahí; las que ya existían
+# en Amazon sin gating lo mantienen así para no quitarle acceso a nadie).
+_NAV_TAB_DEFS = [
+    dict(id="gral", label="Gral", icon="⊕",
+         ml_href="/multi-dashboard", amz_href=None,
+         ml_active=["multi_dashboard"], amz_active=None, amz_uses_dispatcher=False,
+         section="dashboard", admin_only=False, amz_gated=False, badge=None),
+    dict(id="inventory_global", label="Inv.Global", icon="▦",
+         ml_href="/inventory-global", amz_href=None,
+         ml_active=["inventory_global"], amz_active=None, amz_uses_dispatcher=False,
+         section="dashboard", admin_only=True, amz_gated=False, badge=None),
+    dict(id="dashboard", label="Dashboard", icon="🏠",
+         ml_href="/dashboard", amz_href="/amazon?tab=dashboard",
+         ml_active=["dashboard"], amz_active="dashboard", amz_uses_dispatcher=True,
+         section="dashboard", admin_only=False, amz_gated=False, badge=None),
+    dict(id="ventas", label="Ventas", icon="📊",
+         ml_href="/orders", amz_href="/amazon?tab=ventas",
+         ml_active=["orders"], amz_active="ventas", amz_uses_dispatcher=True,
+         section="ventas", admin_only=False, amz_gated=False, badge=None),
+    dict(id="productos", label="Productos", icon="📦",
+         ml_href="/items", amz_href="/amazon/products",
+         ml_active=["items", "items_health", "sku_inventory", "productos"], amz_active="productos", amz_uses_dispatcher=True,
+         section="productos", admin_only=False, amz_gated=False, badge="orphans"),
+    dict(id="sku", label="SKU", icon="🔎",
+         ml_href="/sku-sales", amz_href=None,
+         ml_active=["sku_sales", "sku_compare"], amz_active=None, amz_uses_dispatcher=False,
+         section="sku", admin_only=False, amz_gated=False, badge=None),
+    dict(id="ads", label="Ads", icon="📣",
+         ml_href="/ads", amz_href=None,
+         ml_active=["ads"], amz_active=None, amz_uses_dispatcher=False,
+         section="ads", admin_only=False, amz_gated=False, badge=None),
+    dict(id="salud", label="Salud", icon="💚",
+         ml_href="/health", amz_href="/amazon?tab=salud",
+         ml_active=["health"], amz_active="salud", amz_uses_dispatcher=True,
+         section="salud", admin_only=False, amz_gated=False, badge="health"),
+    dict(id="returns", label="Retornos", icon="🔄",
+         ml_href="/returns", amz_href=None,
+         ml_active=["returns"], amz_active=None, amz_uses_dispatcher=False,
+         section="devoluciones", admin_only=False, amz_gated=False, badge="returns"),
+    dict(id="planning", label="Planeación", icon="⬡",
+         ml_href="/planning", amz_href="/planning",
+         ml_active=["planning"], amz_active=None, amz_uses_dispatcher=False,
+         section="planning", admin_only=False, amz_gated=True, badge=None),
+    dict(id="facturacion", label="Facturación", icon="◈",
+         ml_href="/facturacion", amz_href="/facturacion",
+         ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
+         section="facturacion", admin_only=False, amz_gated=True, badge=None),
+    dict(id="finanzas", label="Finanzas", icon="💰",
+         ml_href=None, amz_href="/amazon?tab=finanzas",
+         ml_active=None, amz_active="finanzas", amz_uses_dispatcher=True,
+         section=None, admin_only=False, amz_gated=False, badge=None),
+    dict(id="fba", label="FBA & Stock", icon="🚚",
+         ml_href=None, amz_href="/amazon?tab=fba",
+         ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
+         section=None, admin_only=False, amz_gated=False, badge=None),
+    dict(id="listings", label="Listings", icon="🏷️",
+         ml_href=None, amz_href="/amazon?tab=listings",
+         ml_active=None, amz_active="listings", amz_uses_dispatcher=True,
+         section=None, admin_only=False, amz_gated=False, badge=None),
+    dict(id="deals", label="Deals", icon="🎯",
+         ml_href=None, amz_href="/amazon?tab=deals",
+         ml_active=None, amz_active="deals", amz_uses_dispatcher=True,
+         section=None, admin_only=False, amz_gated=False, badge=None),
+    dict(id="stock_sync", label="Sync Stock", icon="⇄",
+         ml_href="/stock-sync", amz_href=None,
+         ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
+         section="sync", admin_only=True, amz_gated=False, badge="bm_sync"),
+    dict(id="distribucion", label="Distribución", icon="⊞",
+         ml_href="/distribucion", amz_href=None,
+         ml_active=["distribucion"], amz_active=None, amz_uses_dispatcher=False,
+         section="sync", admin_only=True, amz_gated=False, badge=None),
+]
+
+# Rutas ML-only reales (para el guard de /auth/switch-amazon). Se derivan del
+# registro + un puñado de sub-rutas mobile-only que no son "tabs" de primer
+# nivel pero sí páginas ML-exclusivas (accesos directos del menú móvil).
+_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory"}
 _ML_ONLY_PATHS = {
-    "/dashboard", "/ventas", "/productos", "/sku", "/salud",
-    "/retornos", "/planeacion", "/facturacion", "/sync-stock", "/distribucion",
-}
+    t["ml_href"] for t in _NAV_TAB_DEFS if t["ml_href"] and not t["amz_href"]
+} | _ML_ONLY_EXTRA_PATHS
+
+
+def _build_nav_tabs(active_platform: str, dashboard_user) -> list:
+    """Lista de pestañas para el nav (desktop + mobile), ya filtrada por
+    permisos y anotada con el href/disponibilidad de la plataforma activa.
+    Una pestaña sin href para la plataforma activa se muestra deshabilitada
+    (nunca se oculta) salvo que el usuario no tenga permiso — ahí sí se omite,
+    igual que se comportaba antes."""
+    _sec = (dashboard_user.get("allowed_sections") or []) if dashboard_user else []
+    is_admin = bool(dashboard_user and dashboard_user.get("role") == "admin")
+    out = []
+    for t in _NAV_TAB_DEFS:
+        if t["admin_only"] and not is_admin:
+            continue
+        section = t["section"]
+        if section and _sec:
+            gated_here = (active_platform != "amz") or t["amz_gated"]
+            if gated_here and section not in _sec:
+                continue
+        href = t["amz_href"] if active_platform == "amz" else t["ml_href"]
+        out.append({**t, "href": href, "available": href is not None})
+    return out
 
 @app.post("/auth/switch-account")
 async def switch_account(request: Request):
@@ -1138,6 +1252,7 @@ async def _accounts_ctx(request: Request) -> dict:
     if last_platform == "amz" and not amazon_accounts:
         last_platform = "ml"
     amazon_account = next((a for a in amazon_accounts if a["seller_id"] == active_amazon_id), None)
+    dashboard_user = getattr(request.state, "dashboard_user", None)
 
     return {
         "accounts": accounts,
@@ -1146,7 +1261,8 @@ async def _accounts_ctx(request: Request) -> dict:
         "active_amazon_id": active_amazon_id,
         "active_platform": last_platform,
         "amazon_account": amazon_account,
-        "dashboard_user": getattr(request.state, "dashboard_user", None),
+        "dashboard_user": dashboard_user,
+        "nav_tabs": _build_nav_tabs(last_platform, dashboard_user),
     }
 
 
@@ -12682,8 +12798,9 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
 
     active_tab = tab if tab in ("dashboard", "ventas", "salud", "operaciones", "finanzas", "fba", "listings", "deals") else "dashboard"
     ctx["amazon_account"] = amazon_account
-    ctx["active_platform"] = "amazon"
+    ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = active_tab
+    ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
     return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx})
 
 
@@ -12925,8 +13042,9 @@ async def amazon_products_page(request: Request):
     if active_amazon_id:
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
     ctx["amazon_account"] = amazon_account
-    ctx["active_platform"] = "amazon"
+    ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = "productos"
+    ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
     return templates.TemplateResponse(request, "amazon_products.html", {"user": user, **ctx})
 
 
@@ -12943,8 +13061,9 @@ async def amazon_orders_page(request: Request):
     if active_amazon_id:
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
     ctx["amazon_account"] = amazon_account
-    ctx["active_platform"] = "amazon"
+    ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = "orders"
+    ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
     return templates.TemplateResponse(request, "amazon_orders.html", {"user": user, **ctx})
 
 

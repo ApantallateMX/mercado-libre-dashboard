@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-17 — FIX/FEAT: nav unificado ML ↔ Amazon + hotfix del switch de cuentas
+
+**Archivos:** `app/main.py`, `app/templates/base.html`
+
+**Motivación:** al cambiar de cuenta ML a Amazon (o viceversa) desde ciertas páginas
+(ej. `/returns`), la app quedaba en un estado híbrido roto — el nav de arriba cambiaba
+de plataforma pero el contenido de la página se quedaba de la plataforma anterior
+("Cuenta activa: BLOWTECHNOLOGIES" con nav de Amazon y VECKTOR seleccionado arriba).
+
+**Causa raíz (dos bugs):**
+1. `_ML_ONLY_PATHS` (usado por `/auth/switch-amazon` para decidir si sacarte de la
+   página ML actual) tenía nombres de ruta viejos en español (`/retornos`, `/ventas`,
+   `/salud`, `/planeacion`, `/sync-stock`) que ya no existen — las rutas reales son
+   `/returns`, `/orders`, `/health`, `/planning`, `/stock-sync`. El guard nunca disparaba
+   para la mayoría de las páginas ML.
+2. Los handlers `/amazon`, `/amazon/products` y `/amazon/orders` seteaban
+   `ctx["active_platform"] = "amazon"` mientras que el cookie y **todos** los checks de
+   `base.html` comparan contra `"amz"` — inconsistencia de string independiente del bug 1.
+
+**Fix + nav unificado:** se construyó `_build_nav_tabs()` (main.py) — un registro único
+de las 17 pestañas (13 ML + 8 Amazon, unión completa) que reemplaza los 4 bloques Jinja
+duplicados (desktop/mobile × ML/Amazon) en `base.html` por un solo loop compartido.
+Cada pestaña declara su href por plataforma; si no aplica a la plataforma activa se
+muestra deshabilitada/gris con tooltip en vez de desaparecer o romper el layout.
+`_ML_ONLY_PATHS`/`_AMZ_ONLY_PATHS` ahora se derivan de ese mismo registro — ya no puede
+volver a desincronizarse. Bono: **Planeación** y **Facturación** ahora también son
+accesibles desde el nav de Amazon (el backend de `/planning` ya combinaba ML+Amazon).
+
+**Validado localmente:** admin en ambas plataformas (desktop+mobile), gating por rol
+verificado directamente contra `_build_nav_tabs()` (editor con `allowed_sections`
+limitado ve solo sus tabs permitidas en ambas plataformas), y reproducción exacta del
+bug reportado — `POST /auth/switch-amazon` desde `/returns` ahora responde
+`Location: /amazon` en vez de dejarte a medias.
+
+**Pendiente (Fase 2, no en este cambio):** Retornos, SKU y Listings/Deals promovidos a
+vista propia en la plataforma que aún no los tiene (los datos backend ya existen para
+Amazon Retornos vía `get_refunds_30d`/`_compute_unified_returns`).
+
+---
+
 ## 2026-07-17 — FIX: tope duro de disco en claim_photos/ (causa raíz de los incidentes recurrentes de "disk full")
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`
