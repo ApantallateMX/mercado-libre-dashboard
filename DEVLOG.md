@@ -7,6 +7,71 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-17 — FIX: nav ya no hace scroll horizontal en pantallas anchas
+
+**Archivos:** `app/templates/base.html`
+
+**Motivación:** tras el nav unificado, Jovan reportó (con captura) que el nav ahora
+mostraba scroll horizontal y espacio vacío a los lados en su monitor ancho — el
+contenedor del nav estaba limitado a `max-w-7xl` (1280px) sin importar qué tan ancha
+fuera la pantalla, mientras las 17 pestañas (unión ML+Amazon) desbordaban ese ancho.
+
+**Fix:** el nav pasa de `max-w-7xl mx-auto` a `w-full` (usa todo el ancho disponible,
+la barra de contenido principal más abajo sigue centrada en `max-w-7xl` sin cambios),
+más padding/gap reducido en las pestañas. Verificado con Playwright headless a 1920px:
+0px de overflow (antes desbordaba); a 1366px (laptop común) queda un desborde menor
+esperado dado que ahora son 17 pestañas en vez de 13.
+
+---
+
+## 2026-07-17 — FEAT: Retornos Amazon (Fase 2.1 del nav unificado) — vista de una sola cuenta con razón real vía Reports API
+
+**Archivos:** `app/main.py`, `app/templates/amazon_returns.html`,
+`app/templates/partials/amazon_returns_summary.html`, `app/templates/base.html`
+
+**Motivación:** primera de 5 features de Fase 2 acordadas con Jovan tras el nav
+unificado — Retornos existía solo para ML; del lado Amazon la pestaña estaba
+deshabilitada porque nunca se construyó una vista de una sola cuenta (solo existía
+el agregado cross-cuenta del widget "Top Retornos Global").
+
+**Decisiones de alcance (confirmadas con Jovan):**
+- Sin tarjetas "Abiertos"/"Resueltos" — un refund Amazon es un evento financiero ya
+  completado, no existe estado "abierto" en los datos (antes ni siquiera se calculaba,
+  estaba hardcodeado a `closed`). Grid de 4 KPIs en vez de 6.
+- Razón real del reembolso SÍ se integra ahora (no solo el fallback genérico que
+  existía antes) vía `get_returns_report()` — Reports API
+  `GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE`, ya definida pero nunca usada. Limitación
+  real de Amazon: **solo cubre FBA** — FBM cae al fallback "Devolución Amazon",
+  comunicado explícitamente en la UI.
+
+**Backend nuevo:**
+- `_fetch_amazon_returns_report_cached(seller_id, days)` — cache 6h (reportes son
+  caros de generar, primera carga hace polling ~30-60s+).
+- `_AMZ_REASON_SEVERITY` — tabla de severidad por código de razón Amazon (mismo
+  formato que `_REASON_SEVERITY` de ML), solo penaliza cuando la razón real se conoce.
+- `_aggregate_amazon_returns_by_sku(seller_id, days)` — helper compartido que
+  combina refunds (Finances API, todas las órdenes) + reasons report (FBA) por
+  `order_id`. **Reemplaza la lógica duplicada** que `_compute_unified_returns` tenía
+  inline para su rama Amazon — el widget cross-cuenta ahora también se beneficia de
+  razones reales para órdenes FBA.
+- 4 endpoints nuevos: `/partials/amazon-returns-summary`, `/api/amazon/returns/timeline`,
+  `/api/amazon/returns/quality-scores`, `/api/amazon/returns/top-skus`.
+- Página `/amazon/returns` (mismo patrón que `/amazon/products`).
+- `_NAV_TAB_DEFS`: tab `returns` ahora con `amz_href` + `amz_gated=True`.
+
+**Bug encontrado y corregido en el mismo cambio:** `get_order_metrics(granularity="Total")`
+retorna una **lista** de 1 elemento, no un dict — el chequeo `isinstance(metrics, dict)`
+fallaba silenciosamente y "Tasa de Retorno" siempre mostraba 0%. Corregido antes de push.
+
+**Validado con datos reales (VECKTOR IMPORTS):** 34 refunds/30d, tasa de retorno 3.3%
+(34/1024 órdenes vía Sales API), Quality Score y Top SKUs poblados correctamente, sin
+errores de consola (Playwright), gating por rol correcto en ambas plataformas.
+
+**Pendiente Fase 2 (roadmap, no en este cambio):** SKU Amazon, Finanzas ML,
+Listings/Deals promovidos a vista propia, FBA/Sync Stock/Distribución cross-platform.
+
+---
+
 ## 2026-07-17 — FIX/FEAT: nav unificado ML ↔ Amazon + hotfix del switch de cuentas
 
 **Archivos:** `app/main.py`, `app/templates/base.html`
