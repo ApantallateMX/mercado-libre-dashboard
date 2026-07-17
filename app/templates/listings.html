@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Listings{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Listings</h1>
+        <p class="text-gray-600">Quality Score por publicación — título, fotos, GTIN y marca</p>
+    </div>
+    {% if active_user_id %}
+    <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-400">Cuenta activa:</span>
+        {% for acc in accounts %}{% if acc.user_id == active_user_id %}
+        <span class="text-xs font-semibold bg-yellow-400 text-gray-800 px-2.5 py-0.5 rounded-full">{{ acc.nickname or acc.user_id }}</span>
+        {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div id="lq-summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    {% for i in range(4) %}
+    <div class="bg-white p-5 rounded-lg shadow animate-pulse">
+        <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+        <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="bg-white rounded-lg shadow">
+    <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-3 flex-wrap">
+        <h2 class="text-sm font-semibold text-gray-700">Publicaciones</h2>
+        <select id="lq-filter" onchange="loadListings()" class="border rounded px-2 py-1 text-xs bg-white ml-auto">
+            <option value="all">Todas</option>
+            <option value="D">Grado D (crítico)</option>
+            <option value="C">Grado C o peor</option>
+            <option value="issues">Con issues</option>
+        </select>
+    </div>
+    <div id="lq-table-wrap" class="p-5">
+        <div class="text-center py-10 text-gray-400 text-sm">Analizando calidad de listings...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+var _PAGE_SIZE = 10;
+
+function _renderPaginated(rows, page, tbodyId, paginatorId) {
+    var total = rows.length;
+    var totalPages = Math.max(1, Math.ceil(total / _PAGE_SIZE));
+    var p = Math.min(Math.max(1, page), totalPages);
+    var start = (p - 1) * _PAGE_SIZE, end = Math.min(start + _PAGE_SIZE, total);
+    var tbody = document.getElementById(tbodyId);
+    if (tbody) tbody.innerHTML = rows.slice(start, end).join('');
+    var pag = document.getElementById(paginatorId);
+    if (!pag) return p;
+    if (total <= _PAGE_SIZE) { pag.innerHTML = ''; return p; }
+    pag.innerHTML =
+        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">' +
+        '<span class="text-xs text-gray-400">' + (start + 1) + '–' + end + ' de ' + total + '</span>' +
+        '<div class="flex items-center gap-1">' +
+        '<button onclick="window[\'' + paginatorId + '_go\'](' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+        '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
+        '<button onclick="window[\'' + paginatorId + '_go\'](' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+        '</div></div>';
+    return p;
+}
+
+window.loadListings = function() {
+    var wrap = document.getElementById('lq-table-wrap');
+    var summaryEl = document.getElementById('lq-summary');
+    var filter = (document.getElementById('lq-filter') || {}).value || 'all';
+    wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Analizando calidad de listings...</div>';
+
+    fetch('/api/ml/listing-quality')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.error) { wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">' + d.error + '</div>'; return; }
+
+            var s = d.summary || {};
+            summaryEl.innerHTML = [
+                {label: 'Score Promedio', value: (s.avg_score || 0).toFixed(1), icon: '📊', color: '#F59E0B', sub: 'de 100 puntos'},
+                {label: 'Grado A (≥85)', value: s.grade_A || 0, icon: '🟢', color: '#10B981', sub: 'excelente calidad'},
+                {label: 'Grado B/C', value: (s.grade_B || 0) + (s.grade_C || 0), icon: '🟡', color: '#D97706', sub: 'mejorar'},
+                {label: 'Grado D (<55)', value: s.grade_D || 0, icon: '🔴', color: '#EF4444', sub: 'crítico'},
+            ].map(function(c) {
+                return '<div class="bg-white p-5 rounded-lg shadow border-b-4" style="border-bottom-color:' + c.color + '">' +
+                    '<div class="flex items-center justify-between mb-1"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
+                    '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
+                    '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
+            }).join('');
+
+            var items = d.items || [];
+            if (filter === 'D') items = items.filter(function(i) { return i.grade === 'D'; });
+            else if (filter === 'C') items = items.filter(function(i) { return i.grade === 'C' || i.grade === 'D'; });
+            else if (filter === 'issues') items = items.filter(function(i) { return (i.issues || []).length > 0; });
+
+            if (!items.length) { wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay listings para el filtro seleccionado</div>'; return; }
+
+            var gradeColor = {A: 'bg-green-100 text-green-700', B: 'bg-blue-100 text-blue-700', C: 'bg-yellow-100 text-yellow-700', D: 'bg-red-100 text-red-700'};
+            var rows = items.map(function(item) {
+                var scoreColor = item.score >= 85 ? '#10B981' : (item.score >= 70 ? '#3B82F6' : (item.score >= 55 ? '#D97706' : '#EF4444'));
+                var gc = gradeColor[item.grade] || 'bg-gray-100 text-gray-500';
+                var issuesHtml = (item.issues || []).map(function(i) { return '<div class="text-xs text-red-600 truncate max-w-[220px]">• ' + i + '</div>'; }).join('');
+                var row = '<tr class="hover:bg-gray-50">';
+                row += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs font-mono">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[250px]">' + (item.title || '—') + '</div></td>';
+                row += '<td class="py-3 px-3 text-center"><span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold ' + gc + '">' + item.grade + '</span></td>';
+                row += '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1"><div class="w-14 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + item.score + '%;background:' + scoreColor + '"></div></div><span class="text-xs font-bold" style="color:' + scoreColor + '">' + item.score + '</span></div></td>';
+                row += '<td class="py-3 px-3 text-right text-xs text-gray-600">' + (item.price ? '$' + Number(item.price).toLocaleString('es-MX') : '—') + '</td>';
+                row += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
+                row += '<td class="py-3 px-3 text-center">' +
+                    (item.item_id ? '<a href="https://www.mercadolibre.com.mx/p/' + item.item_id + '" target="_blank" class="text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">Ver en ML</a>' : '—') +
+                    '</td>';
+                row += '</tr>';
+                return row;
+            });
+
+            wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[700px]">' +
+                '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
+                '<th class="py-3 px-4 font-semibold">SKU / Título</th>' +
+                '<th class="py-3 px-3 text-center font-semibold">Grado</th>' +
+                '<th class="py-3 px-3 text-center font-semibold">Score</th>' +
+                '<th class="py-3 px-3 text-right font-semibold">Precio</th>' +
+                '<th class="py-3 px-4 font-semibold">Issues</th>' +
+                '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
+                '</tr></thead><tbody id="lq-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
+                '<div id="lq-pag"></div>';
+            window['lq-pag_go'] = function(p) { _renderPaginated(rows, p, 'lq-tbody', 'lq-pag'); };
+            _renderPaginated(rows, 1, 'lq-tbody', 'lq-pag');
+        })
+        .catch(function(e) {
+            wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar listings: ' + e.message + '</div>';
+        });
+};
+
+loadListings();
+})();
+</script>
+{% endblock %}

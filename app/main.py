@@ -1121,9 +1121,9 @@ _NAV_TAB_DEFS = [
          ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
          section=None, admin_only=False, amz_gated=False, badge=None),
     dict(id="listings", label="Listings", icon="🏷️",
-         ml_href=None, amz_href="/amazon?tab=listings",
-         ml_active=None, amz_active="listings", amz_uses_dispatcher=True,
-         section=None, admin_only=False, amz_gated=False, badge=None),
+         ml_href="/listings", amz_href="/amazon?tab=listings",
+         ml_active=["listings"], amz_active="listings", amz_uses_dispatcher=True,
+         section="productos", admin_only=False, amz_gated=False, badge=None),
     dict(id="deals", label="Deals", icon="🎯",
          ml_href="/deals", amz_href="/amazon?tab=deals",
          ml_active=["deals"], amz_active="deals", amz_uses_dispatcher=True,
@@ -2069,6 +2069,74 @@ async def deals_page(request: Request):
     ctx = await _accounts_ctx(request)
     return templates.TemplateResponse(request, "deals.html", {
         "user": user, "active": "deals", **ctx
+    })
+
+
+@app.get("/api/ml/listing-quality")
+async def ml_listing_quality():
+    """Quality Score ML con grado A/B/C/D + resumen — mismo corte que
+    /api/amazon/listing-quality (amazon_products.py:3965-3981) para que ambas
+    plataformas se sientan iguales. Reusa la misma tabla/query que
+    /api/lanzar/listing-quality (lanzar.py:1337), solo agrega grado+issues[]+summary
+    server-side (antes vivían solo en el JS de lanzar_gaps.html)."""
+    import aiosqlite as _aio_mlq
+    from app.services.meli_client import _active_user_id as _ml_lq_ctx
+    user_id = _ml_lq_ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with _aio_mlq.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_mlq.Row
+        cur = await db.execute(
+            "SELECT * FROM ml_listing_quality WHERE user_id=? ORDER BY quality_score ASC",
+            (user_id,)
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    items = []
+    for r in rows:
+        score = r.get("quality_score") or 0
+        grade = "A" if score >= 85 else "B" if score >= 70 else "C" if score >= 55 else "D"
+        issues = []
+        title_len = r.get("title_len") or 0
+        pics_count = r.get("pics_count") or 0
+        if title_len < 40:
+            issues.append(f"Título corto ({title_len} chars)")
+        if pics_count < 3:
+            issues.append(f"Pocas imágenes ({pics_count})")
+        if not r.get("has_gtin"):
+            issues.append("Sin GTIN/UPC")
+        if not r.get("has_brand"):
+            issues.append("Sin marca")
+        items.append({
+            "sku": r.get("sku", ""), "item_id": r.get("item_id", ""),
+            "title": r.get("product_title") or r.get("sku", ""),
+            "price": r.get("ml_price"), "score": score, "grade": grade,
+            "issues": issues, "last_scan": r.get("last_scan", ""),
+        })
+
+    total = len(items)
+    avg_score = round(sum(i["score"] for i in items) / total, 1) if total > 0 else 0.0
+    summary = {
+        "avg_score": avg_score,
+        "grade_A": sum(1 for i in items if i["grade"] == "A"),
+        "grade_B": sum(1 for i in items if i["grade"] == "B"),
+        "grade_C": sum(1 for i in items if i["grade"] == "C"),
+        "grade_D": sum(1 for i in items if i["grade"] == "D"),
+        "total": total,
+    }
+    return {"items": items, "summary": summary}
+
+
+@app.get("/listings", response_class=HTMLResponse)
+async def listings_page(request: Request):
+    """Listings ML como pestaña propia — Quality Score con grado, calcado del
+    layout de /amazon?tab=listings."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "listings.html", {
+        "user": user, "active": "listings", **ctx
     })
 
 
