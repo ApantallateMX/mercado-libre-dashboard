@@ -44,7 +44,7 @@
    anotado con .available/.href según active_platform ("ml" o "amz").
    ════════════════════════════════════════════════════════════════════════ #}
 <nav class="bg-yellow-400 shadow-md {% if active_platform == 'amz' %}border-b-2 border-orange-500{% else %}border-b-2 border-yellow-500{% endif %}">
-    <div class="max-w-7xl mx-auto px-4">
+    <div class="w-full px-4">
         <div class="flex justify-between h-14 md:h-16 items-center">
 
             <!-- ── Logo + hamburger ──────────────────────────────────────── -->
@@ -66,11 +66,11 @@
             </div>
 
             <!-- ── Tabs desktop — nav unificado ML + Amazon (mismo registro nav_tabs) ── -->
-            <div class="hidden md:flex items-center gap-1 text-xs font-medium overflow-x-auto">
+            <div class="hidden md:flex items-center gap-0.5 lg:gap-1 text-xs font-medium overflow-x-auto min-w-0">
                 {% for tab in nav_tabs %}
                 {% set is_active = (active_platform == 'amz' and ((tab.amz_uses_dispatcher and active_amazon_tab == tab.amz_active) or (not tab.amz_uses_dispatcher and tab.ml_active and active in tab.ml_active))) or (active_platform != 'amz' and tab.ml_active and active in tab.ml_active) %}
                 {% if tab.available %}
-                <a href="{{ tab.href }}" class="relative flex items-center gap-1 text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition whitespace-nowrap {% if is_active %}font-semibold bg-yellow-500{% endif %}">
+                <a href="{{ tab.href }}" class="relative flex items-center gap-0.5 text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-1.5 py-1 rounded transition whitespace-nowrap {% if is_active %}font-semibold bg-yellow-500{% endif %}">
                     <span>{{ tab.icon }}</span> {{ tab.label }}
                     {% if tab.badge == 'orphans' and active_platform != 'amz' %}<span id="orphans-nav-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
                     {% if tab.badge == 'health' and active_platform != 'amz' %}<span id="health-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
@@ -79,7 +79,7 @@
                 </a>
                 {% else %}
                 <span title="Aún no disponible en {% if active_platform == 'amz' %}Amazon{% else %}Mercado Libre{% endif %}"
-                      class="relative flex items-center gap-1 px-2 py-1 rounded whitespace-nowrap opacity-40 cursor-not-allowed text-gray-400 select-none">
+                      class="relative flex items-center gap-0.5 px-1 py-1 rounded whitespace-nowrap opacity-40 cursor-not-allowed text-gray-400 select-none text-[11px]">
                     <span>{{ tab.icon }}</span> {{ tab.label }}
                 </span>
                 {% endif %}
