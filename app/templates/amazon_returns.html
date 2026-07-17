@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}Retornos Amazon{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Retornos y Devoluciones — Amazon</h1>
+        <p class="text-gray-600">Reembolsos reportados por Amazon para la cuenta activa</p>
+    </div>
+    <div class="flex items-center gap-3 mt-1 flex-wrap">
+        {% if amazon_account %}
+        <div class="flex items-center gap-2">
+            <span class="text-xs text-gray-400">Cuenta activa:</span>
+            <span class="text-xs font-semibold bg-orange-100 text-orange-800 px-2.5 py-0.5 rounded-full">
+                {{ amazon_account.nickname or amazon_account.seller_id }}
+            </span>
+        </div>
+        {% endif %}
+        <a href="/multi-dashboard" class="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium transition">
+            🌐 Ver retornos de todas las cuentas →
+        </a>
+    </div>
+</div>
+
+<!-- Period presets -->
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+    <div class="flex flex-wrap gap-1.5 items-center">
+        <span class="text-xs text-gray-400 self-center mr-1">Período:</span>
+        <button onclick="setAmzRetPeriod(7)"  data-days="7"  class="amz-ret-preset px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-800 transition font-medium">7 días</button>
+        <button onclick="setAmzRetPeriod(30)" data-days="30" class="amz-ret-preset px-3 py-1 text-xs rounded-full bg-orange-400 text-white font-semibold transition">30 días</button>
+        <button onclick="setAmzRetPeriod(90)" data-days="90" class="amz-ret-preset px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-800 transition font-medium">90 días</button>
+        <span class="ml-auto text-[10px] text-gray-400">
+            La razón real del reembolso solo está disponible para órdenes FBA (Reports API) — FBM se muestra genérico.
+        </span>
+    </div>
+</div>
+
+<div id="ret-alerts-panel" class="hidden mb-5"></div>
+
+<!-- KPI Summary -->
+<div id="amz-ret-summary">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {% for i in range(4) %}
+        <div class="bg-white p-5 rounded-lg shadow animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+            <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Tendencia + Quality Score -->
+<div class="grid grid-cols-1 lg:grid-cols-5 gap-5 mb-6">
+    <div class="lg:col-span-3 bg-white rounded-lg shadow">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+            <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+            </svg>
+            <h2 class="text-sm font-semibold text-gray-700">Tendencia de Retornos</h2>
+            <span class="text-[10px] text-gray-400">(por día o semana)</span>
+        </div>
+        <div class="p-5">
+            <div id="amz-ret-timeline-wrap" class="relative" style="height:250px">
+                <canvas id="amz-ret-timeline-chart"></canvas>
+                <div id="amz-ret-timeline-empty" class="hidden absolute inset-0 flex items-center justify-center text-sm text-gray-400">Sin datos en este periodo</div>
+            </div>
+        </div>
+    </div>
+    <div class="lg:col-span-2 bg-white rounded-lg shadow p-4 flex flex-col">
+        <h3 class="text-sm font-bold text-gray-800 mb-1 flex items-center gap-1">
+            <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            Quality Score
+        </h3>
+        <p class="text-[10px] text-gray-400 mb-3">Calidad por SKU — solo penaliza cuando se conoce la razón real (FBA)</p>
+        <div id="amz-ret-quality-scores" class="flex-1 overflow-y-auto">
+            <div class="animate-pulse space-y-1.5">
+                {% for i in range(5) %}
+                <div class="h-7 bg-gray-100 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Top SKUs -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="px-6 py-3 flex items-center gap-2 border-b border-gray-100">
+        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        <h2 class="text-sm font-semibold text-gray-700">Top SKUs por Retornos</h2>
+    </div>
+    <div id="amz-ret-top-skus" class="p-5">
+        <div class="flex items-center justify-center gap-3 py-8 text-sm text-gray-400">
+            <svg class="animate-spin h-5 w-5 text-orange-500" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+            Cargando top retornados...
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+var sellerId = '{{ active_amazon_id | default("") }}';
+var currentDays = 30;
+var _timelineChart = null;
+
+function _params() { return 'seller_id=' + encodeURIComponent(sellerId) + '&days=' + currentDays; }
+
+window.setAmzRetPeriod = function(days) {
+    currentDays = days;
+    document.querySelectorAll('.amz-ret-preset').forEach(function(btn) {
+        var isActive = parseInt(btn.dataset.days, 10) === days;
+        btn.className = 'amz-ret-preset px-3 py-1 text-xs rounded-full transition font-medium ' +
+            (isActive ? 'bg-orange-400 text-white font-semibold' : 'bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-800');
+    });
+    loadAll();
+};
+
+function loadSummary() {
+    fetch('/partials/amazon-returns-summary?' + _params())
+        .then(function(r) { return r.text(); })
+        .then(function(html) { document.getElementById('amz-ret-summary').innerHTML = html; })
+        .catch(function() {
+            document.getElementById('amz-ret-summary').innerHTML =
+                '<p class="text-center text-red-500 py-4">Error cargando resumen</p>';
+        });
+}
+
+function loadTimeline() {
+    fetch('/api/amazon/returns/timeline?' + _params())
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderTimeline(data); })
+        .catch(function() {});
+}
+
+function _renderTimeline(data) {
+    var empty = document.getElementById('amz-ret-timeline-empty');
+    var canvas = document.getElementById('amz-ret-timeline-chart');
+    if (!canvas) return;
+    var tl = data.timeline || [];
+    if (!tl.length) { if (empty) empty.classList.remove('hidden'); return; }
+    if (empty) empty.classList.add('hidden');
+    var labels = tl.map(function(b) { return b.date; });
+    var counts = tl.map(function(b) { return b.count; });
+    var ctx = canvas.getContext('2d');
+    if (_timelineChart) _timelineChart.destroy();
+    _timelineChart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels: labels, datasets: [{
+            label: 'Retornos', data: counts,
+            backgroundColor: counts.map(function(v) { return v >= 5 ? 'rgba(239,68,68,0.7)' : v >= 2 ? 'rgba(249,115,22,0.6)' : 'rgba(251,191,36,0.5)'; }),
+            borderColor: counts.map(function(v) { return v >= 5 ? '#ef4444' : v >= 2 ? '#f97316' : '#fbbf24'; }),
+            borderWidth: 1, borderRadius: 3,
+        }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { x: { ticks: { font: { size: 10 }, maxRotation: 45 } }, y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } } } }
+        }
+    });
+}
+
+function loadQualityScores() {
+    var el = document.getElementById('amz-ret-quality-scores');
+    fetch('/api/amazon/returns/quality-scores?' + _params())
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var scores = (data.scores || []).slice(0, 10);
+            var critical = scores.filter(function(s) { return s.grade === 'F' || s.return_count > 2; });
+            _renderCriticalBanner(critical);
+            if (!scores.length) { el.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Sin datos suficientes.</p>'; return; }
+            var gradeColors = { A: 'text-green-600 bg-green-50', B: 'text-yellow-600 bg-yellow-50', C: 'text-orange-600 bg-orange-50', D: 'text-red-500 bg-red-50', F: 'text-red-700 bg-red-100' };
+            var html = '';
+            scores.forEach(function(s) {
+                var gc = gradeColors[s.grade] || 'text-gray-500 bg-gray-50';
+                html += '<div class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg ' + gc + ' mb-1.5">' +
+                    '<div class="min-w-0"><p class="text-xs font-semibold font-mono truncate">' + (s.sku || s.title) + '</p>' +
+                    '<p class="text-[10px] opacity-75 truncate">' + s.return_count + ' retorno' + (s.return_count !== 1 ? 's' : '') + (s.main_reason ? ' · ' + s.main_reason : '') + '</p></div>' +
+                    '<span class="text-sm font-black flex-shrink-0">' + s.grade + ' · ' + s.score + '</span></div>';
+            });
+            el.innerHTML = html;
+        })
+        .catch(function() { el.innerHTML = '<p class="text-xs text-red-400 text-center py-4">Error cargando scores</p>'; });
+}
+
+function _renderCriticalBanner(critical) {
+    var panel = document.getElementById('ret-alerts-panel');
+    if (!critical.length) { panel.classList.add('hidden'); panel.innerHTML = ''; return; }
+    var worst = critical[0];
+    panel.classList.remove('hidden');
+    panel.innerHTML = '<div class="flex items-center gap-3 p-3 bg-red-50 border border-red-200 rounded-lg">' +
+        '<span class="w-2.5 h-2.5 rounded-full bg-red-500 flex-shrink-0"></span>' +
+        '<p class="text-sm text-red-700"><strong>Crítico:</strong> ' + (worst.title || worst.sku) +
+        ' — ' + worst.return_count + ' retornos · Score ' + worst.score + '</p></div>';
+}
+
+function loadTopSkus() {
+    var el = document.getElementById('amz-ret-top-skus');
+    fetch('/api/amazon/returns/top-skus?limit=15&' + _params())
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderTopSkus(data); })
+        .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
+}
+
+function _renderTopSkus(data) {
+    var el = document.getElementById('amz-ret-top-skus');
+    var products = data.products || [];
+    if (!products.length) { el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">Sin retornos en este periodo.</p>'; return; }
+    var html = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-3">SKU</th><th class="py-2 pr-3">Retornos</th>' +
+        '<th class="py-2 pr-3">% del total</th><th class="py-2 pr-3">Monto USD</th><th class="py-2 pr-3">Ref. BM (USD/u)</th>' +
+        '<th class="py-2 pr-3">Razones</th></tr></thead><tbody>';
+    products.forEach(function(p) {
+        var reasonsTxt = Object.entries(p.reasons || {}).sort(function(a, b) { return b[1] - a[1]; })
+            .map(function(kv) { return kv[0] + ' (' + kv[1] + ')'; }).join(', ');
+        html += '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
+            '<td class="py-2 pr-3 font-mono font-semibold">' + (p.sku || p.title) + '</td>' +
+            '<td class="py-2 pr-3">' + p.count + '</td>' +
+            '<td class="py-2 pr-3">' + p.pct_of_total + '%</td>' +
+            '<td class="py-2 pr-3">$' + p.refund_usd.toLocaleString('es-MX', {minimumFractionDigits: 2}) + '</td>' +
+            '<td class="py-2 pr-3">' + (p.retail_ph_unit > 0 ? '$' + p.retail_ph_unit.toFixed(2) : '—') + '</td>' +
+            '<td class="py-2 pr-3 text-gray-500">' + (reasonsTxt || 'Sin detalle') + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+}
+
+function loadAll() { loadSummary(); loadTimeline(); loadQualityScores(); loadTopSkus(); }
+
+if (!sellerId) {
+    document.getElementById('amz-ret-summary').innerHTML =
+        '<p class="text-center text-red-500 py-6">No hay cuenta Amazon activa — selecciona una en el menú de arriba.</p>';
+} else {
+    loadAll();
+}
+})();
+</script>
+{% endblock %}

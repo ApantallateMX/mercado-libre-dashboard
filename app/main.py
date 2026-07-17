@@ -1101,9 +1101,9 @@ _NAV_TAB_DEFS = [
          ml_active=["health"], amz_active="salud", amz_uses_dispatcher=True,
          section="salud", admin_only=False, amz_gated=False, badge="health"),
     dict(id="returns", label="Retornos", icon="🔄",
-         ml_href="/returns", amz_href=None,
+         ml_href="/returns", amz_href="/amazon/returns",
          ml_active=["returns"], amz_active=None, amz_uses_dispatcher=False,
-         section="devoluciones", admin_only=False, amz_gated=False, badge="returns"),
+         section="devoluciones", admin_only=False, amz_gated=True, badge="returns"),
     dict(id="planning", label="Planeación", icon="⬡",
          ml_href="/planning", amz_href="/planning",
          ml_active=["planning"], amz_active=None, amz_uses_dispatcher=False,
@@ -13067,6 +13067,22 @@ async def amazon_orders_page(request: Request):
     return templates.TemplateResponse(request, "amazon_orders.html", {"user": user, **ctx})
 
 
+@app.get("/amazon/returns", response_class=HTMLResponse)
+async def amazon_returns_page(request: Request):
+    """Retornos y Devoluciones — vista Amazon de una sola cuenta (Fase 2.1)."""
+    user = await get_current_user()
+    ctx = await _accounts_ctx(request)
+    active_amazon_id = ctx.get("active_amazon_id")
+    amazon_account = None
+    if active_amazon_id:
+        amazon_account = await token_store.get_amazon_account(active_amazon_id)
+    ctx["amazon_account"] = amazon_account
+    ctx["active_platform"] = "amz"
+    ctx["active"] = "returns"
+    ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
+    return templates.TemplateResponse(request, "amazon_returns.html", {"user": user, **ctx})
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # STOCK SYNC SCHEDULER — Alertas proactivas de sobreventa (Week 3)
 # Cada 4 horas verifica: items activos en MeLi con BM disponible = 0
@@ -16653,6 +16669,108 @@ def _amz_reason_label(reason: str) -> str:
     return _AMZ_REASON_MAP.get((reason or "").upper().strip(), reason or "Devolución Amazon")
 
 
+# ── Amazon returns report (razón real, solo FBA) ───────────────────────────────
+# get_refunds_detail() (Finances API) nunca trae razón real — el campo llega vacío.
+# La razón real solo existe en el reporte GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE
+# (Reports API, solo FBA). Cache largo porque generar el reporte es caro (polling).
+_amz_returns_report_cache: dict = {}   # {(seller_id, days): (ts, [returns])}
+_AMZ_RETURNS_REPORT_TTL = 3600 * 6    # 6 horas
+
+async def _fetch_amazon_returns_report_cached(seller_id: str, days: int) -> list:
+    """get_returns_report() con cache de 6h. Amazon limita el reporte a 60 días —
+    si days > 60 se acota (el reporte cubre solo la ventana más reciente)."""
+    import time as _trr
+    from datetime import datetime as _dtr, timedelta as _tdr
+    key = (seller_id, days)
+    entry = _amz_returns_report_cache.get(key)
+    if entry and (_trr.time() - entry[0]) < _AMZ_RETURNS_REPORT_TTL:
+        return entry[1]
+    try:
+        from app.services.amazon_client import get_amazon_client as _get_amz_rr
+        client = await _get_amz_rr(seller_id)
+        if not client:
+            return []
+        capped_days = min(days, 60)
+        _now = _dtr.utcnow()
+        date_from = (_now - _tdr(days=capped_days)).strftime("%Y-%m-%d")
+        date_to = _now.strftime("%Y-%m-%d")
+        items = await client.get_returns_report(date_from, date_to)
+        _amz_returns_report_cache[key] = (_trr.time(), items)
+        return items
+    except Exception as _exc:
+        logger.warning(f"[AMZ-RETURNS-REPORT] Error {seller_id}: {_exc}")
+        return []
+
+
+# Severidad por código de razón Amazon (mismo formato que _REASON_SEVERITY de ML,
+# ver /api/returns/quality-scores). Pesos altos = problema real de calidad del
+# producto; bajos = arrepentimiento/logística, no calidad.
+_AMZ_REASON_SEVERITY: dict = {
+    "DEFECTIVE": 25, "QUALITY_UNACCEPTABLE": 22, "DAMAGED_BY_CARRIER": 18,
+    "WRONG_ITEM_SENT": 18, "NOT_AS_DESCRIBED": 15, "MISSING_PARTS": 12,
+    "NOT_COMPATIBLE": 10, "SWITCHEROO": 10,
+    "CUSTOMER_RETURN": 5, "UNDELIVERABLE": 5, "REFUSED": 5, "EXPIRED": 5,
+}
+_AMZ_REASON_SEVERITY_DEFAULT = 10  # código no mapeado pero SÍ conocido
+
+
+async def _aggregate_amazon_returns_by_sku(seller_id: str, days: int, nickname: str = "") -> dict:
+    """Agrega refunds Amazon por SKU para UNA cuenta — combina _fetch_amazon_refunds_cached
+    (todas las órdenes, sin razón) + _fetch_amazon_returns_report_cached (razón real,
+    solo FBA) por order_id. Refund sin match en el reporte (típicamente FBM) cae al
+    fallback "Devolución Amazon", igual que antes — no se inventa una razón.
+
+    Usado tanto por el endpoint de una sola cuenta (/amazon/returns) como por
+    _compute_unified_returns (cross-cuenta) — antes esa función duplicaba esta misma
+    lógica inline por cuenta.
+    """
+    refunds = await _fetch_amazon_refunds_cached(seller_id, days)
+    try:
+        reasons_report = await _fetch_amazon_returns_report_cached(seller_id, days)
+    except Exception:
+        reasons_report = []
+    reason_by_order = {
+        r["order_id"]: r["reason"] for r in reasons_report
+        if r.get("order_id") and r.get("reason")
+    }
+
+    counts: dict = {}
+    for ref in refunds:
+        sku_raw = (ref.get("sku") or "").strip()
+        sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
+        key = sku if sku else f"amz_{ref.get('order_id', '')}"
+        reason_code = reason_by_order.get(ref.get("order_id", ""), "")
+        reason_lbl = _amz_reason_label(reason_code) if reason_code else "Devolución Amazon"
+        refund_amt = float(ref.get("amount", 0) or 0)
+        currency = ref.get("currency", "USD")
+        refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
+
+        if key not in counts:
+            counts[key] = {
+                "title": sku or sku_raw or key, "sku": sku,
+                "item_id": "",
+                "count": 0, "opened": 0, "closed": 0,
+                "reasons": {}, "accounts": {},
+                "platforms": {"ml": 0, "amazon": 0},
+                "sale_amount_mxn": 0.0, "refund_usd": 0.0,
+                "severity_sum": 0,
+            }
+        elif sku and not counts[key]["sku"]:
+            counts[key]["sku"] = sku
+        counts[key]["count"] += 1
+        counts[key]["platforms"]["amazon"] += 1
+        counts[key]["refund_usd"] = round(counts[key]["refund_usd"] + refund_usd, 2)
+        counts[key]["closed"] += 1  # un refund es un evento financiero ya completado
+        counts[key]["reasons"][reason_lbl] = counts[key]["reasons"].get(reason_lbl, 0) + 1
+        if reason_code:  # solo se penaliza cuando la razón real SÍ se conoce (FBA)
+            counts[key]["severity_sum"] += _AMZ_REASON_SEVERITY.get(
+                reason_code.upper().strip(), _AMZ_REASON_SEVERITY_DEFAULT
+            )
+        if nickname:
+            counts[key]["accounts"][nickname] = counts[key]["accounts"].get(nickname, 0) + 1
+    return counts
+
+
 # ── Unified returns cache (ML + Amazon combinado por SKU) ──────────────────────
 # Antes esto se calculaba en vivo en cada carga del widget, y para resolver el SKU
 # real de un reclamo ML hay que pedir el detalle de LA orden (1 request por reclamo)
@@ -16854,49 +16972,35 @@ async def _compute_unified_returns(days: int) -> dict:
             seller_id = acc.get("seller_id", "")
             nick = acc.get("nickname") or seller_id
             try:
-                refunds = await _fetch_amazon_refunds_cached(seller_id, days)
-                for r in refunds:
-                    r["_account_nickname"] = nick
-                return refunds
+                return await _aggregate_amazon_returns_by_sku(seller_id, days, nickname=nick)
             except Exception:
-                return []
+                return {}
 
     amz_nested = await asyncio.gather(
         *[_amz_for_account(a) for a in amz_accounts], return_exceptions=True
     )
-    amz_refunds: list = []
-    for r in amz_nested:
-        if isinstance(r, list):
-            amz_refunds.extend(r)
-
-    for ref in amz_refunds:
-        sku_raw = (ref.get("sku") or "").strip()
-        sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
-        key = sku if sku else f"amz_{ref.get('order_id', '')}"
-        acc_nick = ref.get("_account_nickname", "Amazon")
-        reason_lbl = _amz_reason_label(ref.get("reason", ""))
-        refund_amt = float(ref.get("amount", 0) or 0)
-        currency = ref.get("currency", "USD")
-        refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
-
-        if key not in amz_counts:
-            amz_counts[key] = {
-                "title": sku or sku_raw or key, "sku": sku,
-                "item_id": "",
-                "count": 0, "opened": 0, "closed": 0,
-                "reasons": {}, "accounts": {},
-                "platforms": {"ml": 0, "amazon": 0},
-                "sale_amount_mxn": 0.0, "refund_usd": 0.0,
-            }
-        elif sku and not amz_counts[key]["sku"]:
-            amz_counts[key]["sku"] = sku
-        amz_counts[key]["count"] += 1
-        amz_counts[key]["platforms"]["amazon"] += 1
-        amz_counts[key]["refund_usd"] = round(amz_counts[key]["refund_usd"] + refund_usd, 2)
-        amz_counts[key]["closed"] += 1  # refunds son operaciones cerradas
-        amz_counts[key]["reasons"][reason_lbl] = amz_counts[key]["reasons"].get(reason_lbl, 0) + 1
-        if acc_nick:
-            amz_counts[key]["accounts"][acc_nick] = amz_counts[key]["accounts"].get(acc_nick, 0) + 1
+    amz_total_refunds = 0
+    for per_account in amz_nested:
+        if not isinstance(per_account, dict):
+            continue
+        for key, v in per_account.items():
+            amz_total_refunds += v["count"]
+            if key not in amz_counts:
+                amz_counts[key] = {**v, "reasons": dict(v["reasons"]), "accounts": dict(v["accounts"]),
+                                    "platforms": dict(v["platforms"])}
+                continue
+            m = amz_counts[key]
+            m["count"] += v["count"]
+            m["closed"] += v["closed"]
+            m["refund_usd"] = round(m["refund_usd"] + v["refund_usd"], 2)
+            m["severity_sum"] = m.get("severity_sum", 0) + v.get("severity_sum", 0)
+            m["platforms"]["amazon"] += v["platforms"]["amazon"]
+            if v.get("sku") and not m.get("sku"):
+                m["sku"] = v["sku"]
+            for r2, c2 in v["reasons"].items():
+                m["reasons"][r2] = m["reasons"].get(r2, 0) + c2
+            for a2, c2 in v["accounts"].items():
+                m["accounts"][a2] = m["accounts"].get(a2, 0) + c2
 
     # ── Fallback de título vía catálogo BM cuando no se pudo resolver por orden/refund ──
     try:
@@ -16914,7 +17018,7 @@ async def _compute_unified_returns(days: int) -> dict:
 
     return {
         "ml_counts": ml_counts, "amz_counts": amz_counts,
-        "ml_total": len(ml_claims), "amz_total": len(amz_refunds),
+        "ml_total": len(ml_claims), "amz_total": amz_total_refunds,
     }
 
 
@@ -16948,6 +17052,173 @@ async def _fetch_unified_returns_cached(days: int) -> dict:
     if entry:
         return entry[1]
     return {"ml_counts": {}, "amz_counts": {}, "ml_total": 0, "amz_total": 0, "computing": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RETORNOS AMAZON — vista de una sola cuenta (Fase 2.1 del nav unificado)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/partials/amazon-returns-summary", response_class=HTMLResponse)
+async def amazon_returns_summary_partial(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """KPIs de Retornos para UNA cuenta Amazon. Sin Abiertos/Resueltos (un refund
+    Amazon es un evento financiero ya completado, no hay estado 'abierto')."""
+    sid = seller_id.strip()
+    if not sid:
+        return HTMLResponse("<p class='text-center py-4 text-red-500'>No hay cuenta Amazon activa.</p>")
+    try:
+        agg = await _aggregate_amazon_returns_by_sku(sid, days)
+        total = sum(v["count"] for v in agg.values())
+        refund_usd_total = sum(v["refund_usd"] for v in agg.values())
+
+        retail_map = _get_retail_ph_map()
+        costo_usd = sum(retail_map.get(v["sku"], 0.0) * v["count"] for v in agg.values() if v.get("sku"))
+
+        # Denominador de tasa de retorno — total de órdenes del período (Sales API)
+        total_orders = 0
+        try:
+            from app.services.amazon_client import get_amazon_client as _get_amz_rt
+            from datetime import datetime as _dtrt, timedelta as _tdrt
+            client = await _get_amz_rt(sid)
+            if client:
+                _now = _dtrt.utcnow()
+                date_to_excl = (_now + _tdrt(days=1)).strftime("%Y-%m-%d")
+                date_from = (_now - _tdrt(days=days)).strftime("%Y-%m-%d")
+                metrics = await client.get_order_metrics(
+                    date_from=date_from, date_to_exclusive=date_to_excl, granularity="Total"
+                )
+                # get_order_metrics(granularity="Total") retorna una LISTA de 1 elemento
+                metrics_row = metrics[0] if isinstance(metrics, list) and metrics else (metrics if isinstance(metrics, dict) else {})
+                total_orders = int(metrics_row.get("orderCount", 0))
+        except Exception as _e:
+            logger.warning(f"[AMZ-RETURNS-SUMMARY] order_metrics error {sid}: {_e}")
+
+        return_rate = (total / total_orders * 100) if total_orders > 0 else 0.0
+        _fx = _manual_fx_rate if _manual_fx_rate > 0 else 18.0
+        valor_mxn = refund_usd_total * _fx
+
+        reasons_agg: dict = {}
+        for v in agg.values():
+            for r, c in v.get("reasons", {}).items():
+                reasons_agg[r] = reasons_agg.get(r, 0) + c
+
+        summary = SimpleNamespace(
+            total=total,
+            return_rate=round(return_rate, 2),
+            total_orders=total_orders,
+            valor_mxn=round(valor_mxn, 2),
+            valor_usd=round(refund_usd_total, 2),
+            costo_usd=round(costo_usd, 2),
+            reasons=reasons_agg,
+        )
+        return templates.TemplateResponse(request, "partials/amazon_returns_summary.html", {
+            "summary": summary, "days": days,
+        })
+    except Exception as e:
+        logger.warning(f"[AMZ-RETURNS-SUMMARY] Error {sid}: {e}")
+        return HTMLResponse(f"<p class='text-center py-4 text-red-500'>Error cargando resumen: {e}</p>")
+
+
+@app.get("/api/amazon/returns/timeline")
+async def amazon_returns_timeline(
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """Timeline de refunds Amazon por día o semana (mismo shape que /api/returns/timeline)."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"error": "No hay cuenta Amazon activa", "timeline": [], "total": 0}
+    try:
+        from datetime import datetime as _dttl, timedelta as _tdtl
+        refunds = await _fetch_amazon_refunds_cached(sid, days)
+        gran = "week" if days > 90 else "day"
+        buckets: dict = {}
+        for r in refunds:
+            dc = (r.get("posted_date") or "")[:10]
+            if not dc:
+                continue
+            key = dc
+            if gran == "week":
+                try:
+                    d_obj = _dttl.fromisoformat(dc)
+                    key = (d_obj - _tdtl(days=d_obj.weekday())).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            if key not in buckets:
+                buckets[key] = {"date": key, "count": 0}
+            buckets[key]["count"] += 1
+        timeline = sorted(buckets.values(), key=lambda x: x["date"])
+        return {"timeline": timeline, "granularity": gran, "total": len(refunds)}
+    except Exception as e:
+        return {"error": str(e), "timeline": [], "total": 0}
+
+
+@app.get("/api/amazon/returns/quality-scores")
+async def amazon_returns_quality_scores(
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """Quality Score 0-100 por SKU Amazon — mismo criterio que ML (deducción por
+    volumen + severidad de razón), sin penalidad por 'abiertos' (no aplica)."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"ok": False, "error": "No hay cuenta Amazon activa", "scores": []}
+    try:
+        agg = await _aggregate_amazon_returns_by_sku(sid, days)
+        scores = []
+        for d in agg.values():
+            n = d["count"]
+            if n == 0:
+                continue
+            count_deduct = min(n * 8, 60)
+            sev_deduct = min(d.get("severity_sum", 0) / max(n, 1), 30)
+            score = max(0, round(100 - count_deduct - sev_deduct))
+            grade = ("A" if score >= 80 else "B" if score >= 60 else
+                     "C" if score >= 40 else "D" if score >= 20 else "F")
+            main_reason = max(d["reasons"], key=d["reasons"].get) if d["reasons"] else ""
+            scores.append({
+                "sku": d.get("sku", ""), "title": d.get("title", "") or d.get("sku", ""),
+                "score": score, "grade": grade,
+                "return_count": n, "main_reason": main_reason,
+            })
+        scores.sort(key=lambda s: s["score"])
+        return {"ok": True, "scores": scores}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "scores": []}
+
+
+@app.get("/api/amazon/returns/top-skus")
+async def amazon_returns_top_skus(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=50),
+    seller_id: str = Query(""),
+):
+    """Top SKUs por retornos Amazon de UNA cuenta — mismo shape que
+    /api/returns/unified-top?platform=amazon pero scoped a un solo seller_id."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"error": "No hay cuenta Amazon activa", "products": [], "total": 0}
+    try:
+        agg = await _aggregate_amazon_returns_by_sku(sid, days)
+        total = sum(v["count"] for v in agg.values())
+        retail_map = _get_retail_ph_map()
+        top = sorted(agg.values(), key=lambda x: x["count"], reverse=True)[:limit]
+        products = []
+        for p in top:
+            sku = p.get("sku", "")
+            products.append({
+                "sku": sku, "title": p.get("title", "") or sku,
+                "count": p["count"], "refund_usd": p["refund_usd"],
+                "reasons": p["reasons"],
+                "retail_ph_unit": retail_map.get(sku, 0.0) if sku else 0.0,
+                "pct_of_total": round(p["count"] / total * 100, 1) if total > 0 else 0,
+            })
+        return {"total": total, "days": days, "products": products}
+    except Exception as e:
+        return {"error": str(e), "products": [], "total": 0}
 
 
 def _merge_return_counts(ml_counts: dict, amz_counts: dict) -> dict:

@@ -74,7 +74,7 @@
                     <span>{{ tab.icon }}</span> {{ tab.label }}
                     {% if tab.badge == 'orphans' and active_platform != 'amz' %}<span id="orphans-nav-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
                     {% if tab.badge == 'health' and active_platform != 'amz' %}<span id="health-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
-                    {% if tab.badge == 'returns' %}<span id="returns-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
+                    {% if tab.badge == 'returns' and active_platform != 'amz' %}<span id="returns-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
                     {% if tab.badge == 'bm_sync' %}<span id="bm-health-dot" title="BinManager: verificando..." class="inline-block w-2 h-2 rounded-full bg-gray-300 ml-1 flex-shrink-0"></span><span id="bm-cache-age" class="text-[10px] text-gray-400 ml-0.5 font-mono hidden"></span>{% endif %}
                 </a>
                 {% else %}

@@ -1,0 +1,87 @@
+<div class="mb-2">
+    <span class="text-xs text-gray-400">Período: últimos {{ days }} días</span>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <!-- Total retornos -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-xs text-gray-500 mb-1">Total Retornos</p>
+        <p class="text-2xl font-bold {% if summary.total > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+            {{ summary.total }}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">en el periodo</p>
+        <div class="h-1.5 rounded-full mt-2 {% if summary.total == 0 %}bg-green-200{% elif summary.total <= 3 %}bg-yellow-200{% else %}bg-red-200{% endif %}">
+            <div class="h-1.5 rounded-full {% if summary.total == 0 %}bg-green-500{% elif summary.total <= 3 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
+                 style="width:{{ [summary.total * 10, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Tasa de retorno -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-xs text-gray-500 mb-1">Tasa de Retorno</p>
+        <p class="text-2xl font-bold {% if summary.return_rate >= 5 %}text-red-600{% elif summary.return_rate >= 2 %}text-yellow-600{% else %}text-green-600{% endif %}">
+            {{ "%.1f"|format(summary.return_rate) }}%
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">
+            {% if summary.total_orders > 0 %}empírica · {{ summary.total_orders }} órdenes{% else %}sin órdenes en rango{% endif %}
+        </p>
+        <div class="h-1.5 rounded-full mt-2 bg-gray-100">
+            <div class="h-1.5 rounded-full {% if summary.return_rate >= 5 %}bg-red-500{% elif summary.return_rate >= 2 %}bg-yellow-500{% else %}bg-green-500{% endif %}"
+                 style="width:{{ [summary.return_rate * 5, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Valor retornado -->
+    <div class="bg-white p-5 rounded-lg shadow border-l-4 border-orange-300">
+        <p class="text-xs text-gray-500 mb-1">Valor Retornado</p>
+        <p class="text-xl font-bold {% if summary.valor_mxn > 0 %}text-orange-600{% else %}text-gray-400{% endif %}">
+            ${{ "{:,.0f}".format(summary.valor_mxn) }}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">
+            MXN estimado · ${{ "{:,.2f}".format(summary.valor_usd) }} USD
+        </p>
+        <div class="h-1.5 rounded-full mt-2 bg-orange-100">
+            <div class="h-1.5 rounded-full bg-orange-400" style="width:{{ [summary.total * 10, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Valor Ref. BM -->
+    <div class="bg-white p-5 rounded-lg shadow border-l-4 border-red-300">
+        <p class="text-xs text-gray-500 mb-1">Valor Ref. BM</p>
+        <p class="text-xl font-bold {% if summary.costo_usd > 0 %}text-red-600{% else %}text-gray-400{% endif %}">
+            ${{ "{:,.2f}".format(summary.costo_usd) }}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">USD · Last Retail PH</p>
+        <div class="h-1.5 rounded-full mt-2 bg-red-100">
+            <div class="h-1.5 rounded-full bg-red-400" style="width:{{ [summary.total * 10, 100]|min }}%"></div>
+        </div>
+    </div>
+</div>
+
+{% if summary.total == 0 %}
+<div class="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
+    <svg class="w-5 h-5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <p class="text-sm text-green-700 font-medium">Sin retornos en el periodo seleccionado.</p>
+</div>
+{% endif %}
+
+{% if summary.total > 0 and summary.reasons %}
+<!-- Desglose por razón -->
+<div class="bg-white rounded-lg shadow p-4 mt-2">
+    <h4 class="text-xs font-semibold text-gray-600 mb-1">Desglose por razón</h4>
+    <p class="text-[10px] text-gray-400 mb-3">
+        Razón real disponible solo para órdenes FBA (Reports API) — las órdenes FBM se muestran como
+        "Devolución Amazon" genérico, Amazon no expone motivo para esas.
+    </p>
+    {% for label, count in summary.reasons.items()|sort(attribute='1', reverse=true) %}
+    <div class="flex items-center gap-2 mb-1.5">
+        <span class="text-xs text-gray-600 w-44 truncate" title="{{ label }}">{{ label }}</span>
+        <div class="flex-1 bg-gray-100 rounded-full h-2">
+            <div class="{% if label == 'Devolución Amazon' %}bg-gray-300{% else %}bg-orange-400{% endif %} h-2 rounded-full"
+                 style="width:{{ (count / summary.total * 100)|int }}%"></div>
+        </div>
+        <span class="text-xs font-bold text-gray-700 w-6 text-right">{{ count }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
