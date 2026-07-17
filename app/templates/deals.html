@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Deals{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Deals</h1>
+        <p class="text-gray-600">Promociones activas, precios y candidatos a deal</p>
+    </div>
+    {% if active_user_id %}
+    <div class="flex items-center gap-2" id="account-badge-wrap">
+        <span class="text-xs text-gray-400">Cuenta activa:</span>
+        {% for acc in accounts %}{% if acc.user_id == active_user_id %}
+        <span class="text-xs font-semibold bg-yellow-400 text-gray-800 px-2.5 py-0.5 rounded-full">{{ acc.nickname or acc.user_id }}</span>
+        {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div id="tab-content">
+    <div class="flex justify-center py-12">
+        <svg class="animate-spin h-8 w-8 text-yellow-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var activeTab = 'deals';
+
+    // Carga/recarga el contenido del tab (mismo comportamiento que items.html
+    // switchProductTab — el partial de deals llama a window.switchProductTab
+    // para su botón "Actualizar datos", así que se replica minimal aquí).
+    window.switchProductTab = function(tabName, url) {
+        activeTab = tabName;
+        var content = document.getElementById('tab-content');
+        content.innerHTML = '<div class="flex justify-center py-12"><svg class="animate-spin h-8 w-8 text-yellow-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg></div>';
+
+        var ctrl = new AbortController();
+        var tId = setTimeout(function() { ctrl.abort(); }, 150000);
+        fetch(url, {headers: {'ngrok-skip-browser-warning': 'true'}, signal: ctrl.signal})
+            .then(function(r) {
+                clearTimeout(tId);
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.text();
+            })
+            .then(function(html) {
+                content.innerHTML = html;
+                content.querySelectorAll('script').forEach(function(oldScript) {
+                    var newScript = document.createElement('script');
+                    newScript.textContent = oldScript.textContent;
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+            })
+            .catch(function(e) {
+                clearTimeout(tId);
+                var msg = e.name === 'AbortError' ? 'Tiempo de carga excedido (150s)' : ('Error: ' + e.message);
+                content.innerHTML = '<div class="text-center py-8 text-red-500">' + msg +
+                    ' — <button onclick="window.switchProductTab(\'' + tabName + '\',\'' + url + '\')" ' +
+                    'class="underline text-blue-500 hover:text-blue-700">Reintentar</button></div>';
+            });
+    };
+
+    // ── Edición inline de stock — portado de items.html (usado por los onclick
+    // del partial de deals: showStockEditor / quickSyncBM / inlineStockSync) ──
+    window.inlineStockSync = function(itemId, qty, msgEl, onSuccess) {
+        msgEl.textContent = '...';
+        msgEl.className = 'text-[10px] text-gray-400 ml-1 inline';
+        fetch('/api/items/' + itemId + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: qty})
+        })
+        .then(function(r) {
+            if (r.ok) {
+                msgEl.textContent = 'OK';
+                msgEl.className = 'text-[10px] text-green-600 ml-1 inline font-semibold';
+                setTimeout(function() { msgEl.textContent = ''; }, 2000);
+                if (onSuccess) onSuccess(qty);
+            } else {
+                return r.text().then(function(t) {
+                    try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                    catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+                });
+            }
+        })
+        .catch(function(e) {
+            msgEl.textContent = e.message;
+            msgEl.className = 'text-[10px] text-red-600 ml-1 inline';
+        });
+    };
+
+    window.quickSyncBM = function(btn, itemId, bmTotal) {
+        var cell = btn.closest('[data-stock-cell]');
+        var msgEl = cell.querySelector('[data-stock-msg]');
+        var displayEl = cell.querySelector('[data-stock-val]');
+        btn.disabled = true;
+        btn.textContent = '...';
+        window.inlineStockSync(itemId, bmTotal, msgEl, function(qty) {
+            displayEl.textContent = qty;
+            displayEl.className = 'cursor-pointer font-semibold hover:text-purple-600 hover:underline ' +
+                (qty > 5 ? 'text-green-600' : qty > 0 ? 'text-yellow-600' : 'text-red-600');
+            btn.classList.add('hidden');
+            btn.disabled = false;
+            btn.textContent = 'BM';
+        });
+    };
+
+    window.showStockEditor = function(el, itemId, currentStock, bmTotal) {
+        var cell = el.closest('[data-stock-cell]');
+        var msgEl = cell.querySelector('[data-stock-msg]');
+        var displayEl = cell.querySelector('[data-stock-val]');
+        var bmBtn = cell.querySelector('[data-bm-btn]');
+
+        var prefill = (bmTotal > 0 && bmTotal !== currentStock) ? bmTotal : currentStock;
+        displayEl.style.display = 'none';
+        if (bmBtn) bmBtn.style.display = 'none';
+
+        var wrap = document.createElement('span');
+        wrap.className = 'inline-flex items-center gap-1';
+        wrap.setAttribute('data-editor', '');
+        wrap.innerHTML = '<input type="number" min="0" value="' + prefill + '" ' +
+            'class="w-14 px-1 py-0.5 border rounded text-xs text-right focus:ring-1 focus:ring-purple-400 focus:outline-none">' +
+            '<button class="text-green-600 hover:text-green-800 text-sm font-bold leading-none" title="Guardar">&#10003;</button>' +
+            '<button class="text-gray-400 hover:text-red-500 text-sm font-bold leading-none" title="Cancelar">&#10007;</button>';
+        cell.insertBefore(wrap, msgEl);
+
+        var inp = wrap.querySelector('input');
+        var okBtn = wrap.querySelectorAll('button')[0];
+        var cancelBtn = wrap.querySelectorAll('button')[1];
+        inp.focus();
+        inp.select();
+
+        function closeEditor() {
+            wrap.remove();
+            displayEl.style.display = '';
+            if (bmBtn) bmBtn.style.display = '';
+        }
+
+        cancelBtn.onclick = closeEditor;
+        okBtn.onclick = function() {
+            var val = parseInt(inp.value);
+            if (isNaN(val) || val < 0) { inp.classList.add('border-red-400'); return; }
+            closeEditor();
+            window.inlineStockSync(itemId, val, msgEl, function(qty) {
+                displayEl.textContent = qty;
+                displayEl.className = 'cursor-pointer font-semibold hover:text-purple-600 hover:underline ' +
+                    (qty > 5 ? 'text-green-600' : qty > 0 ? 'text-yellow-600' : 'text-red-600');
+                if (bmBtn) {
+                    if (bmTotal > 0 && bmTotal !== qty) { bmBtn.classList.remove('hidden'); }
+                    else { bmBtn.classList.add('hidden'); }
+                }
+            });
+        };
+        inp.onkeydown = function(e) {
+            if (e.key === 'Enter') okBtn.onclick();
+            if (e.key === 'Escape') closeEditor();
+        };
+    };
+
+    window.switchProductTab('deals', '/partials/products-deals');
+})();
+</script>
+{% endblock %}

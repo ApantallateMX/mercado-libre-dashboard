@@ -1125,9 +1125,9 @@ _NAV_TAB_DEFS = [
          ml_active=None, amz_active="listings", amz_uses_dispatcher=True,
          section=None, admin_only=False, amz_gated=False, badge=None),
     dict(id="deals", label="Deals", icon="🎯",
-         ml_href=None, amz_href="/amazon?tab=deals",
-         ml_active=None, amz_active="deals", amz_uses_dispatcher=True,
-         section=None, admin_only=False, amz_gated=False, badge=None),
+         ml_href="/deals", amz_href="/amazon?tab=deals",
+         ml_active=["deals"], amz_active="deals", amz_uses_dispatcher=True,
+         section="productos", admin_only=False, amz_gated=False, badge=None),
     dict(id="stock_sync", label="Sync Stock", icon="⇄",
          ml_href="/stock-sync", amz_href=None,
          ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
@@ -2057,6 +2057,18 @@ async def items_page(request: Request):
     return templates.TemplateResponse(request, "items.html", {        "user": user,
         "active": "items",
         **ctx
+    })
+
+
+@app.get("/deals", response_class=HTMLResponse)
+async def deals_page(request: Request):
+    """Deals ML como pestaña propia — reusa /partials/products-deals sin cambios."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "deals.html", {
+        "user": user, "active": "deals", **ctx
     })
 
 
