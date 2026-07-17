@@ -1113,9 +1113,9 @@ _NAV_TAB_DEFS = [
          ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
          section="facturacion", admin_only=False, amz_gated=True, badge=None),
     dict(id="finanzas", label="Finanzas", icon="💰",
-         ml_href=None, amz_href="/amazon?tab=finanzas",
-         ml_active=None, amz_active="finanzas", amz_uses_dispatcher=True,
-         section=None, admin_only=False, amz_gated=False, badge=None),
+         ml_href="/finanzas", amz_href="/amazon?tab=finanzas",
+         ml_active=["finanzas"], amz_active="finanzas", amz_uses_dispatcher=True,
+         section="ventas", admin_only=False, amz_gated=False, badge=None),
     dict(id="fba", label="FBA & Stock", icon="🚚",
          ml_href=None, amz_href="/amazon?tab=fba",
          ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
@@ -2125,6 +2125,113 @@ async def ml_listing_quality():
         "total": total,
     }
     return {"items": items, "summary": summary}
+
+
+# ── Finanzas ML cache ───────────────────────────────────────────────────────
+# Igual que /partials/metrics, esto hace fetch_all_orders + enrich_orders_with_net_amount
+# (1 request a /collections por orden pagada, semaphore 10) — para 2 meses completos en
+# cuentas con cientos/miles de órdenes esto puede tardar minutos en vivo y Railway mata
+# requests a los ~30s (ver DEVLOG). Mismo patrón stale-while-revalidate que
+# _fetch_unified_returns_cached: nunca se calcula en línea con el request.
+_ml_finanzas_cache: dict = {}       # {account_id: (ts, data)}
+_ML_FINANZAS_TTL = 1800            # 30 min
+_ml_finanzas_inflight: set = set()
+
+async def _compute_ml_finanzas_summary(account_id: str) -> dict:
+    from datetime import datetime as _dtf, timedelta as _tdf
+    client = await get_meli_client(user_id=account_id or None)
+    if not client:
+        return {"error": "No autenticado"}
+    try:
+        async def _period_summary(date_from: str, date_to: str, label: str) -> dict:
+            orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
+            paid = [o for o in orders if o.get("status") in ("paid", "delivered")]
+            await client.enrich_orders_with_net_amount(paid)
+            await client.enrich_orders_with_shipping(paid)
+            gross = sum(float(o.get("total_amount", 0) or 0) for o in paid)
+            fees = sum(
+                sum(float(i.get("sale_fee", 0) or 0) for i in o.get("order_items", []))
+                for o in paid
+            )
+            net = sum(order_net_revenue(o) for o in paid)
+            units = sum(
+                sum(int(i.get("quantity", 0) or 0) for i in o.get("order_items", []))
+                for o in paid
+            )
+            return {
+                "label": label, "sales": round(gross, 2), "fees": round(fees, 2),
+                "net": round(net, 2), "orders": len(paid), "units": units,
+            }
+
+        _now = _dtf.utcnow()
+        cm_from = _now.replace(day=1).strftime("%Y-%m-%d")
+        cm_to = _now.strftime("%Y-%m-%d")
+        _last_day_prev = _now.replace(day=1) - _tdf(days=1)
+        pm_from = _last_day_prev.replace(day=1).strftime("%Y-%m-%d")
+        pm_to = _last_day_prev.strftime("%Y-%m-%d")
+
+        current_month, prev_month = await asyncio.gather(
+            _period_summary(cm_from, cm_to, _now.strftime("%b %Y")),
+            _period_summary(pm_from, pm_to, _last_day_prev.strftime("%b %Y")),
+        )
+        return {"current_month": current_month, "prev_month": prev_month, "currency": "MXN"}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        await client.close()
+
+
+async def _refresh_ml_finanzas(account_id: str) -> None:
+    import time as _tf
+    try:
+        data = await _compute_ml_finanzas_summary(account_id)
+        _ml_finanzas_cache[account_id] = (_tf.time(), data)
+    except Exception as _e:
+        logger.warning(f"[ML-FINANZAS] Error refrescando {account_id}: {_e}")
+    finally:
+        _ml_finanzas_inflight.discard(account_id)
+
+
+async def _fetch_ml_finanzas_cached(account_id: str) -> dict:
+    import time as _tf
+    entry = _ml_finanzas_cache.get(account_id)
+    fresh = entry and (_tf.time() - entry[0]) < _ML_FINANZAS_TTL
+    if fresh:
+        return entry[1]
+    if account_id not in _ml_finanzas_inflight:
+        _ml_finanzas_inflight.add(account_id)
+        asyncio.create_task(_refresh_ml_finanzas(account_id))
+    if entry:
+        return entry[1]
+    return {"computing": True}
+
+
+@app.get("/api/ml/finanzas-summary")
+async def ml_finanzas_summary():
+    """Ventas/fees reales/neto mes actual vs anterior — equivalente ML de
+    /api/amazon/finances/summary (amazon_products.py:3744), pero con datos REALES
+    (sale_fee real por orden vía enrich_orders_with_net_amount) en vez del estimado
+    ~20% que usa Amazon. Sin tabla de settlements — ML no tiene ese concepto
+    (paga por transacción vía /collections/{id}, no en lotes). Cacheado 30 min
+    con refresh en background — ver _fetch_ml_finanzas_cached."""
+    from app.services.meli_client import _active_user_id as _fin_ctx
+    account_id = str(_fin_ctx.get() or "")
+    if not account_id:
+        return {"error": "No autenticado"}
+    return await _fetch_ml_finanzas_cached(account_id)
+
+
+@app.get("/finanzas", response_class=HTMLResponse)
+async def finanzas_page(request: Request):
+    """Finanzas ML como pestaña propia — ventas/fees reales/neto, calcado del
+    layout de /amazon?tab=finanzas (sin tabla de settlements, ML no lo tiene)."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "finanzas.html", {
+        "user": user, "active": "finanzas", **ctx
+    })
 
 
 @app.get("/listings", response_class=HTMLResponse)

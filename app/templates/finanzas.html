@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Finanzas{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Finanzas</h1>
+        <p class="text-gray-600">Ventas, fees reales y neto — mes actual vs anterior</p>
+    </div>
+    {% if active_user_id %}
+    <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-400">Cuenta activa:</span>
+        {% for acc in accounts %}{% if acc.user_id == active_user_id %}
+        <span class="text-xs font-semibold bg-yellow-400 text-gray-800 px-2.5 py-0.5 rounded-full">{{ acc.nickname or acc.user_id }}</span>
+        {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div id="fin-content">
+    <div class="animate-pulse space-y-3">
+        {% for i in range(3) %}
+        <div class="h-24 bg-yellow-50 rounded-xl"></div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+function fmt(v, cur) {
+    return new Intl.NumberFormat('es-MX', {style: 'currency', currency: cur || 'MXN', minimumFractionDigits: 0, maximumFractionDigits: 0}).format(v || 0);
+}
+
+function loadFinanzas(isRetry) {
+    var el = document.getElementById('fin-content');
+    fetch('/api/ml/finanzas-summary')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.computing) {
+                el.innerHTML = '<div class="flex items-center justify-center gap-3 py-12 text-sm text-gray-500">' +
+                    '<svg class="animate-spin h-5 w-5 text-yellow-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>' +
+                    '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>' +
+                    'Calculando finanzas del mes (primera carga puede tardar) — se actualiza cada 30 min…</div>';
+                setTimeout(function() { loadFinanzas(true); }, 5000);
+                return;
+            }
+            if (d.error) { el.innerHTML = '<div class="text-center py-12 text-red-400 text-sm">' + d.error + '</div>'; return; }
+
+            var cm = d.current_month || {}, pm = d.prev_month || {};
+            var cur = d.currency || 'MXN';
+
+            var salesDelta = pm.sales > 0 ? Math.round((cm.sales - pm.sales) / pm.sales * 100) : null;
+            var trendHtml = salesDelta != null
+                ? '<span class="text-xs font-semibold ml-1 ' + (salesDelta >= 0 ? 'text-green-600' : 'text-red-600') + '">' +
+                    (salesDelta >= 0 ? '▲' : '▼') + ' ' + Math.abs(salesDelta) + '% vs ' + (pm.label || 'mes ant.') + '</span>'
+                : '';
+
+            var kpiCards = [
+                {label: 'Ventas ' + (cm.label || 'mes actual'), value: fmt(cm.sales, cur), icon: '💰', color: '#F59E0B',
+                    sub: (cm.orders || 0) + ' órd · ' + (cm.units || 0) + ' uds', extra: trendHtml},
+                {label: 'Fees reales (' + (cm.label || 'mes') + ')', value: fmt(cm.fees, cur), icon: '📋', color: '#6366F1',
+                    sub: 'sale_fee real por orden (ML)', extra: ''},
+                {label: 'Neto real (' + (cm.label || 'mes') + ')', value: fmt(cm.net, cur), icon: '📈', color: '#10B981',
+                    sub: 'Ventas − fees − envío', extra: ''},
+                {label: 'Órdenes pagadas', value: cm.orders || 0, icon: '🧾', color: '#0EA5E9',
+                    sub: (cm.label || 'mes actual'), extra: ''},
+                {label: 'Unidades vendidas', value: cm.units || 0, icon: '📦', color: '#EC4899',
+                    sub: (cm.label || 'mes actual'), extra: ''},
+            ].map(function(c) {
+                return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
+                    '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
+                    '<p class="text-xl font-extrabold" style="color:' + c.color + '">' + c.value + c.extra + '</p>' +
+                    '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
+            }).join('');
+
+            var prevRow = pm.sales > 0
+                ? '<div class="bg-gray-50 rounded-xl p-4 mb-5 flex flex-wrap gap-6 text-sm">' +
+                    '<span class="text-gray-500 font-medium">' + (pm.label || 'Mes anterior') + ':</span>' +
+                    '<span>Ventas <b class="text-gray-800">' + fmt(pm.sales, cur) + '</b></span>' +
+                    '<span>Fees <b class="text-gray-600">' + fmt(pm.fees, cur) + '</b></span>' +
+                    '<span>Neto <b class="text-green-700">' + fmt(pm.net, cur) + '</b></span>' +
+                    '<span>Órdenes <b class="text-gray-700">' + (pm.orders || 0) + '</b></span>' +
+                    '</div>'
+                : '';
+
+            el.innerHTML =
+                '<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">' + kpiCards + '</div>' +
+                prevRow +
+                '<div class="bg-yellow-50 border border-yellow-100 rounded-xl p-3 text-xs text-yellow-800">' +
+                '<b>Nota:</b> a diferencia de Amazon, Mercado Libre no agrupa pagos en liquidaciones periódicas — ' +
+                'paga por transacción. Por eso no hay tabla de liquidaciones aquí; Fees y Neto son el dato real ' +
+                'reportado por ML (<code>sale_fee</code> por orden), no un estimado.' +
+                '</div>';
+        })
+        .catch(function(e) {
+            el.innerHTML = '<div class="text-center py-12 text-red-400 text-sm">Error al cargar finanzas: ' + e.message + '</div>';
+        });
+}
+
+loadFinanzas();
+})();
+</script>
+{% endblock %}
