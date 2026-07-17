@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-17 — FEAT: Fase 2 completa — Deals ML, Listings ML, Finanzas ML, SKU Amazon
+
+**Archivos:** `app/main.py`, `app/services/amazon_client.py`, templates nuevos
+`deals.html`, `listings.html`, `finanzas.html`, `amazon_sku_sales.html`
+
+**Motivación:** cierra el roadmap de Fase 2 del nav unificado (Retornos Amazon ya
+había salido antes) — las 4 pestañas restantes que quedaron deshabilitadas al
+unificar el nav. Jovan pidió hacerlas todas, una por una, sin pausas. Ads queda
+fuera (requiere alta de app nueva en Amazon Developer Central).
+
+- **Deals ML** (`/deals`): el cálculo ya existía completo
+  (`/partials/products-deals`, embebido en Productos) — solo se expuso como
+  pestaña propia. Se portaron 3 funciones JS de `items.html`
+  (`inlineStockSync`/`showStockEditor`/`quickSyncBM`) que el partial necesita para
+  edición inline de stock. Verificado con datos reales: 208 deals activos, 52
+  candidatos.
+- **Listings ML** (`/listings`): `ml_listing_quality` ya tenía el score completo
+  — nuevo endpoint `/api/ml/listing-quality` agrega grado A/B/C/D (mismo corte
+  que ya usa Amazon: ≥85/≥70/≥55/resto) + `issues[]` + resumen, antes solo
+  vivían client-side. Verificado: 958 publicaciones, avg score 88.9.
+- **Finanzas ML** (`/finanzas`): a diferencia del ~20% estimado que usa Amazon,
+  ML ya tenía el dato REAL de fees por orden (`order_net_revenue` +
+  `enrich_orders_with_net_amount/shipping`, ya usados en `/partials/metrics`).
+  Sin tabla de liquidaciones — ML no agrupa pagos en settlements como Amazon
+  (paga por transacción), se omite en vez de inventarla. Cacheado 30min con
+  refresh en background (stale-while-revalidate) — calcular 2 meses completos
+  con `enrich_orders_with_shipping` (secuencial, 1 request/orden) puede tardar
+  varios minutos en cuentas de alto volumen. Verificado con datos reales
+  (AUTOBOT MEXICO): Jul 2026 $498,292/146 órdenes, Jun 2026 $3,641,850/774
+  órdenes.
+- **SKU Amazon** (`/amazon/sku-sales`): la única sin atajo barato — nuevo
+  `get_sku_sales(date_from, date_to)` en `amazon_client.py` extiende el patrón
+  N+1 de `get_sales_summary_30d()` con rango configurable + ingreso. **Bug real
+  encontrado y corregido**: `CreatedBefore` con "hoy 23:59:59" cae en el futuro
+  respecto al momento real → Amazon lo rechaza (SP-API exige ≥2min en el
+  pasado) — se acota al menor entre fin-de-día solicitado y ahora-5min.
+  Confirmado también que `getOrderItems` tiene rate limit propio estricto
+  (429/QuotaExceeded incluso con Semaphore(2)) — el retry-con-backoff ya
+  existente lo resuelve solo pero puede tardar; cache 6h (el más largo de los
+  4, por ser el más caro de recalcular).
+
+**Patrón común a las 4:** mismo registro `_NAV_TAB_DEFS` (solo cambiar
+`ml_href`/`amz_href` de `None` a la ruta real + `amz_gated`/`section` según
+corresponda), mismo criterio de honestidad que Retornos Amazon — donde una
+plataforma no tiene un concepto real (Abiertos/Resueltos, settlements), se
+omite en vez de inventarlo.
+
+---
+
 ## 2026-07-17 — FIX: nav ya no hace scroll horizontal en pantallas anchas
 
 **Archivos:** `app/templates/base.html`
