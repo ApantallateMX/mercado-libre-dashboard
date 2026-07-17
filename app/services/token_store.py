@@ -3043,6 +3043,21 @@ async def get_claim_photos(claim_id: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+async def delete_claim_photos_by_path(local_paths: list[str]) -> int:
+    """Borra filas de claim_photos por local_path — usado por el evictor de presupuesto
+    de disco (ver _enforce_claim_photos_budget en main.py) después de borrar el archivo
+    físico, para que la DB no apunte a fotos que ya no existen."""
+    if not local_paths:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        placeholders = ",".join("?" * len(local_paths))
+        cur = await db.execute(
+            f"DELETE FROM claim_photos WHERE local_path IN ({placeholders})", local_paths
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_sku_price_history(
     sku: str,
     platform: str = None,

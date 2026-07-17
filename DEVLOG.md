@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-17 — FIX: tope duro de disco en claim_photos/ (causa raíz de los incidentes recurrentes de "disk full")
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`
+
+**Motivación:** el incidente de disco lleno (login roto en las 4 cuentas ML,
+`refresh_token` fallando con "database or disk is full") se repitió el 2026-07-17 — esta
+vez causado por mi propio feature del día anterior (backfill on-demand de fotos en el
+buscador de SKU), que acumuló 113MB sin que nadie lo notara hasta que volvió a tumbar el
+login. Cada request individual ya tenía un tope (30 fotos/request en el backfill, 1 en el
+proxy de galería), pero **nada acotaba el total acumulado a lo largo del tiempo** —
+Railway Volume es 500MB compartido con la DB (~310MB), así que cualquier crecimiento sin
+límite en `claim_photos/` termina tumbando el volumen completo, sin importar qué tan
+acotado esté cada request individual.
+
+**Fix:** `_enforce_claim_photos_budget()` — presupuesto duro de 120MB para
+`claim_photos/`. Si se pasa, evicta los archivos más viejos (por mtime, LRU) hasta bajar
+al 80% del presupuesto (96MB), y limpia las filas correspondientes en `claim_photos` vía
+el nuevo `token_store.delete_claim_photos_by_path()`. Se dispara en background
+(`asyncio.create_task`, no bloquea la respuesta al usuario) después de cualquier descarga
+de fotos — tanto en `/api/returns/claim-photo-proxy` (galería de un reclamo) como en el
+backfill de `/api/returns/sku-claims-detail` (buscador de SKU).
+
+**Validado localmente:** script standalone contra un directorio aislado (sin tocar el
+caché real de dev) — 20 archivos sintéticos de 8MB (160MB total, mtimes escalonados) →
+tras la eviction quedan 96MB exactos (el 80% objetivo), los 8 archivos más viejos
+desaparecen del disco Y de la tabla `claim_photos`, los 12 más nuevos sobreviven intactos.
+Verificado también que el endpoint de búsqueda sigue funcionando normal con datos reales
+del caché local existente tras el cambio.
+
+**Nota:** este es el fix de contención inmediata. La solución de fondo (sacar las fotos
+del volumen de Railway a MinIO/S3 de MI2) quedó pendiente de un correo a
+`coolify01@mi2.com.mx` — ver `.claude/memory/reference_mi2_portals.md`.
+
+---
+
 ## 2026-07-16 — FIX: seller_custom_field vacío ocultaba SKUs reales que sí tenían seller_sku
 
 **Archivos:** `app/main.py`

@@ -17042,6 +17042,74 @@ async def returns_claim_photo_file(path: str = Query(...)):
     return Response(content=full_path.read_bytes(), media_type=mime or "application/octet-stream")
 
 
+# Presupuesto duro de disco para claim_photos/ — el Railway Volume es 500MB TOTAL,
+# compartido con la DB (~310MB). Sin un tope acumulado, las fotos de reclamos crecen sin
+# límite entre requests (cada request individual ya tenía un cap propio — 30 fotos aquí,
+# 1 en claim-photo-proxy — pero eso solo acota CADA llamada, no el total acumulado con el
+# tiempo). Causa raíz confirmada de los incidentes "database or disk is full" del
+# 2026-07-15 (835 fotos = 1.5GB, sync masivo) y 2026-07-17 (113MB acumulados por el
+# backfill on-demand del buscador de SKU, sin relación con el sync). Ver DEVLOG.
+_CLAIM_PHOTOS_BUDGET_MB = 120.0
+
+
+async def _enforce_claim_photos_budget() -> dict:
+    """Mantiene claim_photos/ bajo _CLAIM_PHOTOS_BUDGET_MB — si se pasa, borra los
+    archivos más viejos (por mtime, LRU) hasta bajar al 80% del presupuesto (deja margen
+    para no estar evictando en cada llamada apenas se toca el límite). Se llama después
+    de cualquier descarga de fotos, sin importar el endpoint."""
+    import os as _os_budget
+
+    photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+    if not photos_dir.is_dir():
+        return {"evicted": 0, "freed_mb": 0.0}
+
+    entries = []
+    total_bytes = 0
+    for root, _dirs, fnames in _os_budget.walk(photos_dir):
+        for f in fnames:
+            fp = _os_budget.path.join(root, f)
+            try:
+                st = _os_budget.stat(fp)
+                entries.append((fp, st.st_size, st.st_mtime))
+                total_bytes += st.st_size
+            except Exception:
+                pass
+
+    budget_bytes = _CLAIM_PHOTOS_BUDGET_MB * 1024 * 1024
+    if total_bytes <= budget_bytes:
+        return {"evicted": 0, "freed_mb": 0.0}
+
+    entries.sort(key=lambda e: e[2])  # más viejo primero
+    target_bytes = budget_bytes * 0.8
+    evicted, freed = 0, 0
+    deleted_rel_paths = []
+    for fp, sz, _mt in entries:
+        if total_bytes <= target_bytes:
+            break
+        try:
+            _os_budget.remove(fp)
+            total_bytes -= sz
+            freed += sz
+            evicted += 1
+            deleted_rel_paths.append(str(Path(fp).relative_to(photos_dir.parent)))
+        except Exception:
+            pass
+
+    if deleted_rel_paths:
+        try:
+            from app.services import token_store as _ts_evict
+            await _ts_evict.delete_claim_photos_by_path(deleted_rel_paths)
+        except Exception:
+            pass
+
+    if evicted:
+        logger.warning(
+            f"[CLAIM-PHOTOS-BUDGET] Evictados {evicted} archivos, "
+            f"{freed / 1024 / 1024:.1f}MB liberados (presupuesto {_CLAIM_PHOTOS_BUDGET_MB}MB)"
+        )
+    return {"evicted": evicted, "freed_mb": round(freed / 1024 / 1024, 2)}
+
+
 @app.get("/api/returns/claim-photo-proxy")
 async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = Query(...), account_id: str = Query("")):
     """Descarga en vivo una foto de reclamo (con auth) y la sirve al navegador —
@@ -17070,6 +17138,7 @@ async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = 
                 "original_url": dl_path,
                 "from_role": "",
             }])
+            asyncio.create_task(_enforce_claim_photos_budget())
 
         mime, _ = mimetypes.guess_type(filename)
         return Response(content=content, media_type=mime or "image/jpeg")
@@ -18268,6 +18337,8 @@ async def returns_sku_claims_detail(
         for cli in clients_bf.values():
             if cli:
                 await cli.close()
+        if photos_downloaded[0] > 0:
+            asyncio.create_task(_enforce_claim_photos_budget())
 
     accounts = await _ts_scd.get_all_tokens()
     nick_map = {str(a["user_id"]): (a.get("nickname") or a["user_id"]) for a in accounts}
