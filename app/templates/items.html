@@ -56,13 +56,13 @@
                 class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
             Stock <span id="oversell-badge" class="hidden ml-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
         </button>
-        <button data-tab="unpublished" data-url="/partials/products-not-published"
-                class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
-            Oportunidades <span id="unpublished-badge" class="hidden ml-1 bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
-        </button>
         <button data-tab="deals" data-url="/partials/products-deals"
                 class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
             🏷 Deals <span id="deals-badge" class="hidden ml-1 bg-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+        </button>
+        <button data-tab="listings" data-url="/partials/products-listings"
+                class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
+            ⭐ Listings
         </button>
         <button data-tab="full-candidates" data-url="/partials/products-full-candidates"
                 class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
@@ -246,8 +246,17 @@
         });
     });
 
-    // Load default tab
-    switchTab('summary', '/partials/products-summary');
+    // Load default tab — respeta ?tab= en la URL (usado por /deals y /listings
+    // al redirigir aquí) para pre-seleccionar una pestaña específica
+    (function() {
+        var requested = new URLSearchParams(window.location.search).get('tab');
+        var btn = requested && document.querySelector('.tab-btn[data-tab="' + requested + '"]');
+        if (btn) {
+            switchTab(btn.dataset.tab, btn.dataset.url);
+        } else {
+            switchTab('summary', '/partials/products-summary');
+        }
+    })();
 
     // ── Barra de alertas unificada ──────────────────────────────────────────
     function loadAlertBar() {
@@ -281,9 +290,9 @@
                     '<span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500"></span>Stock crítico' +
                     '<span class="ml-1 bg-yellow-600 text-white rounded-full px-1.5 py-0.5 text-[10px] font-bold">' + d.critico + '</span></button>';
                 if (d.sin_publicar > 0) badges +=
-                    '<button onclick="window.switchProductTab(\'unpublished\',\'/partials/products-not-published\')" class="flex items-center gap-1.5 px-2.5 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-300 rounded-lg text-xs font-semibold transition-colors">' +
+                    '<a href="/bm/unlaunched" class="flex items-center gap-1.5 px-2.5 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-300 rounded-lg text-xs font-semibold transition-colors">' +
                     '<span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500"></span>Sin publicar' +
-                    '<span class="ml-1 bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-bold">' + d.sin_publicar + '</span></button>';
+                    '<span class="ml-1 bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-bold">' + d.sin_publicar + '</span></a>';
                 if (d.pausados > 0) badges +=
                     '<button onclick="window.togglePausedPanel()" class="flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-700 border border-purple-300 rounded-lg text-xs font-semibold transition-colors">' +
                     '<span class="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>Pausados x stock' +
@@ -537,15 +546,6 @@
 
     // Expose for external use
     window.switchProductTab = switchTab;
-
-    // Cargar conteo de oportunidades (sin publicar con stock BM)
-    fetch('/api/amazon/products/sin-publicar').then(function(r){ return r.json(); }).then(function(d){
-        var count = Array.isArray(d) ? d.length : (d.total || 0);
-        if (count > 0) {
-            var b = document.getElementById('unpublished-badge');
-            if (b) { b.textContent = count; b.classList.remove('hidden'); }
-        }
-    }).catch(function(){});
 
     // Cargar conteo de alertas de sobreventa (badge rojo en tab Stock)
     fetch('/api/sync/alerts-count').then(function(r){ return r.json(); }).then(function(d){

@@ -1,23 +1,3 @@
-{% extends "base.html" %}
-
-{% block title %}Listings{% endblock %}
-
-{% block content %}
-<div class="mb-6 flex items-start justify-between flex-wrap gap-3">
-    <div>
-        <h1 class="text-2xl font-bold text-gray-800">Listings</h1>
-        <p class="text-gray-600">Quality Score por publicación — título, fotos, GTIN y marca</p>
-    </div>
-    {% if active_user_id %}
-    <div class="flex items-center gap-2">
-        <span class="text-xs text-gray-400">Cuenta activa:</span>
-        {% for acc in accounts %}{% if acc.user_id == active_user_id %}
-        <span class="text-xs font-semibold bg-yellow-400 text-gray-800 px-2.5 py-0.5 rounded-full">{{ acc.nickname or acc.user_id }}</span>
-        {% endif %}{% endfor %}
-    </div>
-    {% endif %}
-</div>
-
 <div id="lq-summary" class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
     {% for i in range(4) %}
     <div class="bg-white p-5 rounded-lg shadow animate-pulse">
@@ -29,7 +9,7 @@
 
 <div class="bg-white rounded-lg shadow">
     <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-3 flex-wrap">
-        <h2 class="text-sm font-semibold text-gray-700">Publicaciones</h2>
+        <h2 class="text-sm font-semibold text-gray-700">Publicaciones — Quality Score</h2>
         <select id="lq-filter" onchange="loadListings()" class="border rounded px-2 py-1 text-xs bg-white ml-auto">
             <option value="all">Todas</option>
             <option value="D">Grado D (crítico)</option>
@@ -41,9 +21,7 @@
         <div class="text-center py-10 text-gray-400 text-sm">Analizando calidad de listings...</div>
     </div>
 </div>
-{% endblock %}
 
-{% block scripts %}
 <script>
 (function() {
 var _PAGE_SIZE = 10;
@@ -141,4 +119,3 @@ window.loadListings = function() {
 loadListings();
 })();
 </script>
-{% endblock %}

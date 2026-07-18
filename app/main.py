@@ -1116,13 +1116,15 @@ _NAV_TAB_DEFS = [
          ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
          section=None, admin_only=False, amz_gated=False, badge=None),
     dict(id="listings", label="Listings", icon="🏷️",
-         ml_href="/listings", amz_href="/amazon?tab=listings",
-         ml_active=["listings"], amz_active="listings", amz_uses_dispatcher=True,
-         section="productos", admin_only=False, amz_gated=False, badge=None),
+         ml_href=None, amz_href="/amazon?tab=listings",
+         ml_active=None, amz_active="listings", amz_uses_dispatcher=True,
+         section="productos", admin_only=False, amz_gated=False, badge=None,
+         ml_hidden=True),
     dict(id="deals", label="Deals", icon="🎯",
-         ml_href="/deals", amz_href="/amazon?tab=deals",
-         ml_active=["deals"], amz_active="deals", amz_uses_dispatcher=True,
-         section="productos", admin_only=False, amz_gated=False, badge=None),
+         ml_href=None, amz_href="/amazon?tab=deals",
+         ml_active=None, amz_active="deals", amz_uses_dispatcher=True,
+         section="productos", admin_only=False, amz_gated=False, badge=None,
+         ml_hidden=True),
     dict(id="stock_sync", label="Sync Stock", icon="⇄",
          ml_href="/stock-sync", amz_href=None,
          ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
@@ -1136,7 +1138,7 @@ _NAV_TAB_DEFS = [
 # Rutas ML-only reales (para el guard de /auth/switch-amazon). Se derivan del
 # registro + un puñado de sub-rutas mobile-only que no son "tabs" de primer
 # nivel pero sí páginas ML-exclusivas (accesos directos del menú móvil).
-_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory"}
+_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory", "/deals", "/listings"}
 _ML_ONLY_PATHS = {
     t["ml_href"] for t in _NAV_TAB_DEFS if t["ml_href"] and not t["amz_href"]
 } | _ML_ONLY_EXTRA_PATHS
@@ -1147,12 +1149,18 @@ def _build_nav_tabs(active_platform: str, dashboard_user) -> list:
     permisos y anotada con el href/disponibilidad de la plataforma activa.
     Una pestaña sin href para la plataforma activa se muestra deshabilitada
     (nunca se oculta) salvo que el usuario no tenga permiso — ahí sí se omite,
-    igual que se comportaba antes."""
+    igual que se comportaba antes. `ml_hidden`/`amz_hidden` es un tercer caso:
+    la pestaña se OMITE por completo en esa plataforma (no deshabilitada) —
+    para funciones que sí existen ahí pero viven fusionadas dentro de otra
+    pestaña (ej. Listings/Deals dentro de Productos en ML)."""
     _sec = (dashboard_user.get("allowed_sections") or []) if dashboard_user else []
     is_admin = bool(dashboard_user and dashboard_user.get("role") == "admin")
     out = []
     for t in _NAV_TAB_DEFS:
         if t["admin_only"] and not is_admin:
+            continue
+        hidden_here = t.get("amz_hidden") if active_platform == "amz" else t.get("ml_hidden")
+        if hidden_here:
             continue
         section = t["section"]
         if section and _sec:
@@ -2056,16 +2064,10 @@ async def items_page(request: Request):
     })
 
 
-@app.get("/deals", response_class=HTMLResponse)
-async def deals_page(request: Request):
-    """Deals ML como pestaña propia — reusa /partials/products-deals sin cambios."""
-    user = await get_current_user()
-    if not user:
-        return templates.TemplateResponse(request, "no_session.html", {})
-    ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "deals.html", {
-        "user": user, "active": "deals", **ctx
-    })
+@app.get("/deals")
+async def deals_page():
+    """Alias legacy — Deals ahora vive como pestaña dentro de /items."""
+    return RedirectResponse("/items?tab=deals", status_code=302)
 
 
 @app.get("/api/ml/listing-quality")
@@ -2230,17 +2232,10 @@ async def finanzas_page(request: Request):
     })
 
 
-@app.get("/listings", response_class=HTMLResponse)
-async def listings_page(request: Request):
-    """Listings ML como pestaña propia — Quality Score con grado, calcado del
-    layout de /amazon?tab=listings."""
-    user = await get_current_user()
-    if not user:
-        return templates.TemplateResponse(request, "no_session.html", {})
-    ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "listings.html", {
-        "user": user, "active": "listings", **ctx
-    })
+@app.get("/listings")
+async def listings_page():
+    """Alias legacy — Listings ahora vive como pestaña dentro de /items."""
+    return RedirectResponse("/items?tab=listings", status_code=302)
 
 
 @app.get("/bm/unlaunched", response_class=HTMLResponse)
@@ -7721,191 +7716,10 @@ async def products_deals_partial(request: Request):
         await client.close()
 
 
-@app.get("/partials/products-not-published", response_class=HTMLResponse)
-async def products_not_published_partial(request: Request):
-    """SKUs en BM sin listing en MeLi. Usa cache de items."""
-    import httpx
-    from datetime import datetime, timedelta
-    client = await get_meli_client()
-    if not client:
-        return HTMLResponse("<p>Error: No autenticado</p>")
-    try:
-        now = datetime.utcnow()
-        date_from = (now - timedelta(days=60)).strftime("%Y-%m-%d")
-        date_to = now.strftime("%Y-%m-%d")
-
-        # Items (cached) + ordenes (cached) en paralelo
-        all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client, include_paused=True),
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
-        )
-
-        # Recopilar SKUs conocidos
-        known_skus = set()
-        for body in all_bodies:
-            sku = _get_item_sku(body)
-            if sku:
-                known_skus.add(_extract_base_sku(sku).upper())
-        for order in all_orders:
-            for oi in order.get("order_items", []):
-                item = oi.get("item", {})
-                raw_sku = item.get("seller_sku") or item.get("seller_custom_field") or ""
-                if raw_sku:
-                    known_skus.add(_extract_base_sku(raw_sku).upper())
-
-        if not known_skus:
-            return HTMLResponse('<p class="text-center py-8 text-gray-500">No se encontraron SKUs para comparar</p>')
-
-        BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-        from app.services.binmanager_client import bm_post as _bm_post_deal
-
-        # Fase 1: BM InventoryReport — serializados via bm_post
-        async def _fetch_bm_inv(base_sku):
-            try:
-                resp = await _bm_post_deal(BM_INV_URL, {
-                    "COMPANYID": 1,
-                    "SEARCH": base_sku,
-                    "CONCEPTID": 8,
-                    "NUMBERPAGE": 1,
-                    "RECORDSPAGE": 10,
-                }, timeout=10.0)
-                if resp and resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and data:
-                        for item in data:
-                            if item.get("SKU", "").upper() == base_sku.upper():
-                                return base_sku, item
-                        return base_sku, data[0]
-            except Exception:
-                pass
-            return base_sku, None
-
-        inv_tasks = [_fetch_bm_inv(sku) for sku in list(known_skus)[:100]]
-        inv_results = await asyncio.gather(*inv_tasks, return_exceptions=True)
-
-        bm_products = {}
-        for r in inv_results:
-            if isinstance(r, Exception) or r is None:
-                continue
-            base_sku, data = r
-            if data:
-                bm_products[base_sku] = data
-
-        usd_to_mxn = await _get_usd_to_mxn(client)
-
-        # Fase 2: BM Warehouse endpoint (stock real por almacen) — serializados via bm_post
-        BM_WH_URL2 = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-
-        async def _check_base_wh(base_sku):
-            """Consulta Warehouse endpoint para obtener stock real."""
-            try:
-                resp = await _bm_post_deal(BM_WH_URL2, {
-                    "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
-                    "LocationID": "47,62,68", "BINID": None,
-                    "Condition": _bm_conditions_for_sku(base_sku), "ForInventory": 0, "SUPPLIERS": None,
-                }, timeout=10.0)
-                if resp and resp.status_code == 200:
-                    rows = resp.json() or []
-                    mty = cdmx = tj = 0
-                    for row in rows:
-                        qty = row.get("QtyTotal", 0) or 0
-                        wname = (row.get("WarehouseName") or "").lower()
-                        if "monterrey" in wname or "maxx" in wname:
-                            mty += qty
-                        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-                            cdmx += qty
-                        else:
-                            tj += qty
-                    total = mty + cdmx
-                    if total > 0:
-                        return base_sku, {"mty": mty, "cdmx": cdmx, "tj": tj, "total": total}
-            except Exception:
-                pass
-            return base_sku, None
-
-        ff_tasks = [_check_base_wh(sku) for sku in bm_products.keys()]
-        ff_results = await asyncio.gather(*ff_tasks, return_exceptions=True)
-
-        skus_with_stock = {}
-        for r in ff_results:
-            if isinstance(r, Exception) or r is None:
-                continue
-            base_sku, stock_data = r
-            if stock_data:
-                skus_with_stock[base_sku.upper()] = stock_data
-
-        # Fase 3: Verificar cuales NO estan en MeLi
-        # Buscar por SKU completo (con sufijo) y tambien por base SKU
-        async def _check_meli(sku):
-            async with sem:
-                try:
-                    result = await client.get(
-                        f"/users/{client.user_id}/items/search",
-                        params={"seller_sku": sku, "limit": 1}
-                    )
-                    if result.get("results"):
-                        return sku, True
-                    # Fallback: buscar por base SKU (sin sufijo)
-                    base = _extract_base_sku(sku)
-                    if base != sku:
-                        result2 = await client.get(
-                            f"/users/{client.user_id}/items/search",
-                            params={"seller_sku": base, "limit": 1}
-                        )
-                        if result2.get("results"):
-                            return sku, True
-                    return sku, False
-                except Exception:
-                    return sku, False
-
-        meli_checks = await asyncio.gather(
-            *[_check_meli(sku) for sku in list(skus_with_stock.keys())[:100]],
-            return_exceptions=True
-        )
-
-        meli_published = set()
-        for r in meli_checks:
-            if isinstance(r, Exception) or r is None:
-                continue
-            sku, found = r
-            if found:
-                meli_published.add(sku)
-
-        not_published = []
-        for sku_upper, stock_data in skus_with_stock.items():
-            if sku_upper in meli_published:
-                continue
-            base = _extract_base_sku(sku_upper)
-            bm_info = bm_products.get(base, {})
-            retail_price = bm_info.get("RetailPrice", 0) or 0
-            avg_cost = bm_info.get("AvgCostQTY", 0) or 0
-            if retail_price > 0 and retail_price < 9999:
-                estimated_price = round(retail_price * usd_to_mxn * 1.16, 0)
-            elif avg_cost > 0 and avg_cost < 9999:
-                estimated_price = round(avg_cost * usd_to_mxn * 2 * 1.16, 0)
-            else:
-                estimated_price = 0
-            not_published.append({
-                "sku": sku_upper,
-                "base_sku": base,
-                "title": bm_info.get("Title", ""),
-                "brand": bm_info.get("Brand", ""),
-                "retail_price_usd": retail_price,
-                "avg_cost_usd": avg_cost,
-                "estimated_price_mxn": estimated_price,
-                "mty": stock_data["mty"],
-                "cdmx": stock_data["cdmx"],
-                "tj": stock_data["tj"],
-                "total_stock": stock_data["total"],
-            })
-
-        not_published.sort(key=lambda x: x["total_stock"], reverse=True)
-
-        return templates.TemplateResponse(request, "partials/products_not_published.html", {            "products": not_published,
-            "usd_to_mxn": usd_to_mxn,
-        })
-    finally:
-        await client.close()
+@app.get("/partials/products-listings", response_class=HTMLResponse)
+async def products_listings_partial(request: Request):
+    """Listings: Quality Score A-D — pestaña de Productos, mismo dato que /api/ml/listing-quality (sin cambios)."""
+    return templates.TemplateResponse(request, "partials/products_listings.html", {})
 
 
 # ---------- Health helpers ----------
