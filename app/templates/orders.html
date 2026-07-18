@@ -5,141 +5,372 @@
 {% block content %}
 <div class="mb-5">
     <h1 class="text-2xl font-bold text-gray-800">Ventas</h1>
-    <p class="text-gray-600 text-sm">Historial de órdenes de tu cuenta</p>
+    <p class="text-gray-600 text-sm">Órdenes, ventas por SKU y comparativa de periodos</p>
 </div>
 
-<!-- ═══ PLATAFORMA: ML vs Amazon (30d) ═══ -->
-<div id="platform-comparison-wrap"
-     hx-get="/partials/platform-comparison?days=30"
-     hx-trigger="load"
-     hx-swap="outerHTML">
-    <!-- skeleton -->
-    <div class="bg-white rounded-xl shadow mb-5 p-4">
-        <div class="animate-pulse space-y-3">
-            <div class="h-4 bg-gray-200 rounded w-48"></div>
-            <div class="grid grid-cols-2 gap-4">
-                <div class="h-16 bg-gray-200 rounded"></div>
-                <div class="h-16 bg-gray-200 rounded"></div>
+<!-- ═══ SUB-VISTAS: Por Orden / Por SKU / Comparativa ═══ -->
+<div class="flex gap-1 mb-5 border-b border-gray-200 pb-0">
+    <button type="button" data-view="orders" onclick="window.setVentasView('orders')"
+            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+        Por Orden
+    </button>
+    <button type="button" data-view="sku" onclick="window.setVentasView('sku')"
+            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+        Por SKU
+    </button>
+    <button type="button" data-view="compare" onclick="window.setVentasView('compare')"
+            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+        Comparativa
+    </button>
+</div>
+
+<!-- ═══ VISTA: POR ORDEN ═══ -->
+<div id="ventas-view-orders" {% if view != 'orders' %}class="hidden"{% endif %}>
+
+    <!-- ═══ PLATAFORMA: ML vs Amazon (30d) ═══ -->
+    <div id="platform-comparison-wrap"
+         hx-get="/partials/platform-comparison?days=30"
+         hx-trigger="load"
+         hx-swap="outerHTML">
+        <!-- skeleton -->
+        <div class="bg-white rounded-xl shadow mb-5 p-4">
+            <div class="animate-pulse space-y-3">
+                <div class="h-4 bg-gray-200 rounded w-48"></div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="h-16 bg-gray-200 rounded"></div>
+                    <div class="h-16 bg-gray-200 rounded"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ ANÁLISIS DE PRODUCTO ML ═══ -->
+    <div class="bg-white rounded-xl shadow mb-5">
+        <div class="px-4 md:px-6 py-4 border-b border-gray-100">
+            <div class="flex items-start justify-between gap-4 flex-wrap">
+                <div>
+                    <h2 class="text-base font-bold text-gray-800">Análisis de Producto ML</h2>
+                    <p class="text-xs text-gray-400 mt-0.5">Pega un ID MLM o link para ver demanda real, fees exactos y precio tope de compra</p>
+                </div>
+            </div>
+            <div class="flex gap-2 mt-3">
+                <input type="text" id="ml-item-id-input"
+                       placeholder="MLM1234567890 — o pega el link completo"
+                       class="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400 min-w-0 bg-white"
+                       onkeydown="if(event.key==='Enter') window.searchMlItem()">
+                <button onclick="window.searchMlItem()" id="ml-item-search-btn"
+                        class="px-4 py-2 bg-yellow-400 text-gray-900 text-sm font-semibold rounded-lg hover:bg-yellow-500 transition shrink-0">
+                    Analizar
+                </button>
+            </div>
+        </div>
+        <div id="ml-item-result" class="p-4 md:p-6 empty:hidden"></div>
+    </div>
+
+    <!-- ═══ FILTROS (compartidos con Por SKU) ═══ -->
+    <div class="bg-white p-4 rounded-xl shadow mb-5">
+
+        <!-- Buscador global — solo aplica a Por Orden -->
+        <div class="relative mb-3" id="ord-search-wrap">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <input type="text" id="ord-search-q" name="q"
+                   placeholder="Buscar por SKU, MLM, título, marca, modelo..."
+                   class="w-full pl-10 pr-10 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-yellow-400 focus:ring-2 focus:ring-yellow-200 bg-gray-50 focus:bg-white transition"
+                   oninput="window._ordOnSearch(this.value)"
+                   onkeydown="if(event.key==='Escape'){this.value='';window._ordOnSearch('')}">
+            <button id="ord-search-clear"
+                    onclick="document.getElementById('ord-search-q').value='';window._ordOnSearch('')"
+                    class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden"
+                    title="Limpiar búsqueda">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="flex flex-wrap gap-3 items-center justify-between">
+            <!-- Ordenamiento — solo aplica a Por Orden -->
+            <select id="sort-select" name="sort" class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none">
+                <option value="date_desc">Más recientes</option>
+                <option value="date_asc">Más antiguos</option>
+            </select>
+
+            <!-- Botones de periodo — compartidos -->
+            <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                <button id="ord-p-1"  onclick="window.setOrdPeriod(1)"
+                        class="px-2.5 py-1.5 bg-yellow-400 text-gray-900">Hoy</button>
+                <button id="ord-p-7"  onclick="window.setOrdPeriod(7)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">7d</button>
+                <button id="ord-p-15" onclick="window.setOrdPeriod(15)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">15d</button>
+                <button id="ord-p-30" onclick="window.setOrdPeriod(30)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">30d</button>
+                <button id="ord-p-all" onclick="window.setOrdPeriod(0)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">Todo</button>
+            </div>
+
+            <!-- Fechas personalizadas — compartidas -->
+            <div class="flex gap-2 items-center">
+                <input type="date" id="ord-date-custom-from"
+                       class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none"
+                       onchange="window.setOrdCustomDates()">
+                <span class="text-xs text-gray-400">a</span>
+                <input type="date" id="ord-date-custom-to"
+                       class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none"
+                       onchange="window.setOrdCustomDates()">
+            </div>
+        </div>
+
+        <!-- Hidden inputs — htmx los incluirá al trigger (compartidos entre Por Orden y Por SKU) -->
+        <input type="hidden" id="ord-date-from" name="date_from" value="">
+        <input type="hidden" id="ord-date-to"   name="date_to"   value="">
+    </div>
+
+    <!-- ═══ TABLA DE ÓRDENES ═══ -->
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+        <div id="orders-table"
+             hx-get="/partials/orders-table"
+             hx-trigger="{% if view == 'orders' %}load, {% endif %}ordersFilter"
+             hx-include="#sort-select, #ord-date-from, #ord-date-to, #ord-search-q"
+             hx-swap="innerHTML">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(10) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
             </div>
         </div>
     </div>
 </div>
+<!-- /ventas-view-orders -->
 
-<!-- ═══ ANÁLISIS DE PRODUCTO ML ═══ -->
-<div class="bg-white rounded-xl shadow mb-5">
-    <div class="px-4 md:px-6 py-4 border-b border-gray-100">
-        <div class="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-                <h2 class="text-base font-bold text-gray-800">Análisis de Producto ML</h2>
-                <p class="text-xs text-gray-400 mt-0.5">Pega un ID MLM o link para ver demanda real, fees exactos y precio tope de compra</p>
+<!-- ═══ VISTA: POR SKU ═══ -->
+<div id="ventas-view-sku" {% if view != 'sku' %}class="hidden"{% endif %}>
+
+    <!-- Filtro de fechas (compartido con Por Orden) -->
+    <div class="bg-white p-4 rounded-xl shadow mb-5">
+        <div class="flex flex-wrap gap-3 items-center justify-between">
+            <p class="text-xs text-gray-400">El rango de fechas se comparte con la vista "Por Orden"</p>
+            <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                <button id="ord-p-1-sku"  onclick="window.setOrdPeriod(1)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50">Hoy</button>
+                <button id="ord-p-7-sku"  onclick="window.setOrdPeriod(7)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">7d</button>
+                <button id="ord-p-15-sku" onclick="window.setOrdPeriod(15)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">15d</button>
+                <button id="ord-p-30-sku" onclick="window.setOrdPeriod(30)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">30d</button>
+                <button id="ord-p-all-sku" onclick="window.setOrdPeriod(0)"
+                        class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">Todo</button>
             </div>
         </div>
-        <div class="flex gap-2 mt-3">
-            <input type="text" id="ml-item-id-input"
-                   placeholder="MLM1234567890 — o pega el link completo"
-                   class="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400 min-w-0 bg-white"
-                   onkeydown="if(event.key==='Enter') window.searchMlItem()">
-            <button onclick="window.searchMlItem()" id="ml-item-search-btn"
-                    class="px-4 py-2 bg-yellow-400 text-gray-900 text-sm font-semibold rounded-lg hover:bg-yellow-500 transition shrink-0">
-                Analizar
+    </div>
+
+    <div class="bg-white rounded-xl shadow overflow-hidden">
+        <div id="sku-sales-table"
+             hx-get="/partials/sku-sales-table"
+             hx-trigger="{% if view == 'sku' %}load, {% endif %}ordersFilter"
+             hx-include="#ord-date-from, #ord-date-to"
+             hx-swap="innerHTML"
+             hx-on::after-swap="window._initSkuPagination()">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(10) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+<!-- /ventas-view-sku -->
+
+<!-- ═══ VISTA: COMPARATIVA ═══ -->
+<div id="ventas-view-compare" {% if view != 'compare' %}class="hidden"{% endif %}>
+
+    <!-- Presets rapidos -->
+    <div class="bg-white p-4 rounded-lg shadow mb-4">
+        <p class="text-sm font-medium text-gray-700 mb-2">Comparativas rapidas</p>
+        <div class="flex flex-wrap gap-2" id="presets">
+            <button type="button" data-preset="day" class="preset-btn px-4 py-2 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">
+                Hoy vs Ayer
+            </button>
+            <button type="button" data-preset="week" class="preset-btn px-4 py-2 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">
+                Esta semana vs Semana pasada
+            </button>
+            <button type="button" data-preset="biweek" class="preset-btn px-4 py-2 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">
+                Ultimos 15 dias vs 15 anteriores
+            </button>
+            <button type="button" data-preset="month" class="preset-btn px-4 py-2 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">
+                Este mes vs Mes pasado
             </button>
         </div>
     </div>
-    <div id="ml-item-result" class="p-4 md:p-6 empty:hidden"></div>
-</div>
 
-<!-- ═══ FILTROS ═══ -->
-<div class="bg-white p-4 rounded-xl shadow mb-5">
+    <!-- Selectores manuales -->
+    <div class="bg-white p-4 rounded-lg shadow mb-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+                <p class="text-sm font-semibold text-blue-700 mb-2">Periodo Actual (A)</p>
+                <div class="flex gap-3 items-end">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Desde</label>
+                        <input type="date" id="a_from" class="border rounded px-3 py-2 text-sm w-full">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Hasta</label>
+                        <input type="date" id="a_to" class="border rounded px-3 py-2 text-sm w-full">
+                    </div>
+                </div>
+            </div>
+            <div>
+                <p class="text-sm font-semibold text-gray-500 mb-2">Periodo Anterior (B)</p>
+                <div class="flex gap-3 items-end">
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Desde</label>
+                        <input type="date" id="b_from" class="border rounded px-3 py-2 text-sm w-full">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Hasta</label>
+                        <input type="date" id="b_to" class="border rounded px-3 py-2 text-sm w-full">
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="mt-4 flex gap-3">
+            <button type="button" id="btn-comparar"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-6 py-2 rounded hover:bg-yellow-500 transition text-sm">
+                Comparar
+            </button>
+            <button type="button" id="btn-limpiar-compare"
+                    class="border border-gray-300 text-gray-600 px-4 py-2 rounded hover:bg-gray-100 transition text-sm">
+                Limpiar
+            </button>
+        </div>
+    </div>
 
-    <!-- Buscador global -->
-    <div class="relative mb-3">
-        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-        </svg>
-        <input type="text" id="ord-search-q" name="q"
-               placeholder="Buscar por SKU, MLM, título, marca, modelo..."
-               class="w-full pl-10 pr-10 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-yellow-400 focus:ring-2 focus:ring-yellow-200 bg-gray-50 focus:bg-white transition"
-               oninput="window._ordOnSearch(this.value)"
-               onkeydown="if(event.key==='Escape'){this.value='';window._ordOnSearch('')}">
-        <button id="ord-search-clear"
-                onclick="document.getElementById('ord-search-q').value='';window._ordOnSearch('')"
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden"
-                title="Limpiar búsqueda">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+    <!-- KPI resumen -->
+    <div id="summary-cards" class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6" style="display:none;"></div>
+
+    <!-- Loading -->
+    <div id="compare-loading" class="hidden">
+        <div class="bg-white rounded-lg shadow p-12 text-center">
+            <svg class="animate-spin h-10 w-10 mx-auto mb-4 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
-        </button>
-    </div>
-
-    <div class="flex flex-wrap gap-3 items-center justify-between">
-        <!-- Ordenamiento -->
-        <select id="sort-select" name="sort" class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none">
-            <option value="date_desc">Más recientes</option>
-            <option value="date_asc">Más antiguos</option>
-        </select>
-
-        <!-- Botones de periodo -->
-        <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
-            <button id="ord-p-1"  onclick="window.setOrdPeriod(1)"
-                    class="px-2.5 py-1.5 bg-yellow-400 text-gray-900">Hoy</button>
-            <button id="ord-p-7"  onclick="window.setOrdPeriod(7)"
-                    class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">7d</button>
-            <button id="ord-p-15" onclick="window.setOrdPeriod(15)"
-                    class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">15d</button>
-            <button id="ord-p-30" onclick="window.setOrdPeriod(30)"
-                    class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">30d</button>
-            <button id="ord-p-all" onclick="window.setOrdPeriod(0)"
-                    class="px-2.5 py-1.5 text-gray-600 hover:bg-yellow-50 border-l border-gray-200">Todo</button>
-        </div>
-
-        <!-- Fechas personalizadas -->
-        <div class="flex gap-2 items-center">
-            <input type="date" id="ord-date-custom-from"
-                   class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none"
-                   onchange="window.setOrdCustomDates()">
-            <span class="text-xs text-gray-400">a</span>
-            <input type="date" id="ord-date-custom-to"
-                   class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none"
-                   onchange="window.setOrdCustomDates()">
+            <p class="text-gray-500">Comparando periodos... Esto puede tardar unos segundos</p>
         </div>
     </div>
 
-    <!-- Hidden inputs — htmx los incluirá al trigger -->
-    <input type="hidden" id="ord-date-from" name="date_from" value="">
-    <input type="hidden" id="ord-date-to"   name="date_to"   value="">
-</div>
+    <!-- Tabla comparativa -->
+    <div id="compare-results" class="hidden">
+        <!-- Filtro de tabla -->
+        <div class="bg-white rounded-t-lg shadow px-4 py-3 border-b flex flex-wrap items-center gap-3">
+            <span class="text-sm font-medium text-gray-700">Filtrar:</span>
+            <button type="button" data-filter="all" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-yellow-400 text-gray-800">Todos</button>
+            <button type="button" data-filter="lost" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-red-100">Dejaron de venderse</button>
+            <button type="button" data-filter="down" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-orange-100">Bajaron</button>
+            <button type="button" data-filter="up" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-green-100">Subieron</button>
+            <button type="button" data-filter="new" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-blue-100">Nuevos</button>
+            <span class="border-l border-gray-300 h-4 mx-1"></span>
+            <button type="button" data-filter="sin_stock" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-red-100">Sin Stock</button>
+            <button type="button" data-filter="pausado" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-purple-100">Pausados</button>
+            <input type="text" id="search-sku" placeholder="Buscar SKU..." class="ml-auto border rounded px-3 py-1 text-sm w-full md:w-48 mt-2 md:mt-0">
+        </div>
+        <!-- Mobile cards -->
+        <div class="md:hidden space-y-2 p-2" id="compare-cards"></div>
+        <!-- Desktop table -->
+        <div class="bg-white rounded-b-lg shadow hidden md:block overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-left">
+                    <tr>
+                        <th class="px-4 py-3 font-semibold text-gray-600">Estado</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600">Razon</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600">SKU</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600">Producto</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">Stock</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">Uds Actual</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">Uds Anterior</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">Cambio</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">%</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">$ Actual</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">$ Anterior</th>
+                        <th class="px-4 py-3 font-semibold text-gray-600 text-right">Dif $</th>
+                    </tr>
+                </thead>
+                <tbody id="compare-tbody"></tbody>
+            </table>
+        </div>
+    </div>
 
-<!-- ═══ TABLA DE ÓRDENES ═══ -->
-<div class="bg-white rounded-xl shadow overflow-hidden">
-    <div id="orders-table"
-         hx-get="/partials/orders-table"
-         hx-trigger="load, ordersFilter"
-         hx-include="#sort-select, #ord-date-from, #ord-date-to, #ord-search-q"
-         hx-swap="innerHTML">
-        <div class="animate-pulse p-4 space-y-3">
-            {% for i in range(10) %}
-            <div class="h-12 bg-gray-200 rounded"></div>
-            {% endfor %}
+    <!-- Vacio -->
+    <div id="compare-empty-state" class="hidden">
+        <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+            <p class="text-lg">No se encontraron datos para comparar en los periodos seleccionados.</p>
         </div>
     </div>
 </div>
+<!-- /ventas-view-compare -->
 
 <script>
-// ─── Periodo filter ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// Sub-vistas: Por Orden / Por SKU / Comparativa
+// ════════════════════════════════════════════════════════════════════════════
+window._ventasLoadedViews = {};
+window._ventasLoadedViews['{{ view }}'] = true;
+
+window._ventasHighlightBtn = function(view) {
+    document.querySelectorAll('.ventas-view-btn').forEach(function(b) {
+        var active = b.getAttribute('data-view') === view;
+        b.classList.toggle('bg-white', active);
+        b.classList.toggle('border-gray-200', active);
+        b.classList.toggle('text-yellow-700', active);
+        b.classList.toggle('font-semibold', active);
+        b.classList.toggle('-mb-px', active);
+        b.classList.toggle('bg-gray-50', !active);
+        b.classList.toggle('border-transparent', !active);
+        b.classList.toggle('text-gray-500', !active);
+    });
+};
+
+window.setVentasView = function(view) {
+    ['orders', 'sku', 'compare'].forEach(function(v) {
+        var el = document.getElementById('ventas-view-' + v);
+        if (el) el.classList.toggle('hidden', v !== view);
+    });
+    window._ventasHighlightBtn(view);
+
+    if (!window._ventasLoadedViews[view]) {
+        window._ventasLoadedViews[view] = true;
+        if (view === 'orders') {
+            htmx.trigger(document.getElementById('orders-table'), 'ordersFilter');
+        } else if (view === 'sku') {
+            htmx.trigger(document.getElementById('sku-sales-table'), 'ordersFilter');
+        } else if (view === 'compare') {
+            applyPreset('month');
+            highlightPreset(document.querySelector('.preset-btn[data-preset="month"]'));
+            doCompare();
+        }
+    }
+};
+
+// ─── Periodo filter — compartido entre Por Orden y Por SKU ────────────────────
 window._ordActivePeriod = 1;
 
 window._setOrdPeriodBtn = function(days) {
     ['1','7','15','30','all'].forEach(function(k) {
-        var btn = document.getElementById('ord-p-' + k);
-        if (!btn) return;
         var isActive = (days === 0 && k === 'all') || (String(days) === k);
-        if (isActive) {
-            btn.classList.add('bg-yellow-400', 'text-gray-900');
-            btn.classList.remove('text-gray-600', 'hover:bg-yellow-50');
-        } else {
-            btn.classList.remove('bg-yellow-400', 'text-gray-900');
-            btn.classList.add('text-gray-600', 'hover:bg-yellow-50');
-        }
+        ['ord-p-' + k, 'ord-p-' + k + '-sku'].forEach(function(id) {
+            var btn = document.getElementById(id);
+            if (!btn) return;
+            if (isActive) {
+                btn.classList.add('bg-yellow-400', 'text-gray-900');
+                btn.classList.remove('text-gray-600', 'hover:bg-yellow-50');
+            } else {
+                btn.classList.remove('bg-yellow-400', 'text-gray-900');
+                btn.classList.add('text-gray-600', 'hover:bg-yellow-50');
+            }
+        });
     });
 };
 
@@ -163,6 +394,9 @@ window.setOrdPeriod = function(days) {
     if (ct) ct.value = '';
     window._setOrdPeriodBtn(days);
     htmx.trigger(document.getElementById('orders-table'), 'ordersFilter');
+    if (window._ventasLoadedViews['sku']) {
+        htmx.trigger(document.getElementById('sku-sales-table'), 'ordersFilter');
+    }
 };
 
 window.setOrdCustomDates = function() {
@@ -176,6 +410,9 @@ window.setOrdCustomDates = function() {
         toEl.value   = ct.value;
         window._setOrdPeriodBtn(-1);
         htmx.trigger(document.getElementById('orders-table'), 'ordersFilter');
+        if (window._ventasLoadedViews['sku']) {
+            htmx.trigger(document.getElementById('sku-sales-table'), 'ordersFilter');
+        }
     }
 };
 
@@ -189,9 +426,10 @@ window.setOrdCustomDates = function() {
         fromEl.value = new Date(now.getTime() - 1 * 86400000).toISOString().slice(0, 10);
     }
     window._setOrdPeriodBtn(1);
+    window._ventasHighlightBtn('{{ view }}');
 })();
 
-// ─── Buscador global — debounce 500ms, auto-switch a 7d si estaba en Hoy ────
+// ─── Buscador global (Por Orden) — debounce 500ms, auto-switch a 7d si estaba en Hoy ────
 var _ordSearchTimer = null;
 window._ordOnSearch = function(val) {
     var clearBtn = document.getElementById('ord-search-clear');
@@ -216,6 +454,425 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// Por SKU — paginación client-side
+// ════════════════════════════════════════════════════════════════════════════
+var _SKU_PER_PAGE = 20;
+var _skuPage      = 1;
+var _skuViewAll   = false;
+
+function _getAllSkuRows() {
+    return Array.from(document.querySelectorAll('#sku-tbody tr.sku-data-row'));
+}
+
+function _applySkuPage(page) {
+    var rows = _getAllSkuRows();
+    if (!rows.length) return;
+
+    var total      = rows.length;
+    var totalPages = Math.ceil(total / _SKU_PER_PAGE);
+    _skuPage = Math.max(1, Math.min(page, totalPages));
+
+    if (_skuViewAll) {
+        rows.forEach(function(r) { r.classList.remove('hidden'); });
+    } else {
+        var start = (_skuPage - 1) * _SKU_PER_PAGE;
+        var end   = start + _SKU_PER_PAGE;
+        rows.forEach(function(r, i) {
+            r.classList.toggle('hidden', i < start || i >= end);
+        });
+    }
+    _renderSkuPagination(total, _skuPage, totalPages);
+}
+
+function _renderSkuPagination(total, page, totalPages) {
+    var container = document.getElementById('sku-pagination');
+    if (!container) return;
+
+    if (total <= _SKU_PER_PAGE && !_skuViewAll) {
+        container.innerHTML = '';
+        return;
+    }
+
+    var start = _skuViewAll ? 1 : (page - 1) * _SKU_PER_PAGE + 1;
+    var end   = _skuViewAll ? total : Math.min(page * _SKU_PER_PAGE, total);
+
+    // Botones de página con ellipsis
+    var pageBtns = '';
+    if (!_skuViewAll) {
+        var last = 0;
+        for (var p = 1; p <= totalPages; p++) {
+            var near = p >= page - 2 && p <= page + 2;
+            var edge = p === 1 || p === totalPages;
+            if (!near && !edge) continue;
+            if (last > 0 && p - last > 1) pageBtns += '<span class="px-1 text-gray-300 select-none text-xs">…</span>';
+            last = p;
+            if (p === page) {
+                pageBtns += '<button class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border bg-yellow-400 text-gray-800 border-yellow-400 cursor-default">' + p + '</button>';
+            } else {
+                pageBtns += '<button onclick="window._paginateSkus(' + p + ')" class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">' + p + '</button>';
+            }
+        }
+    }
+
+    container.innerHTML =
+        '<div class="px-4 py-3 border-t border-gray-100 bg-white flex flex-wrap items-center justify-between gap-3">' +
+        '<span class="text-xs text-gray-400">Mostrando <strong class="text-gray-600">' + start + '–' + end + '</strong> de <strong class="text-gray-600">' + total + '</strong> SKUs</span>' +
+        '<div class="flex items-center gap-1 flex-wrap">' +
+        (!_skuViewAll ?
+            '<button onclick="window._paginateSkus(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') +
+            ' class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+            pageBtns +
+            '<button onclick="window._paginateSkus(' + (page + 1) + ')" ' + (page >= totalPages ? 'disabled' : '') +
+            ' class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>'
+        : '') +
+        '<button onclick="window._paginateSkus(0, true)" class="h-8 px-3 rounded-lg text-xs font-semibold border transition ml-1 ' +
+        (_skuViewAll ? 'border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-white' : 'border-gray-200 text-gray-500 hover:border-yellow-400 hover:text-yellow-700') + '">' +
+        (_skuViewAll ? '← Paginar' : 'Ver todos') + '</button>' +
+        '</div></div>';
+}
+
+window._paginateSkus = function(page, toggle) {
+    if (toggle !== undefined) {
+        _skuViewAll = !_skuViewAll;
+        _skuPage = 1;
+        _applySkuPage(1);
+    } else {
+        _applySkuPage(page);
+    }
+};
+
+window._initSkuPagination = function() {
+    _skuPage    = 1;
+    _skuViewAll = false;
+    _applySkuPage(1);
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Comparativa
+// ════════════════════════════════════════════════════════════════════════════
+var allRows = [];
+var currentFilter = 'all';
+
+function toStr(d) { return d.toISOString().split('T')[0]; }
+
+function applyPreset(preset) {
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    if (preset === 'day') {
+        var yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+        document.getElementById('a_from').value = toStr(today);
+        document.getElementById('a_to').value = toStr(today);
+        document.getElementById('b_from').value = toStr(yesterday);
+        document.getElementById('b_to').value = toStr(yesterday);
+    } else if (preset === 'week') {
+        var dow = today.getDay() || 7; // lunes=1
+        var weekStart = new Date(today); weekStart.setDate(today.getDate() - dow + 1);
+        var prevWeekStart = new Date(weekStart); prevWeekStart.setDate(prevWeekStart.getDate() - 7);
+        var prevWeekEnd = new Date(weekStart); prevWeekEnd.setDate(prevWeekEnd.getDate() - 1);
+        document.getElementById('a_from').value = toStr(weekStart);
+        document.getElementById('a_to').value = toStr(today);
+        document.getElementById('b_from').value = toStr(prevWeekStart);
+        document.getElementById('b_to').value = toStr(prevWeekEnd);
+    } else if (preset === 'biweek') {
+        var start15 = new Date(today); start15.setDate(start15.getDate() - 14);
+        var prev15end = new Date(start15); prev15end.setDate(prev15end.getDate() - 1);
+        var prev15start = new Date(prev15end); prev15start.setDate(prev15start.getDate() - 14);
+        document.getElementById('a_from').value = toStr(start15);
+        document.getElementById('a_to').value = toStr(today);
+        document.getElementById('b_from').value = toStr(prev15start);
+        document.getElementById('b_to').value = toStr(prev15end);
+    } else if (preset === 'month') {
+        var monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        var prevMonthEnd = new Date(monthStart); prevMonthEnd.setDate(prevMonthEnd.getDate() - 1);
+        var prevMonthStart = new Date(prevMonthEnd.getFullYear(), prevMonthEnd.getMonth(), 1);
+        document.getElementById('a_from').value = toStr(monthStart);
+        document.getElementById('a_to').value = toStr(today);
+        document.getElementById('b_from').value = toStr(prevMonthStart);
+        document.getElementById('b_to').value = toStr(prevMonthEnd);
+    }
+}
+
+function highlightPreset(btn) {
+    document.querySelectorAll('.preset-btn').forEach(function(b) {
+        b.classList.remove('bg-yellow-400', 'text-gray-800', 'border-yellow-400');
+        b.classList.add('border-gray-300', 'text-gray-600');
+    });
+    if (btn) {
+        btn.classList.add('bg-yellow-400', 'text-gray-800', 'border-yellow-400');
+        btn.classList.remove('border-gray-300', 'text-gray-600');
+    }
+}
+
+function fmt(n) {
+    return parseFloat(n).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function statusBadge(s) {
+    var map = {
+        lost: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800">Sin venta</span>',
+        down: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-800">Bajo</span>',
+        equal: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">Igual</span>',
+        up: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800">Subio</span>',
+        'new': '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800">Nuevo</span>'
+    };
+    return map[s] || s;
+}
+
+function diffColor(val) {
+    if (val > 0) return 'text-green-600';
+    if (val < 0) return 'text-red-600';
+    return 'text-gray-500';
+}
+
+function diffSign(val) {
+    if (val > 0) return '+' + val;
+    return '' + val;
+}
+
+function reasonBadge(reason) {
+    var map = {
+        sin_stock: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800">Sin stock</span>',
+        sin_stock_pausado: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-200 text-red-900">Sin stock + Pausado</span>',
+        pausado: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">Pausado</span>',
+        inactivo: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">Inactivo</span>',
+        con_stock: '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Con stock</span>'
+    };
+    return map[reason] || '<span class="text-xs text-gray-400">—</span>';
+}
+
+function borderColor(status) {
+    var map = {lost:'border-red-500', down:'border-orange-500', equal:'border-gray-300', up:'border-green-500', 'new':'border-blue-500'};
+    return map[status] || 'border-gray-300';
+}
+
+function renderTable(rows) {
+    var tbody = document.getElementById('compare-tbody');
+    var cards = document.getElementById('compare-cards');
+    var search = (document.getElementById('search-sku').value || '').toLowerCase();
+
+    var filtered = rows.filter(function(r) {
+        if (currentFilter === 'lost' || currentFilter === 'down' || currentFilter === 'up' || currentFilter === 'new') {
+            if (r.status !== currentFilter) return false;
+        }
+        if (currentFilter === 'sin_stock') {
+            if (r.reason !== 'sin_stock' && r.reason !== 'sin_stock_pausado') return false;
+        }
+        if (currentFilter === 'pausado') {
+            if (r.reason !== 'pausado' && r.reason !== 'sin_stock_pausado' && r.reason !== 'inactivo') return false;
+        }
+        if (search && r.sku.toLowerCase().indexOf(search) === -1 && r.title.toLowerCase().indexOf(search) === -1) return false;
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400">No hay SKUs con este filtro</td></tr>';
+        cards.innerHTML = '<div class="text-center py-8 text-gray-400">No hay SKUs con este filtro</div>';
+        return;
+    }
+
+    var tableHtml = '';
+    var cardHtml = '';
+    filtered.forEach(function(r) {
+        var rowBg = '';
+        if (r.status === 'lost') rowBg = 'bg-red-50';
+        else if (r.status === 'new') rowBg = 'bg-blue-50';
+        if (r.reason === 'sin_stock' || r.reason === 'sin_stock_pausado') rowBg = 'bg-red-50';
+
+        var stockDisplay = '—';
+        if (r.stock !== undefined && r.stock !== null) {
+            stockDisplay = r.stock === 0
+                ? '<span class="text-red-600 font-semibold">0</span>'
+                : '<span class="text-green-600">' + r.stock + '</span>';
+        }
+
+        // Desktop table row
+        tableHtml += '<tr class="border-t ' + rowBg + ' hover:bg-gray-50">';
+        tableHtml += '<td class="px-4 py-2.5">' + statusBadge(r.status) + '</td>';
+        tableHtml += '<td class="px-4 py-2.5">' + reasonBadge(r.reason) + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 font-mono text-xs font-semibold">' + r.sku + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-gray-700 max-w-xs truncate" title="' + r.title + '">' + (r.title.length > 40 ? r.title.substring(0,40) + '...' : r.title) + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right">' + stockDisplay + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right font-semibold">' + r.units_a + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right text-gray-500">' + r.units_b + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.unit_diff) + '">' + diffSign(r.unit_diff) + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.pct) + '">' + (r.pct > 0 ? '+' : '') + r.pct + '%</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right">$' + fmt(r.rev_a) + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right text-gray-500">$' + fmt(r.rev_b) + '</td>';
+        tableHtml += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.rev_diff) + '">$' + fmt(Math.abs(r.rev_diff)) + (r.rev_diff < 0 ? ' ↓' : (r.rev_diff > 0 ? ' ↑' : '')) + '</td>';
+        tableHtml += '</tr>';
+
+        // Mobile card
+        cardHtml += '<div class="bg-white rounded-lg shadow p-3 border-l-4 ' + borderColor(r.status) + '">';
+        cardHtml += '<div class="flex items-center justify-between gap-2">';
+        cardHtml += '<span class="font-mono text-xs font-semibold text-gray-700">' + r.sku + '</span>';
+        cardHtml += '<div class="flex gap-1">' + statusBadge(r.status) + reasonBadge(r.reason) + '</div>';
+        cardHtml += '</div>';
+        cardHtml += '<p class="text-sm text-gray-600 line-clamp-1 mt-1">' + r.title + '</p>';
+        cardHtml += '<div class="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-xs">';
+        cardHtml += '<div>Stock: ' + stockDisplay + '</div>';
+        cardHtml += '<div>Cambio: <span class="font-semibold ' + diffColor(r.unit_diff) + '">' + diffSign(r.unit_diff) + ' (' + (r.pct > 0 ? '+' : '') + r.pct + '%)</span></div>';
+        cardHtml += '<div>Uds: <strong>' + r.units_a + '</strong> <span class="text-gray-400">vs ' + r.units_b + '</span></div>';
+        cardHtml += '<div>$: <strong>$' + fmt(r.rev_a) + '</strong> <span class="text-gray-400">vs $' + fmt(r.rev_b) + '</span></div>';
+        cardHtml += '</div>';
+        cardHtml += '</div>';
+    });
+    tbody.innerHTML = tableHtml;
+    cards.innerHTML = cardHtml;
+}
+
+function renderSummary(s) {
+    var el = document.getElementById('summary-cards');
+    el.style.display = '';
+
+    function card(label, value, sub, color) {
+        return '<div class="bg-white p-5 rounded-lg shadow">' +
+            '<p class="text-gray-500 text-xs mb-1">' + label + '</p>' +
+            '<p class="text-2xl font-bold ' + color + '">' + value + '</p>' +
+            (sub ? '<p class="text-xs mt-1 ' + color + '">' + sub + '</p>' : '') +
+            '</div>';
+    }
+
+    var unitsPct = s.units_pct;
+    var unitsArrow = s.units_diff >= 0 ? '↑' : '↓';
+    var unitsColor = s.units_diff >= 0 ? 'text-green-600' : 'text-red-600';
+
+    var revDiff = s.rev_diff;
+    var revArrow = revDiff >= 0 ? '↑' : '↓';
+    var revColor = revDiff >= 0 ? 'text-green-600' : 'text-red-600';
+
+    el.innerHTML =
+        card('Unidades Actual vs Anterior',
+            s.units_a + ' vs ' + s.units_b,
+            diffSign(s.units_diff) + ' (' + (unitsPct >= 0 ? '+' : '') + unitsPct + '%) ' + unitsArrow,
+            unitsColor) +
+        card('Ingresos Actual vs Anterior',
+            '$' + fmt(s.rev_a) + ' vs $' + fmt(s.rev_b),
+            '$' + fmt(Math.abs(revDiff)) + ' ' + revArrow,
+            revColor) +
+        card('SKUs que dejaron de venderse',
+            s.lost,
+            s.lost > 0 ? 'Requieren atencion' : 'Ninguno',
+            s.lost > 0 ? 'text-red-600' : 'text-green-600') +
+        card('SKUs nuevos / que subieron',
+            s['new'] + ' nuevos, ' + s.up + ' subieron',
+            s.down + ' bajaron',
+            'text-blue-600') +
+        card('Problemas de Stock',
+            (s.stock_issue || 0) + ' sin stock',
+            (s.paused || 0) + ' pausados',
+            (s.stock_issue || 0) > 0 ? 'text-red-600' : 'text-green-600');
+}
+
+function doCompare() {
+    var aFrom = document.getElementById('a_from').value;
+    var aTo = document.getElementById('a_to').value;
+    var bFrom = document.getElementById('b_from').value;
+    var bTo = document.getElementById('b_to').value;
+
+    if (!aFrom || !aTo || !bFrom || !bTo) {
+        alert('Selecciona los 4 campos de fecha');
+        return;
+    }
+
+    var btn = document.getElementById('btn-comparar');
+    btn.disabled = true;
+    btn.classList.add('opacity-50');
+
+    document.getElementById('compare-loading').classList.remove('hidden');
+    document.getElementById('compare-results').classList.add('hidden');
+    document.getElementById('compare-empty-state').classList.add('hidden');
+    document.getElementById('summary-cards').style.display = 'none';
+
+    var url = '/api/sku-compare?a_from=' + aFrom + '&a_to=' + aTo + '&b_from=' + bFrom + '&b_to=' + bTo;
+
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            document.getElementById('compare-loading').classList.add('hidden');
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+
+            if (data.error) {
+                document.getElementById('compare-empty-state').classList.remove('hidden');
+                return;
+            }
+
+            allRows = data.rows;
+            renderSummary(data.summary);
+
+            if (allRows.length === 0) {
+                document.getElementById('compare-empty-state').classList.remove('hidden');
+                return;
+            }
+
+            document.getElementById('compare-results').classList.remove('hidden');
+            currentFilter = 'all';
+            setActiveFilter('all');
+            renderTable(allRows);
+        })
+        .catch(function() {
+            document.getElementById('compare-loading').classList.add('hidden');
+            document.getElementById('compare-empty-state').classList.remove('hidden');
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+        });
+}
+
+function setActiveFilter(f) {
+    document.querySelectorAll('.filter-btn').forEach(function(b) {
+        b.classList.remove('bg-yellow-400', 'text-gray-800');
+        b.classList.add('bg-gray-200', 'text-gray-600');
+    });
+    var active = document.querySelector('.filter-btn[data-filter="' + f + '"]');
+    if (active) {
+        active.classList.add('bg-yellow-400', 'text-gray-800');
+        active.classList.remove('bg-gray-200', 'text-gray-600');
+    }
+}
+
+// Events — Comparativa
+document.querySelectorAll('.preset-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        applyPreset(this.getAttribute('data-preset'));
+        highlightPreset(this);
+        doCompare();
+    });
+});
+
+document.getElementById('btn-comparar').addEventListener('click', function() {
+    highlightPreset(null);
+    doCompare();
+});
+
+document.getElementById('btn-limpiar-compare').addEventListener('click', function() {
+    applyPreset('month');
+    highlightPreset(document.querySelector('.preset-btn[data-preset="month"]'));
+    document.getElementById('compare-results').classList.add('hidden');
+    document.getElementById('summary-cards').style.display = 'none';
+    document.getElementById('compare-empty-state').classList.add('hidden');
+});
+
+document.querySelectorAll('.filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        currentFilter = btn.getAttribute('data-filter');
+        setActiveFilter(currentFilter);
+        renderTable(allRows);
+    });
+});
+
+document.getElementById('search-sku').addEventListener('input', function() {
+    renderTable(allRows);
+});
+
+// Default de Comparativa: Este mes vs Mes pasado (no dispara doCompare a menos que sea la vista activa)
+applyPreset('month');
+highlightPreset(document.querySelector('.preset-btn[data-preset="month"]'));
+if ('{{ view }}' === 'compare') {
+    doCompare();
+}
 
 // ─── MLM Product Analyzer ─────────────────────────────────────────────────────
 window.searchMlItem = function() {

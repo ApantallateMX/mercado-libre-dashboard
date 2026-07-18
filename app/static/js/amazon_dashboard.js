@@ -1140,6 +1140,96 @@ async function loadTopProducts() {
   }
 }
 
+// ─── Ventas — sub-vista Resumen / Por SKU ───────────────────────────────────
+var _amzVentasSkuLoaded = false;
+var _amzSkuDays = 30;
+
+window.setAmzVentasView = function(view) {
+    ['resumen', 'sku'].forEach(function(v) {
+        var el = document.getElementById('amz-ventas-' + v);
+        if (el) el.classList.toggle('hidden', v !== view);
+        var btn = document.getElementById('amz-ventas-view-' + v);
+        if (btn) {
+            btn.classList.toggle('bg-orange-500', v === view);
+            btn.classList.toggle('text-white', v === view);
+            btn.classList.toggle('text-gray-600', v !== view);
+            btn.classList.toggle('hover:bg-orange-50', v !== view);
+        }
+    });
+    if (view === 'sku' && !_amzVentasSkuLoaded) {
+        _amzVentasSkuLoaded = true;
+        loadAmzSkuSales();
+    }
+};
+
+window.setAmzSkuPeriod = function(days) {
+    _amzSkuDays = days;
+    document.querySelectorAll('.amz-sku-preset').forEach(function(btn) {
+        var isActive = parseInt(btn.dataset.days, 10) === days;
+        btn.className = 'amz-sku-preset px-3 py-1 text-xs rounded-full transition font-medium ' +
+            (isActive ? 'bg-orange-400 text-white font-semibold' : 'bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-800');
+    });
+    loadAmzSkuSales();
+};
+
+function loadAmzSkuSales() {
+    var wrap = document.getElementById('amz-sku-table-wrap');
+    if (!wrap) return;
+    if (!window.amzActiveSellerId) {
+        wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">No hay cuenta Amazon activa — selecciona una en el menú de arriba.</div>';
+        return;
+    }
+    wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Cargando ventas por SKU...</div>';
+
+    fetch('/partials/amazon-sku-sales-table?seller_id=' + encodeURIComponent(window.amzActiveSellerId) + '&days=' + _amzSkuDays)
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.error) { wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">' + d.error + '</div>'; return; }
+            if (d.computing) {
+                wrap.innerHTML = '<div class="flex items-center justify-center gap-3 py-10 text-sm text-gray-500">' +
+                    '<svg class="animate-spin h-5 w-5 text-orange-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>' +
+                    '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>' +
+                    'Calculando ventas por SKU (primera carga puede tardar varios minutos) — se cachea 3h…</div>';
+                setTimeout(loadAmzSkuSales, 8000);
+                return;
+            }
+
+            var rows = d.rows || [];
+            var totalEl = document.getElementById('amz-sku-total');
+            if (totalEl) totalEl.textContent = rows.length ? rows.length + ' SKUs con ventas' : '';
+            if (!rows.length) { wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Sin ventas en este periodo.</div>'; return; }
+
+            var trs = rows.map(function(r) {
+                var pctColor = r.pct_recuperado == null ? 'text-gray-400' : (r.pct_recuperado >= 100 ? 'text-green-600' : (r.pct_recuperado >= 70 ? 'text-yellow-600' : 'text-red-600'));
+                return '<tr class="hover:bg-gray-50 border-b border-gray-200">' +
+                    '<td class="px-4 py-3 text-sm font-mono font-medium text-gray-800">' + r.sku + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-gray-800">' + (r.title || r.sku).slice(0, 50) + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-right font-medium text-gray-800">' + r.units + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-right"><div class="font-medium text-gray-800">$' + r.revenue_mxn.toLocaleString('es-MX', {maximumFractionDigits: 0}) + ' <span class="text-xs text-gray-400">MXN</span></div></td>' +
+                    '<td class="px-4 py-3 text-sm text-center">' + (r.bm_stock != null ? r.bm_stock : '<span class="text-gray-300">—</span>') + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-right">' + (r.retail_ph_usd > 0 ? '$' + r.retail_ph_usd.toFixed(2) + ' USD' : '<span class="text-gray-300">—</span>') + '</td>' +
+                    '<td class="px-4 py-3 text-sm text-center font-semibold ' + pctColor + '">' + (r.pct_recuperado != null ? r.pct_recuperado + '%' : '—') + '</td>' +
+                    '</tr>';
+            });
+
+            wrap.innerHTML = '<table class="w-full"><thead class="bg-gray-50"><tr>' +
+                '<th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">SKU</th>' +
+                '<th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>' +
+                '<th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cantidad</th>' +
+                '<th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingreso</th>' +
+                '<th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Stock BM</th>' +
+                '<th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Retail PH</th>' +
+                '<th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Ingreso vs Retail PH de BM">% Recuperado</th>' +
+                '</tr></thead><tbody id="amz-sku-tbody" class="divide-y divide-gray-200"></tbody></table>' +
+                '<div id="amz-sku-pag"></div>';
+            window['amz-sku-pag_go'] = function(p) { _renderPaginated(trs, p, 'amz-sku-tbody', 'amz-sku-pag'); };
+            _renderPaginated(trs, 1, 'amz-sku-tbody', 'amz-sku-pag');
+        })
+        .catch(function(e) {
+            wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error: ' + e.message + '</div>';
+        });
+}
+
 // ─── FBA & Stock Tab ────────────────────────────────────────────────────────
 var _fbaTabLoaded = false;
 async function loadFbaTab() {

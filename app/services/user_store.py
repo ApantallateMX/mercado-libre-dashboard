@@ -186,6 +186,17 @@ async def init_user_db(admin_password: str = "010817xD"):
                 INSERT INTO dashboard_users (username, display_name, password_hash, password_salt, role, active, must_change_pw)
                 VALUES ('admin', 'Administrador', ?, ?, 'admin', 1, 0)
             """, (ph, salt))
+        # Migración: la sección "sku" se fusionó en "ventas" (tab unificado Ventas/SKU) —
+        # cualquier usuario con "sku" en allowed_sections gana "ventas" si no la tenía ya.
+        cur = await db.execute("SELECT id, allowed_sections FROM dashboard_users")
+        for uid, raw_sections in await cur.fetchall():
+            sections = _parse_allowed_sections(raw_sections)
+            if "sku" in sections and "ventas" not in sections:
+                sections.append("ventas")
+                await db.execute(
+                    "UPDATE dashboard_users SET allowed_sections = ? WHERE id = ?",
+                    (json.dumps(sections), uid),
+                )
         await db.commit()
 
 

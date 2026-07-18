@@ -748,9 +748,9 @@ _PATH_TO_SECTION: dict[str, str] = {
     "/items":            "productos",
     "/items-health":     "productos",
     "/productos":        "productos",
-    "/sku-sales":        "sku",
-    "/sku-compare":      "sku",
-    "/sku-inventory":    "sku",
+    "/sku-sales":        "ventas",
+    "/sku-compare":      "ventas",
+    "/sku-inventory":    "productos",
     "/ads":              "ads",
     "/health":           "salud",
     "/returns":          "devoluciones",
@@ -763,7 +763,6 @@ _SECTION_FIRST_URL: dict[str, str] = {
     "dashboard":    "/dashboard",
     "ventas":       "/orders",
     "productos":    "/items",
-    "sku":          "/sku-sales",
     "ads":          "/ads",
     "salud":        "/health",
     "devoluciones": "/returns",
@@ -1082,16 +1081,12 @@ _NAV_TAB_DEFS = [
          section="dashboard", admin_only=False, amz_gated=False, badge=None),
     dict(id="ventas", label="Ventas", icon="📊",
          ml_href="/orders", amz_href="/amazon?tab=ventas",
-         ml_active=["orders"], amz_active="ventas", amz_uses_dispatcher=True,
+         ml_active=["orders", "sku_sales", "sku_compare"], amz_active="ventas", amz_uses_dispatcher=True,
          section="ventas", admin_only=False, amz_gated=False, badge=None),
     dict(id="productos", label="Productos", icon="📦",
          ml_href="/items", amz_href="/amazon/products",
          ml_active=["items", "items_health", "sku_inventory", "productos"], amz_active="productos", amz_uses_dispatcher=True,
          section="productos", admin_only=False, amz_gated=False, badge="orphans"),
-    dict(id="sku", label="SKU", icon="🔎",
-         ml_href="/sku-sales", amz_href="/amazon/sku-sales",
-         ml_active=["sku_sales", "sku_compare"], amz_active=None, amz_uses_dispatcher=False,
-         section="sku", admin_only=False, amz_gated=True, badge=None),
     dict(id="ads", label="Ads", icon="📣",
          ml_href="/ads", amz_href=None,
          ml_active=["ads"], amz_active=None, amz_uses_dispatcher=False,
@@ -2039,6 +2034,7 @@ async def orders_page(request: Request):
     ctx = await _accounts_ctx(request)
     return templates.TemplateResponse(request, "orders.html", {        "user": user,
         "active": "orders",
+        "view": "orders",
         **ctx
     })
 
@@ -2510,24 +2506,28 @@ async def factura_download_invoice_xml(request: Request, token: str):
 
 @app.get("/sku-sales", response_class=HTMLResponse)
 async def sku_sales_page(request: Request):
+    """Alias de /orders con la sub-vista 'Por SKU' pre-seleccionada — mismo template unificado."""
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "sku_sales.html", {        "user": user,
+    return templates.TemplateResponse(request, "orders.html", {        "user": user,
         "active": "sku_sales",
+        "view": "sku",
         **ctx
     })
 
 
 @app.get("/sku-compare", response_class=HTMLResponse)
 async def sku_compare_page(request: Request):
+    """Alias de /orders con la sub-vista 'Comparativa' pre-seleccionada — mismo template unificado."""
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "sku_compare.html", {        "user": user,
+    return templates.TemplateResponse(request, "orders.html", {        "user": user,
         "active": "sku_compare",
+        "view": "compare",
         **ctx
     })
 
@@ -17061,20 +17061,10 @@ async def amazon_sku_sales_table(
     return {"computing": False, "days": days, "rows": rows, "total_skus": len(rows)}
 
 
-@app.get("/amazon/sku-sales", response_class=HTMLResponse)
+@app.get("/amazon/sku-sales")
 async def amazon_sku_sales_page(request: Request):
-    """SKU Amazon como pestaña propia — equivalente de /sku-sales de ML."""
-    user = await get_current_user()
-    ctx = await _accounts_ctx(request)
-    active_amazon_id = ctx.get("active_amazon_id")
-    amazon_account = None
-    if active_amazon_id:
-        amazon_account = await token_store.get_amazon_account(active_amazon_id)
-    ctx["amazon_account"] = amazon_account
-    ctx["active_platform"] = "amz"
-    ctx["active"] = "sku_sales"
-    ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
-    return templates.TemplateResponse(request, "amazon_sku_sales.html", {"user": user, **ctx})
+    """Alias legacy — Ventas por SKU Amazon ahora vive dentro de #amz-tab-ventas."""
+    return RedirectResponse("/amazon?tab=ventas", status_code=302)
 
 
 # Severidad por código de razón Amazon (mismo formato que _REASON_SEVERITY de ML,

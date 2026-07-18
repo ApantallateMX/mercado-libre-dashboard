@@ -399,15 +399,15 @@
                 <span class="text-xl">🩺</span>
                 <span class="text-xs text-gray-800">Optimizar</span>
             </a>
-            {% endif %}
-            {% if tab.id == 'sku' and active_platform != 'amz' %}
-            <a href="/sku-compare" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'sku_compare' %}bg-yellow-500 font-semibold{% endif %}">
-                <span class="text-xl">📐</span>
-                <span class="text-xs text-gray-800">Comparativa</span>
-            </a>
             <a href="/sku-inventory" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'sku_inventory' %}bg-yellow-500 font-semibold{% endif %}">
                 <span class="text-xl">🚀</span>
                 <span class="text-xs text-gray-800">Lanzar</span>
+            </a>
+            {% endif %}
+            {% if tab.id == 'ventas' and active_platform != 'amz' %}
+            <a href="/sku-compare" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'sku_compare' %}bg-yellow-500 font-semibold{% endif %}">
+                <span class="text-xl">📐</span>
+                <span class="text-xs text-gray-800">Comparativa</span>
             </a>
             {% endif %}
             {% else %}

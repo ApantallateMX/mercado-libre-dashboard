@@ -240,6 +240,16 @@
      ══════════════════════════════════════════════════════════════════════ -->
 <div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
 
+<!-- ─── Sub-vista: Resumen / Por SKU ───────────────────────────────────── -->
+<div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium mb-5 w-fit">
+    <button id="amz-ventas-view-resumen" onclick="window.setAmzVentasView('resumen')"
+            class="px-3 py-1.5 bg-orange-500 text-white">Resumen</button>
+    <button id="amz-ventas-view-sku" onclick="window.setAmzVentasView('sku')"
+            class="px-3 py-1.5 text-gray-600 hover:bg-orange-50 border-l border-gray-200">Por SKU</button>
+</div>
+
+<div id="amz-ventas-resumen">
+
 <!-- ─── Morning Briefing Card ──────────────────────────────────────────── -->
 <div id="amz-briefing-card" class="rounded-xl mb-5 overflow-hidden" style="background:#1a1a2e; border-left:4px solid #FF9900;">
   <div class="px-5 py-4">
@@ -346,6 +356,27 @@
         </div>
     </div>
 </div>
+
+</div><!-- /amz-ventas-resumen -->
+
+<!-- ─── Ventas por SKU ──────────────────────────────────────────────────── -->
+<div id="amz-ventas-sku" class="hidden">
+    <div class="bg-white rounded-lg shadow p-4 mb-6">
+        <div class="flex flex-wrap gap-1.5 items-center">
+            <span class="text-xs text-gray-400 self-center mr-1">Período:</span>
+            <button onclick="window.setAmzSkuPeriod(7)"  data-days="7"  class="amz-sku-preset px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-800 transition font-medium">7 días</button>
+            <button onclick="window.setAmzSkuPeriod(30)" data-days="30" class="amz-sku-preset px-3 py-1 text-xs rounded-full bg-orange-400 text-white font-semibold transition">30 días</button>
+            <button onclick="window.setAmzSkuPeriod(90)" data-days="90" class="amz-sku-preset px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-800 transition font-medium">90 días</button>
+            <span id="amz-sku-total" class="ml-auto text-xs text-gray-400"></span>
+        </div>
+    </div>
+    <div class="bg-white rounded-lg shadow">
+        <div id="amz-sku-table-wrap" class="p-5">
+            <div class="text-center py-10 text-gray-400 text-sm">Cargando ventas por SKU...</div>
+        </div>
+    </div>
+</div>
+<!-- /amz-ventas-sku -->
 
 </div><!-- /amz-tab-ventas -->
 
