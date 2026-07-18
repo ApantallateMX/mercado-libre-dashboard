@@ -7,6 +7,52 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-18 — FEAT: fusión de tabs Ventas + SKU en un solo tab (ML y Amazon)
+
+**Archivos:** `app/main.py`, `app/templates/orders.html`, `app/templates/base.html`,
+`app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`,
+`app/services/user_store.py`, `app/templates/usuarios.html`.
+Eliminados: `sku_sales.html`, `sku_compare.html`, `partials/sku_subnav.html`,
+`amazon_sku_sales.html` (contenido migrado, no perdido).
+
+Jovan notó que "Ventas" y "SKU" mostraban info parecida en pestañas separadas
+con filtros de fecha duplicados. Se fusionaron en un solo tab "Ventas" con
+3 sub-vistas cliente-side (sin recargar página):
+
+- **ML** (`/orders`): "Por Orden" / "Por SKU" / "Comparativa". Las primeras
+  dos comparten el filtro de fechas (presets Hoy/7d/15d/30d/Todo + rango
+  custom) — antes "SKU" no tenía ni presets ni KPIs propios. Comparativa
+  mantiene su selector de dos rangos independiente. `/sku-sales` y
+  `/sku-compare` siguen funcionando como alias que pre-seleccionan su
+  sub-vista en el mismo template — no se rompen bookmarks.
+- **Amazon** (`/amazon?tab=ventas`): la pestaña SKU se convirtió en una
+  sección "Por SKU" dentro de Ventas con el mismo estilo de pill-toggle que
+  ya usaba FBA/FBM. Los 4 widgets existentes (Briefing, ASIN, Órdenes, Top
+  Productos) quedan intactos bajo "Resumen". `/amazon/sku-sales` ahora
+  redirige a `/amazon?tab=ventas`. Se eliminó una copia duplicada de
+  `_renderPaginated` (quedó solo la de `amazon_dashboard.js`).
+- **Nav**: se eliminó la entrada `"sku"` de `_NAV_TAB_DEFS` en ambas
+  plataformas — ya no existe una pestaña "SKU" en ningún lado. El shortcut
+  móvil "Comparativa" se movió de la pestaña SKU (ya no existe) a Ventas; el
+  shortcut "Lanzar" (`/sku-inventory`, que ya redirigía a `/productos`) se
+  movió a Productos.
+- **Permisos**: la sección `"sku"` de `allowed_sections` se fusionó en
+  `"ventas"` — migración automática en `init_user_db()` agrega `"ventas"` a
+  cualquier usuario que tuviera `"sku"` suelto, para no perder acceso.
+
+**Hallazgo incidental:** `loadInventoryForSkus()` en el `sku_sales.html` viejo
+llamaba a un endpoint (`/api/items/inventory-sku-sales`) que ya no existe —
+código muerto desde que la columna "Stock BM" pasó a venir server-side vía
+Jinja. Se eliminó al portar la lógica, no se re-implementó.
+
+Verificado localmente con Playwright (Chromium headless): las 3 sub-vistas
+ML y las 2 de Amazon cambian sin recarga, el rango de fechas persiste entre
+"Por Orden"/"Por SKU", las URLs viejas siguen sirviendo el sub-vista correcta,
+0 errores de consola. Deploy confirmado vía Railway GraphQL API (commit
+`d812892`, status SUCCESS).
+
+---
+
 ## 2026-07-18 — FIX URGENTE: incidente de disk-full (segunda vez) — causa raíz de facturas + regla de 30 días para fotos
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/facturacion.html`
