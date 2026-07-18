@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-18 — FEAT: Finanzas → 4ta sub-vista de Ventas, Distribución → sub-vista de Sync Stock
+
+**Archivos:** `app/main.py`, `app/templates/orders.html`, `app/templates/stock_sync.html`.
+Eliminados: `finanzas.html`, `distribucion.html`.
+
+Continuación de la reducción de pestañas del nav. Ambos casos tenían la
+misma señal que ya funcionó antes (`section` compartida con otro tab en
+`_NAV_TAB_DEFS`):
+
+- **Finanzas** (`section="ventas"`, igual que Deals/Listings antes) se
+  fusionó como 4ta sub-vista de `/orders` (Por Orden / Por SKU / Comparativa
+  / **Finanzas**). Sigue el patrón de ruta propia con `view` hardcodeado
+  (igual que `/sku-sales`/`/sku-compare`, NO un redirect) — `/finanzas` sigue
+  siendo una URL real. El endpoint `/api/ml/finanzas-summary` no cambió
+  (sigue sin parámetros de fecha, cache de 30 min intacta). Amazon no se
+  tocó — ya tenía Finanzas dentro de su propio dispatcher.
+- **Distribución** (`section="sync"`, igual que Sync Stock) se fusionó como
+  sub-vista "Configurar" de `/stock-sync` (la otra sub-vista, "Ejecutar", es
+  todo el contenido que ya existía ahí, sin tocar). A diferencia de los
+  merges anteriores, aquí el toggle sincroniza la URL vía
+  `history.replaceState('/stock-sync?view=...')` — necesario porque Sync
+  Stock ya dispara `location.reload()` automático al terminar un ciclo de
+  sync, y sin esa sincronización ese reload hubiera regresado siempre a
+  "Ejecutar" borrando la sub-vista activa a medio ajuste de reglas.
+  Verificado con Playwright que un F5 en "Configurar" preserva la sub-vista.
+  Todo el contenido portado de `distribucion.html` usa IDs/funciones con
+  prefijo `dist` (`distSaveRule`, `#dist-toast`, etc.) porque Sync Stock ya
+  tenía su propia `saveRule()`/`showToast()`/`#toast` para las reglas
+  SKU/plataforma — confirmé el choque de nombres antes de portar, no fue
+  solo precaución. `/distribucion` ahora redirige (302) a
+  `/stock-sync?view=configurar` — de paso cierra un hueco real: esa ruta no
+  tenía guard de admin en el backend (solo el nav la ocultaba), ahora
+  hereda el guard de `stock_sync_page`.
+
+Verificado con Playwright en ambos casos (0 errores de consola, toggles sin
+recarga completa de página, nav sin las pestañas retiradas, Amazon
+intacto). Deploy confirmado vía Railway GraphQL API (commits `ee32933` y
+`69acbb9`, status SUCCESS).
+
+---
+
 ## 2026-07-18 — FIX: ocultar "Inv.Global" del nav + revisión del resto de pestañas
 
 **Archivo:** `app/main.py` (dict `"inventory_global"` en `_NAV_TAB_DEFS`).
