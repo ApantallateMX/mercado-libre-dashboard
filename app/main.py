@@ -17818,14 +17818,24 @@ async def returns_claim_photo_file(path: str = Query(...)):
 # muy poco margen antes de los 500MB del volumen — el disco se volvió a llenar
 # el mismo día. 40MB deja un colchón mucho más cómodo.
 _CLAIM_PHOTOS_BUDGET_MB = 40.0
+# Regla adicional (2026-07-18, a petición de Jovan): ninguna foto vive más de 30
+# días SIN IMPORTAR el tamaño acumulado — se aplica ANTES del tope de tamaño, no
+# en vez de él. Un tope solo por antigüedad no protege contra ráfagas (ej. el
+# incidente del 2026-07-15: 835 fotos/1.5GB de golpe, todas con <30 días) — por
+# eso el tope de tamaño sigue siendo la red de seguridad real; esto es una regla
+# de higiene encima, para que nada se quede oxidado aunque sí haya espacio.
+_CLAIM_PHOTOS_MAX_AGE_DAYS = 30
 
 
 async def _enforce_claim_photos_budget() -> dict:
-    """Mantiene claim_photos/ bajo _CLAIM_PHOTOS_BUDGET_MB — si se pasa, borra los
-    archivos más viejos (por mtime, LRU) hasta bajar al 80% del presupuesto (deja margen
-    para no estar evictando en cada llamada apenas se toca el límite). Se llama después
-    de cualquier descarga de fotos, sin importar el endpoint."""
+    """Mantiene claim_photos/ bajo control con dos reglas, en este orden:
+    1. Borra cualquier archivo con más de _CLAIM_PHOTOS_MAX_AGE_DAYS días,
+       sin importar el tamaño total acumulado.
+    2. Si aún se pasa de _CLAIM_PHOTOS_BUDGET_MB, borra los más viejos que
+       queden (LRU por mtime) hasta bajar al 80% del presupuesto.
+    Se llama después de cualquier descarga de fotos, sin importar el endpoint."""
     import os as _os_budget
+    import time as _time_budget
 
     photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
     if not photos_dir.is_dir():
@@ -17843,25 +17853,39 @@ async def _enforce_claim_photos_budget() -> dict:
             except Exception:
                 pass
 
-    budget_bytes = _CLAIM_PHOTOS_BUDGET_MB * 1024 * 1024
-    if total_bytes <= budget_bytes:
-        return {"evicted": 0, "freed_mb": 0.0}
-
-    entries.sort(key=lambda e: e[2])  # más viejo primero
-    target_bytes = budget_bytes * 0.8
     evicted, freed = 0, 0
     deleted_rel_paths = []
-    for fp, sz, _mt in entries:
-        if total_bytes <= target_bytes:
-            break
+
+    def _evict(fp, sz):
+        nonlocal total_bytes, evicted, freed
         try:
             _os_budget.remove(fp)
             total_bytes -= sz
             freed += sz
             evicted += 1
             deleted_rel_paths.append(str(Path(fp).relative_to(photos_dir.parent)))
+            return True
         except Exception:
-            pass
+            return False
+
+    # Regla 1 — antigüedad, incondicional
+    age_cutoff = _time_budget.time() - (_CLAIM_PHOTOS_MAX_AGE_DAYS * 86400)
+    remaining = []
+    for fp, sz, mt in entries:
+        if mt < age_cutoff:
+            _evict(fp, sz)
+        else:
+            remaining.append((fp, sz, mt))
+
+    # Regla 2 — tope de tamaño sobre lo que sobrevivió a la regla 1
+    budget_bytes = _CLAIM_PHOTOS_BUDGET_MB * 1024 * 1024
+    if total_bytes > budget_bytes:
+        remaining.sort(key=lambda e: e[2])  # más viejo primero
+        target_bytes = budget_bytes * 0.8
+        for fp, sz, _mt in remaining:
+            if total_bytes <= target_bytes:
+                break
+            _evict(fp, sz)
 
     if deleted_rel_paths:
         try:
@@ -17873,7 +17897,8 @@ async def _enforce_claim_photos_budget() -> dict:
     if evicted:
         logger.warning(
             f"[CLAIM-PHOTOS-BUDGET] Evictados {evicted} archivos, "
-            f"{freed / 1024 / 1024:.1f}MB liberados (presupuesto {_CLAIM_PHOTOS_BUDGET_MB}MB)"
+            f"{freed / 1024 / 1024:.1f}MB liberados "
+            f"(máx {_CLAIM_PHOTOS_MAX_AGE_DAYS}d, presupuesto {_CLAIM_PHOTOS_BUDGET_MB}MB)"
         )
     return {"evicted": evicted, "freed_mb": round(freed / 1024 / 1024, 2)}
 
