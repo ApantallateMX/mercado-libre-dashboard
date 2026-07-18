@@ -1132,15 +1132,16 @@ _NAV_TAB_DEFS = [
          ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
          section="sync", admin_only=True, amz_gated=False, badge="bm_sync"),
     dict(id="distribucion", label="Distribución", icon="⊞",
-         ml_href="/distribucion", amz_href=None,
-         ml_active=["distribucion"], amz_active=None, amz_uses_dispatcher=False,
-         section="sync", admin_only=True, amz_gated=False, badge=None),
+         ml_href=None, amz_href=None,
+         ml_active=None, amz_active=None, amz_uses_dispatcher=False,
+         section="sync", admin_only=True, amz_gated=False, badge=None,
+         ml_hidden=True),
 ]
 
 # Rutas ML-only reales (para el guard de /auth/switch-amazon). Se derivan del
 # registro + un puñado de sub-rutas mobile-only que no son "tabs" de primer
 # nivel pero sí páginas ML-exclusivas (accesos directos del menú móvil).
-_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory", "/deals", "/listings", "/finanzas"}
+_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory", "/deals", "/listings", "/finanzas", "/distribucion"}
 _ML_ONLY_PATHS = {
     t["ml_href"] for t in _NAV_TAB_DEFS if t["ml_href"] and not t["amz_href"]
 } | _ML_ONLY_EXTRA_PATHS
@@ -2785,9 +2786,13 @@ async def stock_sync_page(request: Request):
     _active_uid = str(_ctx_uid.get() or "")
     rules = await token_store.get_all_sku_platform_rules(user_id=_active_uid)
     ctx = await _accounts_ctx(request)
+    view = request.query_params.get("view", "ejecutar")
+    if view not in ("ejecutar", "configurar"):
+        view = "ejecutar"
     return templates.TemplateResponse(request, "stock_sync.html", {
         "user": user,
         "active": "stock_sync",
+        "view": view,
         "running": status.get("running", False),
         "last_sync_iso": status.get("last_sync_iso"),
         "last_result": status.get("last_result") or {},
@@ -12731,11 +12736,10 @@ async def get_sku_score_api(sku: str = Query(..., description="SKU base BM")):
     }
 
 
-@app.get("/distribucion", response_class=HTMLResponse)
-async def distribucion_page(request: Request):
-    """Página de configuración de distribución de stock multi-cuenta."""
-    user = await get_current_user()
-    return templates.TemplateResponse(request, "distribucion.html", {"user": user, "active": "distribucion"})
+@app.get("/distribucion")
+async def distribucion_page():
+    """Alias legacy — Distribución ahora vive como sub-vista 'Configurar' de Sync Stock."""
+    return RedirectResponse("/stock-sync?view=configurar", status_code=302)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
