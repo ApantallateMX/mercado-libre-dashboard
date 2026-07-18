@@ -584,6 +584,19 @@ async def init_db():
             await db.execute("ALTER TABLE billing_invoices ADD COLUMN xml_data BLOB")
         except Exception:
             pass
+        # Migration: sacar PDF/XML de BLOB en SQLite a archivos en disco
+        # (uploads/invoices/) — cada factura nueva reescribía el archivo de la
+        # DB completo, contribuyó al incidente de disk-full de 2026-07-18.
+        # file_data/xml_data se dejan de escribir pero no se borran (evita
+        # migración destructiva de schema); pdf_path/xml_path guardan la ruta.
+        try:
+            await db.execute("ALTER TABLE billing_invoices ADD COLUMN pdf_path TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE billing_invoices ADD COLUMN xml_path TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         # Migration: add metodo_pago to billing_fiscal_data
         try:
             await db.execute("ALTER TABLE billing_fiscal_data ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT ''")
@@ -2737,45 +2750,105 @@ async def get_billing_constancia(request_id: int) -> Optional[tuple]:
         return None
 
 
+def _invoices_dir() -> Path:
+    """uploads/invoices/ junto a tokens.db — mismo patrón que claim_photos/.
+    Se crea al vuelo; nunca se le aplica eviction (documentos reales, no caché)."""
+    d = Path(DATABASE_PATH).resolve().parent / "uploads" / "invoices"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 async def save_billing_invoice(
     request_id: int, filename: str, file_data: bytes, uploaded_by: str,
     xml_filename: str = "", xml_data: Optional[bytes] = None,
 ) -> None:
+    """Escribe el PDF/XML a uploads/invoices/ (no a BLOB en SQLite — cada
+    factura nueva reescribía el archivo completo de la DB, causa directa del
+    incidente de disk-full de 2026-07-18). Firma y comportamiento externo
+    sin cambios — ningún caller necesita tocarse."""
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    inv_dir = _invoices_dir()
+
+    pdf_path_rel = ""
+    if file_data:
+        pdf_path_rel = f"uploads/invoices/{request_id}.pdf"
+        (inv_dir / f"{request_id}.pdf").write_bytes(file_data)
+
+    xml_path_rel = ""
+    if xml_data:
+        xml_path_rel = f"uploads/invoices/{request_id}.xml"
+        (inv_dir / f"{request_id}.xml").write_bytes(xml_data)
+
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
+            # file_data es NOT NULL en el schema legacy — se guarda b"" (no NULL)
+            # para no violar la constraint; el lado de lectura ya trata bytes
+            # vacíos igual que NULL (falsy) así que no cae al BLOB legacy.
             """INSERT INTO billing_invoices
-                 (request_id, filename, file_data, xml_filename, xml_data, uploaded_by, uploaded_at)
-               VALUES (?,?,?,?,?,?,?)
+                 (request_id, filename, file_data, xml_filename, xml_data,
+                  pdf_path, xml_path, uploaded_by, uploaded_at)
+               VALUES (?,?,?,?,NULL,?,?,?,?)
                ON CONFLICT(request_id) DO UPDATE SET
-                 filename=excluded.filename, file_data=excluded.file_data,
-                 xml_filename=excluded.xml_filename, xml_data=excluded.xml_data,
+                 filename=excluded.filename, file_data=?,
+                 xml_filename=excluded.xml_filename, xml_data=NULL,
+                 pdf_path=excluded.pdf_path, xml_path=excluded.xml_path,
                  uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at""",
-            (request_id, filename, file_data, xml_filename or "", xml_data, uploaded_by, now),
+            (request_id, filename, b"", xml_filename or "", pdf_path_rel, xml_path_rel, uploaded_by, now, b""),
         )
         await db.commit()
 
 
 async def get_billing_invoice(request_id: int) -> Optional[dict]:
-    """Retorna dict con pdf y xml, o None si no existe ninguno."""
+    """Retorna dict con pdf y xml, o None si no existe ninguno. Lee de
+    uploads/invoices/ si la fila ya está migrada (pdf_path); si no, cae al
+    BLOB legacy (file_data) para filas viejas aún no migradas."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT filename, file_data, xml_filename, xml_data FROM billing_invoices WHERE request_id=?",
+            "SELECT filename, file_data, xml_filename, xml_data, pdf_path, xml_path "
+            "FROM billing_invoices WHERE request_id=?",
             (request_id,),
         )
         row = await cursor.fetchone()
-        if row and row["file_data"]:
-            return {
-                "pdf_filename": row["filename"] or "factura.pdf",
-                "pdf_data":     bytes(row["file_data"]),
-                "xml_filename": row["xml_filename"] or "",
-                "xml_data":     bytes(row["xml_data"]) if row["xml_data"] else None,
-            }
-        return None
+        if not row:
+            return None
+
+        base_dir = Path(DATABASE_PATH).resolve().parent
+        pdf_data = None
+        if row["pdf_path"]:
+            fp = base_dir / row["pdf_path"]
+            if fp.is_file():
+                pdf_data = fp.read_bytes()
+        elif row["file_data"]:
+            pdf_data = bytes(row["file_data"])
+
+        if not pdf_data:
+            return None
+
+        xml_data = None
+        if row["xml_path"]:
+            fp = base_dir / row["xml_path"]
+            if fp.is_file():
+                xml_data = fp.read_bytes()
+        elif row["xml_data"]:
+            xml_data = bytes(row["xml_data"])
+
+        return {
+            "pdf_filename": row["filename"] or "factura.pdf",
+            "pdf_data":     pdf_data,
+            "xml_filename": row["xml_filename"] or "",
+            "xml_data":     xml_data,
+        }
 
 
 async def delete_billing_request(request_id: int) -> None:
+    inv_dir = _invoices_dir()
+    for ext in ("pdf", "xml"):
+        fp = inv_dir / f"{request_id}.{ext}"
+        try:
+            fp.unlink(missing_ok=True)
+        except Exception:
+            pass
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("DELETE FROM billing_fiscal_data WHERE request_id=?", (request_id,))
         await db.execute("DELETE FROM billing_invoices WHERE request_id=?", (request_id,))

@@ -14655,6 +14655,23 @@ async def diag_db_size(token: str = ""):
         result["claim_photos_error"] = str(_e)
 
     try:
+        invoices_dir = Path(DATABASE_PATH).resolve().parent / "uploads" / "invoices"
+        total_inv = 0
+        n_inv_files = 0
+        if invoices_dir.is_dir():
+            for root, _dirs, files in _os_sz.walk(invoices_dir):
+                for f in files:
+                    try:
+                        total_inv += _os_sz.path.getsize(_os_sz.path.join(root, f))
+                        n_inv_files += 1
+                    except Exception:
+                        pass
+        result["invoices_mb"] = round(total_inv / 1024 / 1024, 2)
+        result["invoices_files"] = n_inv_files
+    except Exception as _e:
+        result["invoices_error"] = str(_e)
+
+    try:
         volume_root = Path(DATABASE_PATH).resolve().parent
         total_vol = 0
         for root, _dirs, files in _os_sz.walk(volume_root):
@@ -14728,6 +14745,67 @@ async def diag_emergency_clear_claim_photos(token: str = ""):
     return {
         "ok": True, "files_deleted": n_files, "freed_mb": round(freed_mb, 2),
         "db_rows_deleted": rows_deleted, "vacuum_ok": vacuum_ok,
+    }
+
+
+@app.get("/api/diag/migrate-billing-invoices-to-disk")
+async def diag_migrate_billing_invoices_to_disk(token: str = ""):
+    """One-time: saca los BLOB de billing_invoices (file_data/xml_data) a
+    archivos en uploads/invoices/ y libera las columnas (NULL/b""). Cada
+    factura nueva reescribía el archivo completo de SQLite — causa directa del
+    incidente de disk-full de 2026-07-18. Idempotente: una fila ya migrada
+    (pdf_path ya seteado) se salta, así que es seguro volver a llamarlo."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_mig
+
+    inv_dir = Path(DATABASE_PATH).resolve().parent / "uploads" / "invoices"
+    inv_dir.mkdir(parents=True, exist_ok=True)
+
+    migrated = 0
+    freed_estimate_mb = 0.0
+    errors = []
+    async with _aio_mig.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_mig.Row
+        cur = await db.execute(
+            "SELECT request_id, file_data, xml_data, pdf_path, xml_path FROM billing_invoices "
+            "WHERE (pdf_path IS NULL OR pdf_path='') AND file_data IS NOT NULL AND length(file_data) > 0"
+        )
+        rows = await cur.fetchall()
+
+        for row in rows:
+            rid = row["request_id"]
+            try:
+                pdf_path_rel, xml_path_rel = "", ""
+                if row["file_data"]:
+                    (inv_dir / f"{rid}.pdf").write_bytes(row["file_data"])
+                    pdf_path_rel = f"uploads/invoices/{rid}.pdf"
+                    freed_estimate_mb += len(row["file_data"]) / 1024 / 1024
+                if row["xml_data"]:
+                    (inv_dir / f"{rid}.xml").write_bytes(row["xml_data"])
+                    xml_path_rel = f"uploads/invoices/{rid}.xml"
+                    freed_estimate_mb += len(row["xml_data"]) / 1024 / 1024
+
+                await db.execute(
+                    "UPDATE billing_invoices SET file_data=?, xml_data=NULL, pdf_path=?, xml_path=? "
+                    "WHERE request_id=?",
+                    (b"", pdf_path_rel, xml_path_rel, rid),
+                )
+                migrated += 1
+            except Exception as _e:
+                errors.append(f"request_id={rid}: {_e}")
+        await db.commit()
+
+        vacuum_ok = True
+        try:
+            await db.execute("VACUUM")
+        except Exception:
+            vacuum_ok = False
+
+    return {
+        "ok": True, "migrated": migrated, "freed_estimate_mb": round(freed_estimate_mb, 2),
+        "vacuum_ok": vacuum_ok, "errors": errors[:20],
     }
 
 
@@ -17736,7 +17814,10 @@ async def returns_claim_photo_file(path: str = Query(...)):
 # tiempo). Causa raíz confirmada de los incidentes "database or disk is full" del
 # 2026-07-15 (835 fotos = 1.5GB, sync masivo) y 2026-07-17 (113MB acumulados por el
 # backfill on-demand del buscador de SKU, sin relación con el sync). Ver DEVLOG.
-_CLAIM_PHOTOS_BUDGET_MB = 120.0
+# Bajado de 120 a 40 el 2026-07-18: con la DB en ~309MB, 120MB de fotos dejaba
+# muy poco margen antes de los 500MB del volumen — el disco se volvió a llenar
+# el mismo día. 40MB deja un colchón mucho más cómodo.
+_CLAIM_PHOTOS_BUDGET_MB = 40.0
 
 
 async def _enforce_claim_photos_budget() -> dict:

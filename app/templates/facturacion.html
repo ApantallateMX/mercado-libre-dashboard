@@ -698,7 +698,18 @@ window._uploadInvoice = function(reqId) {
   if (hasXml) fd.append('xml_file', xmlInput.files[0]);
   btn.disabled = true; btn.textContent = 'Subiendo...';
   fetch('/api/facturacion/requests/' + reqId + '/invoice', { method: 'POST', body: fd })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) {
+        // Un 500/502 puede traer texto plano ("Internal Server Error"), no JSON —
+        // leer como texto primero evita el SyntaxError de .json() en cuerpos no-JSON.
+        return r.text().then(function(t) {
+          var msg;
+          try { msg = JSON.parse(t).detail || t; } catch (e) { msg = t || ('HTTP ' + r.status); }
+          throw new Error(msg);
+        });
+      }
+      return r.json();
+    })
     .then(function(d) {
       btn.disabled = false; btn.textContent = 'Subir';
       if (d.ok) {
@@ -709,7 +720,10 @@ window._uploadInvoice = function(reqId) {
         alert('Error: ' + (d.detail || 'desconocido'));
       }
     })
-    .catch(function(e) { btn.disabled = false; btn.textContent = 'Subir'; alert('Error: ' + e); });
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = 'Subir';
+      alert('Error al subir la factura: ' + e.message + '\n\nSi el problema persiste, avisa al equipo técnico.');
+    });
 };
 
 window._deleteRequest = function(reqId) {
