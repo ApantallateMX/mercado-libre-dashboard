@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-18 — FIX: ocultar "Inv.Global" del nav + revisión del resto de pestañas
+
+**Archivo:** `app/main.py` (dict `"inventory_global"` en `_NAV_TAB_DEFS`).
+
+Jovan pidió revisar si quedaba algo más por unificar tras Ventas/SKU y
+Productos/Deals/Listings, y confirmó que "Inv.Global" no la usan. Investigué
+el resto del nav (Gral, Dashboard, Salud, Retornos, Planeación, Finanzas,
+Sync Stock, Distribución, FBA Amazon) — ninguno tiene traslape real, cada
+uno hace algo genuinamente distinto (ver razonamiento en la conversación,
+no vale la pena repetirlo aquí). Único hallazgo: Inv.Global no es duplicado
+de Sync Stock/Distribución (esas automatizan reparto proporcional cada 5
+min; Inv.Global es un escaneo manual con una función única — "Concentrar
+Stock" a una sola cuenta ganadora — que no existe en ningún otro lado).
+
+Se ocultó del nav de ML reusando el flag `ml_hidden` (mismo mecanismo que
+Listings/Deals) — la ruta `/inventory-global` y su función de concentración
+siguen intactas, solo dejaron de aparecer en el menú.
+
+---
+
 ## 2026-07-18 — FEAT: fusión de Deals + Listings dentro de Productos (ML), retiro de tab "Oportunidades" duplicado
 
 **Archivos:** `app/main.py`, `app/templates/items.html`. Eliminados:
