@@ -1082,7 +1082,7 @@ _NAV_TAB_DEFS = [
          section="dashboard", admin_only=False, amz_gated=False, badge=None),
     dict(id="ventas", label="Ventas", icon="📊",
          ml_href="/orders", amz_href="/amazon?tab=ventas",
-         ml_active=["orders", "sku_sales", "sku_compare"], amz_active="ventas", amz_uses_dispatcher=True,
+         ml_active=["orders", "sku_sales", "sku_compare", "finanzas"], amz_active="ventas", amz_uses_dispatcher=True,
          section="ventas", admin_only=False, amz_gated=False, badge=None),
     dict(id="productos", label="Productos", icon="📦",
          ml_href="/items", amz_href="/amazon/products",
@@ -1109,9 +1109,10 @@ _NAV_TAB_DEFS = [
          ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
          section="facturacion", admin_only=False, amz_gated=True, badge=None),
     dict(id="finanzas", label="Finanzas", icon="💰",
-         ml_href="/finanzas", amz_href="/amazon?tab=finanzas",
-         ml_active=["finanzas"], amz_active="finanzas", amz_uses_dispatcher=True,
-         section="ventas", admin_only=False, amz_gated=False, badge=None),
+         ml_href=None, amz_href="/amazon?tab=finanzas",
+         ml_active=None, amz_active="finanzas", amz_uses_dispatcher=True,
+         section="ventas", admin_only=False, amz_gated=False, badge=None,
+         ml_hidden=True),
     dict(id="fba", label="FBA & Stock", icon="🚚",
          ml_href=None, amz_href="/amazon?tab=fba",
          ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
@@ -1139,7 +1140,7 @@ _NAV_TAB_DEFS = [
 # Rutas ML-only reales (para el guard de /auth/switch-amazon). Se derivan del
 # registro + un puñado de sub-rutas mobile-only que no son "tabs" de primer
 # nivel pero sí páginas ML-exclusivas (accesos directos del menú móvil).
-_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory", "/deals", "/listings"}
+_ML_ONLY_EXTRA_PATHS = {"/items-health", "/sku-compare", "/sku-inventory", "/deals", "/listings", "/finanzas"}
 _ML_ONLY_PATHS = {
     t["ml_href"] for t in _NAV_TAB_DEFS if t["ml_href"] and not t["amz_href"]
 } | _ML_ONLY_EXTRA_PATHS
@@ -2222,14 +2223,13 @@ async def ml_finanzas_summary():
 
 @app.get("/finanzas", response_class=HTMLResponse)
 async def finanzas_page(request: Request):
-    """Finanzas ML como pestaña propia — ventas/fees reales/neto, calcado del
-    layout de /amazon?tab=finanzas (sin tabla de settlements, ML no lo tiene)."""
+    """Alias de /orders con la sub-vista 'Finanzas' pre-seleccionada — mismo template unificado."""
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "finanzas.html", {
-        "user": user, "active": "finanzas", **ctx
+    return templates.TemplateResponse(request, "orders.html", {
+        "user": user, "active": "finanzas", "view": "finanzas", **ctx
     })
 
 
