@@ -7,6 +7,56 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-18 — FIX URGENTE: incidente de disk-full (segunda vez) — causa raíz de facturas + regla de 30 días para fotos
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/facturacion.html`
+
+**Incidente:** el volumen de Railway (500MB) se llenó por completo
+(`sqlite3.OperationalError: database or disk is full`, confirmado en logs) y
+tumbó TODA la app — incluido `/login/verify`. Reportado por Jovan primero como
+"no puedo subir una factura" (error de JS "Unexpected token I, Internal S...
+is not valid JSON") y luego como "no puedo ni entrar a la app".
+
+**Mitigación inmediata:** `/api/diag/emergency-clear-claim-photos` (ya
+existente del fix de ayer) — liberó 113.93MB, sitio restaurado en minutos.
+
+**Causa raíz encontrada:** `billing_invoices` guardaba cada PDF/XML de factura
+como BLOB directo dentro de SQLite (hasta 10MB c/u, 463 filas, sin tope
+agregado) — cada factura nueva reescribía el archivo completo de la base de
+datos. Es la peor forma posible de guardar binarios en SQLite y explica por
+qué el `VACUUM` de la limpieza de emergencia falló (`vacuum_ok: false`).
+
+**Fix de fondo:**
+- `save_billing_invoice()`/`get_billing_invoice()` ahora escriben/leen
+  `uploads/invoices/{request_id}.pdf|.xml` en disco en vez de columnas BLOB —
+  misma firma y forma de retorno, cero cambios en los 6 call sites existentes
+  (admin + cliente, upload + download + delete). Migración de las 463 filas
+  existentes vía nuevo endpoint puntual `/api/diag/migrate-billing-invoices-to-disk`
+  (idempotente) — corrida contra producción: 463 migradas, 0 errores.
+- `facturacion.html`: `_uploadInvoice` ahora revisa `response.ok` antes de
+  `.json()` — antes un 500 con cuerpo de texto plano tronaba como el
+  `SyntaxError` que reportó Jovan; ahora muestra un mensaje entendible.
+- `_CLAIM_PHOTOS_BUDGET_MB` bajado de 120 a 40 — el fix de ayer dejaba muy
+  poco margen combinado con la DB de ~309MB.
+- **Nueva regla, a petición de Jovan**: `claim_photos/` ahora también respeta
+  un máximo de 30 días de antigüedad, ADEMÁS del tope de tamaño (no en vez de
+  — un tope solo por días no protege contra ráfagas como la del 2026-07-15,
+  835 fotos/1.5GB de golpe, todas con <30 días). Sin pérdida real de datos:
+  las fotos son caché de lo que ya está en Mercado Libre, se recachean solas.
+
+**Nota honesta:** el `VACUUM` post-migración sigue sin poder correr — necesita
+~2x el tamaño de la DB (309MB) en espacio libre temporal, y el volumen de
+500MB no da para eso. El archivo de la DB se queda en 309MB por ahora (no
+baja), pero ya no va a seguir creciendo por facturas nuevas. Volumen total
+post-fix: 341MB de 500MB (vs 423MB justo antes del incidente).
+
+**Pendiente:** correo ya redactado (por Jovan, no por Claude — sin conector de
+correo activo en esta sesión) a `coolify01@mi2.com.mx` pidiendo storage MinIO/S3
+para sacar fotos y facturas del volumen de Railway por completo. Sin
+respuesta aún.
+
+---
+
 ## 2026-07-17 — FEAT: Fase 2 completa — Deals ML, Listings ML, Finanzas ML, SKU Amazon
 
 **Archivos:** `app/main.py`, `app/services/amazon_client.py`, templates nuevos
