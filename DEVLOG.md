@@ -7,6 +7,60 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-18 — FEAT: fusión de Deals + Listings dentro de Productos (ML), retiro de tab "Oportunidades" duplicado
+
+**Archivos:** `app/main.py`, `app/templates/items.html`. Eliminados:
+`deals.html`, `listings.html`, `partials/products_not_published.html`.
+Nuevo: `partials/products_listings.html`.
+
+Jovan preguntó si Productos y Listings también se podían unificar, dado que
+Productos ya tenía el concepto de "no lanzados". Investigación encontró un
+problema más grande de lo esperado:
+
+- **`/deals` era un duplicado literal**: un wrapper que solo llamaba a
+  `/partials/products-deals` — el MISMO partial que ya era una de las 6
+  pestañas internas de `/items`. Para funcionar solo, `deals.html` había
+  copiado y pegado `switchProductTab`/`inlineStockSync`/`quickSyncBM`/
+  `showStockEditor` de `items.html`.
+- **La pestaña "Oportunidades" de `/items` estaba rota y era redundante**:
+  mostraba SKUs de BM sin listing en ML calculado en vivo (sin cache), y su
+  único CTA ("Lanzar" → `/sku-inventory?sku=...`) no funcionaba —
+  `/sku-inventory` es un redirect 301 a `/productos` que descarta el
+  parámetro `?sku=`. El mismo concepto ya vive completo y funcional en
+  `/bm/unlaunched` (tabla persistente, wizard de publicación real, 7
+  sub-pestañas) — ya enlazado un nivel arriba en `productos_subnav.html`. Se
+  eliminó la pestaña en vez de arreglarla.
+- **`/listings` (Quality Score A-D) no era duplicado de nada** — se movió
+  como 6ª pestaña de `/items` reusando `/api/ml/listing-quality` sin cambios.
+- **Amazon no necesitó ningún cambio** — `amazon_dashboard.html` ya tenía
+  Listings y Deals como secciones del mismo dispatcher, no páginas separadas.
+
+`/deals` y `/listings` ahora son redirects 302 a `/items?tab=deals` /
+`/items?tab=listings` (no rompen bookmarks) — `items.html` ganó soporte de
+`?tab=` en el query string para pre-seleccionar la pestaña correcta al
+cargar. Nav: nuevo campo `ml_hidden`/`amz_hidden` en `_build_nav_tabs` para
+ocultar una pestaña por completo en una plataforma (distinto de
+deshabilitada/gris) — Listings/Deals ya no aparecen en el nav de ML pero
+siguen funcionando igual en Amazon.
+
+**Fuera de alcance a propósito** (encontrado en la investigación, pero son
+iniciativas más grandes que merecen su propio plan): `productos.html`
+(`/productos`) tiene su propio wizard de lanzamiento de 4 pasos — un 4º
+sistema de "lanzar" distinto al de `lanzar_gaps.html`, solapa con
+Resumen/Inventario de `/items` pero fusionarlo implica tocar un wizard de
+producción real. `/bm/unlaunched` y `/productos/sin-bm` no se tocaron — son
+las herramientas canónicas y ya funcionan bien cada una en su propia página.
+
+Verificado localmente con Playwright: las 6 pestañas de `/items` cargan
+igual que antes, `/deals`/`/listings` redirigen y pre-seleccionan su
+pestaña, nav de ML sin Listings/Deals, nav de Amazon sin cambios, 0 errores
+de consola reales (el único "error" en consola fue un 401 pre-existente de
+`/api/ml/listing-quality` sin cuenta activa en el entorno de prueba local,
+no una regresión). Deploy confirmado vía Railway GraphQL API (commit
+`51fdbb7`, status SUCCESS).
+
+---
+
 ## 2026-07-18 — FEAT: fusión de tabs Ventas + SKU en un solo tab (ML y Amazon)
 
 **Archivos:** `app/main.py`, `app/templates/orders.html`, `app/templates/base.html`,
