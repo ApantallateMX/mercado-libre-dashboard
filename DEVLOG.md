@@ -7,6 +7,42 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-20 — FEAT: maestro único BM (bm_sku_master) + historial de cambios
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`.
+
+Jovan pidió tener todos los SKUs de BM guardados como "maestro" — solo
+actualizar las líneas que cambian, no reescribir todo — y usarlo como base
+para alertas, sugerencias y lanzamientos futuros.
+
+Se fusionaron `bm_product_catalog` (título/retail/costo, semanal) y
+`bm_stock_snapshot` (stock, ~10 min) en una sola tabla `bm_sku_master` —
+una fila por SKU, con `catalog_updated_at`/`stock_updated_at` separados
+porque cada bloque se refresca a ritmo distinto. Migración automática al
+arrancar (backfill desde las 2 tablas viejas, que se dejan de escribir
+pero NO se borran — rollback seguro).
+
+Nueva tabla `bm_sku_changes`: cada sync que ya corre hoy compara el valor
+nuevo contra el guardado antes de sobreescribir y loguea el cambio real
+(no cualquier re-guardado idéntico). Retail/costo: cualquier cambio se
+loguea (bajo volumen, semanal). Stock: solo transiciones que cruzan cero
+(se quedó en 0 / se resurtió) — evita llenar el historial de
+micro-fluctuaciones de cada ciclo de 10 min. Cero llamadas nuevas a BM.
+
+Todas las funciones existentes (`upsert_bm_catalog_batch`,
+`get_bm_catalog_all`, `get_orders_without_stock`,
+`get_supplier_debt_export_data`, los diag de `/api/diag/supplier-debt` y
+`/api/diag/bm-stock-snapshot`) se mantuvieron con el mismo nombre/firma
+pero ahora leen/escriben en el maestro unificado — cero call sites nuevos
+en `main.py`. Verificado localmente (migración de 8800+ SKUs, detección
+de un cambio de precio real, chunks de 500 para no pegarle al límite de
+variables SQL de SQLite) y en producción tras el deploy (commit
+`9811319`, status SUCCESS): 11,271 SKUs migrados, `/api/diag/supplier-debt`
+y `/api/diag/bm-stock-snapshot` funcionando correctamente sobre la tabla
+nueva.
+
+---
+
 ## 2026-07-20 — FIX: costo USD del export de deuda salía mayor al retail (data-quality)
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`, `app/api/supplier_debt.py`.
