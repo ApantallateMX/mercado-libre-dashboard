@@ -739,7 +739,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/", "/api/ping")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/", "/api/ping", "/webhooks/")
 
 # Mapeo de rutas de página a sección (para control de acceso por sección)
 _PATH_TO_SECTION: dict[str, str] = {
@@ -1635,6 +1635,76 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
         asyncio.create_task(_do())
     except Exception:
         pass
+
+
+# ── Webhook ML: feed de órdenes individuales sin stock, en tiempo real ──────
+# Fase 1 (solo ML — Amazon requiere infra AWS para Notifications API, pendiente).
+# Reutiliza upsert_order_history vía _save_ml_orders_history_bg — cero lógica
+# duplicada, mismo choke point que ya alimenta deuda y todo lo demás.
+async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
+    from app.services.sku_utils import normalize_to_bm_sku
+    try:
+        order_id = resource.rstrip("/").split("/")[-1]
+        if not order_id.isdigit():
+            return
+        client = await get_meli_client(user_id=user_id)
+        if not client:
+            return
+        try:
+            order = await client.resolve_order(order_id)
+        finally:
+            await client.close()
+
+        if order.get("status") not in ("paid", "delivered"):
+            return
+
+        usd_to_mxn = await _get_usd_to_mxn(client)
+        _save_ml_orders_history_bg([order], user_id, usd_to_mxn)
+
+        order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
+        for oi in order.get("order_items", []):
+            item_info = oi.get("item", {})
+            sku_raw = (item_info.get("seller_sku") or item_info.get("seller_custom_field") or "").strip()
+            if not sku_raw:
+                continue
+            sku = normalize_to_bm_sku(sku_raw)
+            quantity = int(oi.get("quantity") or 1)
+            avail = await token_store.get_bm_sku_available_qty(sku)
+            if avail is None or avail <= 0:
+                await token_store.record_realtime_stock_alert(
+                    order_id=str(order.get("id", "")),
+                    item_id=str(item_info.get("id", "")),
+                    platform="ml", account_id=user_id, sku=sku,
+                    quantity=quantity, available_qty=avail, order_date=order_date,
+                )
+    except Exception as e:
+        logger.warning(f"[WEBHOOK-ML] Error procesando resource={resource} uid={user_id}: {e}")
+
+
+@app.post("/webhooks/ml/orders")
+async def ml_order_webhook(request: Request):
+    """Notificaciones de ML (topic orders_v2) — configurar en el DevCenter de
+    cada app: Notifications URL = https://apantallatemx.up.railway.app/webhooks/ml/orders
+    Responde 200 de inmediato (ML exige ack rápido); el procesamiento real
+    corre en background."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"status": "ignored"}, status_code=200)
+
+    user_id = str(body.get("user_id", "") or "")
+    topic = body.get("topic", "")
+    resource = body.get("resource", "")
+    if not user_id or not resource or topic not in ("orders_v2", "orders"):
+        return JSONResponse({"status": "ignored"}, status_code=200)
+
+    known_accounts = await token_store.get_all_tokens()
+    known_ids = {str(a.get("user_id", "")) for a in known_accounts}
+    if user_id not in known_ids:
+        return JSONResponse({"status": "ignored"}, status_code=200)
+
+    asyncio.create_task(_process_ml_order_webhook(resource, user_id))
+    return JSONResponse({"status": "ok"}, status_code=200)
 
 
 # ── Amazon orders background save ────────────────────────────────────────────
@@ -13932,6 +14002,19 @@ async def orders_without_stock(request: Request, days: int = 14):
     days = max(1, min(days, 90))
     result = await token_store.get_orders_without_stock(days=days)
     return JSONResponse(result)
+
+
+@app.get("/api/stock/realtime-alerts")
+async def realtime_stock_alerts(request: Request, limit: int = 100):
+    """Feed cronológico (más reciente primero) de órdenes ML individuales
+    detectadas sin stock al momento, vía webhook — reemplaza el reporte
+    agregado por SKU. Amazon pendiente (Fase 2, requiere infra AWS)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    limit = max(1, min(limit, 500))
+    rows = await token_store.get_realtime_stock_alerts(limit=limit)
+    return JSONResponse({"rows": rows})
 
 
 @app.get("/api/stock/bm-sync-log")

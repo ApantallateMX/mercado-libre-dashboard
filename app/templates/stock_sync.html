@@ -721,35 +721,26 @@
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
       <div class="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 class="text-sm font-bold text-gray-700">Órdenes sin stock disponible en BinManager</h2>
-          <p class="text-xs text-gray-400 mt-0.5">Cruce de ventas recientes (ML + Amazon, todas las cuentas) contra el stock actual de BM.</p>
+          <h2 class="text-sm font-bold text-gray-700">Órdenes sin stock — en el momento</h2>
+          <p class="text-xs text-gray-400 mt-0.5">Feed en vivo: cada orden de ML se revisa contra BM apenas entra (webhook). Se actualiza solo cada 30s. Amazon: pendiente (Fase 2, requiere infraestructura AWS).</p>
         </div>
-        <div class="flex items-center gap-2">
-          <label class="text-xs text-gray-500">Ventana:</label>
-          <select id="alertas-days" onchange="alertasLoadData()" class="border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
-            <option value="7">7 días</option>
-            <option value="14" selected>14 días</option>
-            <option value="30">30 días</option>
-          </select>
-          <button onclick="alertasLoadData()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
-            ↻ Actualizar
-          </button>
-        </div>
+        <button onclick="alertasLoadData()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
+          ↻ Actualizar
+        </button>
       </div>
-      <p id="alertas-snapshot-age" class="text-xs text-gray-400 mt-2"></p>
     </div>
 
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto">
       <table class="min-w-full text-sm">
         <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
+            <th class="px-4 py-3 text-left">Detectado</th>
+            <th class="px-4 py-3 text-left">Orden</th>
             <th class="px-4 py-3 text-left">SKU</th>
             <th class="px-4 py-3 text-left">Título</th>
-            <th class="px-4 py-3 text-left">Cuentas</th>
-            <th class="px-4 py-3 text-right">Órdenes</th>
-            <th class="px-4 py-3 text-right">Unidades vendidas</th>
+            <th class="px-4 py-3 text-left">Cuenta</th>
+            <th class="px-4 py-3 text-right">Cantidad</th>
             <th class="px-4 py-3 text-right">Disponible BM</th>
-            <th class="px-4 py-3 text-right">Reserva BM</th>
           </tr>
         </thead>
         <tbody id="alertas-tbody">
@@ -2154,38 +2145,30 @@ var _alertasRowsHtml = [];
 var _ALERTAS_PAGE_SIZE = 10;
 
 function alertasLoadData() {
-    var days = document.getElementById('alertas-days').value || 14;
-    document.getElementById('alertas-tbody').innerHTML =
-        '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
-    fetch('/api/stock/orders-without-stock?days=' + days)
+    fetch('/api/stock/realtime-alerts?limit=200')
         .then(function(r) { return r.json(); })
         .then(function(d) {
             var rows = d.rows || [];
-            var ageEl = document.getElementById('alertas-snapshot-age');
-            if (d.stock_snapshot_updated_at) {
-                var ageMin = Math.round((Date.now() / 1000 - d.stock_snapshot_updated_at) / 60);
-                ageEl.textContent = 'Stock actualizado hace ' + ageMin + ' min · ventana: desde ' + d.cutoff;
-            } else {
-                ageEl.textContent = 'Sin foto de stock en disco todavía — esperando el próximo ciclo de sync.';
-            }
             if (!rows.length) {
                 document.getElementById('alertas-tbody').innerHTML =
-                    '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock en esta ventana — todo con inventario disponible.</td></tr>';
+                    '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock detectadas todavía — todo con inventario disponible.</td></tr>';
                 document.getElementById('alertas-pagination').innerHTML = '';
                 return;
             }
             _alertasRowsHtml = rows.map(function(row) {
-                var avail = (row.available_qty === null || row.available_qty === undefined)
+                var avail = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
                     ? '<span class="text-gray-400">sin dato</span>'
-                    : '<span class="' + (row.available_qty <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty + '</span>';
+                    : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
+                var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
+                var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
                 return '<tr class="border-t border-gray-100">' +
+                    '<td class="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + detectedLabel + '</td>' +
+                    '<td class="px-4 py-2.5 font-mono text-xs">' + row.order_id + '</td>' +
                     '<td class="px-4 py-2.5 font-mono text-xs">' + row.sku + '</td>' +
                     '<td class="px-4 py-2.5 text-xs text-gray-600">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-4 py-2.5 text-xs text-gray-500">' + (row.cuentas || '—') + '</td>' +
-                    '<td class="px-4 py-2.5 text-right">' + row.ordenes + '</td>' +
-                    '<td class="px-4 py-2.5 text-right font-semibold">' + row.unidades_vendidas + '</td>' +
+                    '<td class="px-4 py-2.5 text-xs text-gray-500">' + row.platform + ':' + row.account_id + '</td>' +
+                    '<td class="px-4 py-2.5 text-right">' + row.quantity + '</td>' +
                     '<td class="px-4 py-2.5 text-right">' + avail + '</td>' +
-                    '<td class="px-4 py-2.5 text-right text-gray-500">' + (row.reserve_qty === null || row.reserve_qty === undefined ? '—' : row.reserve_qty) + '</td>' +
                     '</tr>';
             });
             window['alertas-pagination_go'](1);
@@ -2195,6 +2178,12 @@ function alertasLoadData() {
                 '<tr><td colspan="7" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
         });
 }
+
+// Auto-refresh cada 30s mientras la sub-vista esté visible
+setInterval(function() {
+    var view = document.getElementById('syncstock-view-alertas');
+    if (view && !view.classList.contains('hidden')) alertasLoadData();
+}, 30000);
 
 window['alertas-pagination_go'] = function(page) {
     var total = _alertasRowsHtml.length;

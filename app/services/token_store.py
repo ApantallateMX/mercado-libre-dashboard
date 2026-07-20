@@ -866,6 +866,28 @@ async def init_db():
             """)
             await db.commit()
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: realtime_stock_alerts — feed de órdenes individuales sin stock,
+        # detectadas al momento vía webhook de ML (Fase 1 — Amazon pendiente,
+        # requiere infra AWS). UNIQUE evita duplicados si ML reenvía la misma
+        # notificación (retries).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS realtime_stock_alerts (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id               TEXT NOT NULL,
+                item_id                TEXT NOT NULL DEFAULT '',
+                platform               TEXT NOT NULL DEFAULT 'ml',
+                account_id             TEXT NOT NULL DEFAULT '',
+                sku                    TEXT NOT NULL DEFAULT '',
+                quantity               INTEGER NOT NULL DEFAULT 1,
+                available_qty_at_check INTEGER,
+                order_date             TEXT NOT NULL DEFAULT '',
+                detected_at            REAL NOT NULL DEFAULT 0,
+                UNIQUE(order_id, sku, platform)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_rsa_detected_at ON realtime_stock_alerts(detected_at)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
         # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
@@ -1372,6 +1394,54 @@ async def get_orders_without_stock(days: int = 14) -> dict:
         rows = [dict(r) for r in await cur.fetchall()]
     last_snapshot = await get_bm_stock_snapshot_last_update()
     return {"days": days, "cutoff": cutoff, "rows": rows, "stock_snapshot_updated_at": last_snapshot}
+
+
+async def get_bm_sku_available_qty(sku: str) -> int | None:
+    """Lookup puntual de stock disponible para UN sku (usado por el webhook de
+    órdenes en tiempo real — volumen bajo, no necesita chunking). None = SKU
+    sin dato en el maestro (no confundir con 0 confirmado)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT available_qty FROM bm_sku_master WHERE sku = ?", (sku,))
+        row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def record_realtime_stock_alert(
+    order_id: str, item_id: str, platform: str, account_id: str,
+    sku: str, quantity: int, available_qty: int | None, order_date: str,
+) -> None:
+    """Registra una orden individual detectada sin stock al momento (vía
+    webhook). Idempotente — UNIQUE(order_id, sku, platform) absorbe reenvíos
+    duplicados de la notificación sin generar 2 alertas."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT OR IGNORE INTO realtime_stock_alerts
+                (order_id, item_id, platform, account_id, sku, quantity,
+                 available_qty_at_check, order_date, detected_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (order_id, item_id, platform, account_id, sku, quantity,
+              available_qty, order_date, _t.time()))
+        await db.commit()
+
+
+async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
+    """Feed cronológico (más reciente primero) de órdenes individuales
+    detectadas sin stock al momento — reemplaza la vista agregada por SKU."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT
+                rsa.order_id, rsa.platform, rsa.account_id, rsa.sku,
+                COALESCE(bsm.title, '') AS titulo,
+                rsa.quantity, rsa.available_qty_at_check, rsa.order_date, rsa.detected_at
+            FROM realtime_stock_alerts rsa
+            LEFT JOIN bm_sku_master bsm ON bsm.sku = rsa.sku
+            ORDER BY rsa.detected_at DESC
+            LIMIT ?
+        """, (limit,))
+        rows = [dict(r) for r in await cur.fetchall()]
+    return rows
 
 
 # ─── ml_message_views helpers ────────────────────────────────────────────────
