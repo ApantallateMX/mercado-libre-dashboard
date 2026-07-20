@@ -781,6 +781,23 @@ async def init_db():
         """)
         await db.execute("INSERT OR IGNORE INTO supplier_debt_settings (id, rate_tv, rate_other) VALUES (1, 0.80, 0.50)")
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_stock_snapshot — foto en disco de _bm_stock_cache (memoria),
+        # tomada al final de cada ciclo de _prewarm_caches. Permite consultar
+        # el stock actual vía SQL (rápido) y sobrevive reinicios/deploys —
+        # a diferencia del dict en memoria, que se vacía en cada restart.
+        # NO representa una llamada nueva a BM: solo persiste lo que el
+        # prewarm ya trae cada ~7 min de todas formas.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_stock_snapshot (
+                sku            TEXT PRIMARY KEY,
+                available_qty  INTEGER NOT NULL DEFAULT 0,
+                reserve_qty    INTEGER NOT NULL DEFAULT 0,
+                total_qty      INTEGER NOT NULL DEFAULT 0,
+                updated_at     REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
         # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
@@ -1132,6 +1149,69 @@ async def get_bm_catalog_last_sync() -> float:
             row = await cur.fetchone()
     val = row[0] if row else None
     return float(val) if val else 0.0
+
+
+async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
+    """Guarda una foto en disco de _bm_stock_cache (memoria) — NO es una llamada
+    nueva a BM, solo persiste lo que el prewarm ya trajo, para que sobreviva
+    reinicios y se pueda consultar por SQL en vez de iterar el dict en memoria.
+    rows: list of {sku, available_qty, reserve_qty, total_qty}
+    """
+    if not rows:
+        return 0
+    now = __import__("time").time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            """INSERT OR REPLACE INTO bm_stock_snapshot
+               (sku, available_qty, reserve_qty, total_qty, updated_at)
+               VALUES (:sku, :available_qty, :reserve_qty, :total_qty, :updated_at)""",
+            [{**r, "updated_at": now} for r in rows],
+        )
+        await db.commit()
+    return len(rows)
+
+
+async def get_bm_stock_snapshot_last_update() -> float:
+    """Timestamp de la foto de stock más reciente en disco, o 0 si nunca se ha tomado."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("SELECT MAX(updated_at) FROM bm_stock_snapshot") as cur:
+            row = await cur.fetchone()
+    val = row[0] if row else None
+    return float(val) if val else 0.0
+
+
+async def get_orders_without_stock(days: int = 14) -> dict:
+    """Cruza order_history (ventana reciente, paid/delivered, las 7 cuentas)
+    contra bm_stock_snapshot (foto en disco del stock BM actual) para detectar
+    SKUs vendidos que hoy tienen AvailableQTY <= 0 — o que no aparecen en el
+    snapshot en absoluto (sin dato, no se asume que sí hay stock).
+    Agrupado por SKU, ordenado por unidades vendidas en riesgo (desc).
+    """
+    from datetime import datetime, timedelta as _td
+    cutoff = (datetime.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT
+                oh.sku AS sku,
+                COALESCE(bpc.title, '') AS titulo,
+                GROUP_CONCAT(DISTINCT oh.platform || ':' || oh.account_id) AS cuentas,
+                COUNT(DISTINCT oh.order_id) AS ordenes,
+                SUM(oh.quantity) AS unidades_vendidas,
+                bss.available_qty AS available_qty,
+                bss.reserve_qty AS reserve_qty,
+                bss.updated_at AS stock_updated_at
+            FROM order_history oh
+            LEFT JOIN bm_stock_snapshot bss ON bss.sku = oh.sku
+            LEFT JOIN bm_product_catalog bpc ON bpc.sku = oh.sku
+            WHERE oh.order_date >= ? AND oh.sku != ''
+            GROUP BY oh.sku
+            HAVING bss.sku IS NULL OR bss.available_qty <= 0
+            ORDER BY unidades_vendidas DESC
+        """, (cutoff,))
+        rows = [dict(r) for r in await cur.fetchall()]
+    last_snapshot = await get_bm_stock_snapshot_last_update()
+    return {"days": days, "cutoff": cutoff, "rows": rows, "stock_snapshot_updated_at": last_snapshot}
 
 
 # ─── ml_message_views helpers ────────────────────────────────────────────────

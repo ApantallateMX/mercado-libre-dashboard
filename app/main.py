@@ -2796,7 +2796,7 @@ async def stock_sync_page(request: Request):
     rules = await token_store.get_all_sku_platform_rules(user_id=_active_uid)
     ctx = await _accounts_ctx(request)
     view = request.query_params.get("view", "ejecutar")
-    if view not in ("ejecutar", "configurar"):
+    if view not in ("ejecutar", "configurar", "alertas"):
         view = "ejecutar"
     return templates.TemplateResponse(request, "stock_sync.html", {
         "user": user,
@@ -5637,6 +5637,24 @@ async def _prewarm_caches(user_id: str = None):
                         source=_prewarm_source,
                     )
                     logger.info("[PREWARM] BM sync log escrito OK")
+                    # Foto en disco de _bm_stock_cache — NO es una llamada nueva a BM,
+                    # solo persiste lo que este mismo ciclo ya trajo, para que la vista
+                    # de "Alertas de Stock" pueda consultarlo por SQL y sobreviva reinicios.
+                    try:
+                        _snapshot_rows = [
+                            {
+                                "sku": _sk,
+                                "available_qty": _inv.get("avail_total", 0),
+                                "reserve_qty": _inv.get("reserved_total", 0),
+                                "total_qty": _inv.get("total", 0),
+                            }
+                            for _sk, (_ts, _inv) in _bm_stock_cache.items()
+                            if _inv.get("_v")
+                        ]
+                        _snap_saved = await token_store.upsert_bm_stock_snapshot_batch(_snapshot_rows)
+                        logger.info(f"[PREWARM] bm_stock_snapshot: {_snap_saved} SKUs guardados en disco")
+                    except Exception as _snap_exc:
+                        logger.warning(f"[PREWARM] Error guardando bm_stock_snapshot: {_snap_exc!r}")
                 else:
                     logger.info("[PREWARM] BM sync log omitido — BM sirvió desde caché (no fetch real)")
             except Exception as _bm_log_exc:
@@ -13903,6 +13921,19 @@ async def prewarm_status():
     })
 
 
+@app.get("/api/stock/orders-without-stock")
+async def orders_without_stock(request: Request, days: int = 14):
+    """Órdenes recientes (ML+Amazon, las 7 cuentas) cuyo SKU hoy tiene
+    AvailableQTY <= 0 en BinManager (o sin dato en el snapshot). Cruce 100%
+    en SQL contra bm_stock_snapshot — no dispara ninguna llamada a BM."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    days = max(1, min(days, 90))
+    result = await token_store.get_orders_without_stock(days=days)
+    return JSONResponse(result)
+
+
 @app.get("/api/stock/bm-sync-log")
 async def bm_sync_log_endpoint():
     """Historial de ejecuciones del prewarm BM — para la tarjeta Caché de Stock BM.
@@ -14563,6 +14594,31 @@ async def diag_supplier_debt(token: str = ""):
         "skus_with_title": skus_with_title,
         "skus_with_cost": skus_with_cost,
         "ledger_skus_with_cost": ledger_skus_with_cost,
+    }
+
+
+@app.get("/api/diag/bm-stock-snapshot")
+async def diag_bm_stock_snapshot(token: str = ""):
+    """Diagnóstico: estado de bm_stock_snapshot (foto en disco del stock BM,
+    tomada al final de cada ciclo de prewarm) — para confirmar que se está
+    llenando sin necesitar sesión admin."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_bss
+    async with _aio_bss.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_bss.Row
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_stock_snapshot")
+        total_rows = (await cur.fetchone())["n"]
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_stock_snapshot WHERE available_qty <= 0")
+        zero_rows = (await cur.fetchone())["n"]
+        cur = await db.execute("SELECT MAX(updated_at) AS ts FROM bm_stock_snapshot")
+        last_ts = (await cur.fetchone())["ts"]
+    return {
+        "total_rows": total_rows,
+        "zero_available_rows": zero_rows,
+        "last_updated_ts": last_ts,
+        "last_updated_age_min": round((_time.time() - last_ts) / 60, 1) if last_ts else None,
     }
 
 
