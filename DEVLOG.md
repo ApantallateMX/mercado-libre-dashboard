@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-19 — FIX: loop automático de captura de ventas para las 7 cuentas (deuda con la empresa)
+
+**Archivo:** `app/main.py` (`_supplier_debt_sync_loop`, `start_supplier_debt_sync`).
+
+Jovan reportó que `/deuda-empresa` mostraba $0 recién desplegado y preguntó
+si debíamos llevar control de TODAS las ventas en TODAS las cuentas —
+correcto. Causa real: `order_history` (que alimenta el ledger) nunca fue
+un proceso que corriera solo — `_save_ml_orders_history_bg` solo se
+disparaba al visitar Deals (ML) y `_save_amazon_orders_bg` solo al visitar
+Planeación→Velocidad (Amazon), cuenta por cuenta.
+
+Nuevo `_supplier_debt_sync_loop()` (mismo patrón que `_stock_sync_loop`,
+arrancado en `lifespan()`): cada hora recorre las 4 cuentas ML (ventana de
+3 días, `upsert_order_history` ya es idempotente) y dispara
+`_save_amazon_orders_bg` (ya cubre las 3 cuentas Amazon internamente, con
+su propio guard de 2h — no hubo que tocar su lógica). Probado localmente
+con datos reales: el saldo pasó de $0 a $552,177.97 (425 entradas ML + 56
+Amazon, 587 unidades) sin errores en ninguna cuenta. Deploy confirmado vía
+Railway GraphQL API (commit `1f9b2fa`, status SUCCESS).
+
+---
+
 ## 2026-07-19 — FEAT: ledger de deuda semanal con la empresa proveedora
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`. Nuevos:
