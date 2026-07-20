@@ -3127,6 +3127,30 @@ async def get_supplier_debt_summary() -> dict:
     }
 
 
+async def get_supplier_debt_export_data() -> list[dict]:
+    """Deuda agregada por SKU — título (bm_product_catalog) + costo (order_history,
+    promedio al momento de cada venta) + retail + unidades + monto generado.
+    Para el export Excel de /deuda-empresa."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT
+                sdl.sku AS sku,
+                COALESCE(bpc.title, '') AS titulo,
+                AVG(NULLIF(sdl.retail_ph_usd, 0)) AS retail_usd,
+                AVG(NULLIF(oh.costo_usd, 0)) AS costo_usd,
+                SUM(sdl.quantity) AS unidades,
+                SUM(sdl.amount_mxn) AS monto_generado_mxn
+            FROM supplier_debt_ledger sdl
+            LEFT JOIN order_history oh
+                ON oh.order_id = sdl.order_id AND oh.item_id = sdl.item_id AND oh.platform = sdl.platform
+            LEFT JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku
+            GROUP BY sdl.sku
+            ORDER BY monto_generado_mxn DESC
+        """)
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def list_supplier_debt_payments() -> list[dict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row

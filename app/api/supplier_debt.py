@@ -7,7 +7,7 @@ configurable). El cálculo real vive en token_store.upsert_order_history —
 este módulo solo expone lectura del saldo/semanas y registro de pagos.
 """
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.services import token_store
 
@@ -63,6 +63,54 @@ async def supplier_debt_delete_payment(payment_id: int, request: Request):
         return forbidden
     deleted = await token_store.delete_supplier_debt_payment(payment_id)
     return {"ok": deleted}
+
+
+@router.get("/export")
+async def supplier_debt_export(request: Request):
+    """Excel (.xlsx) con la deuda agregada por SKU: título, retail, costo,
+    unidades vendidas y monto de deuda generado."""
+    forbidden = _require_admin(request)
+    if forbidden:
+        return forbidden
+
+    import io
+    from datetime import datetime
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    rows = await token_store.get_supplier_debt_export_data()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Deuda por SKU"
+
+    headers = ["SKU", "Título", "Retail (USD)", "Costo (USD)", "Unidades vendidas", "Monto generado (MXN)"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for r in rows:
+        ws.append([
+            r["sku"],
+            r["titulo"],
+            round(r["retail_usd"], 2) if r["retail_usd"] is not None else None,
+            round(r["costo_usd"], 2) if r["costo_usd"] is not None else None,
+            r["unidades"],
+            round(r["monto_generado_mxn"], 2) if r["monto_generado_mxn"] is not None else 0,
+        ])
+
+    widths = [16, 45, 14, 14, 18, 20]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    fname = f"deuda_empresa_{datetime.utcnow().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/settings")

@@ -14527,11 +14527,20 @@ async def diag_supplier_debt(token: str = ""):
         total_amount = (await cur.fetchone())["t"]
         cur = await db.execute("SELECT platform, COUNT(*) AS n FROM supplier_debt_ledger GROUP BY platform")
         by_platform = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_product_catalog")
+        bm_catalog_rows = (await cur.fetchone())["n"]
+        cur = await db.execute("""
+            SELECT COUNT(DISTINCT sdl.sku) AS n FROM supplier_debt_ledger sdl
+            JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku AND bpc.title != ''
+        """)
+        skus_with_title = (await cur.fetchone())["n"]
     return {
         "total_rows": total_rows,
         "zero_amount_rows": zero_rows,
         "total_amount_mxn": round(total_amount, 2),
         "by_platform": by_platform,
+        "bm_catalog_rows": bm_catalog_rows,
+        "skus_with_title": skus_with_title,
     }
 
 

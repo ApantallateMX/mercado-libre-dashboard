@@ -64,7 +64,15 @@
 
   <!-- ── Deuda semanal ───────────────────────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
-    <h2 class="text-sm font-bold text-gray-700">Deuda por Semana</h2>
+    <div class="flex items-center justify-between flex-wrap gap-3">
+      <h2 class="text-sm font-bold text-gray-700">Deuda por Semana</h2>
+      <a href="/api/supplier-debt/export" class="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M7 10l5 5 5-5M12 15V3"/>
+        </svg>
+        Descargar Excel (por SKU)
+      </a>
+    </div>
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
