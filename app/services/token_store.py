@@ -3076,11 +3076,18 @@ async def upsert_order_history(rows: list[dict]) -> int:
                     _iso = _dt.isocalendar()
                     iso_week = f"{_iso[0]}-W{_iso[1]:02d}"
                 await db.execute("""
-                    INSERT OR IGNORE INTO supplier_debt_ledger
+                    INSERT INTO supplier_debt_ledger
                         (order_id, item_id, platform, account_id, sku, is_tv,
                          category_rate, quantity, retail_ph_usd, fx_rate,
                          amount_mxn, order_date, iso_week, created_at)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
+                        retail_ph_usd = CASE WHEN supplier_debt_ledger.amount_mxn = 0 AND excluded.retail_ph_usd > 0
+                                             THEN excluded.retail_ph_usd ELSE supplier_debt_ledger.retail_ph_usd END,
+                        fx_rate       = CASE WHEN supplier_debt_ledger.amount_mxn = 0 AND excluded.amount_mxn > 0
+                                             THEN excluded.fx_rate ELSE supplier_debt_ledger.fx_rate END,
+                        amount_mxn    = CASE WHEN supplier_debt_ledger.amount_mxn = 0 AND excluded.amount_mxn > 0
+                                             THEN excluded.amount_mxn ELSE supplier_debt_ledger.amount_mxn END
                 """, (
                     r.get("order_id", ""), r.get("item_id", ""), r.get("platform", "ml"),
                     r.get("account_id", ""), r.get("sku", ""), 1 if is_tv else 0,
