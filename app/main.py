@@ -14705,6 +14705,42 @@ async def diag_bm_stock_snapshot(token: str = ""):
     }
 
 
+@app.get("/api/diag/ml-webhook-activity")
+async def diag_ml_webhook_activity(token: str = "", minutes: int = 60):
+    """Diagnóstico: actividad reciente de order_history por cuenta ML — para
+    confirmar que el webhook de notificaciones (POST /webhooks/ml/orders)
+    está llegando de las 4 cuentas, no solo de la que se probó a mano."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    minutes = max(1, min(minutes, 1440))
+    cutoff_ts = _time.time() - minutes * 60
+    import aiosqlite as _aio_wh
+    async with _aio_wh.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_wh.Row
+        cur = await db.execute("""
+            SELECT account_id, COUNT(*) AS n, MAX(created_at) AS last_ts
+            FROM order_history
+            WHERE platform = 'ml' AND created_at >= ?
+            GROUP BY account_id
+            ORDER BY n DESC
+        """, (cutoff_ts,))
+        by_account = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute("SELECT COUNT(*) AS n FROM realtime_stock_alerts WHERE detected_at >= ?", (cutoff_ts,))
+        realtime_alerts_n = (await cur.fetchone())["n"]
+    known = await token_store.get_all_tokens()
+    known_ids = {str(a.get("user_id", "")) for a in known}
+    seen_ids = {str(r["account_id"]) for r in by_account}
+    return {
+        "minutes_window": minutes,
+        "by_account": by_account,
+        "known_ml_accounts": sorted(known_ids),
+        "accounts_with_recent_activity": sorted(seen_ids),
+        "accounts_without_recent_activity": sorted(known_ids - seen_ids),
+        "realtime_stock_alerts_in_window": realtime_alerts_n,
+    }
+
+
 @app.get("/api/diag/trigger-catalog-sync")
 async def diag_trigger_catalog_sync(token: str = ""):
     """Dispara el sync manual del catálogo BM sin necesitar sesión admin —
