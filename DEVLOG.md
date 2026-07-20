@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-20 — FEAT: webhook ML en tiempo real — feed de órdenes sin stock (Fase 1)
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/stock_sync.html`.
+
+Jovan dijo que la vista agregada (por SKU, ventana de días) no le servía —
+quería identificar EN EL MOMENTO qué órdenes entran sin stock. Se
+reemplazó por un feed cronológico alimentado por webhooks reales de ML
+(eligió esta opción sobre polling más frecuente).
+
+`POST /webhooks/ml/orders` (público, sin login — necesario para que ML le
+pegue desde afuera) recibe la notificación del topic `orders_v2`, valida
+que el `user_id` sea una de las 4 cuentas conocidas (contra `get_all_tokens()`,
+no hardcodeado), responde `200` de inmediato y procesa en background:
+resuelve la orden real (`resolve_order`), la guarda en `order_history`
+reutilizando `_save_ml_orders_history_bg` (cero lógica duplicada — mismo
+choke point que ya alimenta deuda), y chequea el SKU contra `bm_sku_master`.
+Si `available_qty <= 0` o sin dato → nueva tabla `realtime_stock_alerts`
+(idempotente vía `UNIQUE(order_id, sku, platform)` — reenvíos de ML no
+duplican). Nuevo endpoint `GET /api/stock/realtime-alerts` + UI con
+auto-refresh cada 30s.
+
+**Amazon queda como Fase 2** — SP-API Notifications requiere una cuenta de
+AWS propia (SQS/EventBridge); no se confirmó si ya existe una, así que se
+avanzó primero con ML (no depende de nada externo más que la config de
+ML DevCenter).
+
+**Pendiente que Jovan debe hacer (fuera de este código):** entrar al
+DevCenter de cada una de las 4 apps ML y poner como Notifications URL
+`https://apantallatemx.up.railway.app/webhooks/ml/orders` con el topic
+`orders_v2` activado. Sin esto, el endpoint está vivo pero no recibe
+tráfico real de ML todavía.
+
+Verificado localmente de punta a punta antes de subir: orden con stock
+real → correctamente NO genera alerta; orden con SKU en 0 → SÍ genera
+alerta; reenvío del mismo webhook → no duplica. Deploy confirmado
+(commit `9cd445b`, status SUCCESS) — endpoint probado en vivo en
+producción respondiendo correctamente a un `user_id` desconocido.
+
+---
+
 ## 2026-07-20 — FEAT: maestro único BM (bm_sku_master) + historial de cambios
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`.
