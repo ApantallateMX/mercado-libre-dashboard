@@ -70,7 +70,7 @@
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M7 10l5 5 5-5M12 15V3"/>
         </svg>
-        Descargar Excel (por SKU)
+        Descargar Excel (todas las semanas)
       </a>
     </div>
     <div class="overflow-x-auto">
@@ -81,11 +81,12 @@
             <th class="text-right py-2 pr-4">Unidades Teles</th>
             <th class="text-right py-2 pr-4">Unidades Otras</th>
             <th class="text-right py-2 pr-4">Total Unidades</th>
-            <th class="text-right py-2">Monto Generado</th>
+            <th class="text-right py-2 pr-4">Monto Generado</th>
+            <th class="text-right py-2">Excel</th>
           </tr>
         </thead>
         <tbody id="dd-weekly-tbody">
-          <tr><td colspan="5" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+          <tr><td colspan="6" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
         </tbody>
       </table>
     </div>
@@ -165,7 +166,7 @@ function ddLoadSummary() {
         var tbody = document.getElementById('dd-weekly-tbody');
         var weekly = d.weekly || [];
         if (!weekly.length) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-6 text-gray-400 text-sm">Aún no hay ventas registradas.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-gray-400 text-sm">Aún no hay ventas registradas.</td></tr>';
             return;
         }
         tbody.innerHTML = weekly.map(function(w) {
@@ -175,7 +176,11 @@ function ddLoadSummary() {
                 '<td class="py-2 pr-4 text-right text-gray-600">' + (w.units_tv || 0) + '</td>' +
                 '<td class="py-2 pr-4 text-right text-gray-600">' + (w.units_other || 0) + '</td>' +
                 '<td class="py-2 pr-4 text-right font-semibold text-gray-700">' + (w.units_total || 0) + '</td>' +
-                '<td class="py-2 text-right font-semibold text-gray-800">' + ddFmt(w.amount_mxn) + '</td>' +
+                '<td class="py-2 pr-4 text-right font-semibold text-gray-800">' + ddFmt(w.amount_mxn) + '</td>' +
+                '<td class="py-2 text-right">' +
+                    '<a href="/api/supplier-debt/export?week=' + encodeURIComponent(w.iso_week) + '" ' +
+                    'class="text-xs text-green-600 hover:text-green-800 underline" title="Descargar Excel de ' + w.iso_week + '">↓ Excel</a>' +
+                '</td>' +
                 '</tr>';
         }).join('');
     }).catch(function(e) { ddShowToast('Error cargando resumen: ' + e, true); });

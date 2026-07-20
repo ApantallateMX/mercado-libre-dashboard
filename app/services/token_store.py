@@ -3149,13 +3149,16 @@ async def get_supplier_debt_summary() -> dict:
     }
 
 
-async def get_supplier_debt_export_data() -> list[dict]:
+async def get_supplier_debt_export_data(iso_week: str = "") -> list[dict]:
     """Deuda agregada por SKU — título (bm_product_catalog) + costo (order_history,
     promedio al momento de cada venta) + retail + unidades + monto generado.
-    Para el export Excel de /deuda-empresa."""
+    Para el export Excel de /deuda-empresa. iso_week opcional (ej. '2026-W29')
+    filtra a solo esa semana — vacío = todas."""
+    where_clause = "WHERE sdl.iso_week = ?" if iso_week else ""
+    params = [iso_week] if iso_week else []
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("""
+        cur = await db.execute(f"""
             SELECT
                 sdl.sku AS sku,
                 COALESCE(bpc.title, '') AS titulo,
@@ -3167,9 +3170,10 @@ async def get_supplier_debt_export_data() -> list[dict]:
             LEFT JOIN order_history oh
                 ON oh.order_id = sdl.order_id AND oh.item_id = sdl.item_id AND oh.platform = sdl.platform
             LEFT JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku
+            {where_clause}
             GROUP BY sdl.sku
             ORDER BY monto_generado_mxn DESC
-        """)
+        """, params)
         return [dict(r) for r in await cur.fetchall()]
 
 

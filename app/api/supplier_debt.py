@@ -66,9 +66,10 @@ async def supplier_debt_delete_payment(payment_id: int, request: Request):
 
 
 @router.get("/export")
-async def supplier_debt_export(request: Request):
+async def supplier_debt_export(request: Request, week: str = ""):
     """Excel (.xlsx) con la deuda agregada por SKU: título, retail, costo,
-    unidades vendidas y monto de deuda generado."""
+    unidades vendidas y monto de deuda generado. ?week=2026-W29 filtra a esa
+    semana — sin parámetro exporta todo el historial."""
     forbidden = _require_admin(request)
     if forbidden:
         return forbidden
@@ -78,11 +79,11 @@ async def supplier_debt_export(request: Request):
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
-    rows = await token_store.get_supplier_debt_export_data()
+    rows = await token_store.get_supplier_debt_export_data(iso_week=week)
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Deuda por SKU"
+    ws.title = f"Deuda {week}" if week else "Deuda por SKU"
 
     headers = ["SKU", "Título", "Retail (USD)", "Costo (USD)", "Unidades vendidas", "Monto generado (MXN)"]
     ws.append(headers)
@@ -105,7 +106,8 @@ async def supplier_debt_export(request: Request):
 
     buf = io.BytesIO()
     wb.save(buf)
-    fname = f"deuda_empresa_{datetime.utcnow().strftime('%Y-%m-%d')}.xlsx"
+    suffix = week if week else "todas"
+    fname = f"deuda_empresa_{suffix}_{datetime.utcnow().strftime('%Y-%m-%d')}.xlsx"
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
