@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-20 — FIX: costo USD del export de deuda salía mayor al retail (data-quality)
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`, `app/api/supplier_debt.py`.
+
+Jovan notó en el Excel de deuda que "Costo (USD)" a veces salía MAYOR que
+"Retail (USD)" — imposible en un negocio normal. Causa raíz: `_sku_cost_map`
+(en memoria) solo se llenaba con SKUs de `bm_candidates` (subconjunto
+angosto usado para scoring de Deals) y **nunca se limpiaba** — arrastraba
+valores viejos/parciales de semanas atrás, mientras `_sku_retail_map` (el
+que usaba "Retail") sí se reconstruía completo cada ciclo desde el catálogo
+BM entero. No era un error de fórmula, era un desfase de frescura entre
+ambos datos.
+
+Confirmé antes de tocar nada que el mismo request semanal que ya trae
+retail (`ConfColumns_Conditions_Excel`) YA trae `AvgCostQTY` por SKU para
+el catálogo completo — se descartaba sin guardar. Fix: se agrega columna
+`cost_usd` a `bm_product_catalog` (igual que ya existe para retail),
+nuevo `_bm_cost_cache` poblado en los mismos 2 puntos donde ya se puebla
+`_bm_retail_ph_cache`, y `_prewarm_caches` ahora reconstruye `_sku_cost_map`
+por completo (`.clear()` + rebuild) igual que ya hacía con retail — sin
+ninguna llamada nueva a BM.
+
+De paso, el export de deuda ahora también muestra "Costo (MXN)" y "Costo
+Total (MXN)" (usando el tipo de cambio activo — manual si está seteado,
+si no el último detectado). Verificado localmente: de 2625 SKUs con costo,
+solo 16 siguen mostrando costo > retail (modelos descontinuados/datos BM
+obsoletos — razonable), vs. antes donde el problema era generalizado.
+Deploy confirmado vía Railway GraphQL API (commit `a5e4adc`, status SUCCESS).
+
+---
+
 ## 2026-07-20 — FEAT: descargar Excel de la deuda por semana individual
 
 **Archivos:** `app/api/supplier_debt.py`, `app/services/token_store.py`,
