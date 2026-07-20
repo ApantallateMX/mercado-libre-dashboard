@@ -584,6 +584,7 @@ async def lifespan(app: FastAPI):
     from app.services.stock_sync_multi import start_multi_stock_sync
     start_multi_stock_sync()
     start_token_refresh()
+    start_supplier_debt_sync()
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
@@ -13239,6 +13240,52 @@ async def _stock_sync_loop():
 def start_stock_sync():
     """Inicia el loop de stock sync en background."""
     asyncio.create_task(_stock_sync_loop())
+
+
+# ── Captura periódica de ventas para order_history / ledger de deuda ────────
+# Antes, order_history solo se llenaba si alguien visitaba Deals (ML) o
+# Planeación→Velocidad (Amazon) — dependía de que alguien navegara a esas
+# pestañas por cuenta. Este loop cubre las 7 cuentas (4 ML + 3 Amazon) solo,
+# sin depender de que nadie visite nada.
+_SUPPLIER_DEBT_SYNC_INTERVAL = 3600  # 1 hora
+
+
+async def _supplier_debt_sync_loop():
+    """Recorre las 4 cuentas ML (ventana corta, upsert es idempotente) y
+    dispara _save_amazon_orders_bg (ya cubre las 3 cuentas Amazon con su
+    propio guard de 2h) — mantiene order_history y el ledger de deuda al
+    día sin depender de que alguien visite Deals/Planeación."""
+    await asyncio.sleep(90)  # dejar que los tokens se siembren al arranque
+    while True:
+        try:
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if not uid:
+                    continue
+                try:
+                    client = await get_meli_client(user_id=uid)
+                    if not client:
+                        continue
+                    now = datetime.utcnow()
+                    date_from = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+                    date_to = now.strftime("%Y-%m-%d")
+                    orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
+                    usd_to_mxn = await _get_usd_to_mxn(client)
+                    _save_ml_orders_history_bg(orders, uid, usd_to_mxn)
+                except Exception as e:
+                    logger.warning(f"[SUPPLIER-DEBT-SYNC] Error ML uid={uid}: {e}")
+                await asyncio.sleep(5)  # separar llamadas entre cuentas
+
+            asyncio.create_task(_save_amazon_orders_bg(days=3))
+        except Exception as e:
+            logger.warning(f"[SUPPLIER-DEBT-SYNC] Error: {e}")
+        await asyncio.sleep(_SUPPLIER_DEBT_SYNC_INTERVAL)
+
+
+def start_supplier_debt_sync():
+    """Inicia el loop de captura de ventas para el ledger de deuda."""
+    asyncio.create_task(_supplier_debt_sync_loop())
 
 
 async def _token_refresh_loop():
