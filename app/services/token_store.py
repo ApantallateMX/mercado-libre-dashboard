@@ -1,7 +1,7 @@
 import json
 import os
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional
 from pathlib import Path
 from app.config import DATABASE_PATH
@@ -3100,6 +3100,26 @@ async def upsert_order_history(rows: list[dict]) -> int:
     return len(rows)
 
 
+_MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+
+
+def _iso_week_range_label(iso_week: str) -> str:
+    """'2026-W29' -> 'Lun 13 - Dom 19 jul 2026' (rango real de la semana ISO,
+    lunes a domingo, para que se pueda cruzar contra fechas reales de pago)."""
+    try:
+        year_s, week_s = iso_week.split("-W")
+        year, week = int(year_s), int(week_s)
+        monday = date.fromisocalendar(year, week, 1)
+        sunday = date.fromisocalendar(year, week, 7)
+        if monday.month == sunday.month:
+            return f"{monday.day}-{sunday.day} {_MESES_ES[monday.month - 1]} {monday.year}"
+        if monday.year == sunday.year:
+            return f"{monday.day} {_MESES_ES[monday.month - 1]} - {sunday.day} {_MESES_ES[sunday.month - 1]} {monday.year}"
+        return f"{monday.day} {_MESES_ES[monday.month - 1]} {monday.year} - {sunday.day} {_MESES_ES[sunday.month - 1]} {sunday.year}"
+    except Exception:
+        return ""
+
+
 async def get_supplier_debt_summary() -> dict:
     """Total generado (ledger), total pagado, saldo, y desglose semanal."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -3119,6 +3139,8 @@ async def get_supplier_debt_summary() -> dict:
             ORDER BY iso_week DESC
         """)
         weekly = [dict(r) for r in await cur.fetchall()]
+        for w in weekly:
+            w["week_range"] = _iso_week_range_label(w["iso_week"])
     return {
         "total_generated": round(total_generated, 2),
         "total_paid": round(total_paid, 2),

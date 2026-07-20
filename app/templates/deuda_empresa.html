@@ -170,7 +170,8 @@ function ddLoadSummary() {
         }
         tbody.innerHTML = weekly.map(function(w) {
             return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
-                '<td class="py-2 pr-4 font-medium text-gray-800">' + w.iso_week + '</td>' +
+                '<td class="py-2 pr-4 font-medium text-gray-800">' + w.iso_week +
+                    (w.week_range ? ' <span class="text-xs text-gray-400 font-normal">(' + w.week_range + ')</span>' : '') + '</td>' +
                 '<td class="py-2 pr-4 text-right text-gray-600">' + (w.units_tv || 0) + '</td>' +
                 '<td class="py-2 pr-4 text-right text-gray-600">' + (w.units_other || 0) + '</td>' +
                 '<td class="py-2 pr-4 text-right font-semibold text-gray-700">' + (w.units_total || 0) + '</td>' +
