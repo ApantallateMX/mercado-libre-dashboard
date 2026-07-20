@@ -36,6 +36,22 @@ solo 16 siguen mostrando costo > retail (modelos descontinuados/datos BM
 obsoletos — razonable), vs. antes donde el problema era generalizado.
 Deploy confirmado vía Railway GraphQL API (commit `a5e4adc`, status SUCCESS).
 
+**Corrección post-deploy (commits `98252b0`, `67dc358`):** el deploy agregó
+la columna `cost_usd` vía `ALTER TABLE ... DEFAULT 0`, pero eso NO la
+llena — Jovan bajó el Excel de producción y salió con Costo(USD)/Costo(MXN)
+completamente vacíos porque el catálogo de producción no se había vuelto a
+sincronizar desde el deploy (el cron semanal corre hasta el domingo). Se
+agregó `GET /api/diag/trigger-catalog-sync?token=...` (mismo patrón que
+el resto de `/api/diag/*`, sin sesión admin) para disparar el sync manual
+en producción sin esperar el cron, y se extendió `/api/diag/supplier-debt`
+con `skus_with_cost`/`ledger_skus_with_cost` para poder confirmar la
+cobertura real sin necesitar login. Verificado: `skus_with_cost` pasó de
+0 a 2624 tras el trigger manual. **Lección:** un deploy con status SUCCESS
+solo confirma que el código corrió — cuando el fix depende de un dato que
+vive en una tabla/cache que se sincroniza periódicamente (no en cada
+deploy), hay que disparar y verificar ESA sincronización en producción
+también, no solo en local.
+
 ---
 
 ## 2026-07-20 — FEAT: descargar Excel de la deuda por semana individual
