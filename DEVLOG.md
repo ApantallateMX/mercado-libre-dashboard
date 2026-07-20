@@ -7,6 +7,20 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-20 — FEAT: descargar Excel de la deuda por semana individual
+
+**Archivos:** `app/api/supplier_debt.py`, `app/services/token_store.py`,
+`app/templates/deuda_empresa.html`.
+
+`GET /api/supplier-debt/export?week=2026-W29` filtra el export a solo esa
+semana (`get_supplier_debt_export_data(iso_week=...)` ahora acepta el
+filtro opcional). Nuevo link "↓ Excel" en cada fila de la tabla "Deuda por
+Semana"; el botón de arriba se renombró a "Descargar Excel (todas las
+semanas)" para diferenciarlo. Deploy confirmado vía Railway GraphQL API
+(commit `897e2ec`, status SUCCESS).
+
+---
+
 ## 2026-07-20 — FEAT+FIX: export a Excel de la deuda + rango de fechas por semana
 
 **Archivos:** `app/api/supplier_debt.py`, `app/services/token_store.py`,
