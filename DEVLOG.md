@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-19 — FEAT: ledger de deuda semanal con la empresa proveedora
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`. Nuevos:
+`app/api/supplier_debt.py`, `app/templates/deuda_empresa.html`.
+
+Jovan pidió llevar control de cuánto se le debe a la empresa proveedora por
+cada producto vendido — % fijo del retail del SKU: **80% en teles (prefijo
+SNTV), 50% en todo lo demás**, ambos configurables desde la UI. Arranca
+desde hoy (sin backfill de ventas históricas), ML+Amazon combinado en un
+solo saldo.
+
+El cálculo se engancha en `upsert_order_history` — el único choke point
+real compartido por ML y Amazon (ambas plataformas pasan por ahí en cada
+resync de órdenes, no es un stream de una sola pasada). Reusa
+`retail_ph_usd` y `fx_rate` que cada row de `order_history` ya guarda al
+momento de la venta — cero llamadas nuevas a BM o al tipo de cambio.
+Cancelaciones/reembolsos ya vienen filtrados antes de llegar aquí (`status
+in ("paid","delivered")`), así que nunca se cuenta deuda de una venta que
+no se concretó.
+
+**Doble conteo resuelto con una constraint, no con lógica de aplicación**:
+la tabla nueva `supplier_debt_ledger` tiene `UNIQUE(order_id, item_id,
+platform)` y el insert es `INSERT OR IGNORE` — un resync del mismo pedido
+simplemente no genera una segunda entrada, sin necesidad de un `SELECT` de
+existencia previo (atómico, sin ventana de carrera). Verificado con test
+aislado: 3 resyncs del mismo pedido → exactamente 1 entrada de deuda por
+SKU, con el monto correcto para ambas categorías.
+
+Nueva página `/deuda-empresa` (admin-only, mismo guard de rol que Sync
+Stock): tarjeta de saldo (generado − pagado), tabla semanal (unidades
+teles/otras + monto), formulario para registrar pagos (fecha/monto/
+referencia/notas) con historial y opción de eliminar, y tarjeta de
+configuración de las 2 tasas — cambiar la tasa no recalcula lo ya
+generado, cada entrada del ledger guarda su propio `category_rate`.
+
+Nuevo módulo `app/api/supplier_debt.py` (5 endpoints), mismo patrón que
+`app/api/lanzar.py`. Verificado con Playwright (0 errores de consola,
+registrar/eliminar pago actualiza el saldo correctamente). Deploy
+confirmado vía Railway GraphQL API (commit `be2c82a`, status SUCCESS).
+
+---
+
 ## 2026-07-18 — FEAT: Finanzas → 4ta sub-vista de Ventas, Distribución → sub-vista de Sync Stock
 
 **Archivos:** `app/main.py`, `app/templates/orders.html`, `app/templates/stock_sync.html`.
