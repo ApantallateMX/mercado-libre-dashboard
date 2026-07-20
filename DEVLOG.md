@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-20 — FEAT+FIX: export a Excel de la deuda + rango de fechas por semana
+
+**Archivos:** `app/api/supplier_debt.py`, `app/services/token_store.py`,
+`app/templates/deuda_empresa.html`, `app/main.py`, `requirements.txt`.
+
+Dos mejoras a `/deuda-empresa`:
+
+- **Export a Excel** (`GET /api/supplier-debt/export`, botón "Descargar
+  Excel"): una fila por SKU con título (join `bm_product_catalog`), retail
+  USD, costo USD (de `order_history`), unidades vendidas y monto de deuda
+  generado. `openpyxl` agregado explícitamente a `requirements.txt` (antes
+  solo llegaba como dependencia transitiva, sin garantía en el build de
+  Railway). `/api/diag/supplier-debt` ahora también reporta
+  `bm_catalog_rows`/`skus_with_title` para verificar el join sin necesitar
+  sesión admin.
+- **Rango de fechas por semana**: Jovan notó que "2026-W29" no dice qué
+  días cubre, necesario para cruzar contra pagos reales. Se agrega
+  `week_range` (ej. "13-19 jul 2026", lunes a domingo) calculado desde el
+  código ISO de semana, mostrado junto al código en la tabla.
+
+**Verificación en producción del fix de auto-sanado (commit 6f968ce,
+2026-07-19)**: confirmado exitoso vía `/api/diag/supplier-debt` — de 428
+filas en $0 pasó a 798 filas con solo 184 aún en $0 (mayoría ya sanadas),
+$1,707,618.04 MXN generados, ambas plataformas representadas (461 ML +
+337 Amazon).
+
+Deploy confirmado vía Railway GraphQL API (commit `a1f8ce7`, status
+SUCCESS).
+
+---
+
 ## 2026-07-19 — FIX: loop automático de captura de ventas para las 7 cuentas (deuda con la empresa)
 
 **Archivo:** `app/main.py` (`_supplier_debt_sync_loop`, `start_supplier_debt_sync`).
