@@ -14547,6 +14547,13 @@ async def diag_supplier_debt(token: str = ""):
             JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku AND bpc.title != ''
         """)
         skus_with_title = (await cur.fetchone())["n"]
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_product_catalog WHERE cost_usd > 0")
+        skus_with_cost = (await cur.fetchone())["n"]
+        cur = await db.execute("""
+            SELECT COUNT(DISTINCT sdl.sku) AS n FROM supplier_debt_ledger sdl
+            JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku AND bpc.cost_usd > 0
+        """)
+        ledger_skus_with_cost = (await cur.fetchone())["n"]
     return {
         "total_rows": total_rows,
         "zero_amount_rows": zero_rows,
@@ -14554,6 +14561,8 @@ async def diag_supplier_debt(token: str = ""):
         "by_platform": by_platform,
         "bm_catalog_rows": bm_catalog_rows,
         "skus_with_title": skus_with_title,
+        "skus_with_cost": skus_with_cost,
+        "ledger_skus_with_cost": ledger_skus_with_cost,
     }
 
 
