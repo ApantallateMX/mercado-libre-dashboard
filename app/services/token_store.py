@@ -628,6 +628,11 @@ async def init_db():
                 updated_at REAL NOT NULL DEFAULT 0
             )
         """)
+        # Migración: costo (AvgCostQTY de BM) — antes solo se guardaba retail_ph
+        try:
+            await db.execute("ALTER TABLE bm_product_catalog ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS item_sync_log (
                 item_id    TEXT NOT NULL,
@@ -1090,7 +1095,7 @@ async def get_recently_synced_ids(user_id: str, ttl_seconds: int = 3600) -> set[
 
 async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     """Guarda info de producto BM en bm_product_catalog.
-    rows: list of {sku, retail_ph, brand, model, title}
+    rows: list of {sku, retail_ph, cost_usd, brand, model, title}
     Retorna cantidad de rows insertadas/actualizadas.
     """
     if not rows:
@@ -1099,9 +1104,9 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO bm_product_catalog
-               (sku, retail_ph, brand, model, title, updated_at)
-               VALUES (:sku, :retail_ph, :brand, :model, :title, :updated_at)""",
-            [{**r, "updated_at": now} for r in rows],
+               (sku, retail_ph, cost_usd, brand, model, title, updated_at)
+               VALUES (:sku, :retail_ph, :cost_usd, :brand, :model, :title, :updated_at)""",
+            [{**r, "cost_usd": r.get("cost_usd", 0), "updated_at": now} for r in rows],
         )
         await db.commit()
     return len(rows)
@@ -1112,7 +1117,7 @@ async def get_bm_catalog_all() -> list[dict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT sku, retail_ph, brand, model, title, updated_at FROM bm_product_catalog"
+            "SELECT sku, retail_ph, cost_usd, brand, model, title, updated_at FROM bm_product_catalog"
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
@@ -3163,12 +3168,10 @@ async def get_supplier_debt_export_data(iso_week: str = "") -> list[dict]:
                 sdl.sku AS sku,
                 COALESCE(bpc.title, '') AS titulo,
                 AVG(NULLIF(sdl.retail_ph_usd, 0)) AS retail_usd,
-                AVG(NULLIF(oh.costo_usd, 0)) AS costo_usd,
+                MAX(bpc.cost_usd) AS costo_usd,
                 SUM(sdl.quantity) AS unidades,
                 SUM(sdl.amount_mxn) AS monto_generado_mxn
             FROM supplier_debt_ledger sdl
-            LEFT JOIN order_history oh
-                ON oh.order_id = sdl.order_id AND oh.item_id = sdl.item_id AND oh.platform = sdl.platform
             LEFT JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku
             {where_clause}
             GROUP BY sdl.sku

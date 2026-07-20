@@ -4653,6 +4653,8 @@ _ORDERS_CACHE_TTL = 900     # 15 min
 # Cache RetailPrice PH por SKU base — TTL 30 min (cambia lentamente)
 _bm_retail_ph_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_usd)
 _BM_RETAIL_PH_TTL = 7 * 24 * 3600  # 7 días — fuente real es DB (sync semanal)
+# Cache AvgCostQTY por SKU base — mismo TTL/fuente que retail (sync semanal completo)
+_bm_cost_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, cost_usd)
 
 
 async def _sync_bm_product_catalog(source: str = "auto") -> int:
@@ -4704,9 +4706,11 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
             if not _sku:
                 continue
             _rph = float(_row.get("LastRetailPricePurchaseHistory") or 0)
+            _cost = float(_row.get("AvgCostQTY") or 0)
             rows.append({
                 "sku":       _sku,
                 "retail_ph": _rph if 0 < _rph < 9000 else 0,
+                "cost_usd":  _cost if 0 < _cost < 9000 else 0,
                 "brand":     _row.get("Brand") or "",
                 "model":     _row.get("Model") or "",
                 "title":     _row.get("Title") or "",
@@ -4716,11 +4720,13 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
         saved = await token_store.upsert_bm_catalog_batch(rows)
         logger.info(f"[CATALOG-SYNC] {saved}/{_total_rows} SKUs guardados en DB")
 
-        # Actualizar _bm_retail_ph_cache en memoria
+        # Actualizar _bm_retail_ph_cache / _bm_cost_cache en memoria
         _now = _time.time()
         for _row in rows:
             if _row["retail_ph"] > 0:
                 _bm_retail_ph_cache[_row["sku"]] = (_now, _row["retail_ph"])
+            if _row["cost_usd"] > 0:
+                _bm_cost_cache[_row["sku"]] = (_now, _row["cost_usd"])
 
         with_price = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
         elapsed = round(_time.time() - _t0, 1)
@@ -4760,10 +4766,10 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
 
 
 async def _load_catalog_from_db() -> int:
-    """Al arrancar: carga bm_product_catalog de DB a _bm_retail_ph_cache en memoria.
-    Así VS REF% funciona desde el primer request sin esperar el prewarm semanal.
+    """Al arrancar: carga bm_product_catalog de DB a _bm_retail_ph_cache/_bm_cost_cache
+    en memoria. Así VS REF% funciona desde el primer request sin esperar el prewarm semanal.
     """
-    global _bm_retail_ph_cache
+    global _bm_retail_ph_cache, _bm_cost_cache
     try:
         rows = await token_store.get_bm_catalog_all()
         now = _time.time()
@@ -4772,6 +4778,8 @@ async def _load_catalog_from_db() -> int:
             if row.get("retail_ph") and row["retail_ph"] > 0:
                 _bm_retail_ph_cache[row["sku"]] = (now, float(row["retail_ph"]))
                 loaded += 1
+            if row.get("cost_usd") and row["cost_usd"] > 0:
+                _bm_cost_cache[row["sku"]] = (now, float(row["cost_usd"]))
         logger.info(f"[CATALOG-LOAD] {loaded} SKUs con RetailPH cargados de DB al arrancar")
         return loaded
     except Exception as _e:
@@ -5376,10 +5384,15 @@ async def _prewarm_caches(user_id: str = None):
                 _last_fx_rate = fx  # cachear para conversión USD en endpoints sin ML client
                 _calc_margins(bm_candidates, fx)
 
-                # Actualizar mapa SKU→costo para cálculo de profit en órdenes (GAP 6)
-                for _p in bm_candidates:
-                    if _p.get("sku") and (_p.get("_costo_mxn") or 0) > 0:
-                        _sku_cost_map[_p["sku"]] = _p["_costo_mxn"]
+                # Reconstruir _sku_cost_map desde el catálogo completo BM (AvgCostQTY × FX) —
+                # antes solo se llenaba con bm_candidates (subconjunto angosto) y nunca se
+                # limpiaba, quedando con datos viejos que ya no coincidían con retail (siempre
+                # fresco). Mismo patrón que _sku_retail_map, misma fuente/frescura.
+                _sku_cost_map.clear()
+                for _csku, (_cts, _cusd) in _bm_cost_cache.items():
+                    if 0 < _cusd < 9999:
+                        _sku_cost_map[_csku] = round(_cusd * fx, 2)
+                logger.info(f"[PREWARM] _sku_cost_map: {len(_sku_cost_map)} SKUs con AvgCostQTY MXN")
 
                 # Reconstruir _sku_retail_map desde el catálogo completo BM (8484 SKUs × FX)
                 # Cobertura total: todos los SKUs en DB, no solo los listings activos de ML
