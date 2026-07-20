@@ -14557,6 +14557,20 @@ async def diag_supplier_debt(token: str = ""):
     }
 
 
+@app.get("/api/diag/trigger-catalog-sync")
+async def diag_trigger_catalog_sync(token: str = ""):
+    """Dispara el sync manual del catálogo BM sin necesitar sesión admin —
+    para refrescar bm_product_catalog.cost_usd/retail_ph en producción tras
+    un deploy que agrega/cambia esas columnas, sin esperar al cron semanal."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if _catalog_sync_running:
+        return JSONResponse({"ok": False, "error": "Ya está corriendo un sync"})
+    asyncio.create_task(_sync_bm_product_catalog(source="manual"))
+    return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
+
+
 @app.get("/api/diag/db-size")
 async def diag_db_size(token: str = ""):
     """Diagnóstico URGENTE: tamaño de tokens.db, filas por tabla, y tamaño de
