@@ -14509,6 +14509,32 @@ async def diag_sku(sku: str = "", token: str = ""):
     })
 
 
+@app.get("/api/diag/supplier-debt")
+async def diag_supplier_debt(token: str = ""):
+    """Diagnóstico: salud del ledger de deuda — cuántas filas siguen en $0
+    (candidatas a auto-sanar en el próximo ciclo de _supplier_debt_sync_loop)."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_sd
+    async with _aio_sd.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_sd.Row
+        cur = await db.execute("SELECT COUNT(*) AS n FROM supplier_debt_ledger")
+        total_rows = (await cur.fetchone())["n"]
+        cur = await db.execute("SELECT COUNT(*) AS n FROM supplier_debt_ledger WHERE amount_mxn = 0")
+        zero_rows = (await cur.fetchone())["n"]
+        cur = await db.execute("SELECT COALESCE(SUM(amount_mxn),0) AS t FROM supplier_debt_ledger")
+        total_amount = (await cur.fetchone())["t"]
+        cur = await db.execute("SELECT platform, COUNT(*) AS n FROM supplier_debt_ledger GROUP BY platform")
+        by_platform = [dict(r) for r in await cur.fetchall()]
+    return {
+        "total_rows": total_rows,
+        "zero_amount_rows": zero_rows,
+        "total_amount_mxn": round(total_amount, 2),
+        "by_platform": by_platform,
+    }
+
+
 @app.get("/api/diag/db-size")
 async def diag_db_size(token: str = ""):
     """Diagnóstico URGENTE: tamaño de tokens.db, filas por tabla, y tamaño de
