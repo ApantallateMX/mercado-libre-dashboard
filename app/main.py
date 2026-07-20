@@ -3542,7 +3542,7 @@ async def _orders_search_partial(
                 COALESCE(bm.title,  '') AS bm_title
             FROM order_history oh
             LEFT JOIN ml_listings        ml  ON oh.item_id = ml.item_id
-            LEFT JOIN bm_product_catalog bm  ON UPPER(TRIM(oh.sku)) = UPPER(TRIM(bm.sku))
+            LEFT JOIN bm_sku_master      bm  ON UPPER(TRIM(oh.sku)) = UPPER(TRIM(bm.sku))
             WHERE oh.account_id = ?
               AND oh.platform   = 'ml'
               AND oh.order_date >= ?
@@ -3567,7 +3567,7 @@ async def _orders_search_partial(
             SELECT COUNT(*)
             FROM order_history oh
             LEFT JOIN ml_listings        ml  ON oh.item_id = ml.item_id
-            LEFT JOIN bm_product_catalog bm  ON UPPER(TRIM(oh.sku)) = UPPER(TRIM(bm.sku))
+            LEFT JOIN bm_sku_master      bm  ON UPPER(TRIM(oh.sku)) = UPPER(TRIM(bm.sku))
             WHERE oh.account_id = ?
               AND oh.platform   = 'ml'
               AND oh.order_date >= ?
@@ -14571,18 +14571,18 @@ async def diag_supplier_debt(token: str = ""):
         total_amount = (await cur.fetchone())["t"]
         cur = await db.execute("SELECT platform, COUNT(*) AS n FROM supplier_debt_ledger GROUP BY platform")
         by_platform = [dict(r) for r in await cur.fetchall()]
-        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_product_catalog")
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_sku_master")
         bm_catalog_rows = (await cur.fetchone())["n"]
         cur = await db.execute("""
             SELECT COUNT(DISTINCT sdl.sku) AS n FROM supplier_debt_ledger sdl
-            JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku AND bpc.title != ''
+            JOIN bm_sku_master bpc ON bpc.sku = sdl.sku AND bpc.title != ''
         """)
         skus_with_title = (await cur.fetchone())["n"]
-        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_product_catalog WHERE cost_usd > 0")
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_sku_master WHERE cost_usd > 0")
         skus_with_cost = (await cur.fetchone())["n"]
         cur = await db.execute("""
             SELECT COUNT(DISTINCT sdl.sku) AS n FROM supplier_debt_ledger sdl
-            JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku AND bpc.cost_usd > 0
+            JOIN bm_sku_master bpc ON bpc.sku = sdl.sku AND bpc.cost_usd > 0
         """)
         ledger_skus_with_cost = (await cur.fetchone())["n"]
     return {
@@ -14608,11 +14608,11 @@ async def diag_bm_stock_snapshot(token: str = ""):
     import aiosqlite as _aio_bss
     async with _aio_bss.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_bss.Row
-        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_stock_snapshot")
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_sku_master")
         total_rows = (await cur.fetchone())["n"]
-        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_stock_snapshot WHERE available_qty <= 0")
+        cur = await db.execute("SELECT COUNT(*) AS n FROM bm_sku_master WHERE available_qty <= 0")
         zero_rows = (await cur.fetchone())["n"]
-        cur = await db.execute("SELECT MAX(updated_at) AS ts FROM bm_stock_snapshot")
+        cur = await db.execute("SELECT MAX(stock_updated_at) AS ts FROM bm_sku_master")
         last_ts = (await cur.fetchone())["ts"]
     return {
         "total_rows": total_rows,
@@ -17387,7 +17387,7 @@ async def _compute_unified_returns(days: int) -> dict:
     try:
         async with _aio_ur.connect(token_store.DATABASE_PATH) as _db_t:
             _db_t.row_factory = _aio_ur.Row
-            _cur_t = await _db_t.execute("SELECT sku, title FROM bm_product_catalog")
+            _cur_t = await _db_t.execute("SELECT sku, title FROM bm_sku_master")
             titles_map = {r["sku"]: r["title"] for r in await _cur_t.fetchall()}
     except Exception:
         titles_map = {}
@@ -18900,7 +18900,7 @@ async def returns_sku_claim_rate(
         import aiosqlite as _aio_rate
         async with _aio_rate.connect(_ts_rate.DATABASE_PATH) as db:
             db.row_factory = _aio_rate.Row
-            cur = await db.execute("SELECT sku, title FROM bm_product_catalog")
+            cur = await db.execute("SELECT sku, title FROM bm_sku_master")
             titles = {r["sku"]: r["title"] for r in await cur.fetchall()}
     except Exception:
         pass
@@ -19204,7 +19204,7 @@ async def returns_sku_claims_detail(
         import aiosqlite as _aio_t2
         async with _aio_t2.connect(DATABASE_PATH) as _db_t2:
             _db_t2.row_factory = _aio_t2.Row
-            _cur_t2 = await _db_t2.execute("SELECT title FROM bm_product_catalog WHERE sku = ?", (sku,))
+            _cur_t2 = await _db_t2.execute("SELECT title FROM bm_sku_master WHERE sku = ?", (sku,))
             _row_t2 = await _cur_t2.fetchone()
             if _row_t2:
                 title = _row_t2["title"]

@@ -798,6 +798,74 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_sku_master — maestro único de BM (fusiona bm_product_catalog
+        # + bm_stock_snapshot). Fuente única de verdad para alertas, sugerencias
+        # y lanzamientos. Dos timestamps porque título/retail/costo se refrescan
+        # 1x/semana y stock cada ~10 min — cada bloque guarda su propia frescura.
+        # bm_product_catalog y bm_stock_snapshot se dejan de escribir pero NO se
+        # borran todavía (rollback seguro si algo sale mal con la migración).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_sku_master (
+                sku                TEXT PRIMARY KEY,
+                title              TEXT NOT NULL DEFAULT '',
+                brand              TEXT NOT NULL DEFAULT '',
+                model              TEXT NOT NULL DEFAULT '',
+                retail_ph          REAL NOT NULL DEFAULT 0,
+                cost_usd           REAL NOT NULL DEFAULT 0,
+                available_qty      INTEGER NOT NULL DEFAULT 0,
+                reserve_qty        INTEGER NOT NULL DEFAULT 0,
+                total_qty          INTEGER NOT NULL DEFAULT 0,
+                catalog_updated_at REAL NOT NULL DEFAULT 0,
+                stock_updated_at   REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_sku_changes — historial de cambios detectados en cada sync
+        # (mismo dato que BM ya nos manda, no llamadas nuevas). Retail/costo:
+        # cualquier cambio se loguea. Stock: solo transiciones que importan
+        # (se quedó en 0 / se resurtió) — ver _diff_and_log_stock_change en
+        # el código que escribe esta tabla, para no llenarla de micro-ruido.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_sku_changes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                sku         TEXT NOT NULL,
+                field       TEXT NOT NULL,
+                old_value   REAL,
+                new_value   REAL,
+                changed_at  REAL NOT NULL,
+                source      TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bsc_sku ON bm_sku_changes(sku)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bsc_changed_at ON bm_sku_changes(changed_at)")
+        # Migración única: backfill de bm_sku_master desde las 2 tablas viejas,
+        # solo si el maestro está vacío (primera vez que corre este código).
+        _mcount = await (await db.execute("SELECT COUNT(*) FROM bm_sku_master")).fetchone()
+        if _mcount and _mcount[0] == 0:
+            await db.execute("""
+                INSERT OR IGNORE INTO bm_sku_master
+                    (sku, title, brand, model, retail_ph, cost_usd,
+                     available_qty, reserve_qty, total_qty,
+                     catalog_updated_at, stock_updated_at)
+                SELECT
+                    bpc.sku, bpc.title, bpc.brand, bpc.model, bpc.retail_ph, bpc.cost_usd,
+                    COALESCE(bss.available_qty, 0), COALESCE(bss.reserve_qty, 0), COALESCE(bss.total_qty, 0),
+                    bpc.updated_at, COALESCE(bss.updated_at, 0)
+                FROM bm_product_catalog bpc
+                LEFT JOIN bm_stock_snapshot bss ON bss.sku = bpc.sku
+            """)
+            # SKUs que solo existen en bm_stock_snapshot (aún no vistos por el catálogo)
+            await db.execute("""
+                INSERT OR IGNORE INTO bm_sku_master
+                    (sku, available_qty, reserve_qty, total_qty, stock_updated_at)
+                SELECT sku, available_qty, reserve_qty, total_qty, updated_at
+                FROM bm_stock_snapshot
+                WHERE sku NOT IN (SELECT sku FROM bm_product_catalog)
+            """)
+            await db.commit()
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
         # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
@@ -1111,7 +1179,10 @@ async def get_recently_synced_ids(user_id: str, ttl_seconds: int = 3600) -> set[
 
 
 async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
-    """Guarda info de producto BM en bm_product_catalog.
+    """Guarda título/retail/costo en el maestro bm_sku_master (antes escribía
+    en bm_product_catalog, ahora fusionada). Loguea en bm_sku_changes
+    cualquier cambio de retail_ph/cost_usd — bajo volumen (sync semanal),
+    cada cambio es relevante para alertas de precio.
     rows: list of {sku, retail_ph, cost_usd, brand, model, title}
     Retorna cantidad de rows insertadas/actualizadas.
     """
@@ -1119,22 +1190,55 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
         return 0
     now = __import__("time").time()
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        skus = [r["sku"] for r in rows]
+        # Chunks de 500 — evita el límite de variables SQL de SQLite en catálogos grandes
+        existing = {}
+        for i in range(0, len(skus), 500):
+            chunk = skus[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"SELECT sku, retail_ph, cost_usd FROM bm_sku_master WHERE sku IN ({placeholders})", chunk
+            )
+            existing.update({r["sku"]: r for r in await cur.fetchall()})
+
+        changes = []
+        for r in rows:
+            old = existing.get(r["sku"])
+            if not old:
+                continue
+            new_retail = r.get("retail_ph", 0) or 0
+            new_cost = r.get("cost_usd", 0) or 0
+            if round(old["retail_ph"] or 0, 4) != round(new_retail, 4):
+                changes.append((r["sku"], "retail_ph", old["retail_ph"], new_retail, now, "catalog_sync"))
+            if round(old["cost_usd"] or 0, 4) != round(new_cost, 4):
+                changes.append((r["sku"], "cost_usd", old["cost_usd"], new_cost, now, "catalog_sync"))
+
         await db.executemany(
-            """INSERT OR REPLACE INTO bm_product_catalog
-               (sku, retail_ph, cost_usd, brand, model, title, updated_at)
-               VALUES (:sku, :retail_ph, :cost_usd, :brand, :model, :title, :updated_at)""",
+            """INSERT INTO bm_sku_master (sku, title, brand, model, retail_ph, cost_usd, catalog_updated_at)
+               VALUES (:sku, :title, :brand, :model, :retail_ph, :cost_usd, :updated_at)
+               ON CONFLICT(sku) DO UPDATE SET
+                   title = excluded.title, brand = excluded.brand, model = excluded.model,
+                   retail_ph = excluded.retail_ph, cost_usd = excluded.cost_usd,
+                   catalog_updated_at = excluded.catalog_updated_at""",
             [{**r, "cost_usd": r.get("cost_usd", 0), "updated_at": now} for r in rows],
         )
+        if changes:
+            await db.executemany(
+                "INSERT INTO bm_sku_changes (sku, field, old_value, new_value, changed_at, source) VALUES (?,?,?,?,?,?)",
+                changes,
+            )
         await db.commit()
     return len(rows)
 
 
 async def get_bm_catalog_all() -> list[dict]:
-    """Lee toda la tabla bm_product_catalog. Usado al arrancar para popular cache en memoria."""
+    """Lee el maestro bm_sku_master (título/retail/costo). Usado al arrancar
+    para popular cache en memoria."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT sku, retail_ph, cost_usd, brand, model, title, updated_at FROM bm_product_catalog"
+            "SELECT sku, retail_ph, cost_usd, brand, model, title, catalog_updated_at AS updated_at FROM bm_sku_master"
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
@@ -1144,7 +1248,7 @@ async def get_bm_catalog_last_sync() -> float:
     """Retorna el timestamp de la última sincronización del catálogo, o 0 si nunca."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         async with db.execute(
-            "SELECT MAX(updated_at) FROM bm_product_catalog"
+            "SELECT MAX(catalog_updated_at) FROM bm_sku_master"
         ) as cur:
             row = await cur.fetchone()
     val = row[0] if row else None
@@ -1152,21 +1256,56 @@ async def get_bm_catalog_last_sync() -> float:
 
 
 async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
-    """Guarda una foto en disco de _bm_stock_cache (memoria) — NO es una llamada
-    nueva a BM, solo persiste lo que el prewarm ya trajo, para que sobreviva
-    reinicios y se pueda consultar por SQL en vez de iterar el dict en memoria.
+    """Guarda el stock actual en el maestro bm_sku_master (antes escribía en
+    bm_stock_snapshot, ahora fusionada) — NO es una llamada nueva a BM, solo
+    persiste lo que el prewarm ya trajo. Loguea en bm_sku_changes SOLO
+    transiciones de available_qty que cruzan cero (se quedó en 0 / se
+    resurtió) — evita llenar el historial de micro-fluctuaciones cada ~10 min.
     rows: list of {sku, available_qty, reserve_qty, total_qty}
     """
     if not rows:
         return 0
     now = __import__("time").time()
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        skus = [r["sku"] for r in rows]
+        # Chunks de 500 — evita el límite de variables SQL de SQLite en catálogos grandes
+        existing = {}
+        for i in range(0, len(skus), 500):
+            chunk = skus[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"SELECT sku, available_qty FROM bm_sku_master WHERE sku IN ({placeholders})", chunk
+            )
+            existing.update({r["sku"]: (r["available_qty"] or 0) for r in await cur.fetchall()})
+
+        changes = []
+        for r in rows:
+            sku = r["sku"]
+            if sku not in existing:
+                continue
+            old_avail = existing[sku]
+            new_avail = r.get("available_qty", 0) or 0
+            crossed_out = old_avail > 0 and new_avail <= 0
+            crossed_in = old_avail <= 0 and new_avail > 0
+            if crossed_out or crossed_in:
+                changes.append((sku, "available_qty", old_avail, new_avail, now, "stock_prewarm"))
+
         await db.executemany(
-            """INSERT OR REPLACE INTO bm_stock_snapshot
-               (sku, available_qty, reserve_qty, total_qty, updated_at)
-               VALUES (:sku, :available_qty, :reserve_qty, :total_qty, :updated_at)""",
+            """INSERT INTO bm_sku_master (sku, available_qty, reserve_qty, total_qty, stock_updated_at)
+               VALUES (:sku, :available_qty, :reserve_qty, :total_qty, :updated_at)
+               ON CONFLICT(sku) DO UPDATE SET
+                   available_qty = excluded.available_qty,
+                   reserve_qty = excluded.reserve_qty,
+                   total_qty = excluded.total_qty,
+                   stock_updated_at = excluded.stock_updated_at""",
             [{**r, "updated_at": now} for r in rows],
         )
+        if changes:
+            await db.executemany(
+                "INSERT INTO bm_sku_changes (sku, field, old_value, new_value, changed_at, source) VALUES (?,?,?,?,?,?)",
+                changes,
+            )
         await db.commit()
     return len(rows)
 
@@ -1174,17 +1313,39 @@ async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
 async def get_bm_stock_snapshot_last_update() -> float:
     """Timestamp de la foto de stock más reciente en disco, o 0 si nunca se ha tomado."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        async with db.execute("SELECT MAX(updated_at) FROM bm_stock_snapshot") as cur:
+        async with db.execute("SELECT MAX(stock_updated_at) FROM bm_sku_master") as cur:
             row = await cur.fetchone()
     val = row[0] if row else None
     return float(val) if val else 0.0
 
 
+async def get_bm_sku_changes(days: int = 7, field: str = "", sku: str = "", limit: int = 200) -> list[dict]:
+    """Historial de cambios detectados (bm_sku_changes) — base para alertas
+    tipo 'este SKU bajó de precio' / 'se quedó sin stock' / 'se resurtió'."""
+    import time as _t
+    cutoff = _t.time() - days * 86400
+    query = "SELECT sku, field, old_value, new_value, changed_at, source FROM bm_sku_changes WHERE changed_at >= ?"
+    params = [cutoff]
+    if field:
+        query += " AND field = ?"
+        params.append(field)
+    if sku:
+        query += " AND sku = ?"
+        params.append(sku)
+    query += " ORDER BY changed_at DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(query, params)
+        rows = [dict(r) for r in await cur.fetchall()]
+    return rows
+
+
 async def get_orders_without_stock(days: int = 14) -> dict:
     """Cruza order_history (ventana reciente, paid/delivered, las 7 cuentas)
-    contra bm_stock_snapshot (foto en disco del stock BM actual) para detectar
+    contra bm_sku_master (maestro con stock actual de BM) para detectar
     SKUs vendidos que hoy tienen AvailableQTY <= 0 — o que no aparecen en el
-    snapshot en absoluto (sin dato, no se asume que sí hay stock).
+    maestro en absoluto (sin dato, no se asume que sí hay stock).
     Agrupado por SKU, ordenado por unidades vendidas en riesgo (desc).
     """
     from datetime import datetime, timedelta as _td
@@ -1194,19 +1355,18 @@ async def get_orders_without_stock(days: int = 14) -> dict:
         cur = await db.execute("""
             SELECT
                 oh.sku AS sku,
-                COALESCE(bpc.title, '') AS titulo,
+                COALESCE(bsm.title, '') AS titulo,
                 GROUP_CONCAT(DISTINCT oh.platform || ':' || oh.account_id) AS cuentas,
                 COUNT(DISTINCT oh.order_id) AS ordenes,
                 SUM(oh.quantity) AS unidades_vendidas,
-                bss.available_qty AS available_qty,
-                bss.reserve_qty AS reserve_qty,
-                bss.updated_at AS stock_updated_at
+                bsm.available_qty AS available_qty,
+                bsm.reserve_qty AS reserve_qty,
+                bsm.stock_updated_at AS stock_updated_at
             FROM order_history oh
-            LEFT JOIN bm_stock_snapshot bss ON bss.sku = oh.sku
-            LEFT JOIN bm_product_catalog bpc ON bpc.sku = oh.sku
+            LEFT JOIN bm_sku_master bsm ON bsm.sku = oh.sku
             WHERE oh.order_date >= ? AND oh.sku != ''
             GROUP BY oh.sku
-            HAVING bss.sku IS NULL OR bss.available_qty <= 0
+            HAVING bsm.sku IS NULL OR bsm.available_qty <= 0
             ORDER BY unidades_vendidas DESC
         """, (cutoff,))
         rows = [dict(r) for r in await cur.fetchall()]
@@ -3235,8 +3395,8 @@ async def get_supplier_debt_summary() -> dict:
 
 
 async def get_supplier_debt_export_data(iso_week: str = "") -> list[dict]:
-    """Deuda agregada por SKU — título (bm_product_catalog) + costo (order_history,
-    promedio al momento de cada venta) + retail + unidades + monto generado.
+    """Deuda agregada por SKU — título/costo (bm_sku_master, maestro BM) + retail
+    (order_history, snapshot al momento de cada venta) + unidades + monto generado.
     Para el export Excel de /deuda-empresa. iso_week opcional (ej. '2026-W29')
     filtra a solo esa semana — vacío = todas."""
     where_clause = "WHERE sdl.iso_week = ?" if iso_week else ""
@@ -3246,13 +3406,13 @@ async def get_supplier_debt_export_data(iso_week: str = "") -> list[dict]:
         cur = await db.execute(f"""
             SELECT
                 sdl.sku AS sku,
-                COALESCE(bpc.title, '') AS titulo,
+                COALESCE(bsm.title, '') AS titulo,
                 AVG(NULLIF(sdl.retail_ph_usd, 0)) AS retail_usd,
-                MAX(bpc.cost_usd) AS costo_usd,
+                MAX(bsm.cost_usd) AS costo_usd,
                 SUM(sdl.quantity) AS unidades,
                 SUM(sdl.amount_mxn) AS monto_generado_mxn
             FROM supplier_debt_ledger sdl
-            LEFT JOIN bm_product_catalog bpc ON bpc.sku = sdl.sku
+            LEFT JOIN bm_sku_master bsm ON bsm.sku = sdl.sku
             {where_clause}
             GROUP BY sdl.sku
             ORDER BY monto_generado_mxn DESC
