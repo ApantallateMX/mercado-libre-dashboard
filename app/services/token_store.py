@@ -730,6 +730,52 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
         # ─────────────────────────────────────────────────────────────────
+        # TABLAS: deuda semanal con la empresa proveedora — % fijo del retail
+        # por unidad vendida (teles vs otras categorías). Un row del ledger
+        # por (order_id, item_id, platform) generado desde upsert_order_history
+        # — el UNIQUE + INSERT OR IGNORE evita doble conteo en resyncs.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS supplier_debt_ledger (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id       TEXT NOT NULL,
+                item_id        TEXT NOT NULL,
+                platform       TEXT NOT NULL,
+                account_id     TEXT NOT NULL DEFAULT '',
+                sku            TEXT NOT NULL DEFAULT '',
+                is_tv          INTEGER NOT NULL DEFAULT 0,
+                category_rate  REAL NOT NULL DEFAULT 0,
+                quantity       INTEGER NOT NULL DEFAULT 1,
+                retail_ph_usd  REAL NOT NULL DEFAULT 0,
+                fx_rate        REAL NOT NULL DEFAULT 17.0,
+                amount_mxn     REAL NOT NULL DEFAULT 0,
+                order_date     TEXT NOT NULL DEFAULT '',
+                iso_week       TEXT NOT NULL DEFAULT '',
+                created_at     REAL NOT NULL DEFAULT 0,
+                UNIQUE(order_id, item_id, platform)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_sdl_week ON supplier_debt_ledger(iso_week)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS supplier_debt_payments (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_date  TEXT NOT NULL,
+                amount_mxn    REAL NOT NULL DEFAULT 0,
+                reference     TEXT NOT NULL DEFAULT '',
+                notes         TEXT NOT NULL DEFAULT '',
+                created_by    TEXT NOT NULL DEFAULT '',
+                created_at    REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS supplier_debt_settings (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                rate_tv     REAL NOT NULL DEFAULT 0.80,
+                rate_other  REAL NOT NULL DEFAULT 0.50
+            )
+        """)
+        await db.execute("INSERT OR IGNORE INTO supplier_debt_settings (id, rate_tv, rate_other) VALUES (1, 0.80, 0.50)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
         # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
@@ -2970,11 +3016,17 @@ async def set_deal_config(user_id: str, deal_buffer_pct: float, retail_target_pc
 async def upsert_order_history(rows: list[dict]) -> int:
     """Guarda/actualiza historial de ventas. ON CONFLICT actualiza con el dato más preciso.
     data_source='real' prevalece sobre 'estimated'; sale_fee y neto_plat toman el mayor valor.
+
+    También genera (si es la primera vez que se ve el sale) una entrada en
+    supplier_debt_ledger — deuda con la empresa proveedora = % fijo del
+    retail por unidad (teles vs otras categorías). Ver supplier_debt_settings.
     """
     import time as _t
     if not rows:
         return 0
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        _rate_row = await (await db.execute("SELECT rate_tv, rate_other FROM supplier_debt_settings WHERE id = 1")).fetchone()
+        _rate_tv, _rate_other = (_rate_row[0], _rate_row[1]) if _rate_row else (0.80, 0.50)
         for r in rows:
             await db.execute("""
                 INSERT INTO order_history
@@ -3009,8 +3061,105 @@ async def upsert_order_history(rows: list[dict]) -> int:
                 r.get("status", ""), r.get("data_source", "estimated"),
                 _t.time(),
             ))
+            try:
+                sku = (r.get("sku") or "").upper()
+                is_tv = sku.startswith("SNTV")
+                rate = _rate_tv if is_tv else _rate_other
+                quantity = r.get("quantity", 1) or 0
+                retail_ph_usd = r.get("retail_ph_usd", 0) or 0
+                fx_rate = r.get("fx_rate", 17.0) or 0
+                amount_mxn = round(quantity * retail_ph_usd * fx_rate * rate, 2)
+                order_date = r.get("order_date", "")
+                iso_week = ""
+                if order_date:
+                    _dt = datetime.strptime(order_date, "%Y-%m-%d")
+                    _iso = _dt.isocalendar()
+                    iso_week = f"{_iso[0]}-W{_iso[1]:02d}"
+                await db.execute("""
+                    INSERT OR IGNORE INTO supplier_debt_ledger
+                        (order_id, item_id, platform, account_id, sku, is_tv,
+                         category_rate, quantity, retail_ph_usd, fx_rate,
+                         amount_mxn, order_date, iso_week, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    r.get("order_id", ""), r.get("item_id", ""), r.get("platform", "ml"),
+                    r.get("account_id", ""), r.get("sku", ""), 1 if is_tv else 0,
+                    rate, quantity, retail_ph_usd, fx_rate,
+                    amount_mxn, order_date, iso_week, _t.time(),
+                ))
+            except Exception:
+                pass  # el ledger de deuda nunca debe tumbar el guardado de order_history
         await db.commit()
     return len(rows)
+
+
+async def get_supplier_debt_summary() -> dict:
+    """Total generado (ledger), total pagado, saldo, y desglose semanal."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT COALESCE(SUM(amount_mxn), 0) AS total FROM supplier_debt_ledger")
+        total_generated = (await cur.fetchone())["total"]
+        cur = await db.execute("SELECT COALESCE(SUM(amount_mxn), 0) AS total FROM supplier_debt_payments")
+        total_paid = (await cur.fetchone())["total"]
+        cur = await db.execute("""
+            SELECT iso_week,
+                   SUM(CASE WHEN is_tv = 1 THEN quantity ELSE 0 END) AS units_tv,
+                   SUM(CASE WHEN is_tv = 0 THEN quantity ELSE 0 END) AS units_other,
+                   SUM(quantity) AS units_total,
+                   SUM(amount_mxn) AS amount_mxn
+            FROM supplier_debt_ledger
+            GROUP BY iso_week
+            ORDER BY iso_week DESC
+        """)
+        weekly = [dict(r) for r in await cur.fetchall()]
+    return {
+        "total_generated": round(total_generated, 2),
+        "total_paid": round(total_paid, 2),
+        "balance": round(total_generated - total_paid, 2),
+        "weekly": weekly,
+    }
+
+
+async def list_supplier_debt_payments() -> list[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM supplier_debt_payments ORDER BY payment_date DESC, id DESC")
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def add_supplier_debt_payment(payment_date: str, amount_mxn: float, reference: str, notes: str, created_by: str) -> int:
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("""
+            INSERT INTO supplier_debt_payments (payment_date, amount_mxn, reference, notes, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (payment_date, amount_mxn, reference, notes, created_by, _t.time()))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def delete_supplier_debt_payment(payment_id: int) -> bool:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM supplier_debt_payments WHERE id = ?", (payment_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_supplier_debt_settings() -> dict:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT rate_tv, rate_other FROM supplier_debt_settings WHERE id = 1")
+        row = await cur.fetchone()
+        return dict(row) if row else {"rate_tv": 0.80, "rate_other": 0.50}
+
+
+async def set_supplier_debt_settings(rate_tv: float, rate_other: float) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO supplier_debt_settings (id, rate_tv, rate_other) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET rate_tv = excluded.rate_tv, rate_other = excluded.rate_other
+        """, (rate_tv, rate_other))
+        await db.commit()
 
 
 async def upsert_claims_history(rows: list[dict]) -> int:

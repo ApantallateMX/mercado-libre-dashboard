@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% block title %}Deuda con la Empresa{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- Header -->
+  <div>
+    <h1 class="text-xl font-bold text-gray-800">Deuda con la Empresa</h1>
+    <p class="text-xs text-gray-500 mt-0.5">Generada automáticamente por cada venta (ML + Amazon) — % del retail configurado por categoría.</p>
+  </div>
+
+  <!-- Toast -->
+  <div id="dd-toast" class="hidden fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white transition-all"></div>
+
+  <!-- ── Saldo ────────────────────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6">
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center sm:text-left">
+      <div>
+        <p class="text-xs text-gray-400 font-medium">Total generado</p>
+        <p id="dd-total-generated" class="text-2xl font-extrabold text-gray-800 mt-1">—</p>
+      </div>
+      <div>
+        <p class="text-xs text-gray-400 font-medium">Total pagado</p>
+        <p id="dd-total-paid" class="text-2xl font-extrabold text-green-600 mt-1">—</p>
+      </div>
+      <div>
+        <p class="text-xs text-gray-400 font-medium">Saldo por pagar</p>
+        <p id="dd-balance" class="text-3xl font-extrabold text-red-600 mt-1">—</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Configuración de tasas ──────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-3">
+    <div class="flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h2 class="text-sm font-bold text-gray-700">Tasa de deuda por categoría</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Aplica solo a ventas nuevas — no recalcula lo ya generado.</p>
+      </div>
+      <button onclick="ddSaveSettings()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+        Guardar
+      </button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">% Teles (SKU con prefijo SNTV)</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="dd-rate-tv" min="1" max="100" value="80"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <span class="text-xs text-gray-400 whitespace-nowrap">% del retail</span>
+        </div>
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">% Todas las demás categorías</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="dd-rate-other" min="1" max="100" value="50"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <span class="text-xs text-gray-400 whitespace-nowrap">% del retail</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Deuda semanal ───────────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <h2 class="text-sm font-bold text-gray-700">Deuda por Semana</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-100 text-xs text-gray-500 font-medium">
+            <th class="text-left py-2 pr-4">Semana</th>
+            <th class="text-right py-2 pr-4">Unidades Teles</th>
+            <th class="text-right py-2 pr-4">Unidades Otras</th>
+            <th class="text-right py-2 pr-4">Total Unidades</th>
+            <th class="text-right py-2">Monto Generado</th>
+          </tr>
+        </thead>
+        <tbody id="dd-weekly-tbody">
+          <tr><td colspan="5" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Registrar pago ──────────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <h2 class="text-sm font-bold text-gray-700">Registrar Pago</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Fecha</label>
+        <input type="date" id="dd-pay-date" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Monto (MXN)</label>
+        <input type="number" id="dd-pay-amount" min="0.01" step="0.01" placeholder="0.00" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Referencia</label>
+        <input type="text" id="dd-pay-ref" placeholder="Transferencia #..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+      </div>
+      <div class="flex items-end">
+        <button onclick="ddAddPayment()" class="w-full bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition">
+          Registrar pago
+        </button>
+      </div>
+    </div>
+    <div>
+      <label class="text-xs font-medium text-gray-600 block mb-1">Notas (opcional)</label>
+      <input type="text" id="dd-pay-notes" placeholder="Notas..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+    </div>
+  </div>
+
+  <!-- ── Historial de pagos ──────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <h2 class="text-sm font-bold text-gray-700">Historial de Pagos</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-100 text-xs text-gray-500 font-medium">
+            <th class="text-left py-2 pr-4">Fecha</th>
+            <th class="text-right py-2 pr-4">Monto</th>
+            <th class="text-left py-2 pr-4">Referencia</th>
+            <th class="text-left py-2 pr-4">Notas</th>
+            <th class="text-right py-2">Acción</th>
+          </tr>
+        </thead>
+        <tbody id="dd-payments-tbody">
+          <tr><td colspan="5" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function ddFmt(v) {
+    return '$' + Number(v || 0).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function ddShowToast(msg, isError) {
+    var t = document.getElementById('dd-toast');
+    t.textContent = msg;
+    t.className = 'fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white transition-all ' +
+                  (isError ? 'bg-red-600' : 'bg-green-600');
+    t.classList.remove('hidden');
+    setTimeout(function(){ t.classList.add('hidden'); }, 3500);
+}
+
+function ddLoadSummary() {
+    fetch('/api/supplier-debt/summary').then(function(r){ return r.json(); }).then(function(d) {
+        document.getElementById('dd-total-generated').textContent = ddFmt(d.total_generated);
+        document.getElementById('dd-total-paid').textContent = ddFmt(d.total_paid);
+        document.getElementById('dd-balance').textContent = ddFmt(d.balance);
+
+        var tbody = document.getElementById('dd-weekly-tbody');
+        var weekly = d.weekly || [];
+        if (!weekly.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-6 text-gray-400 text-sm">Aún no hay ventas registradas.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = weekly.map(function(w) {
+            return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
+                '<td class="py-2 pr-4 font-medium text-gray-800">' + w.iso_week + '</td>' +
+                '<td class="py-2 pr-4 text-right text-gray-600">' + (w.units_tv || 0) + '</td>' +
+                '<td class="py-2 pr-4 text-right text-gray-600">' + (w.units_other || 0) + '</td>' +
+                '<td class="py-2 pr-4 text-right font-semibold text-gray-700">' + (w.units_total || 0) + '</td>' +
+                '<td class="py-2 text-right font-semibold text-gray-800">' + ddFmt(w.amount_mxn) + '</td>' +
+                '</tr>';
+        }).join('');
+    }).catch(function(e) { ddShowToast('Error cargando resumen: ' + e, true); });
+}
+
+function ddLoadSettings() {
+    fetch('/api/supplier-debt/settings').then(function(r){ return r.json(); }).then(function(d) {
+        document.getElementById('dd-rate-tv').value = Math.round((d.rate_tv || 0.80) * 100);
+        document.getElementById('dd-rate-other').value = Math.round((d.rate_other || 0.50) * 100);
+    }).catch(function(e) { ddShowToast('Error cargando configuración: ' + e, true); });
+}
+
+function ddSaveSettings() {
+    var rateTv = (parseFloat(document.getElementById('dd-rate-tv').value) || 80) / 100;
+    var rateOther = (parseFloat(document.getElementById('dd-rate-other').value) || 50) / 100;
+    fetch('/api/supplier-debt/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({rate_tv: rateTv, rate_other: rateOther})
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) ddShowToast('Tasas actualizadas', false);
+        else ddShowToast(d.error || 'Error', true);
+    }).catch(function(e) { ddShowToast('Error: ' + e, true); });
+}
+
+function ddLoadPayments() {
+    fetch('/api/supplier-debt/payments').then(function(r){ return r.json(); }).then(function(d) {
+        var tbody = document.getElementById('dd-payments-tbody');
+        var payments = d.payments || [];
+        if (!payments.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-6 text-gray-400 text-sm">Sin pagos registrados aún.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = payments.map(function(p) {
+            return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
+                '<td class="py-2 pr-4 text-gray-700">' + p.payment_date + '</td>' +
+                '<td class="py-2 pr-4 text-right font-semibold text-green-700">' + ddFmt(p.amount_mxn) + '</td>' +
+                '<td class="py-2 pr-4 text-gray-600">' + (p.reference || '—') + '</td>' +
+                '<td class="py-2 pr-4 text-gray-500 text-xs">' + (p.notes || '—') + '</td>' +
+                '<td class="py-2 text-right">' +
+                    '<button onclick="ddDeletePayment(' + p.id + ')" class="text-xs text-red-500 hover:text-red-700 underline">Eliminar</button>' +
+                '</td>' +
+                '</tr>';
+        }).join('');
+    }).catch(function(e) { ddShowToast('Error cargando pagos: ' + e, true); });
+}
+
+function ddAddPayment() {
+    var date = document.getElementById('dd-pay-date').value;
+    var amount = parseFloat(document.getElementById('dd-pay-amount').value) || 0;
+    var ref = document.getElementById('dd-pay-ref').value.trim();
+    var notes = document.getElementById('dd-pay-notes').value.trim();
+    if (!date || amount <= 0) {
+        ddShowToast('Fecha y monto son requeridos', true);
+        return;
+    }
+    fetch('/api/supplier-debt/payments', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({payment_date: date, amount_mxn: amount, reference: ref, notes: notes})
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            ddShowToast('Pago registrado', false);
+            document.getElementById('dd-pay-amount').value = '';
+            document.getElementById('dd-pay-ref').value = '';
+            document.getElementById('dd-pay-notes').value = '';
+            ddLoadSummary();
+            ddLoadPayments();
+        } else {
+            ddShowToast(d.error || 'Error', true);
+        }
+    }).catch(function(e) { ddShowToast('Error: ' + e, true); });
+}
+
+function ddDeletePayment(id) {
+    if (!confirm('¿Eliminar este pago? El saldo aumentará de nuevo.')) return;
+    fetch('/api/supplier-debt/payments/' + id, {method: 'DELETE'}).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            ddShowToast('Pago eliminado', false);
+            ddLoadSummary();
+            ddLoadPayments();
+        } else {
+            ddShowToast('Error al eliminar', true);
+        }
+    }).catch(function(e) { ddShowToast('Error: ' + e, true); });
+}
+
+// Fecha por defecto: hoy
+document.getElementById('dd-pay-date').value = new Date().toISOString().slice(0, 10);
+
+ddLoadSummary();
+ddLoadSettings();
+ddLoadPayments();
+</script>
+{% endblock %}

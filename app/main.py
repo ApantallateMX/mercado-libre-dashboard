@@ -33,6 +33,7 @@ from app.api.productos import router as productos_router
 from app.api.facturacion import router as facturacion_router
 from app.api.higgsfield import router as higgsfield_router
 from app.api.amazon_lanzar import router as amazon_lanzar_router
+from app.api.supplier_debt import router as supplier_debt_router
 from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
@@ -757,6 +758,7 @@ _PATH_TO_SECTION: dict[str, str] = {
     "/planning":         "planning",
     "/facturacion":      "facturacion",
     "/stock-sync":       "sync",
+    "/deuda-empresa":    "deuda",
     "/amazon":           "amazon",
 }
 _SECTION_FIRST_URL: dict[str, str] = {
@@ -769,6 +771,7 @@ _SECTION_FIRST_URL: dict[str, str] = {
     "planning":     "/planning",
     "facturacion":  "/facturacion",
     "sync":         "/stock-sync",
+    "deuda":        "/deuda-empresa",
     "amazon":       "/amazon",
 }
 
@@ -1025,6 +1028,7 @@ app.include_router(productos_router)
 app.include_router(facturacion_router)
 app.include_router(higgsfield_router)
 app.include_router(amazon_lanzar_router)
+app.include_router(supplier_debt_router)
 
 
 # ---------- Account switcher ----------
@@ -1108,6 +1112,10 @@ _NAV_TAB_DEFS = [
          ml_href="/facturacion", amz_href="/facturacion",
          ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
          section="facturacion", admin_only=False, amz_gated=True, badge=None),
+    dict(id="deuda", label="Deuda", icon="🏦",
+         ml_href="/deuda-empresa", amz_href="/deuda-empresa",
+         ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,
+         section="deuda", admin_only=True, amz_gated=True, badge=None),
     dict(id="finanzas", label="Finanzas", icon="💰",
          ml_href=None, amz_href="/amazon?tab=finanzas",
          ml_active=None, amz_active="finanzas", amz_uses_dispatcher=True,
@@ -12740,6 +12748,21 @@ async def get_sku_score_api(sku: str = Query(..., description="SKU base BM")):
 async def distribucion_page():
     """Alias legacy — Distribución ahora vive como sub-vista 'Configurar' de Sync Stock."""
     return RedirectResponse("/stock-sync?view=configurar", status_code=302)
+
+
+@app.get("/deuda-empresa", response_class=HTMLResponse)
+async def deuda_empresa_page(request: Request):
+    """Deuda semanal con la empresa proveedora — % fijo del retail por unidad vendida."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    _du_deuda = getattr(request.state, "dashboard_user", None) or {}
+    if _du_deuda.get("role") != "admin":
+        return RedirectResponse("/dashboard", status_code=302)
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "deuda_empresa.html", {
+        "user": user, "active": "deuda_empresa", **ctx
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
