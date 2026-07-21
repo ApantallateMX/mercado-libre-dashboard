@@ -753,6 +753,7 @@ _PATH_TO_SECTION: dict[str, str] = {
     "/productos":        "productos",
     "/sku-sales":        "ventas",
     "/sku-compare":      "ventas",
+    "/alertas-stock":    "ventas",
     "/sku-inventory":    "productos",
     "/ads":              "ads",
     "/health":           "salud",
@@ -1088,7 +1089,7 @@ _NAV_TAB_DEFS = [
          section="dashboard", admin_only=False, amz_gated=False, badge=None),
     dict(id="ventas", label="Ventas", icon="📊",
          ml_href="/orders", amz_href="/amazon?tab=ventas",
-         ml_active=["orders", "sku_sales", "sku_compare", "finanzas"], amz_active="ventas", amz_uses_dispatcher=True,
+         ml_active=["orders", "sku_sales", "sku_compare", "finanzas", "alertas_stock"], amz_active="ventas", amz_uses_dispatcher=True,
          section="ventas", admin_only=False, amz_gated=False, badge=None),
     dict(id="productos", label="Productos", icon="📦",
          ml_href="/items", amz_href="/amazon/products",
@@ -2683,6 +2684,20 @@ async def sku_compare_page(request: Request):
     })
 
 
+@app.get("/alertas-stock", response_class=HTMLResponse)
+async def alertas_stock_page(request: Request):
+    """Alias de /orders con la sub-vista 'Alertas de Stock' pre-seleccionada —
+    mismo template unificado. Movida de Sync Stock (admin_only) a Ventas
+    (accesible a todos) porque muchos usuarios no tenían acceso a Sync Stock."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "orders.html", {
+        "user": user, "active": "alertas_stock", "view": "alertas_stock", **ctx
+    })
+
+
 @app.get("/sku-inventory")
 async def sku_inventory_page(request: Request):
     return RedirectResponse("/productos", status_code=301)
@@ -2941,7 +2956,7 @@ async def stock_sync_page(request: Request):
     rules = await token_store.get_all_sku_platform_rules(user_id=_active_uid)
     ctx = await _accounts_ctx(request)
     view = request.query_params.get("view", "ejecutar")
-    if view not in ("ejecutar", "configurar", "alertas"):
+    if view not in ("ejecutar", "configurar"):
         view = "ejecutar"
     return templates.TemplateResponse(request, "stock_sync.html", {
         "user": user,
@@ -14157,9 +14172,11 @@ async def orders_without_stock(request: Request, days: int = 14):
 async def realtime_stock_alerts(request: Request, limit: int = 100):
     """Feed cronológico (más reciente primero) de órdenes ML individuales
     detectadas sin stock al momento, vía webhook — reemplaza el reporte
-    agregado por SKU. Amazon pendiente (Fase 2, requiere infra AWS)."""
+    agregado por SKU. Amazon pendiente (Fase 2, requiere infra AWS).
+    Vive en Ventas (no admin_only) — cualquier usuario con sesión puede
+    verlo, movido de Sync Stock porque no todos tenían acceso ahí."""
     du = getattr(request.state, "dashboard_user", None) or {}
-    if du.get("role") != "admin":
+    if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     limit = max(1, min(limit, 500))
     rows = await token_store.get_realtime_stock_alerts(limit=limit)

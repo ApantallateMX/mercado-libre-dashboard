@@ -26,6 +26,10 @@
             class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         💰 Finanzas
     </button>
+    <button type="button" data-view="alertas_stock" onclick="window.setVentasView('alertas_stock')"
+            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+        ⚠️ Alertas de Stock
+    </button>
 </div>
 
 <!-- ═══ VISTA: POR ORDEN ═══ -->
@@ -328,6 +332,50 @@
 </div>
 <!-- /ventas-view-finanzas -->
 
+<!-- ═══ VISTA: ALERTAS DE STOCK (movida de Sync Stock — accesible a todos) ═══ -->
+<div id="ventas-view-alertas_stock" class="space-y-6 {% if view != 'alertas_stock' %}hidden{% endif %}">
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 class="text-sm font-bold text-gray-700">Órdenes sin stock — en el momento</h2>
+          <p class="text-xs text-gray-400 mt-0.5">Feed en vivo: cada orden de ML se revisa contra BM apenas entra (webhook). Se actualiza solo cada 30s. Amazon: pendiente (Fase 2, requiere infraestructura AWS).</p>
+        </div>
+        <button onclick="alertasLoadData()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
+          ↻ Actualizar
+        </button>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200">
+      <table class="w-full table-fixed text-sm">
+        <colgroup>
+          <col style="width:90px"><col style="width:135px"><col style="width:100px">
+          <col><col style="width:130px"><col style="width:55px">
+          <col style="width:90px"><col>
+        </colgroup>
+        <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+          <tr>
+            <th class="px-3 py-3 text-left whitespace-nowrap">Detectado</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">SKU</th>
+            <th class="px-3 py-3 text-left">Título</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
+            <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
+            <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
+            <th class="px-3 py-3 text-left">Sugerencia</th>
+          </tr>
+        </thead>
+        <tbody id="alertas-tbody">
+          <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="alertas-pagination" class="flex justify-center gap-2"></div>
+
+</div>
+<!-- /ventas-view-alertas_stock -->
+
 <script>
 // ════════════════════════════════════════════════════════════════════════════
 // Sub-vistas: Por Orden / Por SKU / Comparativa
@@ -350,7 +398,7 @@ window._ventasHighlightBtn = function(view) {
 };
 
 window.setVentasView = function(view) {
-    ['orders', 'sku', 'compare', 'finanzas'].forEach(function(v) {
+    ['orders', 'sku', 'compare', 'finanzas', 'alertas_stock'].forEach(function(v) {
         var el = document.getElementById('ventas-view-' + v);
         if (el) el.classList.toggle('hidden', v !== view);
     });
@@ -368,8 +416,96 @@ window.setVentasView = function(view) {
             doCompare();
         } else if (view === 'finanzas') {
             loadFinanzas();
+        } else if (view === 'alertas_stock') {
+            alertasLoadData();
         }
     }
+};
+
+if ('{{ view }}' === 'alertas_stock') {
+    alertasLoadData();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Alertas de Stock (movida de Sync Stock) — feed en vivo de órdenes ML sin stock
+// ════════════════════════════════════════════════════════════════════════════
+var _alertasRowsHtml = [];
+var _ALERTAS_PAGE_SIZE = 10;
+
+function alertasLoadData() {
+    var tbody = document.getElementById('alertas-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
+    fetch('/api/stock/realtime-alerts?limit=200')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            if (!rows.length) {
+                document.getElementById('alertas-tbody').innerHTML =
+                    '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock detectadas todavía — todo con inventario disponible.</td></tr>';
+                document.getElementById('alertas-pagination').innerHTML = '';
+                return;
+            }
+            _alertasRowsHtml = rows.map(function(row) {
+                var availNum = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
+                    ? '<span class="text-gray-400">sin dato</span>'
+                    : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
+                var origPriceLabel = row.retail_ph ? ('$' + Math.round(row.retail_ph) + ' USD') : '';
+                var avail = availNum + (origPriceLabel ? '<div class="text-gray-400 whitespace-nowrap" style="font-size:10px">' + origPriceLabel + '</div>' : '');
+                var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
+                var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
+                var sugerencias = row.sugerencias || [];
+                var sugHtml = '<span class="text-gray-400 text-xs">sin sugerencia (mismo tamaño/marca con stock)</span>';
+                if (sugerencias.length) {
+                    var s = sugerencias[0];
+                    sugHtml =
+                        '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (s.title || '').replace(/"/g, '&quot;') + '">' +
+                            '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
+                        '</div>' +
+                        '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
+                }
+                return '<tr class="border-t border-gray-100">' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.order_id + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.sku + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-600 align-top" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + (row.account_name || row.account_id) + '</td>' +
+                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
+                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + avail + '</td>' +
+                    '<td class="px-3 py-2.5 align-top">' + sugHtml + '</td>' +
+                    '</tr>';
+            });
+            window['alertas-pagination_go'](1);
+        })
+        .catch(function() {
+            document.getElementById('alertas-tbody').innerHTML =
+                '<tr><td colspan="8" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
+        });
+}
+
+setInterval(function() {
+    var view = document.getElementById('ventas-view-alertas_stock');
+    if (view && !view.classList.contains('hidden')) alertasLoadData();
+}, 30000);
+
+window['alertas-pagination_go'] = function(page) {
+    var total = _alertasRowsHtml.length;
+    var totalPages = Math.max(1, Math.ceil(total / _ALERTAS_PAGE_SIZE));
+    var p = Math.min(Math.max(1, page), totalPages);
+    var start = (p - 1) * _ALERTAS_PAGE_SIZE, end = Math.min(start + _ALERTAS_PAGE_SIZE, total);
+    document.getElementById('alertas-tbody').innerHTML = _alertasRowsHtml.slice(start, end).join('');
+    var pag = document.getElementById('alertas-pagination');
+    if (total <= _ALERTAS_PAGE_SIZE) { pag.innerHTML = ''; return; }
+    pag.innerHTML =
+        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 w-full">' +
+        '<span class="text-xs text-gray-400">' + (start + 1) + '–' + end + ' de ' + total + '</span>' +
+        '<div class="flex items-center gap-1">' +
+        '<button onclick="window[\'alertas-pagination_go\'](' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+        '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
+        '<button onclick="window[\'alertas-pagination_go\'](' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+        '</div></div>';
 };
 
 // ─── Periodo filter — compartido entre Por Orden y Por SKU ────────────────────

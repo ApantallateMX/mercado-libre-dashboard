@@ -2,7 +2,7 @@
 {% block title %}Sync Stock Multi-Plataforma{% endblock %}
 
 {% block content %}
-<div class="py-6 space-y-6" style="width:100vw; max-width:100vw; margin-left:calc(-50vw + 50%); padding-left:1.5rem; padding-right:1.5rem; box-sizing:border-box;">
+<div class="w-full px-4 py-6 space-y-6">
 
   <!-- ── Header ─────────────────────────────────────────────────── -->
   <div class="flex items-center justify-between">
@@ -34,10 +34,6 @@
     <button type="button" id="syncstock-view-btn-configurar" onclick="window.setSyncStockView('configurar')"
             class="px-4 py-2 text-sm font-medium rounded-lg transition {% if view == 'configurar' %}bg-indigo-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">
         Configurar
-    </button>
-    <button type="button" id="syncstock-view-btn-alertas" onclick="window.setSyncStockView('alertas')"
-            class="px-4 py-2 text-sm font-medium rounded-lg transition {% if view == 'alertas' %}bg-indigo-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}">
-        Alertas de Stock
     </button>
   </div>
 
@@ -714,50 +710,6 @@
 
   </div>
   <!-- /syncstock-view-configurar -->
-
-  <!-- ── Sub-vista: Alertas de Stock (órdenes sin stock disponible en BM) ── -->
-  <div id="syncstock-view-alertas" class="space-y-6 {% if view != 'alertas' %}hidden{% endif %}">
-
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5">
-      <div class="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 class="text-sm font-bold text-gray-700">Órdenes sin stock — en el momento</h2>
-          <p class="text-xs text-gray-400 mt-0.5">Feed en vivo: cada orden de ML se revisa contra BM apenas entra (webhook). Se actualiza solo cada 30s. Amazon: pendiente (Fase 2, requiere infraestructura AWS).</p>
-        </div>
-        <button onclick="alertasLoadData()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
-          ↻ Actualizar
-        </button>
-      </div>
-    </div>
-
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-200">
-      <table class="w-full table-fixed text-sm">
-        <colgroup>
-          <col style="width:95px"><col style="width:145px"><col style="width:105px">
-          <col><col style="width:145px"><col style="width:60px">
-          <col style="width:95px"><col>
-        </colgroup>
-        <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
-          <tr>
-            <th class="px-3 py-3 text-left whitespace-nowrap">Detectado</th>
-            <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
-            <th class="px-3 py-3 text-left whitespace-nowrap">SKU</th>
-            <th class="px-3 py-3 text-left">Título</th>
-            <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
-            <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
-            <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
-            <th class="px-3 py-3 text-left">Sugerencia</th>
-          </tr>
-        </thead>
-        <tbody id="alertas-tbody">
-          <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div id="alertas-pagination" class="flex justify-center gap-2"></div>
-
-  </div>
-  <!-- /syncstock-view-alertas -->
 
 </div>
 
@@ -2116,7 +2068,7 @@ window._syncStockLoadedViews = {};
 window._syncStockLoadedViews['{{ view }}'] = true;
 
 window.setSyncStockView = function(view) {
-    ['ejecutar', 'configurar', 'alertas'].forEach(function(v) {
+    ['ejecutar', 'configurar'].forEach(function(v) {
         var el = document.getElementById('syncstock-view-' + v);
         if (el) el.classList.toggle('hidden', v !== view);
         var btn = document.getElementById('syncstock-view-btn-' + v);
@@ -2131,98 +2083,12 @@ window.setSyncStockView = function(view) {
     if (!window._syncStockLoadedViews[view]) {
         window._syncStockLoadedViews[view] = true;
         if (view === 'configurar') distLoadData();
-        if (view === 'alertas') alertasLoadData();
     }
 };
 
 if ('{{ view }}' === 'configurar') {
     distLoadData();
 }
-if ('{{ view }}' === 'alertas') {
-    alertasLoadData();
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Alertas de Stock — órdenes recientes (7 cuentas) sin stock disponible en BM
-// Paginación: mismo patrón de partials/products_listings.html (10/página,
-// slice + paginador con window['<id>_go']), local a esta vista.
-// ════════════════════════════════════════════════════════════════════════════
-var _alertasRowsHtml = [];
-var _ALERTAS_PAGE_SIZE = 10;
-
-function alertasLoadData() {
-    fetch('/api/stock/realtime-alerts?limit=200')
-        .then(function(r) { return r.json(); })
-        .then(function(d) {
-            var rows = d.rows || [];
-            if (!rows.length) {
-                document.getElementById('alertas-tbody').innerHTML =
-                    '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock detectadas todavía — todo con inventario disponible.</td></tr>';
-                document.getElementById('alertas-pagination').innerHTML = '';
-                return;
-            }
-            _alertasRowsHtml = rows.map(function(row) {
-                var availNum = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
-                    ? '<span class="text-gray-400">sin dato</span>'
-                    : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
-                var origPriceLabel = row.retail_ph ? ('$' + Math.round(row.retail_ph) + ' USD') : '';
-                var avail = availNum + (origPriceLabel ? '<div class="text-gray-400 whitespace-nowrap" style="font-size:10px">' + origPriceLabel + '</div>' : '');
-                var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
-                var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
-                var sugerencias = row.sugerencias || [];
-                var sugHtml = '<span class="text-gray-400 text-xs">sin sugerencia (mismo tamaño/marca con stock)</span>';
-                if (sugerencias.length) {
-                    var s = sugerencias[0];
-                    sugHtml =
-                        '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (s.title || '').replace(/"/g, '&quot;') + '">' +
-                            '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
-                        '</div>' +
-                        '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
-                }
-                return '<tr class="border-t border-gray-100">' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.order_id + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.sku + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-600 align-top" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + (row.account_name || row.account_id) + '</td>' +
-                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
-                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + avail + '</td>' +
-                    '<td class="px-3 py-2.5 align-top">' + sugHtml + '</td>' +
-                    '</tr>';
-            });
-            window['alertas-pagination_go'](1);
-        })
-        .catch(function() {
-            document.getElementById('alertas-tbody').innerHTML =
-                '<tr><td colspan="8" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
-        });
-}
-
-// Auto-refresh cada 30s mientras la sub-vista esté visible
-setInterval(function() {
-    var view = document.getElementById('syncstock-view-alertas');
-    if (view && !view.classList.contains('hidden')) alertasLoadData();
-}, 30000);
-
-window['alertas-pagination_go'] = function(page) {
-    var total = _alertasRowsHtml.length;
-    var totalPages = Math.max(1, Math.ceil(total / _ALERTAS_PAGE_SIZE));
-    var p = Math.min(Math.max(1, page), totalPages);
-    var start = (p - 1) * _ALERTAS_PAGE_SIZE, end = Math.min(start + _ALERTAS_PAGE_SIZE, total);
-    document.getElementById('alertas-tbody').innerHTML = _alertasRowsHtml.slice(start, end).join('');
-    var pag = document.getElementById('alertas-pagination');
-    if (total <= _ALERTAS_PAGE_SIZE) { pag.innerHTML = ''; return; }
-    pag.innerHTML =
-        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 w-full">' +
-        '<span class="text-xs text-gray-400">' + (start + 1) + '–' + end + ' de ' + total + '</span>' +
-        '<div class="flex items-center gap-1">' +
-        '<button onclick="window[\'alertas-pagination_go\'](' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
-        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
-        '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
-        '<button onclick="window[\'alertas-pagination_go\'](' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
-        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
-        '</div></div>';
-};
 
 // ════════════════════════════════════════════════════════════════════════════
 // Configurar — portado de distribucion.html (IDs/funciones con prefijo dist- para
