@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FIX: Retornos Amazon mostraba SKU sin nombre de producto (Quality Score + Top SKUs)
+
+**Archivos:** `app/main.py`, `app/templates/amazon_returns.html`.
+
+Jovan lo reportó con captura tras el fix de arriba: "el sku sin nada de
+información sobre el producto eso es una jalada, en varias secciones
+tienes así". Causa raíz: `_aggregate_amazon_returns_by_sku()` nunca se
+enriquecía con el título real — el campo `title` se inicializaba como
+el propio SKU (fallback permanente, nunca se sobreescribía). Quedaba
+oculto mientras `get_returns_report()` tenía el bug del reportType
+equivocado (fix anterior en esta misma sesión) porque no había datos
+reales fluyendo por ahí; al corregirlo, el hueco de título se volvió
+visible en producción.
+
+- `main.py`: se construye `title_by_order` (desde `product_name` del
+  reporte de devoluciones, título exacto de esa orden) y `title_by_sku`
+  (respaldo desde el catálogo de listings de la cuenta, mismo patrón de
+  `amazon_sku_sales_table`) — se usa el primero disponible en vez de
+  caer siempre al SKU crudo. Beneficia de forma compartida a Quality
+  Score, Top SKUs, y la vista global cross-cuenta (`_compute_unified_returns`
+  usa la misma función).
+- `amazon_returns.html`: Quality Score ahora muestra el título en una
+  línea secundaria (antes `s.sku || s.title` nunca mostraba el título
+  porque sku siempre está presente). Top SKUs ganó cards mobile +
+  columna "SKU / Producto" en la tabla desktop (antes la tabla ni
+  siquiera tenía columna de producto en el HTML).
+
+Verificado en vivo contra cuenta real (VECKTOR): ambas secciones
+muestran títulos reales ("LUBL Smart TV 2025...", "Samsung 55-Inch
+Class Crystal UHD...") en vez de solo el SKU. 0 overflow, 0 errores de
+consola en 375/1920px.
+
+**Pendiente de confirmar con Jovan:** ExclusiveBulbs (cuenta USA) no
+existe en el token store LOCAL de desarrollo (solo VECKTOR y AUTOBOT
+MEXICO) — confirmado que SÍ está conectada y con datos reales en
+producción (Jovan mandó captura del dashboard con 3552 órdenes). La
+feature de comentarios de clientes y este fix de título no tienen
+ningún filtro por cuenta en el código — deberían funcionar igual para
+ExclusiveBulbs, pero no se pudo verificar en vivo contra esa cuenta
+específica por no tener sus tokens en el entorno local.
+
+---
+
 ## 2026-07-21 — FEAT + BUG: comentarios reales de clientes en Retornos Amazon (FBA) — y fix de bug preexistente que dejaba sin datos reales a Quality Score/Top SKUs desde Fase 2.1
 
 **Archivos:** `app/services/amazon_client.py`, `app/main.py`, `app/templates/amazon_returns.html`.
