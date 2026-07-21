@@ -33,7 +33,9 @@
           </div>
         </div>
         <div class="flex items-center gap-3 shrink-0">
-          <!-- Steps indicator -->
+          <!-- Steps indicator — mobile: texto compacto -->
+          <span id="amz-wiz-step-compact" class="sm:hidden text-[10px] font-semibold text-gray-500 whitespace-nowrap">Paso 1</span>
+          <!-- Steps indicator — desktop: dots -->
           <div class="hidden sm:flex items-center gap-1 text-[10px] font-semibold">
             <span id="amz-wiz-step-1" class="w-6 h-6 flex items-center justify-center rounded-full bg-orange-500 text-white">1</span>
             <span class="text-gray-300 text-xs">—</span>
@@ -1193,6 +1195,9 @@ window._amzWizShowTab = function(tab) {
 function _amzWizGoStep(n) {
   if (n > 1 && _wiz.sku) window._wizSaveDraft();   // auto-save cuando avanza de paso
   _wiz.step = n;
+  var stepsForCompact = _wiz.is_new_product ? STEPS_NEW : STEPS_OFFER;
+  var compactEl = document.getElementById('amz-wiz-step-compact');
+  if (compactEl) compactEl.textContent = 'Paso ' + n + ' de ' + stepsForCompact.length;
   [1, 2, 3, 4].forEach(function(i) {
     document.getElementById('amz-wiz-panel-' + i).classList.add('hidden');
     var dot = document.getElementById('amz-wiz-step-' + i);
