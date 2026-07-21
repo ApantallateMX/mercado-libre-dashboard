@@ -341,11 +341,28 @@
           <h2 class="text-sm font-bold text-gray-700">Órdenes sin stock — en el momento</h2>
           <p class="text-xs text-gray-400 mt-0.5">Feed en vivo: cada orden de ML se revisa contra BM apenas entra (webhook). Se actualiza solo cada 30s. Amazon: pendiente (Fase 2, requiere infraestructura AWS).</p>
         </div>
-        <button onclick="alertasLoadData()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
-          ↻ Actualizar
-        </button>
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs">
+            <button id="alertas-tab-live" onclick="setAlertasSubView('live')"
+                    class="px-3 py-2 bg-indigo-600 text-white font-semibold transition">En vivo</button>
+            <button id="alertas-tab-history" onclick="setAlertasSubView('history')"
+                    class="px-3 py-2 bg-white text-gray-500 hover:bg-gray-50 transition">📋 Historial</button>
+          </div>
+          <button onclick="alertasLoadData()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
+            ↻ Actualizar
+          </button>
+        </div>
       </div>
     </div>
+
+    <!-- ═══ Aviso: SKUs puestos en 0 que ya tienen stock de nuevo en BM ═══ -->
+    <div id="restock-watch-section" class="hidden bg-amber-50 rounded-2xl shadow-sm border border-amber-200 p-4">
+      <h3 class="text-sm font-bold text-amber-800 mb-2">✅ Ya hay stock disponible — reactivar</h3>
+      <p class="text-xs text-amber-700 mb-3">Estos SKUs se pusieron en 0 por falta de inventario y BinManager ya muestra stock disponible. Usa Concentración de Stock para decidir en qué cuenta reactivarlos.</p>
+      <div id="restock-watch-list" class="space-y-2"></div>
+    </div>
+
+    <div id="alertas-view-live">
 
     <div id="alertas-kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"></div>
 
@@ -374,18 +391,95 @@
               <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
               <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
               <th class="px-3 py-3 text-left">Sugerencia</th>
+              <th class="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
             </tr>
           </thead>
           <tbody id="alertas-tbody">
-            <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+            <tr><td colspan="9" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
           </tbody>
         </table>
       </div>
       <div id="alertas-pagination"></div>
     </div>
 
+    </div><!-- /alertas-view-live -->
+
+    <!-- ═══ Historial de resoluciones ═══ -->
+    <div id="alertas-view-history" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200">
+      <div class="md:hidden space-y-2 p-3" id="alertas-history-cards"></div>
+      <div class="hidden md:block overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+            <tr>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Fecha</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">SKU original</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Tipo</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">SKU sustituto</th>
+              <th class="px-3 py-3 text-left">Nota</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Usuario</th>
+            </tr>
+          </thead>
+          <tbody id="alertas-history-tbody">
+            <tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
 </div>
 <!-- /ventas-view-alertas_stock -->
+
+<!-- ═══ Modal: registrar sustitución ═══ -->
+<div id="substitution-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-end md:items-center justify-center p-0 md:p-4">
+  <div class="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl max-h-[90vh] overflow-y-auto">
+    <div class="p-5 border-b border-gray-100">
+      <h3 class="text-sm font-bold text-gray-800">🔁 Registrar sustitución</h3>
+      <p class="text-xs text-gray-400 mt-0.5">Orden <span id="sub-modal-order" class="font-mono"></span> · SKU original <span id="sub-modal-sku" class="font-mono"></span></p>
+    </div>
+    <div class="p-5 space-y-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">SKU del producto que se mandó en su lugar</label>
+        <input type="text" id="sub-modal-substitute" placeholder="ej: SNTV004254"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-400 transition">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Nota — respaldo de que el cliente aceptó el cambio <span class="text-red-400">*</span></label>
+        <textarea id="sub-modal-note" rows="3" placeholder="ej: cliente aceptó el cambio por WhatsApp el 21/07"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400 transition"></textarea>
+      </div>
+      <p id="sub-modal-error" class="hidden text-xs text-red-500"></p>
+    </div>
+    <div class="p-5 border-t border-gray-100 flex flex-col sm:flex-row gap-2 sm:justify-end">
+      <button onclick="closeSubstitutionModal()" class="w-full sm:w-auto px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
+      <button onclick="submitSubstitution()" id="sub-modal-confirm-btn"
+              class="w-full sm:w-auto px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold transition">Registrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Modal: poner en 0 en todas las cuentas ═══ -->
+<div id="zerostock-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-end md:items-center justify-center p-0 md:p-4">
+  <div class="bg-white w-full md:max-w-lg rounded-t-2xl md:rounded-2xl max-h-[90vh] overflow-y-auto">
+    <div class="p-5 border-b border-gray-100">
+      <h3 class="text-sm font-bold text-gray-800">⛔ Poner stock en 0 — SKU <span id="zero-modal-sku" class="font-mono"></span></h3>
+      <p class="text-xs text-gray-400 mt-0.5">Se pone <code>available_quantity=0</code> en todas las publicaciones activas de este SKU (nunca se pausa). Revisa antes de confirmar.</p>
+    </div>
+    <div class="p-5">
+      <div id="zero-modal-preview" class="text-sm text-gray-500">Cargando vista previa...</div>
+      <div class="mt-3">
+        <label class="block text-xs font-medium text-gray-600 mb-1">Nota (opcional)</label>
+        <input type="text" id="zero-modal-note" placeholder="ej: sin ETA de reposición"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-400 transition">
+      </div>
+    </div>
+    <div class="p-5 border-t border-gray-100 flex flex-col sm:flex-row gap-2 sm:justify-end">
+      <button onclick="closeZeroStockModal()" class="w-full sm:w-auto px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
+      <button onclick="confirmZeroStock()" id="zero-modal-confirm-btn" disabled
+              class="w-full sm:w-auto px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed">Confirmar — poner en 0</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ════════════════════════════════════════════════════════════════════════════
@@ -440,9 +534,248 @@ if ('{{ view }}' === 'alertas_stock') {
 // ════════════════════════════════════════════════════════════════════════════
 // Alertas de Stock (movida de Sync Stock) — feed en vivo de órdenes ML sin stock
 // ════════════════════════════════════════════════════════════════════════════
+var IS_ADMIN_ALERTAS = {{ 'true' if dashboard_user and dashboard_user.role == 'admin' else 'false' }};
 var _alertasRowsHtml = [];
 var _ALERTAS_PAGE_SIZE = 10;
 var _alertasLastLoadTs = 0;
+
+// ─── Sub-vistas: En vivo / Historial ───────────────────────────────────────
+window.setAlertasSubView = function(v) {
+    document.getElementById('alertas-view-live').classList.toggle('hidden', v !== 'live');
+    document.getElementById('alertas-view-history').classList.toggle('hidden', v !== 'history');
+    var liveBtn = document.getElementById('alertas-tab-live');
+    var histBtn = document.getElementById('alertas-tab-history');
+    liveBtn.classList.toggle('bg-indigo-600', v === 'live');
+    liveBtn.classList.toggle('text-white', v === 'live');
+    liveBtn.classList.toggle('font-semibold', v === 'live');
+    liveBtn.classList.toggle('bg-white', v !== 'live');
+    liveBtn.classList.toggle('text-gray-500', v !== 'live');
+    histBtn.classList.toggle('bg-indigo-600', v === 'history');
+    histBtn.classList.toggle('text-white', v === 'history');
+    histBtn.classList.toggle('font-semibold', v === 'history');
+    histBtn.classList.toggle('bg-white', v !== 'history');
+    histBtn.classList.toggle('text-gray-500', v !== 'history');
+    if (v === 'history') loadAlertasHistory();
+};
+
+// ─── Aviso de reactivación (SKUs puestos en 0 que ya tienen stock BM) ──────
+function loadRestockWatch() {
+    fetch('/api/stock/alerts/restock-watch')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            var section = document.getElementById('restock-watch-section');
+            if (!rows.length) { section.classList.add('hidden'); return; }
+            section.classList.remove('hidden');
+            document.getElementById('restock-watch-list').innerHTML = rows.map(function(w) {
+                return '<div class="bg-white rounded-xl border border-amber-100 p-3 flex flex-wrap items-center justify-between gap-2">' +
+                    '<div>' +
+                        '<span class="font-mono text-sm font-semibold text-gray-800">' + w.original_sku + '</span>' +
+                        '<span class="text-xs text-gray-500 ml-2">' + (w.titulo || '') + '</span>' +
+                        '<div class="text-xs text-amber-700 mt-0.5">BM disponible: <b>' + w.bm_available_qty + '</b> · puesto en 0 por ' + (w.username || '—') + '</div>' +
+                    '</div>' +
+                    '<div class="flex items-center gap-2">' +
+                        '<a href="/stock-sync?sku=' + encodeURIComponent(w.original_sku) + '" target="_blank" ' +
+                           'class="text-xs bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-lg px-3 py-1.5 font-medium transition whitespace-nowrap">⚡ Ir a Concentración</a>' +
+                        '<button onclick="dismissRestockWatch(' + w.id + ')" ' +
+                                'class="text-xs bg-gray-50 border border-gray-200 text-gray-500 hover:bg-gray-100 rounded-lg px-3 py-1.5 transition whitespace-nowrap">Descartar</button>' +
+                    '</div>' +
+                '</div>';
+            }).join('');
+        })
+        .catch(function() {});
+}
+
+window.dismissRestockWatch = function(id) {
+    fetch('/api/stock/alerts/restock-dismiss', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id})
+    }).then(function() { loadRestockWatch(); }).catch(function() {});
+};
+
+loadRestockWatch();
+setInterval(loadRestockWatch, 60000);
+
+// ─── Historial de resoluciones ─────────────────────────────────────────────
+function loadAlertasHistory() {
+    var tbody = document.getElementById('alertas-history-tbody');
+    var cards = document.getElementById('alertas-history-cards');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
+    fetch('/api/stock/alerts/resolutions?limit=100')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
+                cards.innerHTML = '<p class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</p>';
+                return;
+            }
+            tbody.innerHTML = rows.map(function(h) {
+                var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                var tipoBadge = h.resolution_type === 'substitution'
+                    ? '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">🔁 Sustitución</span>'
+                    : '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">⛔ Sin stock</span>';
+                return '<tr class="border-t border-gray-100">' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + fecha + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + h.order_id + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + h.original_sku + '</td>' +
+                    '<td class="px-3 py-2.5">' + tipoBadge + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + (h.substitute_sku || '—') + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-600">' + (h.note || '—') + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + h.username + '</td>' +
+                    '</tr>';
+            }).join('');
+            cards.innerHTML = rows.map(function(h) {
+                var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                var tipoBadge = h.resolution_type === 'substitution'
+                    ? '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">🔁 Sustitución</span>'
+                    : '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">⛔ Sin stock</span>';
+                return '<div class="border border-gray-100 rounded-xl p-3">' +
+                    '<div class="flex items-center justify-between gap-2">' +
+                        '<span class="font-mono text-sm font-semibold">' + h.original_sku + '</span>' +
+                        tipoBadge +
+                    '</div>' +
+                    '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                        '<span>' + fecha + '</span>' +
+                        '<span>Orden <span class="font-mono">' + h.order_id + '</span></span>' +
+                        '<span>' + h.username + '</span>' +
+                    '</div>' +
+                    (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span></div>' : '') +
+                    (h.note ? '<p class="text-xs text-gray-500 mt-1">' + h.note + '</p>' : '') +
+                '</div>';
+            }).join('');
+        })
+        .catch(function() {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
+        });
+}
+
+// ─── Modal: registrar sustitución ──────────────────────────────────────────
+var _subModalCtx = null;
+
+window.openSubstitutionModal = function(orderId, sku, platform, accountId, suggestedSku) {
+    _subModalCtx = {orderId: orderId, sku: sku, platform: platform, accountId: accountId};
+    document.getElementById('sub-modal-order').textContent = orderId;
+    document.getElementById('sub-modal-sku').textContent = sku;
+    document.getElementById('sub-modal-substitute').value = suggestedSku || '';
+    document.getElementById('sub-modal-note').value = '';
+    document.getElementById('sub-modal-error').classList.add('hidden');
+    document.getElementById('substitution-modal').classList.remove('hidden');
+};
+
+window.closeSubstitutionModal = function() {
+    document.getElementById('substitution-modal').classList.add('hidden');
+    _subModalCtx = null;
+};
+
+window.submitSubstitution = function() {
+    if (!_subModalCtx) return;
+    var substituteSku = document.getElementById('sub-modal-substitute').value.trim();
+    var note = document.getElementById('sub-modal-note').value.trim();
+    var errEl = document.getElementById('sub-modal-error');
+    if (!substituteSku || !note) {
+        errEl.textContent = 'El SKU sustituto y la nota son obligatorios.';
+        errEl.classList.remove('hidden');
+        return;
+    }
+    var btn = document.getElementById('sub-modal-confirm-btn');
+    btn.disabled = true; btn.textContent = 'Guardando...';
+    fetch('/api/stock/alerts/resolve-substitution', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            order_id: _subModalCtx.orderId, sku: _subModalCtx.sku,
+            platform: _subModalCtx.platform, account_id: _subModalCtx.accountId,
+            substitute_sku: substituteSku, note: note,
+        })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (d.ok) {
+            closeSubstitutionModal();
+            if (window.showToast) showToast('Sustitución registrada', 'success');
+            alertasLoadData();
+        } else {
+            errEl.textContent = d.detail || 'Error al registrar la sustitución.';
+            errEl.classList.remove('hidden');
+        }
+    })
+    .catch(function() {
+        errEl.textContent = 'Error de conexión.';
+        errEl.classList.remove('hidden');
+    })
+    .finally(function() {
+        btn.disabled = false; btn.textContent = 'Registrar';
+    });
+};
+
+// ─── Modal: poner en 0 en todas las cuentas ────────────────────────────────
+var _zeroModalSku = null;
+
+window.openZeroStockModal = function(sku) {
+    _zeroModalSku = sku;
+    document.getElementById('zero-modal-sku').textContent = sku;
+    document.getElementById('zero-modal-note').value = '';
+    document.getElementById('zero-modal-preview').textContent = 'Cargando vista previa...';
+    document.getElementById('zero-modal-confirm-btn').disabled = true;
+    document.getElementById('zerostock-modal').classList.remove('hidden');
+    fetch('/api/stock/alerts/zero-stock-preview?sku=' + encodeURIComponent(sku))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var preview = document.getElementById('zero-modal-preview');
+            var toZero = d.to_zero || [];
+            var full = d.full_skipped || [];
+            if (!toZero.length && !full.length) {
+                preview.innerHTML = '<p class="text-amber-600">No se encontró ninguna publicación con este SKU en ninguna cuenta ML.</p>';
+                return;
+            }
+            var html = '';
+            if (toZero.length) {
+                html += '<p class="text-xs text-gray-500 mb-2">Se pondrá <b>available_quantity=0</b> en:</p>';
+                html += '<ul class="space-y-1">' + toZero.map(function(i) {
+                    return '<li class="flex items-center justify-between text-xs bg-red-50 rounded-lg px-3 py-2">' +
+                        '<span>' + i.nickname + ' · <span class="font-mono">' + i.item_id + '</span></span>' +
+                        '<span class="font-semibold">' + i.available_quantity + ' → 0</span></li>';
+                }).join('') + '</ul>';
+            }
+            if (full.length) {
+                html += '<p class="text-xs text-gray-400 mt-3">FULL (no se toca, lo gestiona MeLi Fulfillment): ' +
+                    full.map(function(i){ return i.nickname; }).join(', ') + '</p>';
+            }
+            preview.innerHTML = html;
+            document.getElementById('zero-modal-confirm-btn').disabled = toZero.length === 0;
+        })
+        .catch(function() {
+            document.getElementById('zero-modal-preview').innerHTML = '<p class="text-red-500">Error al cargar la vista previa.</p>';
+        });
+};
+
+window.closeZeroStockModal = function() {
+    document.getElementById('zerostock-modal').classList.add('hidden');
+    _zeroModalSku = null;
+};
+
+window.confirmZeroStock = function() {
+    if (!_zeroModalSku) return;
+    var note = document.getElementById('zero-modal-note').value.trim();
+    var btn = document.getElementById('zero-modal-confirm-btn');
+    btn.disabled = true; btn.textContent = 'Aplicando...';
+    fetch('/api/stock/alerts/zero-stock', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sku: _zeroModalSku, note: note})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        closeZeroStockModal();
+        if (window.showToast) showToast(d.summary || (d.ok ? 'Stock puesto en 0' : 'Terminado con errores'), d.ok ? 'success' : 'error');
+        alertasLoadData();
+    })
+    .catch(function() {
+        if (window.showToast) showToast('Error al poner stock en 0', 'error');
+    })
+    .finally(function() {
+        btn.disabled = false; btn.textContent = 'Confirmar — poner en 0';
+    });
+};
 
 function _alertasDensity(n) {
     if (n <= 4)  return { pad: 'py-4',   text: 'text-sm', clamp: 3 };
@@ -504,7 +837,7 @@ function _alertasRenderContext(rows) {
 function alertasLoadData() {
     var tbody = document.getElementById('alertas-tbody');
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
     fetch('/api/stock/realtime-alerts?limit=200')
         .then(function(r) { return r.json(); })
         .then(function(d) {
@@ -544,6 +877,12 @@ function alertasLoadData() {
                         '</div>' +
                         '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
                 }
+                var suggestedSku = sugerencias.length ? sugerencias[0].sku : '';
+                var _subArgs = "'" + row.order_id + "','" + row.sku + "','" + (row.platform || 'ml') + "','" + (row.account_id || '') + "','" + suggestedSku + "'";
+                var actionsHtml = '<div class="flex flex-col gap-1">' +
+                    '<button onclick="openSubstitutionModal(' + _subArgs + ')" class="text-xs bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🔁 Sustituir</button>' +
+                    (IS_ADMIN_ALERTAS ? '<button onclick="openZeroStockModal(\'' + row.sku + '\')" class="text-xs bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">⛔ Sin stock</button>' : '') +
+                    '</div>';
                 var tr = '<tr class="border-t border-gray-100">' +
                     '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.order_id + '</td>' +
@@ -553,6 +892,7 @@ function alertasLoadData() {
                     '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + avail + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' align-top">' + sugHtml + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' text-center align-top">' + actionsHtml + '</td>' +
                     '</tr>';
                 var card = '<div class="border border-gray-100 rounded-xl p-3">' +
                     '<div class="flex items-center justify-between gap-2">' +
@@ -567,6 +907,10 @@ function alertasLoadData() {
                         '<span>Disp. BM ' + avail + '</span>' +
                     '</div>' +
                     '<div class="mt-2 pt-2 border-t border-gray-50">' + sugHtml + '</div>' +
+                    '<div class="mt-2 pt-2 border-t border-gray-50 flex flex-wrap gap-2">' +
+                        '<button onclick="openSubstitutionModal(' + _subArgs + ')" class="text-xs bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 rounded-lg px-2 py-1.5 font-medium transition">🔁 Sustituir</button>' +
+                        (IS_ADMIN_ALERTAS ? '<button onclick="openZeroStockModal(\'' + row.sku + '\')" class="text-xs bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-lg px-2 py-1.5 font-medium transition">⛔ Sin stock</button>' : '') +
+                    '</div>' +
                 '</div>';
                 return { tr: tr, card: card };
             });
@@ -574,7 +918,7 @@ function alertasLoadData() {
         })
         .catch(function() {
             document.getElementById('alertas-tbody').innerHTML =
-                '<tr><td colspan="8" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
+                '<tr><td colspan="9" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
         });
 }
 

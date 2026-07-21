@@ -225,6 +225,8 @@ ACTION_META: dict = {
     "ml_attributes_update":("⚙", "bg-gray-50 text-gray-600",    "Cambio atributos ML"),
     "ml_item_closed":     ("🚫", "bg-red-50 text-red-600",       "Cerró listing ML"),
     "ml_concentration":   ("⚡", "bg-teal-50 text-teal-700",     "Concentración stock"),
+    "stock_order_substitution": ("🔁", "bg-purple-50 text-purple-700", "Sustitución de producto"),
+    "stock_bulk_zero":    ("⛔", "bg-red-50 text-red-700",       "Stock en 0 (sin inventario)"),
     # Amazon acciones
     "amz_price_update":   ("🏷", "bg-yellow-50 text-yellow-700", "Cambio precio Amazon"),
     "amz_listing_update": ("✏️", "bg-orange-50 text-orange-700", "Editó listing Amazon"),
@@ -238,7 +240,7 @@ ACTION_META: dict = {
 }
 
 
-_CRITICAL_ACTIONS = {"ml_status_update", "ml_item_closed", "ml_concentration"}
+_CRITICAL_ACTIONS = {"ml_status_update", "ml_item_closed", "ml_concentration", "stock_bulk_zero"}
 
 from datetime import datetime, timezone, timedelta as _timedelta
 _TJ_TZ = timezone(_timedelta(hours=-7))  # Tijuana = UTC-7 (sin cambio de horario)

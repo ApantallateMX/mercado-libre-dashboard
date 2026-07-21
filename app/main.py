@@ -14030,6 +14030,166 @@ async def realtime_stock_alerts(request: Request, limit: int = 100):
     return JSONResponse({"rows": rows})
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ALERTAS DE STOCK — registro de resoluciones (sustitución / stock en 0)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/stock/alerts/resolve-substitution")
+async def resolve_stock_alert_substitution(request: Request):
+    """Registra que una orden sin stock se resolvió sustituyendo el producto
+    original por otro — cualquier usuario logueado (mismo alcance que ver
+    las alertas). Body: {order_id, platform, account_id, sku, substitute_sku, note}."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+
+    order_id = (body.get("order_id") or "").strip()
+    sku = (body.get("sku") or "").strip()
+    substitute_sku = (body.get("substitute_sku") or "").strip()
+    note = (body.get("note") or "").strip()
+    platform = (body.get("platform") or "ml").strip()
+    account_id = (body.get("account_id") or "").strip()
+
+    if not order_id or not sku or not substitute_sku:
+        return JSONResponse({"detail": "order_id, sku y substitute_sku son requeridos"}, status_code=400)
+    if not note:
+        return JSONResponse({"detail": "La nota es obligatoria (respaldo de que el cliente aceptó el cambio)"}, status_code=400)
+
+    resolution_id = await token_store.record_stock_alert_resolution(
+        order_id=order_id, platform=platform, account_id=account_id,
+        original_sku=sku, resolution_type="substitution",
+        substitute_sku=substitute_sku, note=note,
+        username=du["username"], user_id=du.get("id"),
+    )
+
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=du["username"], user_id=du.get("id"),
+            action="stock_order_substitution", item_id=sku,
+            detail={"order_id": order_id, "substitute_sku": substitute_sku, "note": note},
+            ip=ip, ml_account=account_id, section="Ventas",
+        )
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "id": resolution_id})
+
+
+@app.get("/api/stock/alerts/zero-stock-preview")
+async def zero_stock_preview(request: Request, sku: str = Query(...)):
+    """Preview de poner stock=0 en todas las cuentas ML para un SKU sin
+    stock — admin-only, no ejecuta ningún cambio."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    sku = sku.split("/")[0].strip()
+    from app.services.stock_concentrator import preview_zero_all
+    result = await preview_zero_all(sku)
+    return JSONResponse(result)
+
+
+@app.post("/api/stock/alerts/zero-stock")
+async def zero_stock_execute(request: Request):
+    """Ejecuta poner stock=0 en todas las cuentas ML para un SKU sin stock
+    y resuelve TODAS las alertas activas de ese SKU de un jalón (no solo la
+    orden que se estaba viendo) — admin-only. Body: {sku, note}."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+
+    sku = (body.get("sku") or "").strip().split("/")[0].strip()
+    note = (body.get("note") or "").strip()
+    if not sku:
+        return JSONResponse({"detail": "sku es requerido"}, status_code=400)
+
+    from app.services.stock_concentrator import execute_zero_all
+    result = await execute_zero_all(sku)
+
+    # Sincronizar cache local de ml_listings — que el resto del dashboard
+    # vea qty=0 sin esperar el sync periódico de 3 min.
+    zeroed_ok = [z for z in result.get("zeroed", []) if z.get("ok") and z.get("item_id")]
+    if zeroed_ok:
+        await asyncio.gather(*[
+            token_store.update_ml_listing_qty(z["item_id"], 0) for z in zeroed_ok
+        ], return_exceptions=True)
+
+    # Registrar la resolución para TODAS las alertas activas de este SKU.
+    orders_resolved = 0
+    try:
+        active_alerts = await token_store.get_realtime_stock_alerts(limit=500)
+        matching = [a for a in active_alerts if a.get("sku") == sku]
+        for alert in matching:
+            await token_store.record_stock_alert_resolution(
+                order_id=alert["order_id"], platform=alert.get("platform", "ml"),
+                account_id=alert.get("account_id", ""), original_sku=sku,
+                resolution_type="zeroed_stock", substitute_sku="", note=note,
+                username=du["username"], user_id=du.get("id"),
+            )
+        orders_resolved = len(matching)
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=du["username"], user_id=du.get("id"),
+            action="stock_bulk_zero", item_id=sku,
+            detail={"note": note, "orders_resolved": orders_resolved, "summary": result.get("summary", "")},
+            ip=ip, ml_account="", section="Ventas",
+        )
+    except Exception:
+        pass
+
+    result["orders_resolved"] = orders_resolved
+    return JSONResponse(result)
+
+
+@app.get("/api/stock/alerts/resolutions")
+async def stock_alert_resolutions_history(request: Request, limit: int = 50):
+    """Historial de resoluciones (sustituciones + stock en 0) — pestaña
+    'Historial' de Alertas de Stock."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    limit = max(1, min(limit, 200))
+    rows = await token_store.get_stock_alert_resolutions(limit=limit)
+    return JSONResponse({"rows": rows})
+
+
+@app.get("/api/stock/alerts/restock-watch")
+async def stock_alerts_restock_watch(request: Request):
+    """SKUs que se pusieron en 0 por falta de stock y que YA tienen
+    inventario disponible de nuevo en BM (bm_sku_master, sincronizado
+    periódicamente) — para el aviso de reactivación."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    rows = await token_store.get_pending_restock_watches()
+    return JSONResponse({"rows": rows})
+
+
+@app.post("/api/stock/alerts/restock-dismiss")
+async def stock_alerts_restock_dismiss(request: Request):
+    """Marca un aviso de reactivación como atendido. Body: {id}."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    resolution_id = body.get("id")
+    if not resolution_id:
+        return JSONResponse({"detail": "id es requerido"}, status_code=400)
+    await token_store.mark_resolution_reactivated(int(resolution_id), du["username"])
+    return JSONResponse({"ok": True})
+
+
 @app.get("/api/stock/bm-sync-log")
 async def bm_sync_log_endpoint():
     """Historial de ejecuciones del prewarm BM — para la tarjeta Caché de Stock BM.

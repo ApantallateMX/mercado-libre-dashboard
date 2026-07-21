@@ -474,6 +474,88 @@ async def execute_concentration(
     }
 
 
+# ─── Poner stock=0 en TODAS las cuentas — Alertas de Stock sin reposición ───
+# A diferencia de execute_concentration (que reparte stock real a un
+# ganador), aquí no hay ganador: BM no tiene inventario para repartir, así
+# que se zerea todo lo no-FULL en todas las cuentas donde exista el SKU.
+
+async def preview_zero_all(base_sku: str) -> dict:
+    """Preview de poner stock=0 en TODAS las cuentas para un SKU."""
+    account_data = await find_sku_across_accounts(base_sku)
+
+    items_flat = []
+    for uid, data in account_data.items():
+        for item in data.get("items", []):
+            item_id = item.get("id", "")
+            if not item_id:
+                continue
+            avail = item.get("available_quantity", 0) or 0
+            logistic = item.get("shipping", {}).get("logistic_type", "")
+            is_full = logistic == "fulfillment"
+            items_flat.append({
+                "user_id": uid,
+                "nickname": data.get("nickname", uid),
+                "item_id": item_id,
+                "title": item.get("title", ""),
+                "available_quantity": avail,
+                "is_full": is_full,
+            })
+
+    full_items = [i for i in items_flat if i["is_full"]]
+    to_zero = [i for i in items_flat if not i["is_full"]]
+
+    return {
+        "sku": base_sku,
+        "found": len(items_flat) > 0,
+        "to_zero": to_zero,
+        "full_skipped": full_items,
+    }
+
+
+async def execute_zero_all(base_sku: str) -> dict:
+    """Ejecuta poner stock=0 en todas las cuentas (excepto FULL, cuyo
+    inventario lo gestiona MeLi Fulfillment) para un SKU sin stock en BM."""
+    preview = await preview_zero_all(base_sku)
+    to_zero = preview["to_zero"]
+
+    if not to_zero:
+        return {
+            "ok": True,
+            "sku": base_sku,
+            "zeroed": [],
+            "full_skipped": preview["full_skipped"],
+            "errors": [],
+            "summary": "No se encontraron publicaciones activas (no-FULL) con este SKU en ninguna cuenta.",
+        }
+
+    async def _zero_one(item):
+        if (item.get("available_quantity") or 0) == 0:
+            return {"ok": True, "action": "already_zero", **item}
+        try:
+            client = await get_meli_client(user_id=item["user_id"])
+            await client.update_item_stock(item["item_id"], 0)
+            await client.close()
+            return {"ok": True, "action": "zeroed", **item}
+        except Exception as e:
+            return {"ok": False, "action": "zero_failed", "error": str(e), **item}
+
+    results = await asyncio.gather(*[_zero_one(i) for i in to_zero])
+    errors = [r for r in results if not r.get("ok")]
+
+    return {
+        "ok": len(errors) == 0,
+        "sku": base_sku,
+        "zeroed": results,
+        "full_skipped": preview["full_skipped"],
+        "errors": errors,
+        "summary": (
+            f"Puestos a 0: {len(to_zero) - len(errors)}/{len(to_zero)} publicaciones. "
+            f"FULL no tocados: {len(preview['full_skipped'])}. "
+            f"Errores: {len(errors)}."
+        ),
+    }
+
+
 # ─── Scan: detectar SKUs candidatos a concentración ─────────────────────────
 
 async def scan_low_stock_skus(products: list, threshold: int = 5) -> dict:

@@ -901,6 +901,34 @@ async def init_db():
         except Exception:
             pass
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: stock_alert_resolutions — registro de qué se hizo con cada
+        # orden sin stock (Alertas de Stock): se sustituyó por otro SKU, o
+        # se puso stock=0 en todas las cuentas por falta de inventario.
+        # reactivated_at marca cuándo se atendió el aviso de "ya hay stock
+        # de nuevo" (ver get_pending_restock_watches) — hasta entonces el
+        # SKU sigue en la lista de reactivación pendiente si BM ya tiene
+        # disponible > 0.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_alert_resolutions (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id            TEXT NOT NULL,
+                platform            TEXT NOT NULL DEFAULT 'ml',
+                account_id          TEXT NOT NULL DEFAULT '',
+                original_sku        TEXT NOT NULL,
+                resolution_type     TEXT NOT NULL,
+                substitute_sku      TEXT NOT NULL DEFAULT '',
+                note                TEXT NOT NULL DEFAULT '',
+                username            TEXT NOT NULL DEFAULT '',
+                user_id             INTEGER,
+                ts                  REAL NOT NULL DEFAULT 0,
+                reactivated_at      REAL,
+                reactivated_by      TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_sar_sku ON stock_alert_resolutions(original_sku)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_sar_ts ON stock_alert_resolutions(ts)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
         # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
@@ -1549,6 +1577,84 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
         # el precio del original contra el de la sugerencia en la misma vista.
         row["retail_ph"] = _retail_ph
     return rows
+
+
+# ─── stock_alert_resolutions helpers ─────────────────────────────────────────
+
+async def record_stock_alert_resolution(
+    order_id: str, platform: str, account_id: str, original_sku: str,
+    resolution_type: str, substitute_sku: str, note: str,
+    username: str, user_id: int | None,
+) -> int:
+    """Registra cómo se resolvió una orden sin stock — sustitución de
+    producto o stock puesto en 0. resolution_type: 'substitution' |
+    'zeroed_stock'."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("""
+            INSERT INTO stock_alert_resolutions
+                (order_id, platform, account_id, original_sku, resolution_type,
+                 substitute_sku, note, username, user_id, ts)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (order_id, platform, account_id, original_sku, resolution_type,
+              substitute_sku, note, username, user_id, _t.time()))
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
+    """Historial de resoluciones, más reciente primero — para la pestaña
+    'Historial' dentro de Alertas de Stock."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT id, order_id, platform, account_id, original_sku,
+                   resolution_type, substitute_sku, note, username, ts,
+                   reactivated_at, reactivated_by
+            FROM stock_alert_resolutions
+            ORDER BY ts DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_pending_restock_watches() -> list[dict]:
+    """SKUs que se pusieron en 0 por falta de stock y que YA tienen stock
+    disponible de nuevo en BM (bm_sku_master, sincronizado periódicamente
+    — no es llamada en vivo a BM) — para el aviso 'Ya hay stock, reactivar'.
+    Solo el evento de zeroed_stock más reciente por SKU que no se haya
+    marcado como reactivado."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT sar.id, sar.original_sku, sar.order_id, sar.username, sar.ts,
+                   COALESCE(bsm.title, '') AS titulo,
+                   COALESCE(bsm.available_qty, 0) AS bm_available_qty
+            FROM stock_alert_resolutions sar
+            JOIN bm_sku_master bsm ON bsm.sku = sar.original_sku
+            WHERE sar.resolution_type = 'zeroed_stock'
+              AND sar.reactivated_at IS NULL
+              AND bsm.available_qty > 0
+              AND sar.id = (
+                  SELECT MAX(id) FROM stock_alert_resolutions
+                  WHERE original_sku = sar.original_sku
+                    AND resolution_type = 'zeroed_stock'
+              )
+            ORDER BY sar.ts DESC
+        """)
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_resolution_reactivated(resolution_id: int, username: str) -> None:
+    """Marca un aviso de reactivación como atendido — deja de aparecer en
+    get_pending_restock_watches aunque BM siga con stock > 0."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE stock_alert_resolutions SET reactivated_at = ?, reactivated_by = ? WHERE id = ?",
+            (_t.time(), username, resolution_id),
+        )
+        await db.commit()
 
 
 # ─── ml_message_views helpers ────────────────────────────────────────────────
