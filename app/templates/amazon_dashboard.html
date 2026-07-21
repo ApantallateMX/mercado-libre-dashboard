@@ -449,7 +449,7 @@
   </div>
 
   <!-- Barra de acciones bulk (aparece al seleccionar) -->
-  <div id="amz-bulk-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4">
+  <div id="amz-bulk-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-3 rounded-2xl shadow-2xl flex flex-wrap items-center justify-center gap-3 gap-y-2 max-w-[92vw]">
     <span class="text-sm font-medium"><span id="amz-bulk-count">0</span> seleccionados</span>
     <button onclick="executeBulkAction('set_qty_zero')" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">Qty 0</button>
     <button onclick="executeBulkAction('reactivate_fba')" class="bg-green-500 hover:bg-green-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">▶ Activar FBA</button>
@@ -459,7 +459,7 @@
   <!-- Configuración de threshold -->
   <div class="mt-6 bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <h4 class="font-medium text-gray-700 mb-3">⚙️ Configuración de alertas de stock</h4>
-    <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-3">
       <label class="text-sm text-gray-600">Alertar cuando FBA stock sea menor a</label>
       <input type="number" id="amz-threshold-input" min="0" max="999" value="5"
              class="w-20 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-center">
@@ -510,7 +510,7 @@
 
   <!-- Tabla de restock -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
       <div>
         <h3 class="font-semibold text-gray-800">Calculadora de Reabastecimiento FBA</h3>
         <p class="text-xs text-gray-400 mt-0.5">Velocidad 30d · días de cobertura · qty a pedir</p>
@@ -542,7 +542,7 @@
 
   <!-- Tabla de calidad de listings -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
       <div>
         <h3 class="font-semibold text-gray-800">Calidad de Listings</h3>
         <p class="text-xs text-gray-400 mt-0.5">Score basado en issues, estado y datos del listing</p>
@@ -583,7 +583,7 @@
 
   <!-- Sección 1: Lightning Deals & Best Deals -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
       <div>
         <h3 class="font-semibold text-gray-800">⚡ Lightning Deals & Best Deals</h3>
         <p class="text-xs text-gray-400 mt-0.5">Deals activos y próximos en Amazon MX</p>
@@ -606,14 +606,14 @@
 
   <!-- Sección 2: Precios vs Buy Box -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
       <div>
         <h3 class="font-semibold text-gray-800">📊 Nuestro Precio vs Buy Box</h3>
         <p class="text-xs text-gray-400 mt-0.5">Top productos — gap con el Buy Box actual · Primera carga ~20s</p>
       </div>
       <button onclick="loadCompPricingSection(true)" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻ Actualizar</button>
     </div>
-    <div id="amz-pricing-mini-kpis" class="grid grid-cols-4 gap-px bg-gray-100 border-b border-gray-100"></div>
+    <div id="amz-pricing-mini-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-100 border-b border-gray-100"></div>
     <div id="amz-pricing-table">
       <div class="text-center py-10 text-gray-400 text-sm">Cargando análisis de precios...</div>
     </div>
@@ -621,7 +621,7 @@
 
   <!-- Sección 3: Candidatos a Deal -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
       <div>
         <h3 class="font-semibold text-gray-800">💡 Candidatos a Promoción</h3>
         <p class="text-xs text-gray-400 mt-0.5">Stock alto o ventas bajas — productos ideales para activar con un deal</p>

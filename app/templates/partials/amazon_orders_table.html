@@ -51,7 +51,7 @@
                     <th class="px-3 py-3 text-left whitespace-nowrap">Fecha (CST)</th>
                     <th class="px-3 py-3 text-left">Producto</th>
                     <th class="px-3 py-3 text-left whitespace-nowrap">SKU</th>
-                    <th class="px-3 py-3 text-center whitespace-nowrap">Canal</th>
+                    <th class="px-3 py-3 text-center whitespace-nowrap hidden sm:table-cell">Canal</th>
                     <th class="px-3 py-3 text-right whitespace-nowrap">Total</th>
                     <th class="px-3 py-3 text-center whitespace-nowrap">Estado</th>
                     <th class="px-3 py-3 text-center w-10">▼</th>
@@ -78,7 +78,7 @@
                     </td>
 
                     {# CANAL #}
-                    <td class="px-3 py-2.5 text-center">
+                    <td class="px-3 py-2.5 text-center hidden sm:table-cell">
                         <span class="inline-block text-xs font-semibold px-2 py-0.5 rounded-full {{ order.canal_css }}">
                             {{ order.canal }}
                         </span>

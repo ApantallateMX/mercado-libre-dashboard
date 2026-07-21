@@ -1212,7 +1212,25 @@ function loadAmzSkuSales() {
                     '</tr>';
             });
 
-            wrap.innerHTML = '<table class="w-full"><thead class="bg-gray-50"><tr>' +
+            var cards = rows.map(function(r) {
+                var pctColor = r.pct_recuperado == null ? 'text-gray-400' : (r.pct_recuperado >= 100 ? 'text-green-600' : (r.pct_recuperado >= 70 ? 'text-yellow-600' : 'text-red-600'));
+                return '<div class="border border-gray-100 rounded-xl p-3">' +
+                    '<div class="flex items-center justify-between gap-2">' +
+                        '<span class="font-mono text-sm font-medium text-gray-800">' + r.sku + '</span>' +
+                        '<span class="text-xs font-semibold ' + pctColor + '">' + (r.pct_recuperado != null ? r.pct_recuperado + '%' : '—') + '</span>' +
+                    '</div>' +
+                    '<p class="text-sm text-gray-700 mt-0.5">' + (r.title || r.sku).slice(0, 60) + '</p>' +
+                    '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                        '<span>Cant. <b class="text-gray-700">' + r.units + '</b></span>' +
+                        '<span>Ingreso <b class="text-gray-700">$' + r.revenue_mxn.toLocaleString('es-MX', {maximumFractionDigits: 0}) + ' MXN</b></span>' +
+                        '<span>Stock BM ' + (r.bm_stock != null ? '<b class="text-gray-700">' + r.bm_stock + '</b>' : '—') + '</span>' +
+                    '</div>' +
+                '</div>';
+            });
+            wrap.innerHTML =
+                '<div id="amz-sku-cards" class="md:hidden space-y-2"></div>' +
+                '<div class="hidden md:block overflow-x-auto">' +
+                '<table class="w-full"><thead class="bg-gray-50"><tr>' +
                 '<th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">SKU</th>' +
                 '<th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>' +
                 '<th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cantidad</th>' +
@@ -1221,9 +1239,14 @@ function loadAmzSkuSales() {
                 '<th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Retail PH</th>' +
                 '<th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Ingreso vs Retail PH de BM">% Recuperado</th>' +
                 '</tr></thead><tbody id="amz-sku-tbody" class="divide-y divide-gray-200"></tbody></table>' +
+                '</div>' +
                 '<div id="amz-sku-pag"></div>';
-            window['amz-sku-pag_go'] = function(p) { _renderPaginated(trs, p, 'amz-sku-tbody', 'amz-sku-pag'); };
+            window['amz-sku-pag_go'] = function(p) {
+                _renderPaginated(trs, p, 'amz-sku-tbody', 'amz-sku-pag');
+                _renderPaginated(cards, p, 'amz-sku-cards', null);
+            };
             _renderPaginated(trs, 1, 'amz-sku-tbody', 'amz-sku-pag');
+            _renderPaginated(cards, 1, 'amz-sku-cards', null);
         })
         .catch(function(e) {
             wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error: ' + e.message + '</div>';
@@ -1312,7 +1335,32 @@ async function loadFbaTab() {
       row += '</tr>';
       return row;
     });
-    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[700px]">' +
+    var _fbaCards = items.map(function(item) {
+      var statusColor = {ok:'bg-green-100 text-green-700', warning:'bg-yellow-100 text-yellow-700', critical:'bg-red-100 text-red-700', out:'bg-gray-100 text-gray-600'};
+      var statusLabel = {ok:'OK', warning:'⚠️ Advertencia', critical:'🚨 Crítico', out:'📦 Sin stock'};
+      var sc = statusColor[item.status] || 'bg-gray-100 text-gray-500';
+      var sl = statusLabel[item.status] || item.status;
+      var daysText = item.days_coverage == null ? '∞' : (item.days_coverage > 999 ? '>999' : Math.round(item.days_coverage));
+      var needsAction = item.status === 'critical' || item.status === 'out';
+      return '<div class="' + (item.status === 'critical' ? 'bg-red-50/30 ' : '') + 'border border-gray-100 rounded-xl p-3">' +
+        '<div class="flex items-center justify-between gap-2">' +
+          '<span class="text-xs font-medium text-gray-700">' + item.sku + '</span>' +
+          '<span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + sc + '">' + sl + '</span>' +
+        '</div>' +
+        '<p class="text-xs text-gray-400 truncate mt-0.5">' + (item.title || '—') + '</p>' +
+        '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+          '<span>FBA <b class="' + (item.fba_stock === 0 ? 'text-red-600' : 'text-gray-800') + '">' + item.fba_stock + '</b></span>' +
+          '<span>En camino <b class="text-indigo-600">' + (item.inbound || 0) + '</b></span>' +
+          '<span>Uds/día ' + (item.velocity_daily > 0 ? item.velocity_daily : '—') + '</span>' +
+          '<span>Días cobertura <b class="' + (item.status === 'critical' ? 'text-red-600' : item.status === 'warning' ? 'text-yellow-600' : 'text-gray-700') + '">' + daysText + 'd</b></span>' +
+          (item.restock_qty > 0 ? '<span>Pedir <b class="text-orange-700">' + item.restock_qty + ' u</b></span>' : '') +
+        '</div>' +
+        (needsAction ? '<a href="https://sellercentral.amazon.com.mx/fba/sendtoamazon" target="_blank" class="mt-2 inline-block text-xs bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 rounded px-2 py-1 font-medium transition">📦 Crear envío</a>' : '') +
+      '</div>';
+    });
+    wrap.innerHTML =
+      '<div id="amz-fba-cards" class="md:hidden space-y-2"></div>' +
+      '<div class="hidden md:block overflow-x-auto"><table class="w-full text-sm">' +
       '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
       '<th class="py-3 px-4 font-semibold">SKU / Producto</th>' +
       '<th class="py-3 px-3 text-right font-semibold">FBA Stock</th>' +
@@ -1324,8 +1372,12 @@ async function loadFbaTab() {
       '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
       '</tr></thead><tbody id="amz-fba-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
       '<div id="amz-fba-pag"></div>';
-    window['amz-fba-pag_go'] = function(p) { _renderPaginated(_fbaRows, p, 'amz-fba-tbody', 'amz-fba-pag'); };
+    window['amz-fba-pag_go'] = function(p) {
+      _renderPaginated(_fbaRows, p, 'amz-fba-tbody', 'amz-fba-pag');
+      _renderPaginated(_fbaCards, p, 'amz-fba-cards', null);
+    };
     _renderPaginated(_fbaRows, 1, 'amz-fba-tbody', 'amz-fba-pag');
+    _renderPaginated(_fbaCards, 1, 'amz-fba-cards', null);
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar restock: ' + e.message + '</div>';
   }
@@ -1395,7 +1447,32 @@ async function loadListingsTab() {
       row += '</tr>';
       return row;
     });
-    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[700px]">' +
+    var _lqCards = items.map(function(item) {
+      var gradeColor = {A:'bg-green-100 text-green-700', B:'bg-blue-100 text-blue-700', C:'bg-yellow-100 text-yellow-700', D:'bg-red-100 text-red-700'};
+      var scoreColor = item.score >= 85 ? '#10B981' : (item.score >= 70 ? '#3B82F6' : (item.score >= 55 ? '#D97706' : '#EF4444'));
+      var statusColors = {ACTIVE:'text-green-600', INACTIVE:'text-gray-400', SUPPRESSED:'text-red-600', DISCOVERABLE:'text-yellow-600'};
+      var gc = gradeColor[item.grade] || 'bg-gray-100 text-gray-500';
+      var issuesHtml = (item.issues || []).map(function(i){ return '<div class="text-xs text-red-600 truncate">• ' + i + '</div>'; }).join('');
+      var encodedSku = encodeURIComponent(item.sku);
+      var editUrl = 'https://sellercentral.amazon.com.mx/inventory?search=' + encodedSku;
+      return '<div class="border border-gray-100 rounded-xl p-3">' +
+        '<div class="flex items-center justify-between gap-2">' +
+          '<span class="text-xs font-medium text-gray-700">' + item.sku + '</span>' +
+          '<span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold text-center ' + gc + '">' + item.grade + '</span>' +
+        '</div>' +
+        '<p class="text-xs text-gray-400 truncate mt-0.5">' + (item.title || '—') + '</p>' +
+        '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+          '<span>Score <b style="color:' + scoreColor + '">' + item.score + '</b></span>' +
+          '<span class="font-medium ' + (statusColors[item.status] || 'text-gray-500') + '">' + item.status + '</span>' +
+          (item.bsr_rank != null ? '<span>BSR <b class="text-indigo-600">#' + item.bsr_rank.toLocaleString('es-MX') + '</b></span>' : '') +
+        '</div>' +
+        '<div class="mt-1.5">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</div>' +
+        '<a href="' + editUrl + '" target="_blank" class="mt-2 inline-block text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-1 font-medium transition">✏️ Editar</a>' +
+      '</div>';
+    });
+    wrap.innerHTML =
+      '<div id="amz-lq-cards" class="md:hidden space-y-2"></div>' +
+      '<div class="hidden md:block overflow-x-auto"><table class="w-full text-sm">' +
       '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
       '<th class="py-3 px-4 font-semibold">SKU / Título</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Grado</th>' +
@@ -1406,8 +1483,12 @@ async function loadListingsTab() {
       '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
       '</tr></thead><tbody id="amz-lq-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
       '<div id="amz-lq-pag"></div>';
-    window['amz-lq-pag_go'] = function(p) { _renderPaginated(_lqRows, p, 'amz-lq-tbody', 'amz-lq-pag'); };
+    window['amz-lq-pag_go'] = function(p) {
+      _renderPaginated(_lqRows, p, 'amz-lq-tbody', 'amz-lq-pag');
+      _renderPaginated(_lqCards, p, 'amz-lq-cards', null);
+    };
     _renderPaginated(_lqRows, 1, 'amz-lq-tbody', 'amz-lq-pag');
+    _renderPaginated(_lqCards, 1, 'amz-lq-cards', null);
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar listings: ' + e.message + '</div>';
   }
