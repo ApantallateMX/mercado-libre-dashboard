@@ -4,12 +4,12 @@
 {% block content %}
 <div class="max-w-full mx-auto px-4 py-6">
     <!-- Header -->
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div>
             <h1 class="text-xl font-bold text-gray-900">Centro de Inventario Global</h1>
             <p class="text-xs text-gray-500 mt-1">BinManager × 4 cuentas MeLi — SKUs con stock disponible</p>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
             <div class="flex items-center gap-2">
                 <label class="text-xs text-gray-600">Threshold crítico:</label>
                 <input type="number" id="threshold-input" value="10" min="1" max="50"
@@ -47,7 +47,7 @@
     </div>
 
     <!-- KPI summary (hidden initially) -->
-    <div id="kpi-grid" class="hidden grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+    <div id="kpi-grid" class="hidden grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
         <div class="bg-white rounded-lg shadow p-3 border-l-4 border-indigo-400">
             <p class="text-xs text-gray-500">SKUs Escaneados</p>
             <p class="text-2xl font-bold text-indigo-600" id="kpi-total">—</p>

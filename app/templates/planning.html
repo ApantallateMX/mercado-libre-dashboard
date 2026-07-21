@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="mb-5">
-    <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-3">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">Planeación & Requerimientos</h1>
             <p class="text-gray-500 text-sm">Velocidad de ventas · Cobertura de stock · Orden de separación · Productos sin lanzar</p>
@@ -42,13 +42,13 @@
      BLOQUE 2 — Velocidad de Ventas
 ═══════════════════════════════════════════════════════════ -->
 <div class="bg-white rounded-xl shadow mb-6">
-    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
+    <div class="px-6 py-3 border-b border-gray-100 flex flex-wrap items-center gap-3">
         <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
         </svg>
         <h2 class="text-sm font-bold text-gray-700">Velocidad de Ventas</h2>
         <span class="text-xs text-gray-400">— ML + Amazon por SKU</span>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="ml-auto flex flex-wrap items-center gap-2">
             <button onclick="syncSkus()" id="btn-sync-skus" title="Sincronizar SKUs ML (4 cuentas) + órdenes Amazon (2 cuentas)"
                     class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded border flex items-center gap-1">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
@@ -684,7 +684,7 @@ function _renderOrderSection(d) {
         ' &nbsp;|&nbsp; Meta de cobertura: <strong>' + _target() + ' días</strong>' +
         ' &nbsp;|&nbsp; <strong>' + needReplenish.length + ' productos</strong> a solicitar</div>';
 
-    html += '<table class="w-full text-xs border-collapse" id="order-table">' +
+    html += '<div class="overflow-x-auto"><table class="w-full text-xs border-collapse" id="order-table">' +
         '<thead><tr class="bg-gray-50 border-y border-gray-200 text-[10px] text-gray-500 uppercase">' +
         '<th class="py-2 px-3 text-left">#</th>' +
         '<th class="py-2 px-3 text-left">SKU</th>' +
@@ -724,7 +724,7 @@ function _renderOrderSection(d) {
             '<td class="py-2 px-3"><input type="text" placeholder="Nota..." class="w-full border rounded px-1 py-0.5 text-xs text-gray-600" data-field="note"></td>' +
             '</tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     orderContent.innerHTML = html;
 }
 
