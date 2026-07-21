@@ -17308,8 +17308,11 @@ def _amz_reason_label(reason: str) -> str:
 
 # ── Amazon returns report (razón real, solo FBA) ───────────────────────────────
 # get_refunds_detail() (Finances API) nunca trae razón real — el campo llega vacío.
-# La razón real solo existe en el reporte GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE
-# (Reports API, solo FBA). Cache largo porque generar el reporte es caro (polling).
+# La razón real (y el comentario del cliente) solo existe en el reporte
+# GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA (Reports API, solo FBA). Ese método
+# pedía el reporte equivocado hasta 2026-07-21 (GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE,
+# columnas distintas, siempre devolvía 0 filas) — ver amazon_client.py get_returns_report()
+# para el detalle del bug y su fix. Cache largo porque generar el reporte es caro (polling).
 _amz_returns_report_cache: dict = {}   # {(seller_id, days): (ts, [returns])}
 _AMZ_RETURNS_REPORT_TTL = 3600 * 6    # 6 horas
 
@@ -17956,6 +17959,54 @@ async def amazon_returns_top_skus(
         return {"total": total, "days": days, "products": products}
     except Exception as e:
         return {"error": str(e), "products": [], "total": 0}
+
+
+@app.get("/api/amazon/returns/customer-comments")
+async def amazon_returns_customer_comments(
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """Comentarios reales de clientes en devoluciones — solo FBA (Amazon no
+    expone este campo para MFN). Reusa el mismo reporte cacheado que ya pide
+    _aggregate_amazon_returns_by_sku (customer-comments se descartaba ahí,
+    aquí se expone directo). Jovan pidió esto para Salud/Retornos Amazon
+    después de confirmar que Buyer Messages no es accesible por API."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"error": "No hay cuenta Amazon activa", "rows": [], "total_returns": 0}
+    try:
+        items = await _fetch_amazon_returns_report_cached(sid, days)
+        total_returns = len(items)
+        try:
+            listings = await token_store.get_amazon_listings_for_account(sid)
+            title_map = {l["sku"]: l["title"] for l in listings if l.get("title")}
+        except Exception:
+            title_map = {}
+
+        rows = []
+        for it in items:
+            comment = (it.get("customer_comments") or "").strip()
+            if not comment:
+                continue
+            sku = it.get("sku", "")
+            rows.append({
+                "order_id": it.get("order_id", ""),
+                "sku": sku,
+                "title": it.get("product_name") or title_map.get(sku, sku),
+                "asin": it.get("asin", ""),
+                "return_date": it.get("return_date", ""),
+                "reason": it.get("reason", ""),
+                "reason_label": _amz_reason_label(it.get("reason", "")),
+                "customer_comments": comment,
+                "quantity": it.get("quantity", 1),
+            })
+        rows.sort(key=lambda r: r["return_date"], reverse=True)
+        return {
+            "days": days, "rows": rows,
+            "total_returns": total_returns, "total_with_comments": len(rows),
+        }
+    except Exception as e:
+        return {"error": str(e), "rows": [], "total_returns": 0}
 
 
 def _merge_return_counts(ml_counts: dict, amz_counts: dict) -> dict:

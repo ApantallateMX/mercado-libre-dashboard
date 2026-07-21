@@ -1094,8 +1094,21 @@ class AmazonClient:
 
     async def get_returns_report(self, date_from: str, date_to: str, max_wait_secs: int = 180) -> list:
         """
-        Reporte GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE — devoluciones de inventario
+        Reporte GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA — devoluciones de inventario
         FBA con razón y COMENTARIO REAL DEL CLIENTE (columna customer-comments).
+
+        NOTA HISTÓRICA (2026-07-21): este método pedía antes
+        GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE por error — ese reporte trae
+        columnas Title Case distintas (Order ID, Merchant SKU, Return Reason...)
+        y NO tiene columna de comentario del cliente en absoluto. El parseo de
+        abajo (row.get("sku"), row.get("customer-comments"), etc.) nunca hacía
+        match contra esas columnas, así que este método SIEMPRE devolvía 0 items
+        — confirmado en vivo contra cuenta real (VECKTOR): 0 filas con el reporte
+        viejo, 59 filas con comentarios reales de clientes con el reporte correcto.
+        Verificado que las columnas de GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA
+        SÍ calzan exactamente con el parseo existente (return-date, order-id, sku,
+        asin, product-name, quantity, detailed-disposition, reason,
+        customer-comments) — no hace falta tocar el parseo, solo el reportType.
 
         IMPORTANTE — solo cubre FBA:
             Ventas MFN (envío propio, fulfillment-channel="DEFAULT" en amazon_listings)
@@ -1108,8 +1121,8 @@ class AmazonClient:
                                  si el rango es más amplio, pedir varios reportes.
 
         Returns:
-            Lista de dicts: {order_id, sku, asin, return_date, reason, customer_comments,
-                              disposition, quantity}
+            Lista de dicts: {order_id, sku, asin, product_name, return_date, reason,
+                              customer_comments, disposition, quantity}
         """
         import csv, io as _io
 
@@ -1117,7 +1130,7 @@ class AmazonClient:
         created_before = f"{date_to}T23:59:59Z"
         logger.info(f"[Amazon Reports] Creando reporte de devoluciones FBA {date_from}→{date_to}…")
         body = {
-            "reportType": "GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE",
+            "reportType": "GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA",
             "marketplaceIds": [self.marketplace_id],
             "dataStartTime": created_after,
             "dataEndTime": created_before,
@@ -1160,6 +1173,7 @@ class AmazonClient:
                         "order_id": (row.get("order-id") or "").strip(),
                         "sku": sku,
                         "asin": (row.get("asin") or "").strip(),
+                        "product_name": (row.get("product-name") or "").strip(),
                         "return_date": (row.get("return-date") or "")[:10],
                         "reason": (row.get("reason") or "").strip(),
                         "customer_comments": (row.get("customer-comments") or "").strip(),
