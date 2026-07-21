@@ -17473,21 +17473,38 @@ async def _aggregate_amazon_returns_by_sku(seller_id: str, days: int, nickname: 
         r["order_id"]: r["reason"] for r in reasons_report
         if r.get("order_id") and r.get("reason")
     }
+    # product_name viene directo del reporte de devoluciones (más preciso que
+    # cruzar por SKU, porque es el título exacto de ESE listing/orden). Como
+    # respaldo para refunds sin match en el reporte (típicamente FBM), se usa
+    # el catálogo de listings de la cuenta — antes ninguna de las dos existía
+    # y el título caía siempre al SKU crudo (Jovan lo reportó como "una jalada"
+    # tras ver Quality Score/Top SKUs sin nombre de producto).
+    title_by_order = {
+        r["order_id"]: r["product_name"] for r in reasons_report
+        if r.get("order_id") and r.get("product_name")
+    }
+    try:
+        _listings = await token_store.get_amazon_listings_for_account(seller_id)
+        title_by_sku = {l["sku"]: l["title"] for l in _listings if l.get("title")}
+    except Exception:
+        title_by_sku = {}
 
     counts: dict = {}
     for ref in refunds:
         sku_raw = (ref.get("sku") or "").strip()
         sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
         key = sku if sku else f"amz_{ref.get('order_id', '')}"
-        reason_code = reason_by_order.get(ref.get("order_id", ""), "")
+        order_id = ref.get("order_id", "")
+        reason_code = reason_by_order.get(order_id, "")
         reason_lbl = _amz_reason_label(reason_code) if reason_code else "Devolución Amazon"
         refund_amt = float(ref.get("amount", 0) or 0)
         currency = ref.get("currency", "USD")
         refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
+        real_title = title_by_order.get(order_id) or title_by_sku.get(sku_raw) or title_by_sku.get(sku)
 
         if key not in counts:
             counts[key] = {
-                "title": sku or sku_raw or key, "sku": sku,
+                "title": real_title or sku or sku_raw or key, "sku": sku,
                 "item_id": "",
                 "count": 0, "opened": 0, "closed": 0,
                 "reasons": {}, "accounts": {},
@@ -17497,6 +17514,8 @@ async def _aggregate_amazon_returns_by_sku(seller_id: str, days: int, nickname: 
             }
         elif sku and not counts[key]["sku"]:
             counts[key]["sku"] = sku
+        if real_title and (not counts[key]["title"] or counts[key]["title"] == counts[key]["sku"]):
+            counts[key]["title"] = real_title
         counts[key]["count"] += 1
         counts[key]["platforms"]["amazon"] += 1
         counts[key]["refund_usd"] = round(counts[key]["refund_usd"] + refund_usd, 2)

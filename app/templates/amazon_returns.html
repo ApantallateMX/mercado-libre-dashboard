@@ -194,10 +194,13 @@ function loadQualityScores() {
             var html = '';
             scores.forEach(function(s) {
                 var gc = gradeColors[s.grade] || 'text-gray-500 bg-gray-50';
+                var titleLine = (s.title && s.title !== s.sku)
+                    ? '<p class="text-[10px] opacity-90 truncate" title="' + _escHtml(s.title) + '">' + _escHtml(s.title) + '</p>' : '';
                 html += '<div class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg ' + gc + ' mb-1.5">' +
-                    '<div class="min-w-0"><p class="text-xs font-semibold font-mono truncate">' + (s.sku || s.title) + '</p>' +
+                    '<div class="min-w-0 flex-1"><p class="text-xs font-semibold font-mono truncate">' + _escHtml(s.sku || '') + '</p>' +
+                    titleLine +
                     '<p class="text-[10px] opacity-75 truncate">' + s.return_count + ' retorno' + (s.return_count !== 1 ? 's' : '') + (s.main_reason ? ' · ' + s.main_reason : '') + '</p></div>' +
-                    '<span class="text-sm font-black flex-shrink-0">' + s.grade + ' · ' + s.score + '</span></div>';
+                    '<span class="text-sm font-black flex-shrink-0 ml-2">' + s.grade + ' · ' + s.score + '</span></div>';
             });
             el.innerHTML = html;
         })
@@ -227,23 +230,42 @@ function _renderTopSkus(data) {
     var el = document.getElementById('amz-ret-top-skus');
     var products = data.products || [];
     if (!products.length) { el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">Sin retornos en este periodo.</p>'; return; }
-    var html = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
-        '<thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-3">SKU</th><th class="py-2 pr-3">Retornos</th>' +
+    var cards = '<div class="md:hidden space-y-2">' + products.map(function(p) {
+        var reasonsTxt = Object.entries(p.reasons || {}).sort(function(a, b) { return b[1] - a[1]; })
+            .map(function(kv) { return kv[0] + ' (' + kv[1] + ')'; }).join(', ');
+        var titleHtml = (p.title && p.title !== p.sku) ? '<p class="text-xs text-gray-500 truncate mt-0.5">' + _escHtml(p.title) + '</p>' : '';
+        return '<div class="border border-gray-100 rounded-xl p-3">' +
+            '<div class="flex items-center justify-between gap-2">' +
+                '<span class="font-mono text-sm font-semibold">' + _escHtml(p.sku || '') + '</span>' +
+                '<span class="text-xs text-gray-500">' + p.count + ' retorno' + (p.count !== 1 ? 's' : '') + ' · ' + p.pct_of_total + '%</span>' +
+            '</div>' +
+            titleHtml +
+            '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                '<span>Monto $' + p.refund_usd.toLocaleString('es-MX', {minimumFractionDigits: 2}) + ' USD</span>' +
+                '<span>Ref. BM ' + (p.retail_ph_unit > 0 ? '$' + p.retail_ph_unit.toFixed(2) : '—') + '</span>' +
+            '</div>' +
+            '<p class="text-xs text-gray-500 mt-1">' + (reasonsTxt || 'Sin detalle') + '</p>' +
+        '</div>';
+    }).join('') + '</div>';
+
+    var table = '<div class="hidden md:block overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="text-left text-gray-500 border-b"><th class="py-2 pr-3">SKU / Producto</th><th class="py-2 pr-3">Retornos</th>' +
         '<th class="py-2 pr-3">% del total</th><th class="py-2 pr-3">Monto USD</th><th class="py-2 pr-3">Ref. BM (USD/u)</th>' +
         '<th class="py-2 pr-3">Razones</th></tr></thead><tbody>';
     products.forEach(function(p) {
         var reasonsTxt = Object.entries(p.reasons || {}).sort(function(a, b) { return b[1] - a[1]; })
             .map(function(kv) { return kv[0] + ' (' + kv[1] + ')'; }).join(', ');
-        html += '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
-            '<td class="py-2 pr-3 font-mono font-semibold">' + (p.sku || p.title) + '</td>' +
+        var titleHtml = (p.title && p.title !== p.sku) ? '<br><span class="text-gray-400 truncate block max-w-[220px]">' + _escHtml(p.title) + '</span>' : '';
+        table += '<tr class="border-b border-gray-100 hover:bg-gray-50 align-top">' +
+            '<td class="py-2 pr-3"><span class="font-mono font-semibold">' + _escHtml(p.sku || '') + '</span>' + titleHtml + '</td>' +
             '<td class="py-2 pr-3">' + p.count + '</td>' +
             '<td class="py-2 pr-3">' + p.pct_of_total + '%</td>' +
             '<td class="py-2 pr-3">$' + p.refund_usd.toLocaleString('es-MX', {minimumFractionDigits: 2}) + '</td>' +
             '<td class="py-2 pr-3">' + (p.retail_ph_unit > 0 ? '$' + p.retail_ph_unit.toFixed(2) : '—') + '</td>' +
             '<td class="py-2 pr-3 text-gray-500">' + (reasonsTxt || 'Sin detalle') + '</td></tr>';
     });
-    html += '</tbody></table></div>';
-    el.innerHTML = html;
+    table += '</tbody></table></div>';
+    el.innerHTML = cards + table;
 }
 
 function loadCustomerComments() {
