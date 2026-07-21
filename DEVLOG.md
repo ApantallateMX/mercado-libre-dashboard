@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FEAT: Alertas de Stock se mueve de Sync Stock (admin_only) a Ventas (accesible a todos)
+
+**Archivos:** `app/main.py`, `app/templates/orders.html`, `app/templates/stock_sync.html`.
+
+Jovan reportó que muchos usuarios no tienen acceso a la pestaña Sync
+Stock (admin_only), donde vivía el feed de "Alertas de Stock" — se movió
+completo a Ventas (`admin_only=False`), no se dejó duplicado en los dos
+lugares.
+
+- Nueva ruta `/alertas-stock` (mismo patrón que `/finanzas`, `/sku-sales`,
+  `/sku-compare` — alias de `/orders` con una sub-vista pre-seleccionada
+  sobre el template unificado `orders.html`).
+- `/api/stock/realtime-alerts` ya no exige `role=admin` — solo sesión
+  activa, igual que el resto de Ventas.
+- Se quitó por completo de Sync Stock (botón, HTML, JS) y esa página
+  volvió a su ancho normal (el full-bleed se había puesto específicamente
+  para la tabla ancha de Alertas).
+
+---
+
 ## 2026-07-20 — FIX: Alertas de Stock perdía órdenes por race condition orden↔envío + FULL/entregado + FX + layout
 
 **Archivos:** `app/main.py`, `app/templates/stock_sync.html`.
