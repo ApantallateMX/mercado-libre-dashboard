@@ -733,9 +733,9 @@
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200">
       <table class="w-full table-fixed text-sm">
         <colgroup>
-          <col style="width:110px"><col style="width:160px"><col style="width:120px">
-          <col><col style="width:160px"><col style="width:70px">
-          <col style="width:90px"><col>
+          <col style="width:95px"><col style="width:145px"><col style="width:105px">
+          <col><col style="width:145px"><col style="width:60px">
+          <col style="width:75px"><col>
         </colgroup>
         <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
@@ -2169,22 +2169,23 @@ function alertasLoadData() {
                 var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
                 var sugerencias = row.sugerencias || [];
                 var sugHtml = '<span class="text-gray-400 text-xs">sin sugerencia (mismo tamaño/marca con stock)</span>';
-                var sugTitleAttr = '';
                 if (sugerencias.length) {
                     var s = sugerencias[0];
-                    sugTitleAttr = (s.title || '').replace(/"/g, '&quot;');
-                    sugHtml = '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
-                        ' <span class="text-gray-400">($' + Math.round(s.retail_ph) + ', disp. ' + s.available_qty + ')</span>';
+                    sugHtml =
+                        '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (s.title || '').replace(/"/g, '&quot;') + '">' +
+                            '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
+                        '</div>' +
+                        '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
                 }
                 return '<tr class="border-t border-gray-100">' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + detectedLabel + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + row.order_id + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + row.sku + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-600 truncate" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + (row.account_name || row.account_id) + '</td>' +
-                    '<td class="px-3 py-2.5 text-right whitespace-nowrap">' + row.quantity + '</td>' +
-                    '<td class="px-3 py-2.5 text-right whitespace-nowrap">' + avail + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs truncate" title="' + sugTitleAttr + '">' + sugHtml + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.order_id + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.sku + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-600 align-top" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + (row.account_name || row.account_id) + '</td>' +
+                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
+                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + avail + '</td>' +
+                    '<td class="px-3 py-2.5 align-top">' + sugHtml + '</td>' +
                     '</tr>';
             });
             window['alertas-pagination_go'](1);
