@@ -72,6 +72,66 @@ Hallazgo incidental de paso: la barra de 9 tabs de `amazon_products.html`
 visto en `orders.html`/`health.html` — no estaba en el alcance de este
 batch, queda para una próxima pasada de tab bars.
 
+## 2026-07-21 — FIX: auditoría responsive completa — Fase 1 (23 críticos) + parte de Fase 2-4 cerradas
+
+**"Termina todo"** — Jovan pidió cerrar el resto de la auditoría en la
+misma sesión. Se completaron los 19 hallazgos críticos restantes de
+Fase 1 (más los 4 de Amazon Productos ya cerrados antes = 23/23), la
+mayoría de Fase 2 (grids de KPI) de paso mientras se tocaba cada
+archivo, y 1 ítem de Fase 4. Commits: `5e20ff3` (nav compartido),
+`535c9cb` (Ventas), `42cb705` (Dashboard), `7288dc0` (Amazon core),
+`9415fbd` (Productos), `a7b021e` (Ads), `f1d9595` (Auditoría/Salud/
+Retornos), `7f6caa3` (Planeación/Facturación/Inventario), `2ceb7bf`
+(wizard stepper mobile) — todos con Railway SUCCESS.
+
+**Hallazgo no documentado en el audit original, encontrado en
+verificación, alto impacto:** el cluster derecho del nav compartido por
+las 23 páginas (USD/MXN, campana, selector de cuenta, badge admin,
+botón Salir) se desbordaba 111px en mobile — exactamente lo que se veía
+en la captura original de Jovan. Corregido en `base.html` (commit
+`5e20ff3`): FX widget oculto bajo `sm:`, nombre de cuenta truncado a
+70px en mobile, badge admin/rol oculto bajo `sm:`.
+
+**Patrón recurrente encontrado 3 veces** (orders.html, amazon_products.html,
+items.html): tab bars con `overflow-x-auto` ya presente pero **roto**
+por botones `flex-1 md:flex-none` — el `flex-1` hace que los botones
+compitan por espacio con contenido `whitespace-nowrap`, forzando overflow
+de página pese al `overflow-x-auto` del contenedor. Fix: `flex-none`
+uniforme (sin `flex-1`), dejando que el contenedor scrollee limpio.
+
+**Decisión repetida — NO duplicar en cards cuando el JS no tiene
+scope por visibilidad:** en 2 casos (`amazon_products_seller_flex.html`
+antes, y ahora `planning.html` "Orden de Separación") el JS que recolecta
+datos de la tabla usa `document.querySelectorAll('.clase')` sin filtrar
+por elemento visible. Duplicar la fila en una card con la misma clase
+hubiera hecho que ese JS procesara el dato DOS VECES (una desde la tabla
+oculta, otra desde la card oculta según el viewport) — en `planning.html`
+esto habría duplicado productos en el WhatsApp/CSV exportado. Se aplicó
+el fix seguro (`overflow-x-auto` sin cards) en ambos casos en vez de
+arriesgar un bug funcional por priorizar el diseño.
+
+**Bug de Chart.js encontrado en `returns.html`:** el doughnut "Distribución
+por Estado" (dentro de un sidebar fijo `lg:w-60`) no se redimensionaba
+pese a tener `maintainAspectRatio:false` y un wrapper `position:relative`
+correcto — el canvas quedaba en su tamaño default del navegador (300x150)
+y desbordaba 52px incluso en 1920px de ancho. Se agregó `overflow-hidden`
+al wrapper como clip defensivo (no se identificó la causa raíz exacta del
+comportamiento de Chart.js en ese contexto específico, pero el clip
+garantiza 0 overflow de página).
+
+**Pendiente real, explícitamente fuera de esta sesión (bajo impacto):**
+- Column-hiding → cards completas en 5 partials de Amazon Productos
+  (catalog, buybox, devoluciones, inventory legacy, sin_publicar x3) —
+  patrón ya "aceptable" per el audit original, no bloqueante.
+- `.kpi-card` (hover lift) aplicado solo en ~3 de 20+ generadores de KPI.
+- Paginación de "Por SKU"/"Comparativa" en orders.html con firmas
+  distintas a `_renderPaginated()` — deuda de consistencia, no bug.
+- Conversión completa a cards de `amazon_products_inventario.html`
+  (18 columnas) — solo se aplicó el fix mínimo (`overflow-x-auto`).
+
+Verificado con Playwright las 23 páginas × 375px/1920px (46 combos):
+0 overflow horizontal, 0 errores de consola nuevos en todas.
+
 ## 2026-07-21 — FEAT: Alertas de Stock — rediseño de aprovechamiento de espacio (agente uxui-designer)
 
 **Archivos:** `app/templates/orders.html`.
