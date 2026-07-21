@@ -85,7 +85,7 @@
 <!-- ===== ZONA 2: Tendencia + Quality Score ===== -->
 <div class="grid grid-cols-1 lg:grid-cols-5 gap-5 mb-6">
     <!-- Timeline chart — 3/5 del ancho en desktop -->
-    <div class="lg:col-span-3 bg-white rounded-lg shadow">
+    <div class="lg:col-span-3 min-w-0 bg-white rounded-lg shadow">
         <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
             <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
@@ -266,7 +266,7 @@
                     </div>
                 </div>
                 <!-- Fila 2: filtros por tipo de reclamo -->
-                <div class="flex items-center gap-1.5">
+                <div class="flex flex-wrap items-center gap-1.5">
                     <span class="text-[10px] text-gray-400 mr-0.5">Tipo:</span>
                     <button onclick="setRetClaimType('')" id="ret-btn-type-all"
                             class="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800 font-semibold">
@@ -311,9 +311,11 @@
                 </div>
             </div>
         </div>
-        <div class="bg-white rounded-lg shadow p-4">
+        <div class="min-w-0 bg-white rounded-lg shadow p-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3">Distribución por Estado</h3>
-            <canvas id="ret-status-chart" height="160"></canvas>
+            <div class="w-full overflow-hidden" style="position:relative;height:220px">
+                <canvas id="ret-status-chart"></canvas>
+            </div>
         </div>
     </div>
 </div>
@@ -637,7 +639,7 @@ function loadAnalysis() {
                         datasets: [{ data: [opened, closed],
                             backgroundColor: ['#ef4444','#22c55e'],
                             borderWidth: 2, borderColor: '#fff' }] },
-                    options: { responsive: true, cutout: '65%',
+                    options: { responsive: true, maintainAspectRatio: false, cutout: '65%',
                         plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } } }
                 });
             } else {
@@ -756,7 +758,8 @@ function _renderClaimRate(data, from, to) {
             'Si nunca corriste "Actualizar reclamos", presiónalo primero.</p>';
         return;
     }
-    var html = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+    var cardsHtml = '<div class="md:hidden space-y-2">';
+    var html = '<div class="hidden md:block overflow-x-auto"><table class="w-full text-xs">' +
         '<thead><tr class="text-left text-gray-500 border-b">' +
         '<th class="py-2 pr-3">SKU</th><th class="py-2 pr-3">Reclamos</th>' +
         '<th class="py-2 pr-3">Uds. reclamadas</th><th class="py-2 pr-3">Uds. vendidas</th>' +
@@ -770,6 +773,9 @@ function _renderClaimRate(data, from, to) {
         var titleHtml = p.title ? '<br><span class="text-gray-400 font-normal">' + p.title + '</span>' : '';
         var noteHtml = p.note ? '<br><span class="text-[9px] text-gray-400 font-normal">' + p.note + '</span>' : '';
         var monto = (p.amount_mxn || 0).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        var pkgUrl = '/api/returns/supplier-package?sku=' + encodeURIComponent(p.sku) +
+            '&date_from=' + from + '&date_to=' + to +
+            '&account_id=' + encodeURIComponent(retFilters.account_id);
         html += '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
             '<td class="py-2 pr-3 font-mono font-semibold">' + p.sku + titleHtml + '</td>' +
             '<td class="py-2 pr-3">' + p.claims_count + '</td>' +
@@ -779,14 +785,28 @@ function _renderClaimRate(data, from, to) {
             '<td class="py-2 pr-3">$' + monto + '</td>' +
             '<td class="py-2 pr-3 text-gray-500">' + p.reasons.join(', ') + '</td>' +
             '<td class="py-2 pr-3">' +
-            '<a href="/api/returns/supplier-package?sku=' + encodeURIComponent(p.sku) +
-            '&date_from=' + from + '&date_to=' + to +
-            '&account_id=' + encodeURIComponent(retFilters.account_id) + '" ' +
+            '<a href="' + pkgUrl + '" ' +
             'class="bg-purple-100 text-purple-700 px-2 py-1 rounded hover:bg-purple-200 whitespace-nowrap inline-block">' +
             '📦 Paquete proveedor</a></td></tr>';
+        cardsHtml += '<div class="border border-gray-100 rounded-xl p-3">' +
+            '<div class="flex items-center justify-between gap-2">' +
+                '<span class="font-mono text-sm font-semibold">' + p.sku + '</span>' +
+                '<span class="text-xs ' + rateColor + '">' + rateTxt + '</span>' +
+            '</div>' +
+            (p.title ? '<p class="text-xs text-gray-400 mt-0.5">' + p.title + '</p>' : '') +
+            '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-600">' +
+                '<span>Reclamos <b>' + p.claims_count + '</b></span>' +
+                '<span>Uds. reclamadas <b>' + p.units_claimed + '</b></span>' +
+                '<span>Uds. vendidas <b>' + p.units_sold + '</b></span>' +
+                '<span>Monto <b>$' + monto + '</b></span>' +
+            '</div>' +
+            '<p class="text-xs text-gray-500 mt-1">' + p.reasons.join(', ') + '</p>' +
+            '<a href="' + pkgUrl + '" class="mt-2 inline-block bg-purple-100 text-purple-700 px-2 py-1 rounded text-xs hover:bg-purple-200">📦 Paquete proveedor</a>' +
+        '</div>';
     });
     html += '</tbody></table></div>';
-    el.innerHTML = html;
+    cardsHtml += '</div>';
+    el.innerHTML = cardsHtml + html;
 }
 
 // ============================================================

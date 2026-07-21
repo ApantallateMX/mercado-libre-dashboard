@@ -304,8 +304,8 @@ def _render_timeline_rows(rows: list) -> str:
                     {icon} {label}
                 </span>{critical_badge}
             </td>
-            <td class="px-3 py-2 text-xs font-semibold text-yellow-700 whitespace-nowrap">{ml_account}</td>
-            <td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{section}</td>
+            <td class="px-3 py-2 text-xs font-semibold text-yellow-700 whitespace-nowrap hidden sm:table-cell">{ml_account}</td>
+            <td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap hidden sm:table-cell">{section}</td>
             <td class="px-3 py-2 text-xs">{item_html}</td>
             <td class="px-3 py-2 text-xs text-gray-500">{detail_str}</td>
             <td class="px-3 py-2 text-xs text-gray-400 hidden md:table-cell">{r.get('ip') or '—'}</td>
