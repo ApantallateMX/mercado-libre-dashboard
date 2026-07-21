@@ -109,7 +109,7 @@
 <!-- PRICE_DISCOUNT dates -->
 <div id="idm-dates" class="border-t pt-4 mb-4 hidden">
     <h4 class="text-sm font-semibold text-gray-700 mb-3">Fechas (PRICE_DISCOUNT)</h4>
-    <div class="grid grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
             <label class="text-xs text-gray-500 block mb-1">Fecha inicio</label>
             <input type="datetime-local" id="idm-start-date" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400">
@@ -124,16 +124,16 @@
 <div id="idm-margin-banner" class="hidden mb-3 rounded-lg p-3 text-sm border"></div>
 
 <!-- Actions -->
-<div class="flex items-center gap-3 justify-end border-t pt-4">
-    <button onclick="closeEditModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cerrar</button>
+<div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 sm:justify-end border-t pt-4">
+    <button onclick="closeEditModal()" class="w-full sm:w-auto px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cerrar</button>
     {% if has_deal %}
     <button id="idm-deactivate-btn" onclick="_idmDeactivate()"
-        class="px-4 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition font-semibold">
+        class="w-full sm:w-auto px-4 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition font-semibold">
         Desactivar Deal
     </button>
     {% endif %}
     <button id="idm-activate-btn" onclick="_idmActivate()"
-        class="px-6 py-2 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+        class="w-full sm:w-auto px-6 py-2 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
         disabled>
         {{ 'Modificar Deal' if has_deal else 'Activar Deal' }}
     </button>

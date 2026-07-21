@@ -9,25 +9,25 @@
 </div>
 
 <!-- ═══ SUB-VISTAS: Por Orden / Por SKU / Comparativa ═══ -->
-<div class="flex gap-1 mb-5 border-b border-gray-200 pb-0">
+<div class="flex gap-1 mb-5 border-b border-gray-200 pb-0 overflow-x-auto flex-nowrap">
     <button type="button" data-view="orders" onclick="window.setVentasView('orders')"
-            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+            class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         Por Orden
     </button>
     <button type="button" data-view="sku" onclick="window.setVentasView('sku')"
-            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+            class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         Por SKU
     </button>
     <button type="button" data-view="compare" onclick="window.setVentasView('compare')"
-            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+            class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         Comparativa
     </button>
     <button type="button" data-view="finanzas" onclick="window.setVentasView('finanzas')"
-            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+            class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         💰 Finanzas
     </button>
     <button type="button" data-view="alertas_stock" onclick="window.setVentasView('alertas_stock')"
-            class="ventas-view-btn px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+            class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         ⚠️ Alertas de Stock
     </button>
 </div>
@@ -257,7 +257,7 @@
     </div>
 
     <!-- KPI resumen -->
-    <div id="summary-cards" class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6" style="display:none;"></div>
+    <div id="summary-cards" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6" style="display:none;"></div>
 
     <!-- Loading -->
     <div id="compare-loading" class="hidden">
@@ -347,7 +347,7 @@
       </div>
     </div>
 
-    <div id="alertas-kpis" class="grid grid-cols-2 lg:grid-cols-5 gap-3"></div>
+    <div id="alertas-kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"></div>
 
     <div id="alertas-context" class="hidden flex-wrap gap-2"></div>
 
@@ -359,28 +359,28 @@
     </div>
 
     <div id="alertas-table-card" class="bg-white rounded-2xl shadow-sm border border-gray-200 hidden">
-      <table class="w-full table-fixed text-sm">
-        <colgroup>
-          <col style="width:90px"><col style="width:135px"><col style="width:100px">
-          <col><col style="width:130px"><col style="width:55px">
-          <col style="width:130px"><col>
-        </colgroup>
-        <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
-          <tr>
-            <th class="px-3 py-3 text-left whitespace-nowrap">Detectado</th>
-            <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
-            <th class="px-3 py-3 text-left whitespace-nowrap">SKU</th>
-            <th class="px-3 py-3 text-left">Título</th>
-            <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
-            <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
-            <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
-            <th class="px-3 py-3 text-left">Sugerencia</th>
-          </tr>
-        </thead>
-        <tbody id="alertas-tbody">
-          <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
-        </tbody>
-      </table>
+      <!-- Mobile: cards -->
+      <div id="alertas-cards" class="md:hidden space-y-2 p-3"></div>
+      <!-- Desktop: tabla -->
+      <div class="hidden md:block overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+            <tr>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Detectado</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">SKU</th>
+              <th class="px-3 py-3 text-left">Título</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
+              <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
+              <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
+              <th class="px-3 py-3 text-left">Sugerencia</th>
+            </tr>
+          </thead>
+          <tbody id="alertas-tbody">
+            <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
       <div id="alertas-pagination"></div>
     </div>
 
@@ -544,7 +544,7 @@ function alertasLoadData() {
                         '</div>' +
                         '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
                 }
-                return '<tr class="border-t border-gray-100">' +
+                var tr = '<tr class="border-t border-gray-100">' +
                     '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.order_id + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.sku + '</td>' +
@@ -554,6 +554,21 @@ function alertasLoadData() {
                     '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + avail + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' align-top">' + sugHtml + '</td>' +
                     '</tr>';
+                var card = '<div class="border border-gray-100 rounded-xl p-3">' +
+                    '<div class="flex items-center justify-between gap-2">' +
+                        '<span class="text-xs text-gray-400">' + detectedLabel + '</span>' +
+                        '<span class="text-xs text-gray-500 font-medium">' + (row.account_name || row.account_id) + '</span>' +
+                    '</div>' +
+                    '<p class="text-sm text-gray-700 mt-1" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">' + (row.titulo || '—') + '</p>' +
+                    '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                        '<span>Orden <span class="font-mono text-gray-600">' + row.order_id + '</span></span>' +
+                        '<span>SKU <span class="font-mono text-gray-600">' + row.sku + '</span></span>' +
+                        '<span>Cant. <b class="text-gray-700">' + row.quantity + '</b></span>' +
+                        '<span>Disp. BM ' + avail + '</span>' +
+                    '</div>' +
+                    '<div class="mt-2 pt-2 border-t border-gray-50">' + sugHtml + '</div>' +
+                '</div>';
+                return { tr: tr, card: card };
             });
             window['alertas-pagination_go'](1);
         })
@@ -573,7 +588,9 @@ window['alertas-pagination_go'] = function(page) {
     var totalPages = Math.max(1, Math.ceil(total / _ALERTAS_PAGE_SIZE));
     var p = Math.min(Math.max(1, page), totalPages);
     var start = (p - 1) * _ALERTAS_PAGE_SIZE, end = Math.min(start + _ALERTAS_PAGE_SIZE, total);
-    document.getElementById('alertas-tbody').innerHTML = _alertasRowsHtml.slice(start, end).join('');
+    var pageItems = _alertasRowsHtml.slice(start, end);
+    document.getElementById('alertas-tbody').innerHTML = pageItems.map(function(it) { return it.tr; }).join('');
+    document.getElementById('alertas-cards').innerHTML = pageItems.map(function(it) { return it.card; }).join('');
     var pag = document.getElementById('alertas-pagination');
     var pagerHtml = total > _ALERTAS_PAGE_SIZE
         ? '<div class="flex items-center gap-1">' +
@@ -703,23 +720,32 @@ function _getAllSkuRows() {
     return Array.from(document.querySelectorAll('#sku-tbody tr.sku-data-row'));
 }
 
+function _getAllSkuCards() {
+    return Array.from(document.querySelectorAll('#sku-cards .sku-data-row'));
+}
+
 function _applySkuPage(page) {
     var rows = _getAllSkuRows();
+    var cards = _getAllSkuCards();
     if (!rows.length) return;
 
     var total      = rows.length;
     var totalPages = Math.ceil(total / _SKU_PER_PAGE);
     _skuPage = Math.max(1, Math.min(page, totalPages));
 
-    if (_skuViewAll) {
-        rows.forEach(function(r) { r.classList.remove('hidden'); });
-    } else {
-        var start = (_skuPage - 1) * _SKU_PER_PAGE;
-        var end   = start + _SKU_PER_PAGE;
-        rows.forEach(function(r, i) {
-            r.classList.toggle('hidden', i < start || i >= end);
-        });
-    }
+    var applyVisibility = function(list) {
+        if (_skuViewAll) {
+            list.forEach(function(r) { r.classList.remove('hidden'); });
+        } else {
+            var start = (_skuPage - 1) * _SKU_PER_PAGE;
+            var end   = start + _SKU_PER_PAGE;
+            list.forEach(function(r, i) {
+                r.classList.toggle('hidden', i < start || i >= end);
+            });
+        }
+    };
+    applyVisibility(rows);
+    applyVisibility(cards);
     _renderSkuPagination(total, _skuPage, totalPages);
 }
 
@@ -1317,7 +1343,7 @@ window._renderMlItem = function(d) {
     html += '<p class="text-xs text-gray-400 mt-1">' + d.category_name + ' · ' + d.item_id + '</p>';
     if (d.warranty) html += '<p class="text-[10px] text-gray-400 mt-0.5">🛡 ' + d.warranty + '</p>';
     html += '</div></div>';
-    html += '<div class="grid grid-cols-3 gap-3">';
+    html += '<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">';
     var demDaysLabel = d.is_catalog_product ? 'en catálogo' : ('en ' + d.days_on_market + ' días');
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1">Vendidas</p>';
     html += '<p class="text-xl font-black text-gray-900 leading-none">' + d.sold_quantity.toLocaleString('es-MX') + ' <span class="text-xs font-normal text-gray-400">uds</span></p>';
@@ -1419,7 +1445,7 @@ window._renderMlItem = function(d) {
               {bg:'bg-green-50 border-green-200',ico:'✅',tc:'text-green-700',msg:'Viable — demanda y márgenes aceptables'};
     html += '<div class="border rounded-lg p-3 bg-gray-50">';
     html += '<p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-2">Veredicto</p>';
-    html += '<div class="grid grid-cols-2 gap-1.5 mb-2">';
+    html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mb-2">';
     _vRows.forEach(function(it) {
         html += '<div class="flex items-start gap-1.5"><span class="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5 ' + _clr[it.v] + '"></span><span class="text-[10px] ' + _txt[it.v] + ' leading-tight">' + it.label + '</span></div>';
     });
@@ -1467,7 +1493,7 @@ window._renderMlSim = function(simId, d) {
     }
     var html = '<div class="space-y-3 pt-2">';
     if (useReal) html += '<div class="flex items-center gap-2 px-1"><span class="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">✓ Pre-llenado con última venta real · ' + (rs.last_sale_date || '').slice(0,10) + '</span></div>';
-    html += '<div class="grid grid-cols-2 gap-3">';
+    html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">';
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2"><p class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide mb-1">Ingresos / Fees ML</p>';
     html += row('sell',  'Precio venta ($)',    sellDefault,  useReal);
     html += row('fee',   'Comisión ML (%)',      feeDefaultPct, useReal);

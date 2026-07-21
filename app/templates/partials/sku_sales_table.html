@@ -1,3 +1,43 @@
+<!-- Mobile: cards -->
+<div id="sku-cards" class="md:hidden space-y-2 p-3">
+    {% for sku_data in sku_sales %}
+    {% set show_inv = sku_data.sku != 'SIN SKU' %}
+    <div class="sku-data-row border border-gray-100 rounded-xl p-3" {% if show_inv %}data-sku="{{ sku_data.sku }}"{% endif %}>
+        <div class="flex items-center justify-between gap-2">
+            <span class="font-mono text-sm font-medium text-gray-800">{{ sku_data.sku }}</span>
+            {% if sku_data.get('_recup_retail_pct') is not none %}
+            {% set rp = sku_data._recup_retail_pct %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold
+                {% if rp >= 100 %}bg-green-100 text-green-800
+                {% elif rp >= 80 %}bg-yellow-100 text-yellow-800
+                {% else %}bg-red-100 text-red-700{% endif %}">
+                {{ "%.1f"|format(rp) }}%
+            </span>
+            {% endif %}
+        </div>
+        <p class="text-sm text-gray-700 mt-0.5">{{ sku_data.title[:60] }}{% if sku_data.title|length > 60 %}...{% endif %}</p>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">
+            <span>Cant. <b class="text-gray-700">{{ sku_data.quantity }}</b></span>
+            <span>Ingreso <b class="text-gray-700">${{ "{:,.0f}".format(sku_data.revenue) }} MXN</b></span>
+            {% if not show_inv %}
+            <span>Stock BM <span class="text-gray-300">—</span></span>
+            {% elif sku_data.get('_bm_avail') is not none %}
+            {% set av = sku_data._bm_avail %}
+            <span>Stock BM <b class="{% if av == 0 %}text-red-500{% elif av <= 5 %}text-yellow-600{% else %}text-gray-700{% endif %}">{{ av }}</b></span>
+            {% endif %}
+            {% if sku_data.get('_days_coverage') is not none %}
+            {% set dc = sku_data._days_coverage %}
+            <span>Días BM <b class="{% if dc < 7 %}text-red-600{% elif dc < 14 %}text-yellow-600{% else %}text-green-600{% endif %}">{{ "{:.0f}".format(dc) }}d</b></span>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <p class="text-center text-gray-500 py-8">No hay datos de ventas por SKU</p>
+    {% endfor %}
+</div>
+
+<!-- Desktop: tabla -->
+<div class="hidden md:block overflow-x-auto">
 <table class="w-full">
     <thead class="bg-gray-50">
         <tr>
@@ -89,6 +129,7 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 
 {% if sku_sales %}
 <!-- Paginación SKU (renderizada por JS en orders.html) -->
