@@ -125,7 +125,7 @@ window._stockFilter = function(q) {
 </script>
 
 <!-- KPIs -->
-<div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 mb-6">
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"
          class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
         <p class="text-xs text-gray-500">Sin Stock (con BM)</p>
@@ -2588,7 +2588,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
 {% if orphan_count %}
 <!-- ===== Seccion: Listings Eliminados ===== -->
 <div class="mb-8" id="orphans-section">
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div class="flex items-center gap-2">
             <div class="w-1 h-6 bg-red-500 rounded"></div>
             <h3 class="text-sm md:text-base font-bold text-gray-800">Listings Eliminados</h3>
@@ -2599,7 +2599,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             Eliminar todos ({{ orphan_count }})
         </button>
     </div>
-    <div id="orphans-section-body" class="bg-white rounded-lg shadow overflow-hidden border border-red-100">
+    <div id="orphans-section-body" class="bg-white rounded-lg shadow border border-red-100">
         <div class="flex items-center justify-center gap-2 p-6 text-sm text-gray-400">
             <svg class="animate-spin h-4 w-4 text-red-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -2635,7 +2635,26 @@ window.syncOneImbalanced = function(itemId, bmQty) {
                 'Eliminar de DB</button></td>' +
                 '</tr>';
         }).join('');
-        body.innerHTML = '<table class="w-full text-sm">' +
+        var cards = orphans.map(function(o) {
+            var age = o.age_str || '—';
+            var sku = o.sku
+                ? '<span class="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">' + o.sku + '</span>'
+                : '<span class="text-gray-300 text-xs">—</span>';
+            return '<div class="p-3 border-b border-gray-100" id="orphan-card-' + o.id + '">' +
+                '<p class="text-xs text-gray-700 truncate" title="' + (o.title||'').replace(/"/g,'&quot;') + '">' + (o.title || '—').substring(0, 65) + '</p>' +
+                '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs">' +
+                    '<span class="font-mono text-blue-600">' + o.item_id + '</span>' +
+                    sku +
+                    '<span class="text-gray-400">' + age + '</span>' +
+                '</div>' +
+                '<button onclick="window._deleteOrphanSI(' + o.id + ', this)" ' +
+                '        class="mt-2 px-2.5 py-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition">' +
+                'Eliminar de DB</button>' +
+                '</div>';
+        }).join('');
+        body.innerHTML =
+            '<div class="md:hidden">' + cards + '</div>' +
+            '<div class="hidden md:block overflow-x-auto"><table class="w-full text-sm">' +
             '<thead><tr class="bg-gray-50 border-b border-gray-200 text-left">' +
             '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">Producto</th>' +
             '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">ID / SKU</th>' +
@@ -2643,7 +2662,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">Acciones</th>' +
             '</tr></thead>' +
             '<tbody>' + rows + '</tbody>' +
-            '</table>';
+            '</table></div>';
     }
 
     function _loadOrphans() {
@@ -2666,8 +2685,10 @@ window.syncOneImbalanced = function(itemId, bmQty) {
         })
         .then(function(r) { return r.json(); })
         .then(function() {
-            var row = document.getElementById('orphan-row-' + id);
-            if (row) { row.style.opacity = '0.4'; setTimeout(function() { row.remove(); }, 400); }
+            ['orphan-row-', 'orphan-card-'].forEach(function(prefix) {
+                var el = document.getElementById(prefix + id);
+                if (el) { el.style.opacity = '0.4'; setTimeout(function() { el.remove(); }, 400); }
+            });
             if (window.showToast) showToast('Listing eliminado de DB local', 'success');
         })
         .catch(function() {

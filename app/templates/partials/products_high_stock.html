@@ -4,7 +4,51 @@
 </div>
 
 {% if products %}
-<div class="bg-white rounded-lg shadow overflow-x-auto">
+<!-- Mobile: cards -->
+<div class="md:hidden space-y-2">
+    {% for p in products %}
+    <div class="bg-white rounded-lg shadow p-3">
+        <div class="flex items-center gap-2">
+            {% if p.thumbnail %}
+            <img src="{{ p.thumbnail }}" class="w-10 h-10 rounded object-cover flex-shrink-0" alt="">
+            {% endif %}
+            <div class="min-w-0 flex-1">
+                <p class="text-gray-800 truncate text-xs" title="{{ p.title }}">{{ p.title }}</p>
+                <div class="flex items-center gap-2 mt-0.5">
+                    <a href="{{ p.permalink }}" target="_blank" class="text-[10px] text-blue-600 font-mono font-semibold hover:underline">{{ p.id }}</a>
+                    <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                </div>
+            </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs">
+            <span>Stock BM <b class="{{ 'text-green-600' if p._bm_avail > 20 else 'text-yellow-600' if p._bm_avail > 4 else 'text-red-600' }}">{{ p._bm_avail }}</b></span>
+            <span>Stock MeLi
+                {% if p.get('is_full') %}
+                <b class="text-cyan-600">{{ p.available_quantity }}</b> <span class="px-1 py-0 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
+                {% else %}
+                {% set bm = p._bm_avail|default(0) or 0 %}
+                <b class="cursor-pointer hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
+                   onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</b>
+                {% endif %}
+            </span>
+            <span>Ventas 30d {% if p.units_30d > 0 %}<b class="text-gray-800">{{ p.units_30d }}</b>{% else %}<b class="text-red-500">0</b>{% endif %}</span>
+            <span>Precio <b class="text-gray-700">${{ "{:,.0f}".format(p.price) }}</b></span>
+            {% if p.get('_margen_pct') is not none %}
+            <span class="inline-block px-1.5 py-0.5 rounded font-semibold
+                {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
+                {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
+                {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
+                {% else %}bg-red-100 text-red-700{% endif %}">
+                {{ "%.1f"|format(p._margen_pct) }}% margen
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Desktop: tabla -->
+<div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
     <table class="w-full text-sm">
         <thead class="bg-gray-50 border-b">
             <tr>

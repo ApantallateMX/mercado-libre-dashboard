@@ -98,7 +98,28 @@ window.loadListings = function() {
                 return row;
             });
 
-            wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[700px]">' +
+            var cards = items.map(function(item) {
+                var scoreColor = item.score >= 85 ? '#10B981' : (item.score >= 70 ? '#3B82F6' : (item.score >= 55 ? '#D97706' : '#EF4444'));
+                var gc = gradeColor[item.grade] || 'bg-gray-100 text-gray-500';
+                var issuesHtml = (item.issues || []).map(function(i) { return '<div class="text-xs text-red-600 truncate">• ' + i + '</div>'; }).join('');
+                return '<div class="border border-gray-100 rounded-xl p-3">' +
+                    '<div class="flex items-center justify-between gap-2">' +
+                        '<span class="font-mono text-xs font-medium text-gray-700">' + item.sku + '</span>' +
+                        '<span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold text-center ' + gc + '">' + item.grade + '</span>' +
+                    '</div>' +
+                    '<p class="text-xs text-gray-400 truncate mt-0.5">' + (item.title || '—') + '</p>' +
+                    '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                        '<span>Score <b style="color:' + scoreColor + '">' + item.score + '</b></span>' +
+                        '<span>Precio ' + (item.price ? '<b class="text-gray-700">$' + Number(item.price).toLocaleString('es-MX') + '</b>' : '—') + '</span>' +
+                    '</div>' +
+                    '<div class="mt-1.5">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</div>' +
+                    (item.item_id ? '<a href="https://www.mercadolibre.com.mx/p/' + item.item_id + '" target="_blank" class="mt-2 inline-block text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-1 font-medium transition">Ver en ML</a>' : '') +
+                '</div>';
+            });
+
+            wrap.innerHTML =
+                '<div id="lq-cards" class="md:hidden space-y-2"></div>' +
+                '<div class="hidden md:block overflow-x-auto"><table class="w-full text-sm">' +
                 '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
                 '<th class="py-3 px-4 font-semibold">SKU / Título</th>' +
                 '<th class="py-3 px-3 text-center font-semibold">Grado</th>' +
@@ -108,8 +129,12 @@ window.loadListings = function() {
                 '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
                 '</tr></thead><tbody id="lq-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
                 '<div id="lq-pag"></div>';
-            window['lq-pag_go'] = function(p) { _renderPaginated(rows, p, 'lq-tbody', 'lq-pag'); };
+            window['lq-pag_go'] = function(p) {
+                _renderPaginated(rows, p, 'lq-tbody', 'lq-pag');
+                _renderPaginated(cards, p, 'lq-cards', null);
+            };
             _renderPaginated(rows, 1, 'lq-tbody', 'lq-pag');
+            _renderPaginated(cards, 1, 'lq-cards', null);
         })
         .catch(function(e) {
             wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar listings: ' + e.message + '</div>';
