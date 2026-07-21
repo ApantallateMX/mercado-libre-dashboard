@@ -1425,15 +1425,39 @@ async def record_realtime_stock_alert(
         await db.commit()
 
 
+async def get_replacement_sku_suggestions(sku: str, brand: str, retail_ph: float, limit: int = 3) -> list[dict]:
+    """Sugiere SKUs de reemplazo con stock disponible: misma marca + precio
+    parecido (retail_ph), ordenado por cercanía de precio. Pura lectura de
+    bm_sku_master (ya sincronizado) — sin llamadas nuevas a BM."""
+    if not brand or not retail_ph:
+        return []
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT sku, title, model, retail_ph, available_qty,
+                   ABS(retail_ph - ?) AS price_diff
+            FROM bm_sku_master
+            WHERE brand = ? AND sku != ? AND available_qty > 0 AND retail_ph > 0
+            ORDER BY price_diff ASC
+            LIMIT ?
+        """, (retail_ph, brand, sku, limit))
+        rows = [dict(r) for r in await cur.fetchall()]
+    return rows
+
+
 async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
     """Feed cronológico (más reciente primero) de órdenes individuales
-    detectadas sin stock al momento — reemplaza la vista agregada por SKU."""
+    detectadas sin stock al momento — reemplaza la vista agregada por SKU.
+    Cada fila incluye sugerencias de reemplazo (misma marca, precio parecido,
+    con stock)."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT
                 rsa.order_id, rsa.platform, rsa.account_id, rsa.sku,
                 COALESCE(bsm.title, '') AS titulo,
+                COALESCE(bsm.brand, '') AS brand,
+                COALESCE(bsm.retail_ph, 0) AS retail_ph,
                 rsa.quantity, rsa.available_qty_at_check, rsa.order_date, rsa.detected_at
             FROM realtime_stock_alerts rsa
             LEFT JOIN bm_sku_master bsm ON bsm.sku = rsa.sku
@@ -1441,6 +1465,11 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
             LIMIT ?
         """, (limit,))
         rows = [dict(r) for r in await cur.fetchall()]
+
+    for row in rows:
+        row["sugerencias"] = await get_replacement_sku_suggestions(
+            row["sku"], row.pop("brand"), row.pop("retail_ph"), limit=3
+        )
     return rows
 
 

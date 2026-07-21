@@ -741,10 +741,11 @@
             <th class="px-4 py-3 text-left">Cuenta</th>
             <th class="px-4 py-3 text-right">Cantidad</th>
             <th class="px-4 py-3 text-right">Disponible BM</th>
+            <th class="px-4 py-3 text-left">Sugerencia de reemplazo</th>
           </tr>
         </thead>
         <tbody id="alertas-tbody">
-          <tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+          <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
         </tbody>
       </table>
     </div>
@@ -2151,7 +2152,7 @@ function alertasLoadData() {
             var rows = d.rows || [];
             if (!rows.length) {
                 document.getElementById('alertas-tbody').innerHTML =
-                    '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock detectadas todavía — todo con inventario disponible.</td></tr>';
+                    '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock detectadas todavía — todo con inventario disponible.</td></tr>';
                 document.getElementById('alertas-pagination').innerHTML = '';
                 return;
             }
@@ -2161,21 +2162,29 @@ function alertasLoadData() {
                     : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
                 var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
                 var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
+                var sugerencias = row.sugerencias || [];
+                var sugHtml = sugerencias.length
+                    ? sugerencias.map(function(s) {
+                        return '<div class="text-xs"><span class="font-mono">' + s.sku + '</span> — ' +
+                            (s.title || '—') + ' <span class="text-gray-400">($' + Math.round(s.retail_ph) + ' USD, disp. ' + s.available_qty + ')</span></div>';
+                    }).join('')
+                    : '<span class="text-gray-400 text-xs">sin sugerencia (marca/precio)</span>';
                 return '<tr class="border-t border-gray-100">' +
                     '<td class="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + detectedLabel + '</td>' +
                     '<td class="px-4 py-2.5 font-mono text-xs">' + row.order_id + '</td>' +
                     '<td class="px-4 py-2.5 font-mono text-xs">' + row.sku + '</td>' +
                     '<td class="px-4 py-2.5 text-xs text-gray-600">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-4 py-2.5 text-xs text-gray-500">' + row.platform + ':' + row.account_id + '</td>' +
+                    '<td class="px-4 py-2.5 text-xs text-gray-500">' + (row.account_name || row.account_id) + '</td>' +
                     '<td class="px-4 py-2.5 text-right">' + row.quantity + '</td>' +
                     '<td class="px-4 py-2.5 text-right">' + avail + '</td>' +
+                    '<td class="px-4 py-2.5">' + sugHtml + '</td>' +
                     '</tr>';
             });
             window['alertas-pagination_go'](1);
         })
         .catch(function() {
             document.getElementById('alertas-tbody').innerHTML =
-                '<tr><td colspan="7" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
+                '<tr><td colspan="8" class="text-center py-6 text-red-500 text-sm">Error cargando datos.</td></tr>';
         });
 }
 

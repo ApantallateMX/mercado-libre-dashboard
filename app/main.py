@@ -14014,6 +14014,8 @@ async def realtime_stock_alerts(request: Request, limit: int = 100):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     limit = max(1, min(limit, 500))
     rows = await token_store.get_realtime_stock_alerts(limit=limit)
+    for row in rows:
+        row["account_name"] = _KNOWN_ML_NICKNAMES.get(str(row.get("account_id", "")), str(row.get("account_id", "")))
     return JSONResponse({"rows": rows})
 
 
