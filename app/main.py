@@ -1642,15 +1642,33 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
 # Reutiliza upsert_order_history vía _save_ml_orders_history_bg — cero lógica
 # duplicada, mismo choke point que ya alimenta deuda y todo lo demás.
 async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
+    """Procesa una notificación de ML — acepta tanto el topic "orders_v2"
+    (resource=/orders/{id}) como "shipments" (resource=/shipments/{id}).
+    Se necesitan ambos: la notificación de orden a veces llega ANTES de que
+    ML termine de asignar el envío (shipping.id todavía vacío en ese
+    momento) — confirmado con 2 órdenes reales que se guardaron en
+    order_history pero nunca generaron alerta porque ML no reavisa solo por
+    el cambio de shipment si no estamos suscritos a ese topic. El de
+    shipments cubre exactamente ese caso."""
     from app.services.sku_utils import normalize_to_bm_sku
     client = None
     try:
-        order_id = resource.rstrip("/").split("/")[-1]
-        if not order_id.isdigit():
-            return
         client = await get_meli_client(user_id=user_id)
         if not client:
             return
+
+        if "/shipments/" in resource:
+            shipment_id = resource.rstrip("/").split("/")[-1]
+            if not shipment_id.isdigit():
+                return
+            shipment_probe = await client.get_shipment(shipment_id)
+            order_id = str(shipment_probe.get("order_id", "") or "")
+            if not order_id:
+                return
+        else:
+            order_id = resource.rstrip("/").split("/")[-1]
+            if not order_id.isdigit():
+                return
 
         order = await client.resolve_order(order_id)
         if order.get("status") not in ("paid", "delivered"):
@@ -1665,7 +1683,20 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
         # ya no es accionable, mostrarla solo confunde. El status/logistic_type
         # real vive en /shipments/{id} — el objeto "shipping" de la orden solo
         # trae el id de referencia, NO el estado (confirmado contra un caso real).
+        #
+        # Race condition confirmada con 2 órdenes reales: la notificación de
+        # "orders_v2" a veces llega ANTES de que ML termine de asignar el
+        # shipment (shipping.id todavía vacío) — sin reintento, la orden se
+        # guardaba en order_history pero NUNCA se generaba la alerta, porque
+        # ML no vuelve a notificar solo por el cambio de shipment (no estamos
+        # suscritos al topic "shipments"). Reintenta una vez tras una pausa
+        # corta antes de rendirse.
         shipping_id = (order.get("shipping") or {}).get("id")
+        if not shipping_id:
+            await asyncio.sleep(8)
+            order = await client.resolve_order(order_id)
+            shipping_id = (order.get("shipping") or {}).get("id")
+
         is_full = False
         ship_status = ""
         if shipping_id:
@@ -1676,6 +1707,9 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
             except Exception as _ship_exc:
                 logger.warning(f"[WEBHOOK-ML] No se pudo obtener shipment {shipping_id}: {_ship_exc}")
                 return  # sin dato confiable de envío, mejor no alertar que alertar mal
+        else:
+            logger.warning(f"[WEBHOOK-ML] Orden {order_id} sin shipping.id tras reintento — sin dato de envío")
+            return
         _PENDING_SHIP_STATUSES = ("pending", "handling", "ready_to_ship")
         should_alert = (not is_full) and (ship_status in _PENDING_SHIP_STATUSES)
 
@@ -1710,10 +1744,13 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
 
 @app.post("/webhooks/ml/orders")
 async def ml_order_webhook(request: Request):
-    """Notificaciones de ML (topic orders_v2) — configurar en el DevCenter de
-    cada app: Notifications URL = https://apantallatemx.up.railway.app/webhooks/ml/orders
-    Responde 200 de inmediato (ML exige ack rápido); el procesamiento real
-    corre en background."""
+    """Notificaciones de ML — configurar en el DevCenter de cada app:
+    Notifications URL = https://apantallatemx.up.railway.app/webhooks/ml/orders
+    Topics: orders_v2 Y shipments (ambos necesarios — orders_v2 a veces
+    llega antes de que el envío quede asignado; shipments cubre ese caso
+    avisando cuando el envío pasa a ready_to_ship). Responde 200 de
+    inmediato (ML exige ack rápido); el procesamiento real corre en
+    background."""
     try:
         body = await request.json()
     except Exception:
@@ -1722,7 +1759,7 @@ async def ml_order_webhook(request: Request):
     user_id = str(body.get("user_id", "") or "")
     topic = body.get("topic", "")
     resource = body.get("resource", "")
-    if not user_id or not resource or topic not in ("orders_v2", "orders"):
+    if not user_id or not resource or topic not in ("orders_v2", "orders", "shipments"):
         return JSONResponse({"status": "ignored"}, status_code=200)
 
     known_accounts = await token_store.get_all_tokens()
