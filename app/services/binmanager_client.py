@@ -270,11 +270,14 @@ class BinManagerClient:
                 return []
         return []
 
-    async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,68") -> list:
+    async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68,45,69,43,42") -> list:
         """Retorna TODOS los SKUs vendibles paginando de 500 en 500.
 
-        location_id: "47,68" = MTY+CDMX combinado (default). "47" = solo CDMX. "68" = solo MTY.
-        LOC62 (Tijuana B2B) excluida — es informativa y no suma al stock vendible.
+        location_id: "47,62,68,45,69,43,42" = MTY+CDMX+Cuautitlán+Tijuana real vendible (default).
+        "47" = solo Autobot CDMX. "68" = solo MTY MAXX.
+        Corregido 2026-07-21 — LOC62 es Cuautitlán CDMX (no Tijuana, error de doc previo) y
+        SÍ suma al vendible. LOC45/69/43/42 son las ubicaciones de Warehouse 2 "MITIJ" (Tijuana)
+        verificadas con stock real vendible por SKU — ver project_bm_locationid_62_63_swap.md.
         conditions: qué condiciones incluir. Default GRA,GRB,GRC,NEW (excluye ICB/ICC).
         Para SKUs con sufijo -ICB/-ICC pasar "GRA,GRB,GRC,ICB,ICC,NEW".
         Incluye AvgCostQTY, LastRetailPricePurchaseHistory y NoVendibleQty.
@@ -357,10 +360,11 @@ class BinManagerClient:
         logger.info(f"[BM] get_bulk_stock: {len(all_rows)} SKUs en {_BM_MAX_PAGES} páginas (límite)")
         return all_rows
 
-    async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,68") -> tuple[int, int] | None:
+    async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68,45,69,43,42") -> tuple[int, int] | None:
         """Retorna (AvailableQTY, Reserve) para un SKU.
-        location_id: "47,68" (MTY+CDMX combined, default), "47" (solo MTY), "68" (solo CDMX).
-        LOC62 (Tijuana B2B) excluida — no suma al stock vendible.
+        location_id: "47,62,68,45,69,43,42" (MTY+CDMX+Cuautitlán+Tijuana real vendible, default),
+        "47" (solo Autobot CDMX), "68" (solo MTY MAXX).
+        Corregido 2026-07-21 — ver get_bulk_stock() y project_bm_locationid_62_63_swap.md.
         Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
           - AvailableQTY = stock vendible (TotalQty - Reserve, calculado por BM server-side)
           - Reserve      = unidades reservadas para órdenes pendientes
@@ -372,7 +376,7 @@ class BinManagerClient:
 
     async def get_available_qty(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> int:
         """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
-        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,68.
+        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68,45,69,43,42.
         Retorna 0 tanto para stock genuino 0 como para fallos — usar get_stock_with_reserve()
         si necesitas distinguir entre 0 real y fallo de red.
         Verificado: SNTV001764 → TotalQty=215, Reserve=2, AvailableQTY=213.
@@ -380,9 +384,10 @@ class BinManagerClient:
         result = await self._query_bm_stock(sku, conditions=conditions)
         return result[0] if result is not None else 0
 
-    async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,68") -> tuple[int, int] | None:
+    async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68,45,69,43,42") -> tuple[int, int] | None:
         """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1.
-        location_id: default "47,68" (MTY+CDMX). Pasar "47" o "68" para desglose por almacén.
+        location_id: default "47,62,68,45,69,43,42" (MTY+CDMX+Cuautitlán+Tijuana real vendible).
+        Pasar "47" o "68" para desglose por almacén individual.
         Método interno compartido por get_available_qty() y get_stock_with_reserve().
         Maneja condición-variantes: si SKU no tiene match exacto, suma variantes -GRA/-GRB/etc.
         Verificado: SNTV001764 → AvailableQTY=213, Reserve=2.

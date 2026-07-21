@@ -4558,7 +4558,7 @@ async def items_grid_partial(
                     bm_cli = await _get_bm_cli()
                     r_wh = await _bm_post_inv(BM_WH_URL, {
                         "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
-                        "LocationID": "47,62,68", "BINID": None,
+                        "LocationID": "47,62,68,45,69,43,42", "BINID": None,
                         "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
                     }, timeout=15.0)
                     _stock = await bm_cli.get_stock_with_reserve(base_sku)
@@ -6102,7 +6102,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, no_vendible_direct=0, avail_ok=True, wh_responded=True):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
 
-        avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,68 (MTY+CDMX, sin TJ)
+        avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68,45,69,43,42 (MTY+CDMX+Cuautitlán+TJ real vendible)
         reserve_direct: Reserve del mismo endpoint — unidades reservadas para órdenes pendientes.
         avail_ok:       True si get_stock_with_reserve respondió (tuple); False si fue excepción/timeout.
         wh_responded:   True si el WH endpoint devolvió JSON válido (aunque vacío []).
@@ -6182,7 +6182,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             return
         async with wh_sem:
             try:
-                # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,68 (MTY+CDMX, sin TJ) — fuente única correcta.
+                # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68,45,69,43,42 (MTY+CDMX+Cuautitlán+TJ real vendible) — fuente única correcta.
                 # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
                 # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
                 # timeout=8s: cubre re-login interno (3-5s) + latencia normal. Antes era 25s —
@@ -20038,7 +20038,7 @@ async def bm_launch_opportunities(
             if isinstance(_s, set):
                 ml_bm_skus.update(_s)
 
-    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68 + CONDITION vendible + CONCEPTID=1)
+    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68,45,69,43,42 + CONDITION vendible + CONCEPTID=1)
     #    get_bulk_stock() usa los mismos filtros que el resto de la app — stock vendible real.
     now = _time.time()
     if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL:

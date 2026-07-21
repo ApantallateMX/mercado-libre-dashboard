@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FIX: LocationID 62 no era Tijuana (era Cuautitlán CDMX) — nuevo set de stock vendible incluye Tijuana real
+
+**Archivos:** `app/services/binmanager_client.py`, `app/api/amazon_products.py`,
+`app/api/items.py`, `app/api/productos.py`, `app/api/lanzar.py`,
+`app/api/sku_inventory.py`, `app/services/stock_sync_multi.py`, `app/main.py`,
+`.claude/agents/binmanager-specialist.md`, `CLAUDE.md`.
+
+Reinvestigando un análisis de la categoría "Home Power Tools" (Jovan
+contradijo el hallazgo original con conocimiento directo de que sí había
+stock en Tijuana), se descubrió que **LocationID 62 nunca fue Tijuana** —
+es Warehouse 13 "Cuautitlán CDMX" (código `CDMX-B2B`), físicamente en el
+Estado de México. El Tijuana real es LocationID 63 (Warehouse 14), que
+resultó no tener stock propio (0 registros) — el producto vendible de
+Tijuana vive en Warehouse 2 "MITIJ", nunca antes consultado por el sistema.
+
+**Bug adicional encontrado:** casi todo el código de producción (pricing
+Amazon, `productos.py`, `lanzar.py`/wizard, `sku_inventory.py`, y sobre
+todo `binmanager_client.get_bulk_stock()`/`get_stock_with_reserve()` —
+la función raíz que alimenta pricing, el sync que empuja cantidad a
+listings ML/Amazon, gaps y reorden) usaba el default `"47,68"`, excluyendo
+también Cuautitlán del cálculo de vendible.
+
+**Clasificación de las 44 ubicaciones de MITIJ** (agente `binmanager-specialist`,
+consultando cada LocationID individualmente contra datos reales de BM, no
+por nombre): **45, 69, 43, 42** confirmadas como vendible real (~410K
+unidades en TVs, TV Stands, Cables, Remote Controls, Iluminación, Home
+Goods, Ventiladores). El resto — incluyendo las 10 "To Mexico - Bin 01-10"
+(tránsito), defectuosos, consignación, y el bin de 340K que resultó ser
+98.6% material de empaque (cinta/bolsas/cajas) — quedó excluido a propósito.
+
+**Set final de stock vendible implementado:** `47,62,68,45,69,43,42`
+(antes `47,68` en la mayoría del código real).
+
+Jovan aprobó hacer ambas correcciones juntas en un solo push ("vamos por
+todo"), aceptando que `stock_sync_multi.py` va a subir la cantidad
+disponible en listings ML/Amazon de golpe para varios SKUs (más preciso,
+pero visible en producción). Verificado en local antes de push:
+`/api/diag/sku` con SKU sin stock en las nuevas ubicaciones (sin cambio),
+SKU con stock real confirmado en Tijuana/MITIJ (pasó de 0 a valor real), y
+el SKU de referencia histórico (SNTV001764, sin regresión).
+
+Ver `.claude/memory/project_bm_locationid_62_63_swap.md` para el detalle completo.
+
+---
+
 ## 2026-07-21 — FEAT: Alertas de Stock se mueve de Sync Stock (admin_only) a Ventas (accesible a todos)
 
 **Archivos:** `app/main.py`, `app/templates/orders.html`, `app/templates/stock_sync.html`.

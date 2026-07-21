@@ -19,7 +19,7 @@ BINMANAGER_CONDITION_URL = "https://binmanager.mitechnologiesinc.com/InventoryRe
 BINMANAGER_INVENTORY_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 BINMANAGER_COMPANY_ID = 1
 BINMANAGER_CONCEPT_ID = 8
-BM_LOCATION_IDS = "47,68"
+BM_LOCATION_IDS = "47,62,68,45,69,43,42"
 BM_CONDITIONS_GR  = "GRA,GRB,GRC,NEW"           # SKUs sin sufijo IC
 BM_CONDITIONS_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"   # SKUs con sufijo ICB/ICC
 

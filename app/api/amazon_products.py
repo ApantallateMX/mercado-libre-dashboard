@@ -150,7 +150,7 @@ _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/Invento
 # GlobalStock_InventoryBySKU_Condition — BROKEN: status siempre retorna "Otro", no usar para avail/reserved
 _BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
 _BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-_BM_LOC_IDS  = "47,68"
+_BM_LOC_IDS  = "47,62,68,45,69,43,42"
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
 _bm_all_refreshing:   set   = set()  # "bm_all" cuando BG pre-fetch activo

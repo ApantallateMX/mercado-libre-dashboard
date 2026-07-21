@@ -90,7 +90,7 @@ def _invalidate_user_products_cache(user_id: str):
 BM_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 BM_COMPANY_ID = 1
-BM_LOCATION_IDS = "47,68"
+BM_LOCATION_IDS = "47,62,68,45,69,43,42"
 BM_CONDITIONS_GR = "GRA,GRB,GRC,NEW"           # SKUs sin sufijo IC: solo condicion buena
 BM_CONDITIONS_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"  # SKUs con sufijo ICB/ICC: todas las condiciones
 

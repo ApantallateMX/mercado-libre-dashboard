@@ -16,10 +16,12 @@ Para consultar **stock disponible / vendible / reservado** de un SKU, SIEMPRE y 
 ```
 POST /InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU
 CONCEPTID: 1
-LOCATIONID: "47,62,68"
+LOCATIONID: "47,62,68,45,69,43,42"
 CONDITION: "GRA,GRB,GRC,ICB,ICC,NEW"
 SEARCH: "<SKU-BASE>"
 ```
+
+**Actualizado 2026-07-21** — se agregaron 45,69,43,42 (ubicaciones de Warehouse 2 "MITIJ", Tijuana) tras clasificarlas una por una contra datos reales de BM y confirmar que sí tienen `AvailableQTY` vendible por SKU. Ver `project_bm_locationid_62_63_swap.md` para el detalle completo y qué ubicaciones de MITIJ quedaron excluidas (tránsito/aduana/defectuoso).
 
 Campos que retorna: `TotalQty`, `Reserve`, `AvailableQTY`
 - **Disponible vendible** = `AvailableQTY` (BM lo calcula: TotalQty − Reserve)
@@ -113,9 +115,11 @@ Guarda la cookie `ASP.NET_SessionId` para todas las peticiones siguientes.
 **Zonas usadas en el dashboard:**
 - **MTY**: Monterrey NL (WH9), Monterrey MAXX (WH17)
 - **CDMX**: Autobot (WH1), Cuautitlan CDMX (WH13)
-- **TJ**: Tijuana BC (WH14) — excluido del stock vendible
+- **TJ real**: Tijuana BC (WH14, LocationID 63 — sin stock propio, 0 registros) + WH2 "MITIJ" locations 45/69/43/42 (clasificadas como vendible real tras auditoría) — **incluido desde 2026-07-21**. El resto de MITIJ (tránsito/aduana/defectuoso/en proceso) queda excluido a propósito.
 
-**LocationIDs para stock vendible:** `47,62,68`
+**⚠️ CORREGIDO 2026-07-21 — LocationID 62 NO es Tijuana.** Es un error de documentación que existió desde el inicio: LocationID 62 = Warehouse 13 "Cuautitlan CDMX" (código `CDMX-B2B`), físicamente en Cuautitlán Izcalli, Estado de México — es CDMX. El Tijuana real es **LocationID 63** (Warehouse 14, código `TJ-B2B`), que resultó no tener stock propio — el producto vendible de Tijuana vive en las sub-ubicaciones de Warehouse 2 "MITIJ". Ver `.claude/memory/project_bm_locationid_62_63_swap.md` para el detalle completo del hallazgo y la implementación.
+
+**LocationIDs para stock vendible (implementado 2026-07-21):** `47,62,68,45,69,43,42` — 62 es Cuautitlán CDMX; 45/69/43/42 son las ubicaciones de Tijuana (WH2 MITIJ) verificadas como vendible real por SKU.
 
 ---
 
@@ -301,8 +305,8 @@ POST /InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU
 **Lógica del dashboard:**
 - SKU termina en `-ICB` o `-ICC` → usa condiciones `GRA,GRB,GRC,ICB,ICC,NEW`
 - SKU base o `-NEW/-GRA/-GRB/-GRC` → usa solo `GRA,GRB,GRC,NEW`
-- Stock vendible = MTY + CDMX (TJ excluido)
-- Para stock+reserve: CONCEPTID=1, LOCATIONID="47,62,68"
+- Stock vendible = MTY + CDMX (incluyendo Cuautitlán, LocationID 62) + Tijuana real vendible (WH2 MITIJ locations 45/69/43/42)
+- Para stock+reserve: CONCEPTID=1, LOCATIONID="47,62,68,45,69,43,42"
 - Para info de producto (precio/marca): CONCEPTID=8, sin LOCATIONID
 
 ### Bins
@@ -463,7 +467,7 @@ BM_CONDITIONS_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"
 1. **Todos los POST de datos** necesitan `X-Requested-With: XMLHttpRequest` en headers
 2. **La sesión expira** — si ves redirección a `/User/Index`, hacer login de nuevo
 3. **CompanyID=1** (BOUGHTS) es la empresa principal del vendedor
-4. **LocationIDs 47,62,68** son los puntos de stock vendible (MTY + CDMX)
+4. **LocationIDs 47,62,68,45,69,43,42** son los puntos de stock vendible (MTY + CDMX, incluyendo Cuautitlán=62, + Tijuana real vendible en WH2 MITIJ). Tijuana real es LocationID 63 (NO 62) pero no tiene stock propio — el producto vive en 45/69/43/42 — ver `project_bm_locationid_62_63_swap.md`
 5. **La InventoryReport API** puede retornar 500 si el CompanyID no tiene stock configurado
 6. **BinCode** identifica unívocamente un bin dentro de un warehouse
 7. **TotalQty en bins** es el stock físico total, no necesariamente vendible

@@ -79,7 +79,7 @@ Cualquier feature pedido para ML o Amazon → implementar en TODAS las plataform
 - Si SKU no está en caché → valor es `None`. NO llamar BM para obtenerlo
 - PROHIBIDO: httpx.AsyncClient() crudo, `_bm_stock()`, `get_available_qty()` en vivo
 - Todo código BM DEBE usar `bm_post()` → `_BM_GLOBAL_SEM` (Semaphore 1)
-- Stock vendible: `Get_GlobalStock_InventoryBySKU` CONCEPTID=1, LOC47+LOC68
+- Stock vendible: `Get_GlobalStock_InventoryBySKU` CONCEPTID=1, LOC47+LOC62+LOC68+LOC45+LOC69+LOC43+LOC42 (implementado 2026-07-21, ver nota de LocationIDs abajo)
 - `AvailableQTY = TotalQty - Reserve` (calculado por BM server-side)
 - SIEMPRE mostrar AvailableQTY Y Reserve, incluso si Reserve=0
 - ICB/ICC solo para SNTV* (TVs). Todos los demás: GRA,GRB,GRC,NEW únicamente
@@ -92,9 +92,13 @@ Cualquier feature pedido para ML o Amazon → implementar en TODAS las plataform
 
 ### BM — LocationIDs
 - 47 = CDMX Autobot (Ebanistas)
-- 62 = Tijuana B2B (informativo, no suma al vendible)
+- 62 = **Cuautitlán CDMX** (WH13, "CDMX-B2B") — corregido 2026-07-21: NO es Tijuana, es CDMX. Cuenta hacia el vendible.
+- 63 = Tijuana BC real (WH14, "TJ-B2B") — sin stock propio (0 registros); el producto vendible de Tijuana vive en WH2 MITIJ
 - 68 = Monterrey MAXX
 - 66 = Guadalajara (NO incluida)
+- 45, 69, 43, 42 = ubicaciones de WH2 "MITIJ" (Tijuana) clasificadas como vendible real tras auditoría SKU por SKU — **incluidas desde 2026-07-21**. El resto de MITIJ (tránsito "To Mexico", aduana, defectuoso, en proceso, y el bin de 340K que resultó ser 98.6% material de empaque) queda excluido a propósito.
+
+Set final de stock vendible: `47,62,68,45,69,43,42`. Ver `.claude/memory/project_bm_locationid_62_63_swap.md` para el hallazgo completo y el detalle de qué se implementó en cada archivo.
 
 ### UI / Frontend
 - Funciones onclick en scripts htmx: SIEMPRE `window.foo = function()`, nunca `function foo()`
