@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FIX: contenedor principal fluido (max-w-7xl → max-w-[1920px]) + auditoría responsive completa de la app
+
+**Archivos:** `app/templates/base.html`, `productos.html`, `ml_sin_bm.html`, `facturacion.html`.
+
+Jovan volvió a reportar espacio vacío desperdiciado en monitores anchos
+(misma queja de fondo que el rediseño de Alertas de Stock de más abajo,
+pero esta vez pidió analizar TODA la app, no una sola pestaña). Se
+lanzaron 8 agentes `uxui-designer` en paralelo, cada uno auditando un
+módulo distinto (Ventas/Dashboard, Productos ML, Deals/Stock Issues, Ads,
+Salud/Retornos, Amazon core, Amazon Productos+wizard, Stock/Planeación/
+Facturación) — cobertura completa de los ~100 templates/partials del
+proyecto, pestaña por pestaña. Resultado: **148 hallazgos** documentados
+en un reporte consolidado (artifact), organizados en 5 fases por
+prioridad. Ver `.claude/memory/project_responsive_audit_2026-07-21.md`
+para el detalle completo de los 148 hallazgos y el plan de fases.
+
+**Causa raíz confirmada y corregida en esta sesión (Fase 0 del plan):**
+`base.html:727` — el `<main>` heredado por las 23 páginas tenía
+`max-w-7xl mx-auto` (tope de 1280px, centrado). El nav ya se había hecho
+`w-full` en un fix anterior (commit 8dc596a, 2026-07-17) pero el
+contenedor de CONTENIDO nunca se tocó — de ahí el síntoma "nav ancho
+arriba, contenido angosto abajo". Cambiado a
+`max-w-[1920px] w-full mx-auto` con padding progresivo
+(`px-2 sm:px-4 lg:px-6`).
+
+Además, 3 páginas tenían su propio wrapper `max-w-7xl mx-auto` DUPLICADO
+anidado dentro del `<main>` (`productos.html:4`, `ml_sin_bm.html:4`,
+`facturacion.html:4`) — sin quitarlos, el fix del shell no se hubiera
+notado ahí. Se les quitó el tope, dejando solo el padding.
+
+Verificado con Playwright local (375/1024/1920px, 5 páginas): el overflow
+horizontal detectado a 375px en `orders.html` es preexistente (tab bar de
+5 sub-vistas sin wrap, ya documentado como hallazgo de Fase 1, no
+introducido por este cambio) — confirmado comparando contra el commit
+anterior vía `git stash`. 0 errores de consola nuevos.
+
+**Pendiente — Fases 1-4** (23 hallazgos críticos + ~110 de menor
+severidad: tablas sin fallback mobile, grids de KPI con saltos de
+breakpoint, tap targets bajos, headers sin flex-wrap) — plan completo en
+el artifact/memoria, a ejecutar por módulo en sesiones siguientes.
+
 ## 2026-07-21 — FEAT: Alertas de Stock — rediseño de aprovechamiento de espacio (agente uxui-designer)
 
 **Archivos:** `app/templates/orders.html`.
