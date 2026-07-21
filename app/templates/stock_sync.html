@@ -733,19 +733,19 @@
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto">
       <table class="w-full table-fixed text-sm">
         <colgroup>
-          <col style="width:90px"><col style="width:150px"><col style="width:110px">
-          <col><col style="width:150px"><col style="width:60px">
-          <col style="width:80px"><col>
+          <col style="width:1%"><col style="width:1%"><col style="width:1%">
+          <col><col style="width:1%"><col style="width:1%">
+          <col style="width:1%"><col>
         </colgroup>
         <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
-            <th class="px-3 py-3 text-left">Detectado</th>
-            <th class="px-3 py-3 text-left">Orden</th>
-            <th class="px-3 py-3 text-left">SKU</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">Detectado</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">SKU</th>
             <th class="px-3 py-3 text-left">Título</th>
-            <th class="px-3 py-3 text-left">Cuenta</th>
-            <th class="px-3 py-3 text-right">Cant.</th>
-            <th class="px-3 py-3 text-right">Disp. BM</th>
+            <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
+            <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
+            <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM</th>
             <th class="px-3 py-3 text-left">Sugerencia</th>
           </tr>
         </thead>
@@ -2177,13 +2177,13 @@ function alertasLoadData() {
                         ' <span class="text-gray-400">($' + Math.round(s.retail_ph) + ', disp. ' + s.available_qty + ')</span>';
                 }
                 return '<tr class="border-t border-gray-100">' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 truncate">' + detectedLabel + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs truncate">' + row.order_id + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs truncate">' + row.sku + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + detectedLabel + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + row.order_id + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + row.sku + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-600 truncate" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 truncate">' + (row.account_name || row.account_id) + '</td>' +
-                    '<td class="px-3 py-2.5 text-right">' + row.quantity + '</td>' +
-                    '<td class="px-3 py-2.5 text-right">' + avail + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + (row.account_name || row.account_id) + '</td>' +
+                    '<td class="px-3 py-2.5 text-right whitespace-nowrap">' + row.quantity + '</td>' +
+                    '<td class="px-3 py-2.5 text-right whitespace-nowrap">' + avail + '</td>' +
                     '<td class="px-3 py-2.5 text-xs truncate" title="' + sugTitleAttr + '">' + sugHtml + '</td>' +
                     '</tr>';
             });
