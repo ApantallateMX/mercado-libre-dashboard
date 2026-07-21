@@ -14819,7 +14819,10 @@ async def diag_order_lookup(order_id: str = "", token: str = ""):
         alert_rows = [dict(r) for r in await cur.fetchall()]
         bm_rows = []
         for r in oh_rows:
-            cur = await db.execute("SELECT sku, available_qty, reserve_qty, stock_updated_at FROM bm_sku_master WHERE sku = ?", (r["sku"],))
+            cur = await db.execute(
+                "SELECT sku, available_qty, reserve_qty, stock_updated_at, brand, retail_ph, size FROM bm_sku_master WHERE sku = ?",
+                (r["sku"],),
+            )
             bm_row = await cur.fetchone()
             if bm_row:
                 bm_rows.append(dict(bm_row))
