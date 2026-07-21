@@ -14753,6 +14753,38 @@ async def diag_clear_realtime_alerts(token: str = ""):
     return {"rows_deleted": before}
 
 
+@app.get("/api/diag/order-lookup")
+async def diag_order_lookup(order_id: str = "", token: str = ""):
+    """Diagnóstico: investiga una orden específica — ¿llegó a order_history?
+    ¿generó una realtime_stock_alert? ¿qué stock tiene su SKU ahora en
+    bm_sku_master? Para diagnosticar por qué una orden que BM marca 'Sin
+    Stock' no apareció (o sí) en nuestro feed, sin adivinar."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not order_id:
+        return JSONResponse({"error": "order_id requerido"}, status_code=400)
+    import aiosqlite as _aio_ol
+    async with _aio_ol.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_ol.Row
+        cur = await db.execute("SELECT * FROM order_history WHERE order_id = ?", (order_id,))
+        oh_rows = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute("SELECT * FROM realtime_stock_alerts WHERE order_id = ?", (order_id,))
+        alert_rows = [dict(r) for r in await cur.fetchall()]
+        bm_rows = []
+        for r in oh_rows:
+            cur = await db.execute("SELECT sku, available_qty, reserve_qty, stock_updated_at FROM bm_sku_master WHERE sku = ?", (r["sku"],))
+            bm_row = await cur.fetchone()
+            if bm_row:
+                bm_rows.append(dict(bm_row))
+    return {
+        "order_id": order_id,
+        "in_order_history": oh_rows,
+        "in_realtime_alerts": alert_rows,
+        "bm_sku_master_stock": bm_rows,
+    }
+
+
 @app.get("/api/diag/ml-webhook-activity")
 async def diag_ml_webhook_activity(token: str = "", minutes: int = 60):
     """Diagnóstico: actividad reciente de order_history por cuenta ML — para
