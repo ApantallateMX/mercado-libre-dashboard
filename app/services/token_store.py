@@ -1541,9 +1541,13 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
         rows = [dict(r) for r in await cur.fetchall()]
 
     for row in rows:
+        _retail_ph = row["retail_ph"]
         row["sugerencias"] = await get_replacement_sku_suggestions(
-            row["sku"], row.pop("brand"), row.pop("retail_ph"), row.pop("size"), limit=3
+            row["sku"], row.pop("brand"), _retail_ph, row.pop("size"), limit=3
         )
+        # Se mantiene bajo otro nombre (no se borra) — Jovan quiere comparar
+        # el precio del original contra el de la sugerencia en la misma vista.
+        row["retail_ph"] = _retail_ph
     return rows
 
 

@@ -735,7 +735,7 @@
         <colgroup>
           <col style="width:95px"><col style="width:145px"><col style="width:105px">
           <col><col style="width:145px"><col style="width:60px">
-          <col style="width:75px"><col>
+          <col style="width:95px"><col>
         </colgroup>
         <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
@@ -745,7 +745,7 @@
             <th class="px-3 py-3 text-left">Título</th>
             <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
             <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
-            <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM</th>
+            <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
             <th class="px-3 py-3 text-left">Sugerencia</th>
           </tr>
         </thead>
@@ -2162,9 +2162,11 @@ function alertasLoadData() {
                 return;
             }
             _alertasRowsHtml = rows.map(function(row) {
-                var avail = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
+                var availNum = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
                     ? '<span class="text-gray-400">sin dato</span>'
                     : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
+                var origPriceLabel = row.retail_ph ? ('$' + Math.round(row.retail_ph) + ' USD') : '';
+                var avail = availNum + (origPriceLabel ? '<div class="text-gray-400 whitespace-nowrap" style="font-size:10px">' + origPriceLabel + '</div>' : '');
                 var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
                 var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
                 var sugerencias = row.sugerencias || [];
