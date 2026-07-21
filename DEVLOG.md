@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FEAT + BUG: comentarios reales de clientes en Retornos Amazon (FBA) — y fix de bug preexistente que dejaba sin datos reales a Quality Score/Top SKUs desde Fase 2.1
+
+**Archivos:** `app/services/amazon_client.py`, `app/main.py`, `app/templates/amazon_returns.html`.
+
+Jovan preguntó si se puede ver la orden + lo que el cliente escribe
+cuando reporta un problema en Amazon. Ya se había confirmado con el
+agente `amazon-specialist` (investigación de la doc oficial SP-API,
+ver `.claude/memory/reference_amazon_sp_api_docs.md`) que Buyer
+Messages (la bandeja de "Actions" de Seller Central) **no es accesible
+por API** — Messaging API es solo de salida. La alternativa real: el
+reporte de devoluciones FBA sí trae un campo de texto libre escrito
+por el cliente (`customer-comments`) — pero solo para FBA, Amazon no
+expone esto para FBM (envío propio).
+
+**Bug encontrado y corregido en el camino** (no solo la feature nueva):
+`get_returns_report()` en `amazon_client.py` pedía el reporte
+EQUIVOCADO desde que se escribió — `GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE`
+en vez de `GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA`. Esos dos
+reportes tienen columnas totalmente distintas (Title Case sin
+comentario vs. lowercase-con-guión con `customer-comments`) — el
+parseo existente (`row.get("sku")`, `row.get("customer-comments")`)
+nunca hacía match contra las columnas del reporte viejo, así que el
+método **siempre devolvía 0 filas**, silenciosamente. Confirmado en
+vivo contra cuenta real (VECKTOR): 0 filas con el reporte viejo, 61
+devoluciones reales (16 con comentario) con el correcto. Esto también
+dejaba sin datos reales el "Quality Score" y las "Razones" de Top SKUs
+en Retornos Amazon desde que se implementó esa feature (Fase 2.1,
+2026-07-17) — quedaron arreglados de paso, no solo la feature nueva.
+
+- `amazon_client.py`: `reportType` corregido + se agrega `product_name`
+  al parseo (viene directo en el reporte, más preciso que cruzar con
+  título de BM).
+- `main.py`: nuevo endpoint `/api/amazon/returns/customer-comments` —
+  reusa el cache existente (`_fetch_amazon_returns_report_cached`, sin
+  llamadas nuevas a Amazon), filtra a devoluciones con comentario no
+  vacío, enriquece con producto y motivo legible.
+- `amazon_returns.html`: nueva sección "Comentarios de Clientes" (cards
+  mobile + tabla desktop) debajo de Top SKUs, con aviso honesto de que
+  solo cubre FBA.
+
+Verificado en vivo contra cuenta real (VECKTOR): encoding UTF-8
+correcto (acentos/eñes verificados leyendo el archivo, no solo en
+consola — la consola de Windows los mostraba mal por el codepage, no
+por corrupción de datos real), 0 overflow, 0 errores de consola en
+375/1920px, Quality Score y Top SKUs confirmados mostrando razones
+reales después del fix.
+
+---
+
 ## 2026-07-21 — FEAT: registro de resoluciones en Alertas de Stock (sustitución + poner en 0) y aviso de reactivación
 
 **Archivos:** `app/services/token_store.py`, `app/services/stock_concentrator.py`, `app/main.py`, `app/api/users.py`, `app/templates/orders.html`.
