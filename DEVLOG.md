@@ -7,6 +7,63 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-20 — FIX: Alertas de Stock perdía órdenes por race condition orden↔envío + FULL/entregado + FX + layout
+
+**Archivos:** `app/main.py`, `app/templates/stock_sync.html`.
+
+Sesión larga de fixes reales sobre la feature de webhook ML del mismo día,
+todos reportados por Jovan con capturas/casos concretos, ninguno adivinado:
+
+1. **Órdenes FULL/ya entregadas aparecían como alerta.** El objeto de la
+   orden de ML no trae el estado de envío embebido, solo el id del
+   shipment — había que pedir `/shipments/{id}` aparte. Confirmado con la
+   orden real que reportó Jovan (`2000017373456614`): era `delivered` +
+   `logistic_type=fulfillment` (FULL). Ahora solo alerta si el envío sigue
+   pendiente (`pending`/`handling`/`ready_to_ship`) y NO es FULL. Si una
+   orden ya alertada pasa a FULL o se envía, se limpia sola en la
+   siguiente notificación de esa misma orden.
+2. **FX rate de respaldo (20.0) en vez del real (~17.5).** El cliente ML
+   se cerraba antes de pedir el tipo de cambio — el error se tragaba
+   silenciosamente por el fallback interno de `_get_usd_to_mxn()`.
+   Corregido manteniendo el cliente abierto hasta terminar todo el
+   procesamiento del webhook.
+3. **Sugerencia de reemplazo por tamaño real, no por título.** Se agregó
+   el campo `Size` real de BM (pulgadas, 99.9% de los TVs lo tienen bien
+   poblado) a `bm_sku_master`. Antes solo comparaba marca+precio, lo que
+   podía sugerir un TV de tamaño distinto — motivo válido de queja de
+   cliente. Ahora exige tamaño EXACTO cuando el SKU original lo tiene.
+4. **Layout roto** — contenedor a ancho completo (antes dejaba media
+   pantalla vacía con `max-w-5xl`), tabla con columnas proporcionales +
+   scroll horizontal solo como respaldo en pantallas angostas, sugerencia
+   de reemplazo a una sola línea (antes apilaba 3 completas, se veía roto).
+5. **Bug más profundo, encontrado con 2 casos reales que BinManager sí
+   marcaba "Sin Stock" pero nuestro feed no mostraba**: la notificación
+   `orders_v2` de ML a veces llega ANTES de que ML termine de asignar el
+   shipment (`shipping.id` vacío en ese momento exacto) — la orden se
+   guardaba en `order_history` pero nunca generaba alerta, y como no
+   estábamos suscritos al topic `shipments`, ML nunca reavisaba cuando el
+   envío quedaba listo. Fix de 2 capas: reintento corto (8s) si
+   `shipping.id` viene vacío, Y suscripción también al topic `shipments`
+   (el shipment trae su propio `order_id`, se resuelve la orden completa
+   desde ahí). Verificado con las 2 órdenes reales de Jovan
+   (`2000017513795808` Autobot, `2000017515937288` Blowtechnologies) —
+   ambas generaron la alerta correctamente tras el fix, confirmado en
+   producción vía `/api/diag/order-lookup`.
+
+**Pendiente que Jovan debe hacer:** activar el topic **"Shipments"**
+(además de "Orders_v2", ya activo) en el DevCenter de la app
+APANTALLATEMX — mismo lugar donde se configuró la URL de notificaciones.
+Sin esto, el reintento de 8s sigue funcionando como red de seguridad para
+la mayoría de los casos, pero el topic de shipments es la cobertura
+completa para cuando el envío tarda más en asignarse.
+
+Se agregaron 3 diag endpoints nuevos: `/api/diag/clear-realtime-alerts`
+(limpieza de datos contaminados por el bug, usado una vez — 12 filas
+borradas en producción), `/api/diag/order-lookup?order_id=X` (investigar
+una orden específica sin adivinar — el que resolvió este caso).
+
+---
+
 ## 2026-07-20 — FEAT: webhook ML en tiempo real — feed de órdenes sin stock (Fase 1)
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/stock_sync.html`.
