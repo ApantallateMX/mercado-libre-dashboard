@@ -14736,6 +14736,23 @@ async def diag_bm_stock_snapshot(token: str = ""):
     }
 
 
+@app.get("/api/diag/clear-realtime-alerts")
+async def diag_clear_realtime_alerts(token: str = ""):
+    """Limpia realtime_stock_alerts — usado una vez para borrar datos
+    contaminados por el bug de FULL/ya-enviado (corregido en commit
+    6250d9a). Las alertas se regeneran solas con el webhook ya corregido."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_clr
+    async with _aio_clr.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM realtime_stock_alerts")
+        before = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM realtime_stock_alerts")
+        await db.commit()
+    return {"rows_deleted": before}
+
+
 @app.get("/api/diag/ml-webhook-activity")
 async def diag_ml_webhook_activity(token: str = "", minutes: int = 60):
     """Diagnóstico: actividad reciente de order_history por cuenta ML — para
