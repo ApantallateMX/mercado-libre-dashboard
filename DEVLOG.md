@@ -48,6 +48,30 @@ severidad: tablas sin fallback mobile, grids de KPI con saltos de
 breakpoint, tap targets bajos, headers sin flex-wrap) — plan completo en
 el artifact/memoria, a ejecutar por módulo en sesiones siguientes.
 
+**Actualización misma sesión — limpieza de código muerto + Fase 1 Amazon
+Productos (commits c459925, bab2eb7, Railway SUCCESS):**
+
+- Eliminados 4 templates + sus 4 endpoints backend, confirmados sin
+  ningún caller en templates/JS antes de tocar nada: `ads_best.html`,
+  `ads_products.html` (Ads), `amazon_products_summary.html`,
+  `amazon_products_inventory.html` legacy (Amazon Productos — reemplazados
+  hace tiempo por `_resumen`/`_inventario` sin quitar los viejos).
+- Fase 1 completa para el módulo Amazon Productos (4 hallazgos críticos):
+  `amazon_products_inventario.html` (tabla 18 cols, `overflow-hidden` →
+  `overflow-x-auto`), `amazon_products_repricing.html` (toolbar sin
+  flex-wrap que podía esconder el botón "Aplicar seleccionados"),
+  `amazon_products_seller_flex.html` (MTY/CDMX ocultas en mobile para
+  priorizar columnas editables — **no** se duplicó la fila en cards
+  porque el JS usa `querySelectorAll`/`querySelector` sin scope por
+  visibilidad, duplicar inputs hubiera doble-contado selecciones/CSV),
+  `amazon_lanzar_wizard.html` Paso 3 (3 grids de atributos
+  `grid-cols-2` fijo → `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`).
+
+Hallazgo incidental de paso: la barra de 9 tabs de `amazon_products.html`
+(`.amz-prod-tab`) tiene el mismo problema de overflow sin wrap/scroll ya
+visto en `orders.html`/`health.html` — no estaba en el alcance de este
+batch, queda para una próxima pasada de tab bars.
+
 ## 2026-07-21 — FEAT: Alertas de Stock — rediseño de aprovechamiento de espacio (agente uxui-designer)
 
 **Archivos:** `app/templates/orders.html`.
