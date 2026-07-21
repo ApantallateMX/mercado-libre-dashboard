@@ -101,8 +101,8 @@
 <div class="bg-white rounded-xl shadow overflow-hidden">
 
     <!-- Barra de acciones -->
-    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
-        <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <div class="flex items-center gap-3 flex-wrap">
             <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
                 <input type="checkbox" id="rp-select-all" onchange="window._amzRpSelectAll(this.checked)"
                        class="accent-[#FF9900]">
@@ -110,7 +110,7 @@
             </label>
             <span id="rp-selected-count" class="text-xs text-gray-400">0 seleccionados</span>
         </div>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap w-full sm:w-auto">
             <button onclick="window._amzRpRefreshBB('{{ seller_id }}')"
                     class="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:border-gray-400 transition">
                 🔄 Actualizar BB

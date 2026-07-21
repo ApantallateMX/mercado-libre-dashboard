@@ -123,8 +123,8 @@
                         <span class="block text-[9px] text-gray-400 font-normal normal-case tracking-normal leading-none">(FBA API real)</span>
                     </th>
                     <th class="py-2.5 px-3 font-medium text-right">BM Disp.</th>
-                    <th class="py-2.5 px-3 font-medium text-right">MTY</th>
-                    <th class="py-2.5 px-3 font-medium text-right">CDMX</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden sm:table-cell">MTY</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden sm:table-cell">CDMX</th>
                     <th class="py-2.5 px-3 font-medium text-center">BIN</th>
                     <th class="py-2.5 px-3 font-medium text-center">Cantidad a recibir</th>
                     <th class="py-2.5 px-3 font-medium text-center">Tipo</th>
@@ -200,14 +200,14 @@
                     </td>
 
                     <!-- MTY -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                    <td class="py-2.5 px-3 text-right whitespace-nowrap hidden sm:table-cell">
                         <span class="text-xs {% if item.bm_mty > 0 %}text-green-700 font-medium{% else %}text-gray-300{% endif %}">
                             {{ item.bm_mty }}
                         </span>
                     </td>
 
                     <!-- CDMX -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                    <td class="py-2.5 px-3 text-right whitespace-nowrap hidden sm:table-cell">
                         <span class="text-xs {% if item.bm_cdmx > 0 %}text-green-700 font-medium{% else %}text-gray-300{% endif %}">
                             {{ item.bm_cdmx }}
                         </span>
