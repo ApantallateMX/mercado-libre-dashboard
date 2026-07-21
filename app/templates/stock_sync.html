@@ -2168,10 +2168,13 @@ function alertasLoadData() {
                 var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
                 var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
                 var sugerencias = row.sugerencias || [];
-                var sugHtml = '<span class="text-gray-400 text-xs">sin sugerencia</span>';
+                var sugHtml = '<span class="text-gray-400 text-xs">sin sugerencia (mismo tamaño/marca con stock)</span>';
+                var sugTitleAttr = '';
                 if (sugerencias.length) {
                     var s = sugerencias[0];
-                    sugHtml = '<span class="font-mono">' + s.sku + '</span> · $' + Math.round(s.retail_ph) + ' · disp. ' + s.available_qty;
+                    sugTitleAttr = (s.title || '').replace(/"/g, '&quot;');
+                    sugHtml = '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
+                        ' <span class="text-gray-400">($' + Math.round(s.retail_ph) + ', disp. ' + s.available_qty + ')</span>';
                 }
                 return '<tr class="border-t border-gray-100">' +
                     '<td class="px-3 py-2.5 text-xs text-gray-500 truncate">' + detectedLabel + '</td>' +
@@ -2181,7 +2184,7 @@ function alertasLoadData() {
                     '<td class="px-3 py-2.5 text-xs text-gray-500 truncate">' + (row.account_name || row.account_id) + '</td>' +
                     '<td class="px-3 py-2.5 text-right">' + row.quantity + '</td>' +
                     '<td class="px-3 py-2.5 text-right">' + avail + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs truncate">' + sugHtml + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs truncate" title="' + sugTitleAttr + '">' + sugHtml + '</td>' +
                     '</tr>';
             });
             window['alertas-pagination_go'](1);

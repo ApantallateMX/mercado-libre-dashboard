@@ -1699,19 +1699,28 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
 
         is_full = False
         ship_status = ""
+        ship_substatus = ""
         if shipping_id:
             try:
                 shipment = await client.get_shipment(str(shipping_id))
                 is_full = shipment.get("logistic_type", "") == "fulfillment"
                 ship_status = shipment.get("status", "")
+                ship_substatus = shipment.get("substatus", "")
             except Exception as _ship_exc:
                 logger.warning(f"[WEBHOOK-ML] No se pudo obtener shipment {shipping_id}: {_ship_exc}")
                 return  # sin dato confiable de envío, mejor no alertar que alertar mal
         else:
             logger.warning(f"[WEBHOOK-ML] Orden {order_id} sin shipping.id tras reintento — sin dato de envío")
             return
-        _PENDING_SHIP_STATUSES = ("pending", "handling", "ready_to_ship")
-        should_alert = (not is_full) and (ship_status in _PENDING_SHIP_STATUSES)
+        # Confirmado con 3 órdenes reales: Jovan solo quiere ver "pendiente
+        # por imprimir" — status=ready_to_ship con substatus=ready_to_print
+        # (guía generada, aún no impresa/armada para recolección). En cuanto
+        # el substatus avanza a in_packing_list (ya en lista de recolección,
+        # "en camino" para el vendedor) ya no es accionable — se descarta.
+        should_alert = (not is_full) and (
+            ship_status in ("pending", "handling")
+            or (ship_status == "ready_to_ship" and ship_substatus == "ready_to_print")
+        )
 
         if should_alert:
             order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
