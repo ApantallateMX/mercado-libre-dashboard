@@ -7,6 +7,62 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FEAT: registro de resoluciones en Alertas de Stock (sustitución + poner en 0) y aviso de reactivación
+
+**Archivos:** `app/services/token_store.py`, `app/services/stock_concentrator.py`, `app/main.py`, `app/api/users.py`, `app/templates/orders.html`.
+
+Jovan pidió llevar un récord de qué orden se resolvió sustituyendo el
+producto por otro (con quién lo autorizó) y un botón para poner
+stock=0 en las 4 cuentas ML de un jalón cuando de plano no hay
+inventario. Durante el diseño, agregó un tercer requisito: cuando ese
+SKU puesto en 0 vuelve a tener stock, las alertas deben avisar para
+reactivarlo — "por eso es importante que las alertas estén funcionando
+al 100%".
+
+- Tabla nueva `stock_alert_resolutions`: order_id, sku original, tipo
+  (`substitution`|`zeroed_stock`), sku sustituto, nota, usuario,
+  timestamp, reactivated_at. Cada resolución también se escribe en el
+  `audit_log` ya existente (acciones nuevas `stock_order_substitution`/
+  `stock_bulk_zero` en `ACTION_META` de `users.py`), así aparece
+  automático en Auditoría sin duplicar esfuerzo.
+- `stock_concentrator.py` gana `preview_zero_all()`/`execute_zero_all()`
+  — mismo motor que ya usa Concentración de Stock
+  (`find_sku_across_accounts` + `update_item_stock`), pero sin ganador:
+  zerea TODO lo no-FULL en todas las cuentas donde exista el SKU.
+- 6 endpoints nuevos: `resolve-substitution` (cualquier usuario
+  logueado, nota obligatoria como respaldo de que el cliente aceptó),
+  `zero-stock-preview`/`zero-stock` (**admin-only**, con vista previa
+  antes de ejecutar — decisión explícita de Jovan sobre permisos),
+  `resolutions` (historial), `restock-watch`/`restock-dismiss`.
+- Aviso de reactivación: cuando un SKU en 0 ya tiene `available_qty > 0`
+  en `bm_sku_master` (sincronizado periódicamente, **no** es llamada en
+  vivo a BM), aparece un banner "Ya hay stock disponible" con link
+  directo a Concentración de Stock — en vez de reinventar cómo repartir
+  el stock entre cuentas, se reutiliza la herramienta que ya hace
+  exactamente eso.
+- Frontend: 2 botones por alerta (🔁 Sustituir / ⛔ Sin stock, el
+  segundo solo visible para admin vía `IS_ADMIN_ALERTAS`), 2 modales
+  (sustitución con nota obligatoria; poner-en-0 con preview de qué
+  cuentas/publicaciones se van a afectar antes de confirmar), toggle
+  En vivo/Historial, banner de reactivación pendiente.
+
+Verificado en local: 403 para no-admin en zero-stock, 200 para
+sustitución con cualquier usuario, inserción correcta en DB, aparece en
+Auditoría con ícono/etiqueta propios, modales y toggle funcionan sin
+errores de consola (0 overflow). Prueba con SKU inexistente confirmó
+que no toca cuentas ML reales cuando no encuentra publicaciones antes
+de probar con datos reales.
+
+**Pendiente — push a mi2/ecomops (Coolify) falló por token expirado**
+(`fatal: Authentication failed for 'https://github.com/mi2-apps/ecomops.git/'`
+— push a origin sí tuvo éxito, Railway ya tiene el deploy). Coolify ya
+estaba en pausa por el exit 137 pendiente de Amir, así que no es
+bloqueante hoy, pero el PAT de ese remote necesita renovarse — Jovan
+tiene que generar un token nuevo en GitHub (mi2-apps/ecomops) y
+actualizarlo en la URL del remote `mi2` local.
+
+---
+
 ## 2026-07-21 — FIX: contenedor principal fluido (max-w-7xl → max-w-[1920px]) + auditoría responsive completa de la app
 
 **Archivos:** `app/templates/base.html`, `productos.html`, `ml_sin_bm.html`, `facturacion.html`.
