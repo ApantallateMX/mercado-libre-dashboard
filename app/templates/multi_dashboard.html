@@ -100,7 +100,7 @@
 </div>
 
 <!-- ═══ LÍDERES ═══ -->
-<div id="md-leaders" class="grid grid-cols-3 gap-3 md:gap-4 mb-5">
+<div id="md-leaders" class="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 mb-5">
     {% for _ in range(3) %}
     <div class="bg-white p-3 md:p-4 rounded-xl shadow animate-pulse">
         <div class="h-2 bg-gray-200 rounded w-1/2 mb-3"></div>
@@ -157,7 +157,7 @@
         </svg>
     </div>
     <div id="ret-widget-controls" class="px-4 md:px-5 py-2.5 border-b border-gray-50 flex items-center gap-2 flex-wrap" onclick="event.stopPropagation()">
-        <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs">
+        <div class="flex flex-wrap rounded-lg border border-gray-200 text-xs">
             <button id="ret-plat-all" onclick="setReturnsWidgetPlatform('all')"
                     class="px-3 py-1 bg-yellow-400 text-gray-900 font-semibold transition">Todas</button>
             <button id="ret-plat-ml" onclick="setReturnsWidgetPlatform('ml')"
@@ -201,7 +201,7 @@
             <h2 class="text-sm font-bold text-gray-700">Rendimiento por Cuenta</h2>
         </div>
         <!-- Tabs -->
-        <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs">
+        <div class="flex flex-wrap rounded-lg border border-gray-200 text-xs">
             <button id="perf-tab-ranking" onclick="setPerfTab('ranking')"
                 class="px-3 py-1.5 bg-yellow-400 text-gray-800 font-semibold">Ranking</button>
             <button id="perf-tab-launches" onclick="setPerfTab('launches')"
@@ -240,7 +240,7 @@
 </div>
 
 <!-- ═══ GRÁFICA COMPARATIVA + TOP PRODUCTOS ═══ -->
-<div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
     <!-- Gráfica (2/3) -->
     <div class="xl:col-span-2 bg-white rounded-xl shadow p-4">
         <h2 class="font-semibold text-gray-700 mb-3">Comparativa de Ventas (Neto)</h2>
@@ -270,7 +270,7 @@
         <h2 class="font-semibold text-gray-700">Top Productos — Todas las Cuentas</h2>
         <div class="flex items-center gap-2">
             <span id="md-top-period" class="text-xs text-gray-400"></span>
-            <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs">
+            <div class="flex flex-wrap rounded-lg border border-gray-200 text-xs">
                 <button id="top-sort-rev" onclick="setTopSort('revenue')"
                     class="px-2 py-1 bg-yellow-400 text-white font-semibold">Por Ingreso</button>
                 <button id="top-sort-units" onclick="setTopSort('units')"
@@ -392,7 +392,7 @@ async function loadMultiDashboard() {
 function showError(msg) {
     // Muestra el error en el área de líderes (visible arriba)
     document.getElementById('md-leaders').innerHTML = `
-        <div class="col-span-3 bg-red-50 border border-red-200 rounded-xl p-4 text-center">
+        <div class="sm:col-span-3 bg-red-50 border border-red-200 rounded-xl p-4 text-center">
             <p class="text-red-600 font-semibold mb-1">Error al cargar</p>
             <p class="text-red-500 text-sm">${escapeHtml(msg)}</p>
             <button onclick="loadMultiDashboard()" class="mt-3 bg-red-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-600 transition">

@@ -819,7 +819,36 @@ function renderDailyTable(data) {
         '<td class="py-3 px-3 text-center text-xs text-gray-500">' + totals.days_met + '/' + totals.total_days + ' días</td>' +
         '</tr></tfoot>';
 
-    var html = '<table class="w-full text-sm">' +
+    var _meliDailyCards = daily.map(function(day) {
+        var pct = day.pct_of_goal;
+        var isToday = day.date === todayStr;
+        var badge, badgeClass;
+        if (pct >= 120) { badge = 'Sobre'; badgeClass = 'bg-emerald-100 text-emerald-800'; }
+        else if (pct >= 100) { badge = 'Meta'; badgeClass = 'bg-green-100 text-green-800'; }
+        else if (pct >= 80) { badge = 'Cerca'; badgeClass = 'bg-yellow-100 text-yellow-800'; }
+        else if (pct > 0) { badge = 'Bajo'; badgeClass = 'bg-red-100 text-red-700'; }
+        else { badge = '—'; badgeClass = 'bg-gray-100 text-gray-400'; }
+        var barColor = pct >= 100 ? '#10B981' : (pct >= 80 ? '#FBBF24' : '#EF4444');
+        var dateDisplay = isToday ? '<span class="font-bold" style="color:'+accColor+'">● Hoy</span>' : day.date;
+        var barW = Math.min(pct, 100);
+        return '<div class="' + (isToday ? 'bg-blue-50 ' : '') + 'border border-gray-100 rounded-xl p-3" onclick="window.showDayBreakdown(\'' + day.date + '\')">' +
+            '<div class="flex items-center justify-between gap-2">' +
+                '<span class="text-sm font-medium text-gray-700">' + dateDisplay + '</span>' +
+                '<span class="px-2 py-0.5 text-xs rounded-full font-semibold ' + badgeClass + '">' + badge + '</span>' +
+            '</div>' +
+            '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                '<span>Uds <b class="text-gray-700">' + day.units + '</b></span>' +
+                '<span>Bruto <b class="text-gray-700">$' + fmtMoney(day.revenue_gross) + '</b></span>' +
+                '<span>Neto <b class="text-green-700">$' + fmtMoney(day.revenue_net) + '</b></span>' +
+                '<span>Meta <b style="color:' + barColor + '">' + pct.toFixed(1) + '%</b></span>' +
+            '</div>' +
+            '<div class="w-full bg-gray-200 rounded-full h-2 mt-2"><div class="h-2 rounded-full" style="width:' + barW + '%;background:' + barColor + '"></div></div>' +
+        '</div>';
+    });
+
+    var html = '<div id="meli-daily-cards" class="md:hidden space-y-2 p-3"></div>' +
+        '<div class="hidden md:block overflow-x-auto">' +
+        '<table class="w-full text-sm">' +
         '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
         '<th class="py-2.5 px-4 font-semibold">Fecha</th>' +
         '<th class="py-2.5 px-3 font-semibold text-right">Uds</th>' +
@@ -832,11 +861,16 @@ function renderDailyTable(data) {
         '<tbody id="meli-daily-tbody"></tbody>' +
         tfoot +
         '</table>' +
+        '</div>' +
         '<div id="meli-daily-pag"></div>';
 
     document.getElementById('daily-sales-table').innerHTML = html;
-    window['meli-daily-pag_go'] = function(p) { _renderPaginatedMeli(_meliDailyRows, p, 'meli-daily-tbody', 'meli-daily-pag'); };
+    window['meli-daily-pag_go'] = function(p) {
+        _renderPaginatedMeli(_meliDailyRows, p, 'meli-daily-tbody', 'meli-daily-pag');
+        _renderPaginatedMeli(_meliDailyCards, p, 'meli-daily-cards', null);
+    };
     _renderPaginatedMeli(_meliDailyRows, 1, 'meli-daily-tbody', 'meli-daily-pag');
+    _renderPaginatedMeli(_meliDailyCards, 1, 'meli-daily-cards', null);
     updateTodayBar(todayGross, todayNet, todayUnits);
     renderHeatmap(daily);
 }
@@ -1070,12 +1104,31 @@ window.loadLowStockAlerts = function() {
                     '<td class="py-2.5 px-3 text-right text-gray-500 text-xs">' + s.units_30d + ' uds</td>' +
                     '</tr>';
             }).join('');
+            var cards = all.map(function(s) {
+                var stockColor = s.alert ? '#EF4444' : (s.bm_stock <= 10 ? '#F97316' : '#10B981');
+                var daysText = s.days_remaining !== null ? s.days_remaining + 'd' : '∞';
+                var daysColor = (s.days_remaining !== null && s.days_remaining <= 7) ? '#EF4444' : ((s.days_remaining !== null && s.days_remaining <= 14) ? '#F97316' : '#6B7280');
+                return '<div class="' + (s.alert ? 'bg-red-50 ' : '') + 'border border-gray-100 rounded-xl p-3">' +
+                    '<div class="flex items-center justify-between gap-2">' +
+                        '<span class="font-mono text-xs text-gray-500">' + s.sku + '</span>' +
+                        (s.alert ? '<span>⚠️</span>' : '') +
+                    '</div>' +
+                    '<p class="text-xs text-gray-700 mt-0.5" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + s.title + '</p>' +
+                    '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                        '<span>Stock BM <b style="color:' + stockColor + '">' + s.bm_stock + '</b></span>' +
+                        '<span>Vel. ' + s.daily_velocity.toFixed(1) + '/día</span>' +
+                        '<span>Días <b style="color:' + daysColor + '">' + daysText + '</b></span>' +
+                        '<span>Ventas 30d ' + s.units_30d + '</span>' +
+                    '</div>' +
+                '</div>';
+            }).join('');
             var alertCount = data.alerts.length;
             var banner = alertCount > 0
                 ? '<div class="mb-4 p-3 bg-red-50 rounded-lg border border-red-200 text-xs text-red-700 font-semibold">⚠️ ' + alertCount + ' SKU' + (alertCount > 1 ? 's' : '') + ' con stock ≤ ' + threshold + ' unidades — requieren reposición</div>'
                 : '<div class="mb-4 p-3 bg-green-50 rounded-lg border border-green-200 text-xs text-green-700 font-semibold">✓ Todos los top SKUs tienen stock suficiente (&gt;' + threshold + ' uds)</div>';
             content.innerHTML = banner +
-                '<div class="overflow-x-auto"><table class="w-full text-sm">' +
+                '<div class="md:hidden space-y-2">' + cards + '</div>' +
+                '<div class="hidden md:block overflow-x-auto"><table class="w-full text-sm">' +
                 '<thead><tr class="text-left text-xs text-gray-400 border-b border-gray-200 bg-gray-50">' +
                 '<th class="py-2 px-3 w-8"></th>' +
                 '<th class="py-2 px-3 font-semibold">SKU</th>' +
@@ -1491,7 +1544,7 @@ window._renderMlItem = function(d) {
     html += '<p class="text-xs text-gray-400 mt-1">' + d.category_name + ' · ' + d.item_id + '</p>';
     html += '</div></div>';
     // Stats grid
-    html += '<div class="grid grid-cols-3 gap-3">';
+    html += '<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">';
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Demanda</p>';
     html += '<span class="px-2 py-0.5 rounded-full text-xs font-bold ' + demClr + '">' + d.demand_tier + '</span>';
     html += '<p class="text-xs text-gray-700 mt-1.5 font-semibold">' + d.velocity_per_day + ' ud/día</p>';
@@ -1545,7 +1598,7 @@ window._renderMlSim = function(simId, d) {
             '</div>';
     }
     var html = '<div class="space-y-3 pt-2">';
-    html += '<div class="grid grid-cols-2 gap-3">';
+    html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">';
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2"><p class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide mb-1">Ingresos / Fees ML</p>';
     html += row('sell',  'Precio venta ($)', d.price.toFixed(2));
     html += row('fee',   'Comisión ML (%)', feeDefaultPct);
