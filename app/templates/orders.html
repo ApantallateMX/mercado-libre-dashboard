@@ -347,12 +347,23 @@
       </div>
     </div>
 
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-200">
+    <div id="alertas-kpis" class="grid grid-cols-2 lg:grid-cols-5 gap-3"></div>
+
+    <div id="alertas-context" class="hidden flex-wrap gap-2"></div>
+
+    <div id="alertas-empty" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200 py-16 flex flex-col items-center justify-center gap-2">
+      <div class="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center text-green-600 text-2xl">✓</div>
+      <p class="text-sm font-semibold text-gray-700">Todo con stock disponible</p>
+      <p class="text-xs text-gray-400">No hay órdenes sin stock detectadas en este momento.</p>
+      <p id="alertas-empty-live" class="text-xs text-gray-300 mt-2"></p>
+    </div>
+
+    <div id="alertas-table-card" class="bg-white rounded-2xl shadow-sm border border-gray-200 hidden">
       <table class="w-full table-fixed text-sm">
         <colgroup>
           <col style="width:90px"><col style="width:135px"><col style="width:100px">
           <col><col style="width:130px"><col style="width:55px">
-          <col style="width:90px"><col>
+          <col style="width:130px"><col>
         </colgroup>
         <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
@@ -370,8 +381,8 @@
           <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
         </tbody>
       </table>
+      <div id="alertas-pagination"></div>
     </div>
-    <div id="alertas-pagination" class="flex justify-center gap-2"></div>
 
 </div>
 <!-- /ventas-view-alertas_stock -->
@@ -431,6 +442,64 @@ if ('{{ view }}' === 'alertas_stock') {
 // ════════════════════════════════════════════════════════════════════════════
 var _alertasRowsHtml = [];
 var _ALERTAS_PAGE_SIZE = 10;
+var _alertasLastLoadTs = 0;
+
+function _alertasDensity(n) {
+    if (n <= 4)  return { pad: 'py-4',   text: 'text-sm', clamp: 3 };
+    if (n <= 14) return { pad: 'py-2.5', text: 'text-xs', clamp: 2 };
+    return           { pad: 'py-2',   text: 'text-xs', clamp: 1 };
+}
+
+function _alertasKpiCard(label, value, accent) {
+    return '<div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">' +
+        '<div class="text-xs text-gray-400">' + label + '</div>' +
+        '<div class="text-xl font-bold mt-1 ' + (accent || 'text-gray-800') + '">' + value + '</div>' +
+        '</div>';
+}
+
+function _alertasRenderKpis(rows) {
+    var total = rows.length;
+    var lastLabel = '—';
+    if (total) {
+        var agoMin = Math.round((Date.now() / 1000 - rows[0].detected_at) / 60);
+        lastLabel = agoMin < 1 ? 'hace unos seg.' : ('hace ' + agoMin + ' min');
+    }
+    var accounts = {};
+    rows.forEach(function(r) { accounts[r.account_name || r.account_id] = true; });
+    var nAccounts = Object.keys(accounts).length;
+    var withSug = rows.filter(function(r) { return (r.sugerencias || []).length > 0; }).length;
+    var units = rows.reduce(function(s, r) { return s + (r.quantity || 0); }, 0);
+
+    document.getElementById('alertas-kpis').innerHTML =
+        _alertasKpiCard('Alertas activas', total, total > 0 ? 'text-red-600' : 'text-green-600') +
+        _alertasKpiCard('Última detectada', lastLabel) +
+        _alertasKpiCard('Cuentas afectadas', nAccounts) +
+        _alertasKpiCard('Con sugerencia lista', total ? (withSug + ' / ' + total) : '0 / 0') +
+        _alertasKpiCard('Unidades afectadas', units);
+}
+
+function _alertasRenderContext(rows) {
+    var ctx = document.getElementById('alertas-context');
+    if (!rows.length) { ctx.classList.add('hidden'); ctx.classList.remove('flex'); ctx.innerHTML = ''; return; }
+    var byAccount = {};
+    var bySku = {};
+    rows.forEach(function(r) {
+        var acc = r.account_name || r.account_id;
+        byAccount[acc] = (byAccount[acc] || 0) + 1;
+        bySku[r.sku] = (bySku[r.sku] || 0) + 1;
+    });
+    var chips = Object.keys(byAccount).map(function(acc) {
+        return '<span class="bg-gray-100 text-gray-600 text-xs px-3 py-1.5 rounded-full">' + acc + ' · ' + byAccount[acc] + '</span>';
+    });
+    Object.keys(bySku).forEach(function(sku) {
+        if (bySku[sku] > 1) {
+            chips.push('<span class="bg-amber-50 text-amber-700 text-xs px-3 py-1.5 rounded-full font-mono">' + sku + ' ×' + bySku[sku] + '</span>');
+        }
+    });
+    ctx.innerHTML = chips.join('');
+    ctx.classList.remove('hidden');
+    ctx.classList.add('flex');
+}
 
 function alertasLoadData() {
     var tbody = document.getElementById('alertas-tbody');
@@ -440,12 +509,23 @@ function alertasLoadData() {
         .then(function(r) { return r.json(); })
         .then(function(d) {
             var rows = d.rows || [];
+            _alertasLastLoadTs = Date.now();
+            _alertasRenderKpis(rows);
+            _alertasRenderContext(rows);
+
+            var emptyEl = document.getElementById('alertas-empty');
+            var tableCard = document.getElementById('alertas-table-card');
             if (!rows.length) {
-                document.getElementById('alertas-tbody').innerHTML =
-                    '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Sin órdenes sin stock detectadas todavía — todo con inventario disponible.</td></tr>';
-                document.getElementById('alertas-pagination').innerHTML = '';
+                _alertasRowsHtml = [];
+                emptyEl.classList.remove('hidden');
+                tableCard.classList.add('hidden');
+                document.getElementById('alertas-empty-live').textContent = 'Revisando automáticamente cada 30s · última revisión: ahora';
                 return;
             }
+            emptyEl.classList.add('hidden');
+            tableCard.classList.remove('hidden');
+
+            var d2 = _alertasDensity(rows.length);
             _alertasRowsHtml = rows.map(function(row) {
                 var availNum = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
                     ? '<span class="text-gray-400">sin dato</span>'
@@ -459,20 +539,20 @@ function alertasLoadData() {
                 if (sugerencias.length) {
                     var s = sugerencias[0];
                     sugHtml =
-                        '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (s.title || '').replace(/"/g, '&quot;') + '">' +
+                        '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:' + d2.clamp + '; -webkit-box-orient:vertical; overflow:hidden;" title="' + (s.title || '').replace(/"/g, '&quot;') + '">' +
                             '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
                         '</div>' +
                         '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
                 }
                 return '<tr class="border-t border-gray-100">' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.order_id + '</td>' +
-                    '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap align-top">' + row.sku + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-600 align-top" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap align-top">' + (row.account_name || row.account_id) + '</td>' +
-                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
-                    '<td class="px-3 py-2.5 text-right whitespace-nowrap align-top">' + avail + '</td>' +
-                    '<td class="px-3 py-2.5 align-top">' + sugHtml + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.order_id + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.sku + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-600 align-top" style="display:-webkit-box; -webkit-line-clamp:' + d2.clamp + '; -webkit-box-orient:vertical; overflow:hidden;" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-500 whitespace-nowrap align-top">' + (row.account_name || row.account_id) + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + avail + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' align-top">' + sugHtml + '</td>' +
                     '</tr>';
             });
             window['alertas-pagination_go'](1);
@@ -495,17 +575,20 @@ window['alertas-pagination_go'] = function(page) {
     var start = (p - 1) * _ALERTAS_PAGE_SIZE, end = Math.min(start + _ALERTAS_PAGE_SIZE, total);
     document.getElementById('alertas-tbody').innerHTML = _alertasRowsHtml.slice(start, end).join('');
     var pag = document.getElementById('alertas-pagination');
-    if (total <= _ALERTAS_PAGE_SIZE) { pag.innerHTML = ''; return; }
+    var pagerHtml = total > _ALERTAS_PAGE_SIZE
+        ? '<div class="flex items-center gap-1">' +
+          '<button onclick="window[\'alertas-pagination_go\'](' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
+          ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+          '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
+          '<button onclick="window[\'alertas-pagination_go\'](' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
+          ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+          '</div>'
+        : '<span class="text-xs text-gray-300">Actualizado hace unos segundos</span>';
     pag.innerHTML =
-        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 w-full">' +
-        '<span class="text-xs text-gray-400">' + (start + 1) + '–' + end + ' de ' + total + '</span>' +
-        '<div class="flex items-center gap-1">' +
-        '<button onclick="window[\'alertas-pagination_go\'](' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
-        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
-        '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
-        '<button onclick="window[\'alertas-pagination_go\'](' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
-        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
-        '</div></div>';
+        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50 w-full rounded-b-2xl">' +
+        '<span class="text-xs text-gray-400">Mostrando ' + (start + 1) + '–' + end + ' de ' + total + ' alertas</span>' +
+        pagerHtml +
+        '</div>';
 };
 
 // ─── Periodo filter — compartido entre Por Orden y Por SKU ────────────────────

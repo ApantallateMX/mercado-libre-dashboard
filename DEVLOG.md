@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-21 — FEAT: Alertas de Stock — rediseño de aprovechamiento de espacio (agente uxui-designer)
+
+**Archivos:** `app/templates/orders.html`.
+
+Jovan reportó que la sub-vista "Alertas de Stock" (recién movida a Ventas)
+se veía "mocha" — con pocas filas (feed en vivo, a veces 0-2 órdenes) la
+tabla ocupaba una fracción mínima de la pantalla y el resto quedaba vacío,
+sin sensación de diseño intencional. Pidió usar el agente de diseño
+(`uxui-designer`) en vez de un parche improvisado.
+
+Spec del agente (prototipo interactivo incluido) diagnosticó que el
+problema no era la tabla — era que arriba de ella solo había texto, sin
+ningún elemento con "peso" visual que compitiera por espacio. Implementado:
+
+1. **Franja de 5 KPIs** siempre presente (alertas activas, última
+   detectada, cuentas afectadas, con sugerencia lista, unidades afectadas)
+   — calculados 100% client-side sobre el mismo array que ya se descarga,
+   sin endpoint nuevo.
+2. **Barra de contexto** (chips por cuenta + chip "SKU ×N" si se repite),
+   solo si hay filas.
+3. **Empty state dedicado** (check verde + mensaje + indicador en vivo) en
+   vez de una tabla con una sola fila de texto gris flotando.
+4. **Densidad de fila auto-ajustada** al volumen real: 1-4 filas =
+   cómoda (py-4, clamp 3 líneas), 5-14 = estándar (como antes), 15+ =
+   compacta (py-2, clamp 1 línea) — no un mínimo de altura artificial.
+5. **Pie de tabla siempre presente** ("Mostrando X–Y de Z alertas" +
+   indicador en vivo), paginación ‹Ant/Sig› solo aparece con >10 filas —
+   antes terminaba de golpe sin cierre visual con pocas filas.
+
+Verificado con Playwright (instalado en esta sesión, no existía antes) +
+JWT local: capturas en 1920×1080 con 0 filas (empty state) y con 4 filas
+de prueba insertadas directo en `tokens.db` (borradas después de verificar).
+Durante la verificación se encontró y corrigió de paso un bug real
+preexistente — la columna "Disp. BM / Precio" (90px) era muy angosta para
+su propio título de encabezado y se superponía visualmente con
+"Sugerencia"; se amplió a 130px.
+
+---
+
 ## 2026-07-21 — FIX: LocationID 62 no era Tijuana (era Cuautitlán CDMX) — nuevo set de stock vendible incluye Tijuana real
 
 **Archivos:** `app/services/binmanager_client.py`, `app/api/amazon_products.py`,
