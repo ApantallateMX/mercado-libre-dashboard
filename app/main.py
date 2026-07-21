@@ -1643,6 +1643,7 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
 # duplicada, mismo choke point que ya alimenta deuda y todo lo demás.
 async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
     from app.services.sku_utils import normalize_to_bm_sku
+    client = None
     try:
         order_id = resource.rstrip("/").split("/")[-1]
         if not order_id.isdigit():
@@ -1650,35 +1651,61 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
         client = await get_meli_client(user_id=user_id)
         if not client:
             return
-        try:
-            order = await client.resolve_order(order_id)
-        finally:
-            await client.close()
 
+        order = await client.resolve_order(order_id)
         if order.get("status") not in ("paid", "delivered"):
             return
 
         usd_to_mxn = await _get_usd_to_mxn(client)
         _save_ml_orders_history_bg([order], user_id, usd_to_mxn)
 
-        order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
-        for oi in order.get("order_items", []):
-            item_info = oi.get("item", {})
-            sku_raw = (item_info.get("seller_sku") or item_info.get("seller_custom_field") or "").strip()
-            if not sku_raw:
-                continue
-            sku = normalize_to_bm_sku(sku_raw)
-            quantity = int(oi.get("quantity") or 1)
-            avail = await token_store.get_bm_sku_available_qty(sku)
-            if avail is None or avail <= 0:
-                await token_store.record_realtime_stock_alert(
-                    order_id=str(order.get("id", "")),
-                    item_id=str(item_info.get("id", "")),
-                    platform="ml", account_id=user_id, sku=sku,
-                    quantity=quantity, available_qty=avail, order_date=order_date,
-                )
+        # La alerta de "sin stock" solo aplica a órdenes PENDIENTES de enviar,
+        # merchant (no FULL) — FULL lo despacha ML desde su propio almacén
+        # (no depende de nuestro stock BM), y una orden ya enviada/entregada
+        # ya no es accionable, mostrarla solo confunde. El status/logistic_type
+        # real vive en /shipments/{id} — el objeto "shipping" de la orden solo
+        # trae el id de referencia, NO el estado (confirmado contra un caso real).
+        shipping_id = (order.get("shipping") or {}).get("id")
+        is_full = False
+        ship_status = ""
+        if shipping_id:
+            try:
+                shipment = await client.get_shipment(str(shipping_id))
+                is_full = shipment.get("logistic_type", "") == "fulfillment"
+                ship_status = shipment.get("status", "")
+            except Exception as _ship_exc:
+                logger.warning(f"[WEBHOOK-ML] No se pudo obtener shipment {shipping_id}: {_ship_exc}")
+                return  # sin dato confiable de envío, mejor no alertar que alertar mal
+        _PENDING_SHIP_STATUSES = ("pending", "handling", "ready_to_ship")
+        should_alert = (not is_full) and (ship_status in _PENDING_SHIP_STATUSES)
+
+        if should_alert:
+            order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
+            for oi in order.get("order_items", []):
+                item_info = oi.get("item", {})
+                sku_raw = (item_info.get("seller_sku") or item_info.get("seller_custom_field") or "").strip()
+                if not sku_raw:
+                    continue
+                sku = normalize_to_bm_sku(sku_raw)
+                quantity = int(oi.get("quantity") or 1)
+                avail = await token_store.get_bm_sku_available_qty(sku)
+                if avail is None or avail <= 0:
+                    await token_store.record_realtime_stock_alert(
+                        order_id=str(order.get("id", "")),
+                        item_id=str(item_info.get("id", "")),
+                        platform="ml", account_id=user_id, sku=sku,
+                        quantity=quantity, available_qty=avail, order_date=order_date,
+                    )
+        else:
+            # ML reenvía la notificación en cada cambio de estado de la misma
+            # orden — si ya se había alertado antes y ahora es FULL o pasó a
+            # enviado/entregado/cancelado, ya no es accionable: se limpia.
+            await token_store.delete_realtime_stock_alerts_for_order(str(order.get("id", "")), platform="ml")
     except Exception as e:
         logger.warning(f"[WEBHOOK-ML] Error procesando resource={resource} uid={user_id}: {e}")
+    finally:
+        if client:
+            await client.close()
 
 
 @app.post("/webhooks/ml/orders")
@@ -4777,6 +4804,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 continue
             _rph = float(_row.get("LastRetailPricePurchaseHistory") or 0)
             _cost = float(_row.get("AvgCostQTY") or 0)
+            _size = int(_row.get("Size") or 0)
             rows.append({
                 "sku":       _sku,
                 "retail_ph": _rph if 0 < _rph < 9000 else 0,
@@ -4784,6 +4812,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "brand":     _row.get("Brand") or "",
                 "model":     _row.get("Model") or "",
                 "title":     _row.get("Title") or "",
+                "size":      _size if 0 < _size <= 200 else 0,
             })
 
         # Guardar en DB

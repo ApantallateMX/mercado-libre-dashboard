@@ -820,6 +820,13 @@ async def init_db():
                 stock_updated_at   REAL NOT NULL DEFAULT 0
             )
         """)
+        # Migración: tamaño de pantalla (campo "Size" real de BM, ej. 55/65/75
+        # pulgadas) — usado para sugerencias de reemplazo por SKU sin stock,
+        # SIN esto se sugería el mismo tamaño equivocado (marca+precio nomás).
+        try:
+            await db.execute("ALTER TABLE bm_sku_master ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_sku_changes — historial de cambios detectados en cada sync
         # (mismo dato que BM ya nos manda, no llamadas nuevas). Retail/costo:
@@ -1237,13 +1244,14 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
                 changes.append((r["sku"], "cost_usd", old["cost_usd"], new_cost, now, "catalog_sync"))
 
         await db.executemany(
-            """INSERT INTO bm_sku_master (sku, title, brand, model, retail_ph, cost_usd, catalog_updated_at)
-               VALUES (:sku, :title, :brand, :model, :retail_ph, :cost_usd, :updated_at)
+            """INSERT INTO bm_sku_master (sku, title, brand, model, retail_ph, cost_usd, size, catalog_updated_at)
+               VALUES (:sku, :title, :brand, :model, :retail_ph, :cost_usd, :size, :updated_at)
                ON CONFLICT(sku) DO UPDATE SET
                    title = excluded.title, brand = excluded.brand, model = excluded.model,
                    retail_ph = excluded.retail_ph, cost_usd = excluded.cost_usd,
+                   size = excluded.size,
                    catalog_updated_at = excluded.catalog_updated_at""",
-            [{**r, "cost_usd": r.get("cost_usd", 0), "updated_at": now} for r in rows],
+            [{**r, "cost_usd": r.get("cost_usd", 0), "size": r.get("size", 0), "updated_at": now} for r in rows],
         )
         if changes:
             await db.executemany(
@@ -1425,22 +1433,47 @@ async def record_realtime_stock_alert(
         await db.commit()
 
 
-async def get_replacement_sku_suggestions(sku: str, brand: str, retail_ph: float, limit: int = 3) -> list[dict]:
+async def delete_realtime_stock_alerts_for_order(order_id: str, platform: str = "ml") -> int:
+    """Elimina alertas de una orden que ya no es accionable (se envió, se
+    entregó, se canceló, o resultó ser FULL) — se llama cuando el webhook
+    recibe una actualización posterior de esa misma orden. Retorna filas
+    borradas."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM realtime_stock_alerts WHERE order_id = ? AND platform = ?",
+            (order_id, platform),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
+async def get_replacement_sku_suggestions(
+    sku: str, brand: str, retail_ph: float, size: int = 0, limit: int = 3
+) -> list[dict]:
     """Sugiere SKUs de reemplazo con stock disponible: misma marca + precio
     parecido (retail_ph), ordenado por cercanía de precio. Pura lectura de
-    bm_sku_master (ya sincronizado) — sin llamadas nuevas a BM."""
+    bm_sku_master (ya sincronizado) — sin llamadas nuevas a BM.
+
+    Si el SKU original tiene "size" (tamaño de pantalla en pulgadas, campo
+    real de BM — ej. TVs) > 0, la búsqueda EXIGE el mismo tamaño exacto —
+    nunca sugiere un tamaño distinto aunque el precio sea parecido, para no
+    generar una queja de cliente por mandar un reemplazo del tamaño
+    equivocado. Si no hay tamaño (producto sin pantalla) cae a marca+precio.
+    """
     if not brand or not retail_ph:
         return []
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("""
-            SELECT sku, title, model, retail_ph, available_qty,
+        size_clause = "AND size = ?" if size and size > 0 else ""
+        params = [retail_ph, brand, sku] + ([size] if size and size > 0 else []) + [limit]
+        cur = await db.execute(f"""
+            SELECT sku, title, model, retail_ph, available_qty, size,
                    ABS(retail_ph - ?) AS price_diff
             FROM bm_sku_master
-            WHERE brand = ? AND sku != ? AND available_qty > 0 AND retail_ph > 0
+            WHERE brand = ? AND sku != ? AND available_qty > 0 AND retail_ph > 0 {size_clause}
             ORDER BY price_diff ASC
             LIMIT ?
-        """, (retail_ph, brand, sku, limit))
+        """, params)
         rows = [dict(r) for r in await cur.fetchall()]
     return rows
 
@@ -1458,6 +1491,7 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
                 COALESCE(bsm.title, '') AS titulo,
                 COALESCE(bsm.brand, '') AS brand,
                 COALESCE(bsm.retail_ph, 0) AS retail_ph,
+                COALESCE(bsm.size, 0) AS size,
                 rsa.quantity, rsa.available_qty_at_check, rsa.order_date, rsa.detected_at
             FROM realtime_stock_alerts rsa
             LEFT JOIN bm_sku_master bsm ON bsm.sku = rsa.sku
@@ -1468,7 +1502,7 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
 
     for row in rows:
         row["sugerencias"] = await get_replacement_sku_suggestions(
-            row["sku"], row.pop("brand"), row.pop("retail_ph"), limit=3
+            row["sku"], row.pop("brand"), row.pop("retail_ph"), row.pop("size"), limit=3
         )
     return rows
 

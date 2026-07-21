@@ -2,7 +2,7 @@
 {% block title %}Sync Stock Multi-Plataforma{% endblock %}
 
 {% block content %}
-<div class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+<div class="w-full px-4 py-6 space-y-6">
 
   <!-- ── Header ─────────────────────────────────────────────────── -->
   <div class="flex items-center justify-between">
@@ -731,17 +731,22 @@
     </div>
 
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto">
-      <table class="min-w-full text-sm">
+      <table class="w-full table-fixed text-sm" style="min-width:900px">
+        <colgroup>
+          <col style="width:9%"><col style="width:11%"><col style="width:9%">
+          <col style="width:25%"><col style="width:13%"><col style="width:7%">
+          <col style="width:9%"><col style="width:17%">
+        </colgroup>
         <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
           <tr>
-            <th class="px-4 py-3 text-left">Detectado</th>
-            <th class="px-4 py-3 text-left">Orden</th>
-            <th class="px-4 py-3 text-left">SKU</th>
-            <th class="px-4 py-3 text-left">Título</th>
-            <th class="px-4 py-3 text-left">Cuenta</th>
-            <th class="px-4 py-3 text-right">Cantidad</th>
-            <th class="px-4 py-3 text-right">Disponible BM</th>
-            <th class="px-4 py-3 text-left">Sugerencia de reemplazo</th>
+            <th class="px-3 py-3 text-left">Detectado</th>
+            <th class="px-3 py-3 text-left">Orden</th>
+            <th class="px-3 py-3 text-left">SKU</th>
+            <th class="px-3 py-3 text-left">Título</th>
+            <th class="px-3 py-3 text-left">Cuenta</th>
+            <th class="px-3 py-3 text-right">Cant.</th>
+            <th class="px-3 py-3 text-right">Disp. BM</th>
+            <th class="px-3 py-3 text-left">Sugerencia</th>
           </tr>
         </thead>
         <tbody id="alertas-tbody">
@@ -2163,21 +2168,20 @@ function alertasLoadData() {
                 var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
                 var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
                 var sugerencias = row.sugerencias || [];
-                var sugHtml = sugerencias.length
-                    ? sugerencias.map(function(s) {
-                        return '<div class="text-xs"><span class="font-mono">' + s.sku + '</span> — ' +
-                            (s.title || '—') + ' <span class="text-gray-400">($' + Math.round(s.retail_ph) + ' USD, disp. ' + s.available_qty + ')</span></div>';
-                    }).join('')
-                    : '<span class="text-gray-400 text-xs">sin sugerencia (marca/precio)</span>';
+                var sugHtml = '<span class="text-gray-400 text-xs">sin sugerencia</span>';
+                if (sugerencias.length) {
+                    var s = sugerencias[0];
+                    sugHtml = '<span class="font-mono">' + s.sku + '</span> · $' + Math.round(s.retail_ph) + ' · disp. ' + s.available_qty;
+                }
                 return '<tr class="border-t border-gray-100">' +
-                    '<td class="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + detectedLabel + '</td>' +
-                    '<td class="px-4 py-2.5 font-mono text-xs">' + row.order_id + '</td>' +
-                    '<td class="px-4 py-2.5 font-mono text-xs">' + row.sku + '</td>' +
-                    '<td class="px-4 py-2.5 text-xs text-gray-600">' + (row.titulo || '—') + '</td>' +
-                    '<td class="px-4 py-2.5 text-xs text-gray-500">' + (row.account_name || row.account_id) + '</td>' +
-                    '<td class="px-4 py-2.5 text-right">' + row.quantity + '</td>' +
-                    '<td class="px-4 py-2.5 text-right">' + avail + '</td>' +
-                    '<td class="px-4 py-2.5">' + sugHtml + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 truncate">' + detectedLabel + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs truncate">' + row.order_id + '</td>' +
+                    '<td class="px-3 py-2.5 font-mono text-xs truncate">' + row.sku + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-600 truncate" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs text-gray-500 truncate">' + (row.account_name || row.account_id) + '</td>' +
+                    '<td class="px-3 py-2.5 text-right">' + row.quantity + '</td>' +
+                    '<td class="px-3 py-2.5 text-right">' + avail + '</td>' +
+                    '<td class="px-3 py-2.5 text-xs truncate">' + sugHtml + '</td>' +
                     '</tr>';
             });
             window['alertas-pagination_go'](1);
