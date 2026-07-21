@@ -18,7 +18,32 @@
 </div>
 {% else %}
 <!-- Brand Ads activas -->
-<div class="overflow-x-auto">
+<!-- Mobile: cards -->
+<div class="md:hidden space-y-2 p-3">
+    {% for c in campaigns %}
+    <div class="border border-gray-100 rounded-xl p-3">
+        <div class="flex items-center justify-between gap-2">
+            <span class="text-sm font-medium text-gray-800">{{ c.name or c.id }}</span>
+            {% if c.status == 'active' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800">Activa</span>
+            {% elif c.status == 'paused' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">Pausada</span>
+            {% else %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ c.status }}</span>
+            {% endif %}
+        </div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-600">
+            <span>Gasto <b class="text-red-600">${{ "%.2f"|format(c.cost or 0) }}</b></span>
+            <span>Ingresos <b class="text-green-600">${{ "%.2f"|format(c.revenue or 0) }}</b></span>
+            <span>Clics {{ c.clicks or 0 }}</span>
+            <span>ROAS <b class="{{ 'text-green-600' if (c.roas or 0) >= 3 else 'text-red-600' }}">{{ "%.2f"|format(c.roas or 0) }}x</b></span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Desktop: tabla -->
+<div class="hidden md:block overflow-x-auto">
 <table class="w-full">
     <thead class="bg-gray-50">
         <tr>
