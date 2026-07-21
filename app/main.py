@@ -585,6 +585,7 @@ async def lifespan(app: FastAPI):
     start_multi_stock_sync()
     start_token_refresh()
     start_supplier_debt_sync()
+    start_realtime_alerts_reconcile()
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
@@ -1641,6 +1642,20 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
 # Fase 1 (solo ML — Amazon requiere infra AWS para Notifications API, pendiente).
 # Reutiliza upsert_order_history vía _save_ml_orders_history_bg — cero lógica
 # duplicada, mismo choke point que ya alimenta deuda y todo lo demás.
+def _shipment_should_alert(shipment: dict) -> bool:
+    """Única fuente de verdad de "¿esta orden sigue siendo accionable?" —
+    usada tanto por el webhook como por el loop de reconciliación, para que
+    nunca queden desincronizados entre sí (causa del bug de sugerencias
+    duplicadas/alertas viejas de hoy)."""
+    is_full = shipment.get("logistic_type", "") == "fulfillment"
+    status = shipment.get("status", "")
+    substatus = shipment.get("substatus", "")
+    return (not is_full) and (
+        status in ("pending", "handling")
+        or (status == "ready_to_ship" and substatus == "ready_to_print")
+    )
+
+
 async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
     """Procesa una notificación de ML — acepta tanto el topic "orders_v2"
     (resource=/orders/{id}) como "shipments" (resource=/shipments/{id}).
@@ -1697,30 +1712,16 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
             order = await client.resolve_order(order_id)
             shipping_id = (order.get("shipping") or {}).get("id")
 
-        is_full = False
-        ship_status = ""
-        ship_substatus = ""
         if shipping_id:
             try:
                 shipment = await client.get_shipment(str(shipping_id))
-                is_full = shipment.get("logistic_type", "") == "fulfillment"
-                ship_status = shipment.get("status", "")
-                ship_substatus = shipment.get("substatus", "")
             except Exception as _ship_exc:
                 logger.warning(f"[WEBHOOK-ML] No se pudo obtener shipment {shipping_id}: {_ship_exc}")
                 return  # sin dato confiable de envío, mejor no alertar que alertar mal
         else:
             logger.warning(f"[WEBHOOK-ML] Orden {order_id} sin shipping.id tras reintento — sin dato de envío")
             return
-        # Confirmado con 3 órdenes reales: Jovan solo quiere ver "pendiente
-        # por imprimir" — status=ready_to_ship con substatus=ready_to_print
-        # (guía generada, aún no impresa/armada para recolección). En cuanto
-        # el substatus avanza a in_packing_list (ya en lista de recolección,
-        # "en camino" para el vendedor) ya no es accionable — se descarta.
-        should_alert = (not is_full) and (
-            ship_status in ("pending", "handling")
-            or (ship_status == "ready_to_ship" and ship_substatus == "ready_to_print")
-        )
+        should_alert = _shipment_should_alert(shipment)
 
         if should_alert:
             order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
@@ -1738,6 +1739,7 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
                         item_id=str(item_info.get("id", "")),
                         platform="ml", account_id=user_id, sku=sku,
                         quantity=quantity, available_qty=avail, order_date=order_date,
+                        shipping_id=str(shipping_id),
                     )
         else:
             # ML reenvía la notificación en cada cambio de estado de la misma
@@ -13464,6 +13466,78 @@ def start_supplier_debt_sync():
     asyncio.create_task(_supplier_debt_sync_loop())
 
 
+# ── Reconciliación de Alertas de Stock — no depende solo de notificaciones ──
+# Bug real encontrado: una alerta se crea correctamente cuando el envío
+# está en "ready_to_print", pero si el envío avanza a "in_packing_list" (o
+# se envía/entrega/resulta FULL) SIN que llegue una notificación nueva para
+# esa orden (ML no siempre reavisa por cada cambio de sub-estado, sobre
+# todo si "Shipments" no está activo en el DevCenter), la alerta se queda
+# congelada mostrando algo que ya no es cierto. Este loop revisa
+# activamente el estado real de CADA alerta activa cada 5 min — no espera
+# a que nos avisen.
+_REALTIME_ALERTS_RECONCILE_INTERVAL = 300  # 5 min
+
+
+async def _reconcile_realtime_alerts_once() -> dict:
+    """Revisa todas las alertas activas contra el estado real de su envío
+    en ML y borra las que ya no son accionables. Retorna un resumen."""
+    alerts = await token_store.get_all_realtime_alerts_for_reconcile()
+    checked = 0
+    removed = 0
+    errors = 0
+    clients_cache: dict = {}
+    try:
+        for a in alerts:
+            account_id = a.get("account_id", "")
+            if a.get("platform") != "ml" or not account_id:
+                continue
+            try:
+                client = clients_cache.get(account_id)
+                if client is None:
+                    client = await get_meli_client(user_id=account_id)
+                    if not client:
+                        continue
+                    clients_cache[account_id] = client
+
+                shipping_id = a.get("shipping_id") or ""
+                if not shipping_id:
+                    order = await client.resolve_order(a["order_id"])
+                    shipping_id = str((order.get("shipping") or {}).get("id") or "")
+                    if shipping_id:
+                        await token_store.update_realtime_stock_alert_shipping_id(a["id"], shipping_id)
+                if not shipping_id:
+                    continue  # sin dato — no se puede confirmar, se deja para el próximo ciclo
+
+                shipment = await client.get_shipment(shipping_id)
+                checked += 1
+                if not _shipment_should_alert(shipment):
+                    await token_store.delete_realtime_stock_alert_by_id(a["id"])
+                    removed += 1
+                await asyncio.sleep(0.3)  # no saturar la API de ML
+            except Exception as e:
+                errors += 1
+                logger.warning(f"[ALERTS-RECONCILE] Error orden {a.get('order_id')}: {e}")
+    finally:
+        for c in clients_cache.values():
+            await c.close()
+    logger.info(f"[ALERTS-RECONCILE] revisadas={checked} borradas={removed} errores={errors}")
+    return {"checked": checked, "removed": removed, "errors": errors}
+
+
+async def _realtime_alerts_reconcile_loop():
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _reconcile_realtime_alerts_once()
+        except Exception as e:
+            logger.warning(f"[ALERTS-RECONCILE] Error en ciclo: {e}")
+        await asyncio.sleep(_REALTIME_ALERTS_RECONCILE_INTERVAL)
+
+
+def start_realtime_alerts_reconcile():
+    asyncio.create_task(_realtime_alerts_reconcile_loop())
+
+
 async def _token_refresh_loop():
     """Auto-renueva tokens MeLi.
     - Normal: cada 5h (ML access tokens duran 6h)
@@ -14780,6 +14854,18 @@ async def diag_bm_stock_snapshot(token: str = ""):
         "last_updated_ts": last_ts,
         "last_updated_age_min": round((_time.time() - last_ts) / 60, 1) if last_ts else None,
     }
+
+
+@app.get("/api/diag/reconcile-realtime-alerts")
+async def diag_reconcile_realtime_alerts(token: str = ""):
+    """Dispara YA el chequeo de reconciliación (normalmente corre solo cada
+    5 min) — revisa cada alerta activa contra el estado real del envío en
+    ML y borra las que ya no son accionables (enviadas/FULL/en_camino)."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    result = await _reconcile_realtime_alerts_once()
+    return result
 
 
 @app.get("/api/diag/clear-realtime-alerts")

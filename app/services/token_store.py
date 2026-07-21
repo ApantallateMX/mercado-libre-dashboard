@@ -894,6 +894,12 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rsa_detected_at ON realtime_stock_alerts(detected_at)")
+        # Migración: shipping_id — permite al loop de reconciliación revisar
+        # el estado real del envío sin tener que re-resolver la orden completa.
+        try:
+            await db.execute("ALTER TABLE realtime_stock_alerts ADD COLUMN shipping_id TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
@@ -1417,19 +1423,22 @@ async def get_bm_sku_available_qty(sku: str) -> int | None:
 async def record_realtime_stock_alert(
     order_id: str, item_id: str, platform: str, account_id: str,
     sku: str, quantity: int, available_qty: int | None, order_date: str,
+    shipping_id: str = "",
 ) -> None:
     """Registra una orden individual detectada sin stock al momento (vía
     webhook). Idempotente — UNIQUE(order_id, sku, platform) absorbe reenvíos
-    duplicados de la notificación sin generar 2 alertas."""
+    duplicados de la notificación sin generar 2 alertas. shipping_id se
+    guarda para que el loop de reconciliación pueda revisar el estado real
+    del envío sin tener que re-resolver la orden completa."""
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
             INSERT OR IGNORE INTO realtime_stock_alerts
                 (order_id, item_id, platform, account_id, sku, quantity,
-                 available_qty_at_check, order_date, detected_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+                 available_qty_at_check, order_date, detected_at, shipping_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
         """, (order_id, item_id, platform, account_id, sku, quantity,
-              available_qty, order_date, _t.time()))
+              available_qty, order_date, _t.time(), shipping_id))
         await db.commit()
 
 
@@ -1445,6 +1454,37 @@ async def delete_realtime_stock_alerts_for_order(order_id: str, platform: str = 
         )
         await db.commit()
         return cur.rowcount
+
+
+async def get_all_realtime_alerts_for_reconcile() -> list[dict]:
+    """Todas las alertas activas — para el loop periódico que revisa el
+    estado REAL de cada envío (no depende de que llegue una notificación
+    nueva; ML no siempre reavisa en cada cambio de sub-estado)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, order_id, platform, account_id, sku, shipping_id FROM realtime_stock_alerts"
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_realtime_stock_alert_by_id(alert_id: int) -> None:
+    """Borra una alerta puntual por su id (usado por el loop de reconciliación)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM realtime_stock_alerts WHERE id = ?", (alert_id,))
+        await db.commit()
+
+
+async def update_realtime_stock_alert_shipping_id(alert_id: int, shipping_id: str) -> None:
+    """Backfill de shipping_id para alertas creadas antes de que existiera
+    la columna — el loop de reconciliación lo completa la primera vez que
+    revisa una fila vieja."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE realtime_stock_alerts SET shipping_id = ? WHERE id = ?",
+            (shipping_id, alert_id),
+        )
+        await db.commit()
 
 
 async def get_replacement_sku_suggestions(
