@@ -1811,6 +1811,26 @@ async def get_message_views(pack_ids: list, account_id: str) -> dict:
     return {r["pack_id"]: dict(r) for r in rows}
 
 
+async def bulk_mark_resolved(pack_ids: list, account_id: str, marked_by: str) -> int:
+    """Marca varios hilos como resueltos de una sola vez — 'borrón y cuenta
+    nueva' del historial acumulado (Jovan: Amazon no comparte respuestas
+    dadas directo en Seller Central, así que el historial viejo no se puede
+    saber con certeza qué ya se atendió; se limpia manualmente una vez y de
+    ahí en adelante se usa Tomar/Resuelto normal)."""
+    if not pack_ids:
+        return 0
+    import time as _t
+    now = _t.time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            """INSERT OR REPLACE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
+               VALUES (?, ?, ?, ?, 'resolved')""",
+            [(pid, account_id, marked_by, now) for pid in pack_ids],
+        )
+        await db.commit()
+    return len(pack_ids)
+
+
 # ─── ml_claim_views helpers (reusa ml_message_views con prefijo "claim:") ─────
 
 async def take_claim(claim_id: str, account_id: str, taken_by: str) -> None:

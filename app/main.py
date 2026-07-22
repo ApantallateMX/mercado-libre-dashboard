@@ -18193,17 +18193,23 @@ async def amazon_buyer_messages_list(
         for th in threads:
             th["messages"].sort(key=lambda m: m["ts"] or 0)
             th["unread"] = sum(1 for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
-            # Pendiente = el último mensaje del hilo es del comprador (nunca
-            # se le contestó, o escribió de nuevo después de la respuesta).
-            th["needs_response"] = th["messages"][-1]["direction"] == "inbound" if th["messages"] else False
 
-        if only_pending and not oid:
-            threads = [t for t in threads if t["needs_response"]]
-
+        # view_info ANTES de filtrar — "pendiente" depende tanto de si el
+        # último mensaje es del comprador COMO de si alguien ya lo marcó
+        # resuelto a mano (ej. "Marcar todo como atendido" para limpiar
+        # historial de antes de esta feature, que Amazon no comparte por
+        # ningún canal). Sin esto, un hilo marcado resuelto seguía apareciendo
+        # como pendiente para siempre si nunca se le contestó DESDE AQUÍ.
         pack_ids = [_amz_thread_key(t["reply_to_addr"]) for t in threads if t["reply_to_addr"]]
         views = await token_store.get_message_views(pack_ids, sid) if pack_ids else {}
         for th in threads:
             th["view_info"] = views.get(_amz_thread_key(th["reply_to_addr"]))
+            last_is_inbound = th["messages"][-1]["direction"] == "inbound" if th["messages"] else False
+            already_resolved = th["view_info"] and th["view_info"].get("status") == "resolved"
+            th["needs_response"] = last_is_inbound and not already_resolved
+
+        if only_pending and not oid:
+            threads = [t for t in threads if t["needs_response"]]
 
         return {"days": days, "threads": threads, "total": len(rows), "unread": unread}
     except Exception as e:
@@ -18266,6 +18272,43 @@ async def amazon_buyer_messages_status(request: Request):
         return JSONResponse({"detail": "seller_id y reply_to_addr son requeridos"}, status_code=400)
     await token_store.update_message_view_status(_amz_thread_key(reply_to_addr), seller_id, status)
     return JSONResponse({"ok": True, "status": status})
+
+
+@app.post("/api/amazon/buyer-messages/mark-all-resolved")
+async def amazon_buyer_messages_mark_all_resolved(request: Request):
+    """'Borrón y cuenta nueva' del historial acumulado — Jovan lo pidió tras
+    confirmar que Amazon no comparte respuestas dadas directo en Seller
+    Central, así que no hay forma de saber con certeza qué del historial
+    viejo ya se atendió. Marca TODOS los hilos actuales de la cuenta como
+    resueltos de un jalón; de ahí en adelante Tomar/Marcar resuelto se usa
+    normal para lo nuevo que vaya llegando."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+        seller_id = (body.get("seller_id") or "").strip()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    if not seller_id:
+        return JSONResponse({"detail": "seller_id es requerido"}, status_code=400)
+
+    rows = await token_store.get_buyer_messages(seller_id, days=3650, limit=5000)
+    reply_addrs = {r["reply_to_addr"] for r in rows if r.get("reply_to_addr")}
+    pack_ids = [_amz_thread_key(addr) for addr in reply_addrs]
+    count = await token_store.bulk_mark_resolved(pack_ids, seller_id, du["username"])
+
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=du["username"], user_id=du.get("id"),
+            action="amazon_buyer_messages_mark_all_resolved", item_id=seller_id,
+            detail={"threads_marked": count}, ip=ip, section="Salud",
+        )
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "threads_marked": count})
 
 
 @app.post("/api/amazon/buyer-messages/{message_id}/reply")

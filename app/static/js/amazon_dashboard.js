@@ -2794,6 +2794,42 @@ window.clearAmzMsgsSearch = function() {
     loadAmzBuyerMessages();
 };
 
+window.markAllAmzMsgsResolved = function() {
+    var ok = confirm(
+        'Esto marca TODO el historial acumulado como atendido de un jalón — ' +
+        'úsalo solo para limpiar lo de antes de hoy que ya sabes que está resuelto ' +
+        '(Amazon no comparte respuestas dadas directo en Seller Central, así que no ' +
+        'podemos saberlo con certeza automáticamente).\n\n' +
+        'De ahí en adelante, usa Tomar/Marcar resuelto por hilo para lo nuevo.\n\n' +
+        '¿Continuar?'
+    );
+    if (!ok) return;
+    var btn = document.getElementById('amz-msgs-mark-all');
+    btn.disabled = true;
+    btn.textContent = 'Marcando...';
+    fetch('/api/amazon/buyer-messages/mark-all-resolved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seller_id: window.amzActiveSellerId }),
+    })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.textContent = 'Marcar todo como atendido';
+            if (data.ok) {
+                alert(data.threads_marked + ' hilo(s) marcados como resueltos.');
+                loadAmzBuyerMessages();
+            } else {
+                alert(data.detail || 'No se pudo completar');
+            }
+        })
+        .catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = 'Marcar todo como atendido';
+            alert('Error: ' + e.message);
+        });
+};
+
 function _renderAmzBuyerMessages(data) {
     var el = document.getElementById('amz-msgs-content');
     var badge = document.getElementById('amz-msgs-unread');
