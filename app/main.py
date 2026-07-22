@@ -15012,14 +15012,22 @@ async def diag_smtp_test(token: str = ""):
     cfg = AMAZON_BUYER_INBOX_ACCOUNTS[0]
 
     def _test():
-        import smtplib
+        import smtplib, socket
         t0 = _t_smtp.time()
+        dns_info = []
+        try:
+            for family, _, _, _, sockaddr in socket.getaddrinfo(SMTP_HOST, SMTP_PORT):
+                fam_name = "IPv4" if family == socket.AF_INET else ("IPv6" if family == socket.AF_INET6 else str(family))
+                dns_info.append(f"{fam_name}:{sockaddr[0]}")
+        except Exception as e:
+            dns_info = [f"dns_error: {e}"]
+
         try:
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=12) as smtp:
                 smtp.login(cfg["email"], cfg["app_password"])
-            return {"ok": True, "elapsed_s": round(_t_smtp.time() - t0, 2)}
+            return {"ok": True, "elapsed_s": round(_t_smtp.time() - t0, 2), "dns": dns_info}
         except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {e}", "elapsed_s": round(_t_smtp.time() - t0, 2)}
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "elapsed_s": round(_t_smtp.time() - t0, 2), "dns": dns_info}
 
     result = await asyncio.to_thread(_test)
     return JSONResponse(result)
