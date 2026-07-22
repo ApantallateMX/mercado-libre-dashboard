@@ -300,3 +300,46 @@ async def send_reply(
         raise RuntimeError(f"Gmail API rechazó el envío: {resp.status_code} {resp.text[:300]}")
 
     return msg["Message-ID"] or ""
+
+
+async def setup_organization_filter(seller_id: str, from_domain: str, label_name: str) -> dict:
+    """Crea (o reusa) una etiqueta y un filtro que la aplica automáticamente
+    a todo correo entrante de from_domain, y lo saca del inbox (Skip Inbox/
+    Archivar) — Jovan pidió esto para mantener su bandeja limpia sin tener
+    que crear el filtro él mismo a mano en la interfaz de Gmail. Requiere el
+    scope gmail.settings.basic (ver /auth/gmail/connect)."""
+    cfg = next((c for c in AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == seller_id), None)
+    if cfg is None:
+        raise ValueError(f"No hay buzón configurado para seller_id={seller_id}")
+    if not cfg.get("gmail_refresh_token"):
+        raise ValueError(f"La cuenta {cfg['email']} no ha autorizado la API de Gmail todavía.")
+
+    access_token = await _gmail_access_token(cfg["gmail_refresh_token"])
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/labels", headers=headers)
+        if resp.status_code != 200:
+            raise RuntimeError(f"No se pudieron leer las etiquetas: {resp.status_code} {resp.text[:200]}")
+        labels = resp.json().get("labels", [])
+        label = next((l for l in labels if l["name"] == label_name), None)
+
+        if label is None:
+            resp = await client.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/labels", headers=headers,
+                json={"name": label_name, "labelListVisibility": "labelShow", "messageListVisibility": "show"},
+            )
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(f"No se pudo crear la etiqueta: {resp.status_code} {resp.text[:200]}")
+            label = resp.json()
+
+        resp = await client.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/settings/filters", headers=headers,
+            json={
+                "criteria": {"from": from_domain},
+                "action": {"addLabelIds": [label["id"]], "removeLabelIds": ["INBOX"]},
+            },
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"No se pudo crear el filtro: {resp.status_code} {resp.text[:300]}")
+        return {"label": label, "filter": resp.json()}

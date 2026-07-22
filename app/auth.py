@@ -801,7 +801,11 @@ async def gmail_connect(request: Request, env_var: str = "AMAZON_GMAIL_REFRESH_T
         "client_id": GMAIL_OAUTH_CLIENT_ID,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/gmail.send",
+        # gmail.send: para responder. gmail.settings.basic: para crear la
+        # etiqueta/filtro de organización (Jovan pidió que el correo de
+        # Amazon se etiquete y archive automático) sin que tenga que tocar
+        # la configuración de Gmail a mano.
+        "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.settings.basic",
         "access_type": "offline",
         "prompt": "consent",  # fuerza a que Google reemita refresh_token siempre
         "state": f"{state}|{env_var}",

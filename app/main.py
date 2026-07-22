@@ -14994,6 +14994,23 @@ async def diag_trigger_catalog_sync(token: str = ""):
     return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
 
 
+@app.post("/api/diag/gmail-setup-filter")
+async def diag_gmail_setup_filter(token: str = "", seller_id: str = Query(...)):
+    """Crea (vía API de Gmail) la etiqueta + filtro que organiza los correos
+    de Buyer Messages — Jovan pidió automatizarlo en vez de crearlo a mano en
+    Gmail. Requiere que la cuenta ya haya autorizado /auth/gmail/connect con
+    el scope gmail.settings.basic."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.buyer_messages_client import setup_organization_filter
+    try:
+        result = await setup_organization_filter(seller_id, "marketplace.amazon.com.mx", "Vektor Amazon")
+        return JSONResponse({"ok": True, "result": result})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/smtp-test")
 async def diag_smtp_test(token: str = ""):
     """Diagnóstico: prueba si el egress de Railway puede conectar por SMTP a
