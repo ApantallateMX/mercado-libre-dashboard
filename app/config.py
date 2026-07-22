@@ -101,17 +101,36 @@ AMAZON2_INBOX_APP_PASSWORD = os.getenv("AMAZON2_INBOX_APP_PASSWORD", "")
 AMAZON3_INBOX_EMAIL = os.getenv("AMAZON3_INBOX_EMAIL", "")
 AMAZON3_INBOX_APP_PASSWORD = os.getenv("AMAZON3_INBOX_APP_PASSWORD", "")
 
+# Gmail API OAuth — usado SOLO para enviar respuestas (no para leer).
+# Railway bloquea egress SMTP (puertos 465/587, confirmado con
+# /api/diag/smtp-test: "Network is unreachable" en ambos) — es una política
+# anti-spam estándar de la mayoría de los hosts en la nube. La API de Gmail
+# manda por HTTPS (nunca bloqueado), autenticado como la cuenta real (DKIM/SPF
+# correctos porque de verdad es Gmail quien envía). Un solo Client ID/Secret
+# (una app OAuth) sirve para las 3 cuentas — cada Gmail dedicado se autoriza
+# por separado y genera su propio refresh_token.
+GMAIL_OAUTH_CLIENT_ID = os.getenv("GMAIL_OAUTH_CLIENT_ID", "")
+GMAIL_OAUTH_CLIENT_SECRET = os.getenv("GMAIL_OAUTH_CLIENT_SECRET", "")
+AMAZON_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON_GMAIL_REFRESH_TOKEN", "")
+AMAZON2_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON2_GMAIL_REFRESH_TOKEN", "")
+AMAZON3_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON3_GMAIL_REFRESH_TOKEN", "")
+
 # Lista de cuentas con buzón configurado — buyer_messages_client.py itera esto.
 # Una cuenta sin email/password configurados simplemente no aparece aquí (el
 # poller la salta sin romper nada, permite lanzar con 1 sola cuenta primero).
+# gmail_refresh_token puede venir vacío mientras no se autorice esa cuenta
+# todavía en /auth/gmail/connect — send_reply() lo valida antes de usarlo.
 AMAZON_BUYER_INBOX_ACCOUNTS = [
     acc for acc in (
         {"seller_id": AMAZON_SELLER_ID, "nickname": AMAZON_NICKNAME,
-         "email": AMAZON_INBOX_EMAIL, "app_password": AMAZON_INBOX_APP_PASSWORD},
+         "email": AMAZON_INBOX_EMAIL, "app_password": AMAZON_INBOX_APP_PASSWORD,
+         "gmail_refresh_token": AMAZON_GMAIL_REFRESH_TOKEN},
         {"seller_id": AMAZON2_SELLER_ID, "nickname": AMAZON2_NICKNAME,
-         "email": AMAZON2_INBOX_EMAIL, "app_password": AMAZON2_INBOX_APP_PASSWORD},
+         "email": AMAZON2_INBOX_EMAIL, "app_password": AMAZON2_INBOX_APP_PASSWORD,
+         "gmail_refresh_token": AMAZON2_GMAIL_REFRESH_TOKEN},
         {"seller_id": AMAZON3_SELLER_ID, "nickname": AMAZON3_NICKNAME,
-         "email": AMAZON3_INBOX_EMAIL, "app_password": AMAZON3_INBOX_APP_PASSWORD},
+         "email": AMAZON3_INBOX_EMAIL, "app_password": AMAZON3_INBOX_APP_PASSWORD,
+         "gmail_refresh_token": AMAZON3_GMAIL_REFRESH_TOKEN},
     )
     if acc["seller_id"] and acc["email"] and acc["app_password"]
 ]

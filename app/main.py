@@ -15006,7 +15006,7 @@ async def diag_smtp_test(token: str = ""):
     if token != _DT:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import time as _t_smtp
-    from app.services.buyer_messages_client import AMAZON_BUYER_INBOX_ACCOUNTS, SMTP_HOST, SMTP_PORT
+    from app.services.buyer_messages_client import AMAZON_BUYER_INBOX_ACCOUNTS
     if not AMAZON_BUYER_INBOX_ACCOUNTS:
         return JSONResponse({"ok": False, "error": "Sin cuentas de buzón configuradas"})
     cfg = AMAZON_BUYER_INBOX_ACCOUNTS[0]
@@ -15016,10 +15016,10 @@ async def diag_smtp_test(token: str = ""):
         t0 = _t_smtp.time()
         try:
             if use_ssl:
-                with smtplib.SMTP_SSL(SMTP_HOST, port, timeout=10) as smtp:
+                with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=10) as smtp:
                     smtp.login(cfg["email"], cfg["app_password"])
             else:
-                with smtplib.SMTP(SMTP_HOST, port, timeout=10) as smtp:
+                with smtplib.SMTP("smtp.gmail.com", port, timeout=10) as smtp:
                     smtp.starttls()
                     smtp.login(cfg["email"], cfg["app_password"])
             return {"ok": True, "elapsed_s": round(_t_smtp.time() - t0, 2)}
@@ -15027,6 +15027,9 @@ async def diag_smtp_test(token: str = ""):
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "elapsed_s": round(_t_smtp.time() - t0, 2)}
 
     def _test():
+        # HISTÓRICO: confirmado 2026-07-22 que Railway bloquea ambos puertos
+        # ("Network is unreachable") — el envío ya migró a Gmail API (HTTPS),
+        # este diagnóstico queda solo por si hace falta re-confirmar algún día.
         return {
             "port_465_ssl": _test_port(465, True),
             "port_587_starttls": _test_port(587, False),

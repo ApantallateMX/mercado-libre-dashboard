@@ -29,21 +29,28 @@ Formato de correo confirmado contra mensajes reales de VECKTOR (2026-07-22):
 """
 
 import asyncio
+import base64
 import email
 import imaplib
 import re
-import smtplib
 import time
+import httpx
 from email.header import decode_header
 from email.message import EmailMessage
 
-from app.config import AMAZON_BUYER_INBOX_ACCOUNTS
+from app.config import AMAZON_BUYER_INBOX_ACCOUNTS, GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET
 from app.services import token_store
 
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465
+# El ENVÍO ya no usa SMTP — Railway bloquea egress a los puertos 465/587
+# (confirmado con /api/diag/smtp-test: "Network is unreachable" en ambos,
+# política anti-spam estándar de la mayoría de hosts en la nube). Responder
+# usa la API de Gmail por HTTPS (nunca bloqueado), autenticado vía OAuth
+# (ver /auth/gmail/connect en auth.py). La LECTURA sigue siendo IMAP normal
+# (puerto 993 no está bloqueado, confirmado — el poller funciona en prod).
+GMAIL_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
 _ORDER_RE = re.compile(r'#\s*(\d{3}-\d{7}-\d{7})\s*:')
 _SUBJECT_ORDER_RE = re.compile(r'\(Pedido:\s*(\d{3}-\d{7}-\d{7})\)')
@@ -197,18 +204,18 @@ async def poll_loop() -> None:
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 
-def _send_reply_sync(
-    cfg: dict, to_addr: str, subject: str, body: str, in_reply_to: str,
+def _build_mime_message(
+    from_addr: str, to_addr: str, subject: str, body: str, in_reply_to: str,
     attachment: tuple[str, bytes, str] | None = None,
-) -> str:
-    """Bloqueante — se llama envuelta en asyncio.to_thread. attachment, si se
-    da, es (filename, contenido, content_type) — NO se persiste en disco en
-    ningún punto de este flujo, solo vive en memoria hasta que smtplib lo
-    manda. No está confirmado que Amazon preserve el adjunto al relanzar el
-    correo al comprador real (es el canal de reenvío, no la API oficial de
-    Seller Central) — se manda de todos modos, pendiente de verificar."""
+) -> EmailMessage:
+    """attachment, si se da, es (filename, contenido, content_type) — NO se
+    persiste en disco en ningún punto de este flujo, solo vive en memoria
+    hasta que se manda. No está confirmado que Amazon preserve el adjunto al
+    relanzar el correo al comprador real (es el canal de reenvío, no la API
+    oficial de Seller Central) — se manda de todos modos, pendiente de
+    verificar."""
     msg = EmailMessage()
-    msg["From"] = cfg["email"]
+    msg["From"] = from_addr
     msg["To"] = to_addr
     msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     msg["Message-ID"] = email.utils.make_msgid()
@@ -221,18 +228,53 @@ def _send_reply_sync(
         filename, data, content_type = attachment
         maintype, _, subtype = (content_type or "application/octet-stream").partition("/")
         msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
+    return msg
 
-    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
-        smtp.login(cfg["email"], cfg["app_password"])
-        smtp.send_message(msg)
-    return msg["Message-ID"] or ""
+
+async def _gmail_access_token(refresh_token: str) -> str:
+    """Cambia el refresh_token (obtenido una vez en /auth/gmail/connect) por
+    un access_token de corta duración — se hace en cada envío, es una sola
+    llamada HTTPS y evita tener que manejar expiración manualmente."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(GMAIL_TOKEN_URL, data={
+            "client_id": GMAIL_OAUTH_CLIENT_ID,
+            "client_secret": GMAIL_OAUTH_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        })
+    if resp.status_code != 200:
+        raise RuntimeError(f"No se pudo renovar el token de Gmail: {resp.status_code} {resp.text[:200]}")
+    return resp.json()["access_token"]
 
 
 async def send_reply(
     seller_id: str, to_addr: str, subject: str, body: str, in_reply_to: str = "",
     attachment: tuple[str, bytes, str] | None = None,
 ) -> str:
+    """Envía por la API de Gmail (HTTPS) — NO por SMTP. Railway bloquea el
+    egress a los puertos de envío de correo (465/587, confirmado con
+    /api/diag/smtp-test), así que smtplib no funciona en producción aunque sí
+    funcione en local. La API de Gmail usa HTTPS (nunca bloqueado)."""
     cfg = next((c for c in AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == seller_id), None)
     if cfg is None:
         raise ValueError(f"No hay buzón configurado para seller_id={seller_id}")
-    return await asyncio.to_thread(_send_reply_sync, cfg, to_addr, subject, body, in_reply_to, attachment)
+    if not cfg.get("gmail_refresh_token"):
+        raise ValueError(
+            f"La cuenta {cfg['email']} no ha autorizado la API de Gmail todavía — "
+            f"visita /auth/gmail/connect para hacerlo."
+        )
+
+    msg = _build_mime_message(cfg["email"], to_addr, subject, body, in_reply_to, attachment)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+
+    access_token = await _gmail_access_token(cfg["gmail_refresh_token"])
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            GMAIL_SEND_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"raw": raw},
+        )
+    if resp.status_code not in (200, 202):
+        raise RuntimeError(f"Gmail API rechazó el envío: {resp.status_code} {resp.text[:300]}")
+
+    return msg["Message-ID"] or ""

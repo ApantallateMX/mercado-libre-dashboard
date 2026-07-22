@@ -43,6 +43,7 @@ from app.config import (
     AMAZON3_CLIENT_ID, AMAZON3_CLIENT_SECRET, AMAZON3_SELLER_ID,
     AMAZON3_MARKETPLACE_ID, AMAZON3_MARKETPLACE_NAME,
     AMAZON3_APP_SOLUTION_ID, AMAZON3_NICKNAME,
+    GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET,
 )
 from app.services import token_store
 from app.services import user_store
@@ -770,3 +771,94 @@ async def amazon_disconnect(request: Request):
         await token_store.delete_amazon_account(seller_id)
         logger.info(f"[Amazon] Cuenta desconectada: {seller_id}")
     return RedirectResponse(url="/dashboard", status_code=303)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GMAIL API OAuth — SOLO para enviar respuestas de Mensajes de Compradores
+# Amazon (buzón dedicado). Railway bloquea egress SMTP (465/587) — la API de
+# Gmail manda por HTTPS. Un solo Client ID/Secret sirve para las 3 cuentas;
+# cada Gmail dedicado se autoriza aquí por separado y genera su propio
+# refresh_token (se muestra una sola vez para copiarlo a Railway como
+# AMAZON_GMAIL_REFRESH_TOKEN / AMAZON2_.../AMAZON3_...).
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/gmail/connect")
+async def gmail_connect(request: Request, env_var: str = "AMAZON_GMAIL_REFRESH_TOKEN"):
+    """Inicia el flujo OAuth de Gmail para autorizar un buzón dedicado.
+    env_var indica en qué variable de Railway va a terminar el refresh_token
+    (solo para mostrarlo en el callback, no afecta el flujo)."""
+    if not GMAIL_OAUTH_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="GMAIL_OAUTH_CLIENT_ID no configurado")
+
+    state = _build_amazon_state()  # nonce anti-CSRF genérico, no es específico de Amazon
+    import os as _os_gmail
+    _app_base = (_os_gmail.getenv("APP_BASE_URL") or "").rstrip("/")
+    if not _app_base:
+        _app_base = str(request.base_url).rstrip("/").replace("http://", "https://")
+    redirect_uri = f"{_app_base}/auth/gmail/callback"
+
+    params = {
+        "client_id": GMAIL_OAUTH_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "https://www.googleapis.com/auth/gmail.send",
+        "access_type": "offline",
+        "prompt": "consent",  # fuerza a que Google reemita refresh_token siempre
+        "state": f"{state}|{env_var}",
+    }
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/gmail/callback")
+async def gmail_callback(request: Request, code: str = None, state: str = None, error: str = None):
+    """Recibe el code de Google, lo intercambia por un refresh_token y lo
+    muestra UNA vez para copiarlo manualmente a Railway (no hay tabla nueva
+    para esto — mismo criterio que AMAZON_INBOX_EMAIL/APP_PASSWORD, env var
+    plana)."""
+    if error:
+        return HTMLResponse(f"<h2>Error de Google: {error}</h2>", status_code=400)
+    if not code or not state or "|" not in state:
+        return HTMLResponse("<h2>Faltan parámetros o state inválido</h2>", status_code=400)
+
+    _state_sig, env_var = state.rsplit("|", 1)
+    if not _verify_amazon_state(_state_sig):
+        return HTMLResponse("<h2>State inválido (posible CSRF)</h2>", status_code=400)
+
+    import os as _os_gmail
+    _app_base = (_os_gmail.getenv("APP_BASE_URL") or "").rstrip("/")
+    if not _app_base:
+        _app_base = str(request.base_url).rstrip("/").replace("http://", "https://")
+    redirect_uri = f"{_app_base}/auth/gmail/callback"
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": GMAIL_OAUTH_CLIENT_ID,
+            "client_secret": GMAIL_OAUTH_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        })
+
+    if resp.status_code != 200:
+        logger.error(f"[Gmail OAuth] Error intercambiando code: {resp.status_code} {resp.text[:300]}")
+        return HTMLResponse(f"<h2>Error de Google al intercambiar el code</h2><pre>{resp.text[:500]}</pre>", status_code=400)
+
+    data = resp.json()
+    refresh_token = data.get("refresh_token")
+    if not refresh_token:
+        return HTMLResponse(
+            "<h2>Google no devolvió refresh_token</h2>"
+            "<p>Esto pasa si esta cuenta ya había autorizado la app antes sin revocar el acceso. "
+            "Ve a <a href='https://myaccount.google.com/permissions' target='_blank'>myaccount.google.com/permissions</a>, "
+            "quita el acceso a 'Dashboard Apantallate' y vuelve a intentar.</p>",
+            status_code=400,
+        )
+
+    logger.info(f"[Gmail OAuth] refresh_token obtenido para {env_var}")
+    return HTMLResponse(f"""
+        <h2>✅ Autorización exitosa</h2>
+        <p>Copia este valor y pásaselo a Claude para cargarlo en Railway como <b>{env_var}</b>:</p>
+        <textarea readonly style="width:100%;height:80px;font-family:monospace;">{refresh_token}</textarea>
+        <p style="color:#888;font-size:13px;">Este token no se guarda en ningún lado más que aquí — si cierras esta página sin copiarlo, tendrás que repetir el proceso.</p>
+    """)
