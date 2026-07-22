@@ -333,13 +333,58 @@ async def setup_organization_filter(seller_id: str, from_domain: str, label_name
                 raise RuntimeError(f"No se pudo crear la etiqueta: {resp.status_code} {resp.text[:200]}")
             label = resp.json()
 
-        resp = await client.post(
-            "https://gmail.googleapis.com/gmail/v1/users/me/settings/filters", headers=headers,
-            json={
-                "criteria": {"from": from_domain},
-                "action": {"addLabelIds": [label["id"]], "removeLabelIds": ["INBOX"]},
-            },
-        )
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(f"No se pudo crear el filtro: {resp.status_code} {resp.text[:300]}")
-        return {"label": label, "filter": resp.json()}
+        # Verificar si ya existe un filtro con este criterio (evita duplicar
+        # si setup_organization_filter se corre más de una vez)
+        existing = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/settings/filters", headers=headers)
+        filters = existing.json().get("filter", []) if existing.status_code == 200 else []
+        gmail_filter = next((f for f in filters if f.get("criteria", {}).get("from") == from_domain), None)
+
+        if gmail_filter is None:
+            resp = await client.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/settings/filters", headers=headers,
+                json={
+                    "criteria": {"from": from_domain},
+                    "action": {"addLabelIds": [label["id"]], "removeLabelIds": ["INBOX"]},
+                },
+            )
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(f"No se pudo crear el filtro: {resp.status_code} {resp.text[:300]}")
+            gmail_filter = resp.json()
+
+        # Gmail NO aplica el filtro retroactivamente a correos que ya estaban
+        # en la bandeja antes de crearlo — hay que etiquetar/archivar el
+        # backlog existente a mano vía batchModify.
+        applied = await _apply_label_to_existing(client, headers, from_domain, label["id"])
+
+        return {"label": label, "filter": gmail_filter, "applied_to_existing": applied}
+
+
+async def _apply_label_to_existing(client: httpx.AsyncClient, headers: dict, from_domain: str, label_id: str) -> int:
+    """Aplica la etiqueta (y saca de INBOX) a todos los correos YA existentes
+    que matcheen from_domain — los filtros de Gmail solo corren hacia
+    adelante, nunca retroactivo."""
+    total = 0
+    page_token = None
+    while True:
+        params = {"q": f"from:{from_domain}", "maxResults": 500}
+        if page_token:
+            params["pageToken"] = page_token
+        resp = await client.get("https://gmail.googleapis.com/gmail/v1/users/me/messages", headers=headers, params=params)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        ids = [m["id"] for m in data.get("messages", [])]
+        for i in range(0, len(ids), 1000):
+            chunk = ids[i:i + 1000]
+            if not chunk:
+                continue
+            mod = await client.post(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchModify", headers=headers,
+                json={"ids": chunk, "addLabelIds": [label_id], "removeLabelIds": ["INBOX"]},
+            )
+            if mod.status_code == 204:
+                total += len(chunk)
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return total
