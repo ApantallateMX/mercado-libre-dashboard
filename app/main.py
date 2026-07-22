@@ -15011,23 +15011,26 @@ async def diag_smtp_test(token: str = ""):
         return JSONResponse({"ok": False, "error": "Sin cuentas de buzón configuradas"})
     cfg = AMAZON_BUYER_INBOX_ACCOUNTS[0]
 
-    def _test():
-        import smtplib, socket
+    def _test_port(port, use_ssl):
+        import smtplib
         t0 = _t_smtp.time()
-        dns_info = []
         try:
-            for family, _, _, _, sockaddr in socket.getaddrinfo(SMTP_HOST, SMTP_PORT):
-                fam_name = "IPv4" if family == socket.AF_INET else ("IPv6" if family == socket.AF_INET6 else str(family))
-                dns_info.append(f"{fam_name}:{sockaddr[0]}")
+            if use_ssl:
+                with smtplib.SMTP_SSL(SMTP_HOST, port, timeout=10) as smtp:
+                    smtp.login(cfg["email"], cfg["app_password"])
+            else:
+                with smtplib.SMTP(SMTP_HOST, port, timeout=10) as smtp:
+                    smtp.starttls()
+                    smtp.login(cfg["email"], cfg["app_password"])
+            return {"ok": True, "elapsed_s": round(_t_smtp.time() - t0, 2)}
         except Exception as e:
-            dns_info = [f"dns_error: {e}"]
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "elapsed_s": round(_t_smtp.time() - t0, 2)}
 
-        try:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=12) as smtp:
-                smtp.login(cfg["email"], cfg["app_password"])
-            return {"ok": True, "elapsed_s": round(_t_smtp.time() - t0, 2), "dns": dns_info}
-        except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {e}", "elapsed_s": round(_t_smtp.time() - t0, 2), "dns": dns_info}
+    def _test():
+        return {
+            "port_465_ssl": _test_port(465, True),
+            "port_587_starttls": _test_port(587, False),
+        }
 
     result = await asyncio.to_thread(_test)
     return JSONResponse(result)
