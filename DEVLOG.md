@@ -7,6 +7,65 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-22 — FEAT: Mensajes de Compradores Amazon — control de atención, adjuntos y respuesta con IA
+
+**Archivos:** `app/main.py`, `app/services/buyer_messages_client.py`,
+`app/services/health_ai.py`, `app/api/health_ai.py`, `app/static/js/health_ai.js`,
+`app/templates/amazon_returns.html`.
+
+Sobre la base de "Mensajes de Compradores" (entrada anterior), Jovan pidió 3
+mejoras: adjuntar archivos al responder, respuesta sugerida por IA (mismo
+patrón ya usado en Salud/Retornos ML), y que antes de sugerir se sepa si ya
+hay respuestas previas en el hilo o si otro compañero ya está atendiendo a
+ese comprador — pidió explícitamente el mismo sistema de "Tomar"/"Atendiendo:
+fulano"/"Resuelto" que ya existe en Mensajes ML.
+
+Las 3 piezas reusan mecanismos ya existentes para ML en vez de inventar algo
+nuevo:
+
+- **Control de atención**: se reusa la tabla genérica `ml_message_views`
+  (`pack_id`/`account_id` → `viewed_by`/`status`) con el mismo truco de
+  prefijo que ya usan los reclamos (`"claim:"`) — ahora `"amz:{reply_to_addr}"`.
+  **Cero cambios de schema.** Nuevos endpoints `POST /api/amazon/buyer-messages/take`
+  y `/status`, mismo patrón que `app/api/health.py:250-283` (ML).
+- **Cambio de forma necesario**: `GET /api/amazon/buyer-messages` pasó de
+  devolver una lista plana de mensajes a **agrupar por hilo** (`reply_to_addr`,
+  la dirección tokenizada de Amazon — identificador estable de "esta
+  conversación con este comprador"). Sin esto, Tomar/Atendiendo/IA-con-historial
+  no tenían sentido. `amazon_returns.html` se reescribió para pintar una
+  tarjeta por hilo (badges Sin abrir/Abrió/Atendiendo/Resuelto + botones
+  Tomar/Marcar resuelto), igual que Mensajes ML.
+- **IA**: `build_buyer_message_reply_prompt()` nueva en `health_ai.py`,
+  copiada de `build_message_reply_prompt` (ML) pero cubre MX+USA (responde
+  en el idioma del comprador, no siempre español) y advierte a la IA si otro
+  compañero ya atendió el hilo (no repetir/contradecir). Endpoint
+  `POST /api/health-ai/suggest-buyer-message-reply` reusa `_sse_stream` y
+  `openrouter_client` (cascada cost-aware ya implementada) tal cual. Frontend
+  reusa `streamAiResponse` (100% genérico) y `useAiSuggestion` ganó una rama
+  `'buyer_message'`. **Nunca auto-envía** — solo llena el textarea, igual
+  que en ML.
+- **Adjuntos**: `POST .../{id}/reply` pasó de JSON a `multipart/form-data`
+  (`Form`+`UploadFile`). El archivo se lee en memoria y se manda directo por
+  SMTP (`EmailMessage.add_attachment`) — **no se persiste en disco a
+  propósito** (este proyecto ya tuvo 2 incidentes de disco lleno por guardar
+  archivos sin límite).
+
+Verificado en vivo contra VECKTOR (50 mensajes reales agrupados en 36 hilos):
+Tomar/Marcar resuelto/Reabrir actualizan el badge y persisten en
+`ml_message_views` con prefijo `amz:`. Botón "Sugerir con IA" probado con
+clic real en la UI (no solo el endpoint) — sugerencia real generada y "Usar
+respuesta" la copia correctamente al textarea. Adjunto probado de punta a
+punta contra la propia cuenta (nunca un comprador real): el archivo llega
+intacto en el correo recibido.
+
+**Riesgo conocido, no resuelto:** no está confirmado que Amazon preserve el
+adjunto al relanzar la respuesta a un comprador real (nuestro canal es el
+reenvío de correo, no la API oficial de Seller Central que sí soporta
+adjuntos documentadamente) — se manda de todos modos, pendiente de
+confirmar con un caso real.
+
+---
+
 ## 2026-07-22 — FEAT: Mensajes de Compradores Amazon — leer y responder desde el dashboard (sin SP-API)
 
 **Archivos:** `app/config.py`, `app/services/buyer_messages_client.py` (nuevo), `app/services/token_store.py`, `app/main.py`, `app/templates/amazon_returns.html`.
