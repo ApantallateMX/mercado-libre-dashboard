@@ -7,6 +7,72 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-22 — FIX CRÍTICO: Responder en Mensajes de Compradores no funcionaba en producción — migración de SMTP a Gmail API/OAuth
+
+**Archivos:** `app/services/buyer_messages_client.py`, `app/auth.py`, `app/config.py`, `app/main.py`.
+
+Jovan reportó que el botón "Responder" se quedaba pegado en "Enviando..." sin
+confirmar si el correo se mandó o no. Diagnóstico paso a paso:
+
+1. Se agregó `/api/diag/smtp-test` (probando puertos 465 SSL y 587 STARTTLS)
+   contra producción → **ambos fallan con "Network is unreachable"** (10-12s,
+   tanto IPv4 como IPv6). **Railway bloquea el egress a los puertos de envío
+   de correo** — política anti-spam estándar de la mayoría de hosts en la
+   nube (Railway, Heroku, Render, etc.), no algo arreglable con
+   configuración de red. Antes de este fix, `smtplib.SMTP_SSL` no tenía
+   timeout, así que el bloqueo silencioso (sin RST) colgaba la conexión
+   indefinidamente en vez de fallar rápido — de ahí el "Enviando..." eterno.
+2. La LECTURA (IMAP, puerto 993) sí funciona en producción — el poller ya
+   venía importando mensajes reales. Solo el ENVÍO estaba roto.
+
+**Solución — migrar el envío a la API de Gmail (HTTPS, nunca bloqueado),
+autenticado vía OAuth** (mismo tipo de flujo ya usado para Mercado Libre y
+las 3 cuentas Amazon en este proyecto):
+
+- `app/config.py`: `GMAIL_OAUTH_CLIENT_ID`/`CLIENT_SECRET` (una sola app
+  OAuth de Google Cloud sirve para las 3 cuentas) + `AMAZON_GMAIL_REFRESH_TOKEN`/
+  `AMAZON2_.../AMAZON3_...` (uno por cuenta, se obtiene autorizando cada
+  buzón por separado).
+- `app/auth.py`: nuevos `/auth/gmail/connect` (inicia el consentimiento OAuth)
+  y `/auth/gmail/callback` (intercambia el code, muestra el refresh_token
+  una vez para copiarlo a Railway — sin tabla nueva, mismo criterio que
+  `AMAZON_INBOX_EMAIL`/`APP_PASSWORD`).
+- `app/services/buyer_messages_client.py`: `send_reply()` ya no usa
+  `smtplib` — construye el mismo MIME (incluye adjunto si viene), refresca
+  un access_token con el refresh_token guardado, y lo manda vía POST HTTPS
+  a `gmail.googleapis.com/.../messages/send`. El poller de LECTURA
+  (`imaplib`) no se tocó.
+
+**Scopes OAuth — 3 idas y vueltas hasta dar con la combinación correcta**
+(cada uno es un recurso distinto en la API de Gmail, no hay uno solo que
+cubra todo): `gmail.send` (enviar), `gmail.settings.basic` (filtros —
+*no* alcanza para etiquetas), `gmail.labels` (etiquetas — confirmado con el
+error real `ACCESS_TOKEN_SCOPE_INSUFFICIENT` en `users.labels.list` aun
+con `settings.basic` correctamente presente en el token, verificado con
+`/tokeninfo`). También se descubrió que la pantalla de reconsentimiento de
+Google se puede saltar el checkbox del scope nuevo si la app ya tenía
+acceso previo — hay que **revocar el acceso completo** en
+`myaccount.google.com/permissions` antes de volver a autorizar para que
+Google muestre la pantalla completa con las 3 casillas.
+
+**Bono — Jovan pidió organizar el correo real** (etiquetar y archivar
+automático los mensajes de `marketplace.amazon.com.mx` para no ensuciar su
+bandeja) y explícitamente **"hazlo tú"** en vez de crear el filtro a mano en
+Gmail: `setup_organization_filter()` crea la etiqueta + filtro vía la misma
+API de Gmail (`POST .../settings/filters`, `removeLabelIds: ["INBOX"]` =
+Skip Inbox), disparado desde `/api/diag/gmail-setup-filter`. Esto expuso un
+bug latente: el poller solo buscaba en `INBOX` — un mensaje archivado
+automáticamente ya no aparece ahí. Se corrigió buscando en el folder
+"Todos los correos" (detectado dinámicamente vía el atributo IMAP `\All`,
+no por nombre — la cuenta está en español, se llama `[Gmail]/Todos`, no
+"All Mail"; esto además deja el código listo para cuentas en otros idiomas).
+
+**Verificado en producción:** filtro y etiqueta creados exitosamente vía
+API; envío de correo de prueba confirmado (200 OK, entregado). El
+mecanismo de respuesta ahora funciona de punta a punta en Railway.
+
+---
+
 ## 2026-07-22 — FEAT: Mensajes de Compradores Amazon — control de atención, adjuntos y respuesta con IA
 
 **Archivos:** `app/main.py`, `app/services/buyer_messages_client.py`,
