@@ -588,6 +588,8 @@ async def lifespan(app: FastAPI):
     start_realtime_alerts_reconcile()
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
+    from app.services import buyer_messages_client as _bmc
+    asyncio.create_task(_bmc.poll_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
@@ -18041,6 +18043,101 @@ async def amazon_returns_customer_comments(
         }
     except Exception as e:
         return {"error": str(e), "rows": [], "total_returns": 0}
+
+
+@app.get("/api/amazon/buyer-messages")
+async def amazon_buyer_messages_list(
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """Mensajes reales de compradores (Buyer-Seller Messaging) capturados vía
+    el buzón Gmail dedicado — NO es SP-API (no existe endpoint de lectura,
+    ver reference_amazon_sp_api_docs). Mismo mecanismo que usan Replyco/eDesk:
+    reenvío de correo configurado en Seller Central → Notification
+    Preferences → Messaging → Buyer Messages."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"error": "No hay cuenta Amazon activa", "rows": [], "total": 0, "unread": 0}
+    try:
+        rows = await token_store.get_buyer_messages(sid, days)
+        unread = sum(1 for r in rows if r["direction"] == "inbound" and not r.get("read_at"))
+        return {"days": days, "rows": rows, "total": len(rows), "unread": unread}
+    except Exception as e:
+        return {"error": str(e), "rows": [], "total": 0, "unread": 0}
+
+
+@app.post("/api/amazon/buyer-messages/mark-read")
+async def amazon_buyer_messages_mark_read(request: Request):
+    """Marca varios mensajes como leídos de una sola vez — el frontend llama
+    esto UNA vez con todos los IDs visibles, no uno por mensaje (evita
+    contención en SQLite si hay muchos sin leer)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+        ids = [int(x) for x in (body.get("ids") or [])]
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    await token_store.mark_buyer_messages_read(ids)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/amazon/buyer-messages/{message_id}/reply")
+async def amazon_buyer_message_reply(message_id: int, request: Request):
+    """Responde un mensaje de comprador desde el dashboard — envía un correo
+    real desde el buzón dedicado de la cuenta hacia la dirección tokenizada
+    de Amazon (reply_to_addr), que la relanza al comprador de forma anónima."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    text = (body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"detail": "El texto de la respuesta es requerido"}, status_code=400)
+
+    original = await token_store.get_buyer_message(message_id)
+    if not original:
+        return JSONResponse({"detail": "Mensaje no encontrado"}, status_code=404)
+
+    from app.services import buyer_messages_client as _bmc
+    try:
+        sent_message_id = await _bmc.send_reply(
+            seller_id=original["seller_id"],
+            to_addr=original["reply_to_addr"],
+            subject=original["subject"],
+            body=text,
+            in_reply_to=original["message_id"],
+        )
+    except Exception as e:
+        return JSONResponse({"detail": f"No se pudo enviar: {e}"}, status_code=502)
+
+    import time as _t_bmr
+    await token_store.insert_buyer_message({
+        "seller_id": original["seller_id"], "direction": "outbound",
+        "order_id": original["order_id"], "asin": original["asin"],
+        "product_title": original["product_title"], "buyer_name": original["buyer_name"],
+        "subject": original["subject"], "body_text": text,
+        "reply_to_addr": original["reply_to_addr"], "message_id": sent_message_id,
+        "in_reply_to": original["message_id"], "ts": _t_bmr.time(),
+    })
+    await token_store.mark_buyer_messages_read([message_id])
+
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=du["username"], user_id=du.get("id"),
+            action="amazon_buyer_message_reply", item_id=original.get("order_id", ""),
+            detail={"seller_id": original["seller_id"], "text": text},
+            ip=ip, section="Salud",
+        )
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True})
 
 
 def _merge_return_counts(ml_counts: dict, amz_counts: dict) -> dict:

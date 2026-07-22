@@ -87,6 +87,35 @@ AMAZON3_MARKETPLACE_NAME = os.getenv("AMAZON3_MARKETPLACE_NAME", "US")
 AMAZON3_APP_SOLUTION_ID = os.getenv("AMAZON3_APP_SOLUTION_ID", "")
 AMAZON3_NICKNAME = os.getenv("AMAZON3_NICKNAME", "ExclusiveBulbs")
 
+# ── Amazon Buyer Messages — buzón Gmail dedicado por cuenta ───────────────
+# NO es SP-API (no existe endpoint de lectura, ver reference_amazon_sp_api_docs).
+# Amazon reenvía el mensaje real del comprador a este correo (Seller Central →
+# Notification Preferences → Messaging → Buyer Messages), y responder desde
+# este mismo buzón (registrado también como Approved Sender) hace que Amazon
+# relance la respuesta al comprador de forma anónima. Ver
+# project_amazon_buyer_messages_plan (memoria) para el plan completo.
+AMAZON_INBOX_EMAIL = os.getenv("AMAZON_INBOX_EMAIL", "")
+AMAZON_INBOX_APP_PASSWORD = os.getenv("AMAZON_INBOX_APP_PASSWORD", "")
+AMAZON2_INBOX_EMAIL = os.getenv("AMAZON2_INBOX_EMAIL", "")
+AMAZON2_INBOX_APP_PASSWORD = os.getenv("AMAZON2_INBOX_APP_PASSWORD", "")
+AMAZON3_INBOX_EMAIL = os.getenv("AMAZON3_INBOX_EMAIL", "")
+AMAZON3_INBOX_APP_PASSWORD = os.getenv("AMAZON3_INBOX_APP_PASSWORD", "")
+
+# Lista de cuentas con buzón configurado — buyer_messages_client.py itera esto.
+# Una cuenta sin email/password configurados simplemente no aparece aquí (el
+# poller la salta sin romper nada, permite lanzar con 1 sola cuenta primero).
+AMAZON_BUYER_INBOX_ACCOUNTS = [
+    acc for acc in (
+        {"seller_id": AMAZON_SELLER_ID, "nickname": AMAZON_NICKNAME,
+         "email": AMAZON_INBOX_EMAIL, "app_password": AMAZON_INBOX_APP_PASSWORD},
+        {"seller_id": AMAZON2_SELLER_ID, "nickname": AMAZON2_NICKNAME,
+         "email": AMAZON2_INBOX_EMAIL, "app_password": AMAZON2_INBOX_APP_PASSWORD},
+        {"seller_id": AMAZON3_SELLER_ID, "nickname": AMAZON3_NICKNAME,
+         "email": AMAZON3_INBOX_EMAIL, "app_password": AMAZON3_INBOX_APP_PASSWORD},
+    )
+    if acc["seller_id"] and acc["email"] and acc["app_password"]
+]
+
 # ── Higgsfield AI — Generación de imágenes y videos ───────────────────────
 HIGGSFIELD_KEY_ID = os.getenv("HIGGSFIELD_KEY_ID", "")
 HIGGSFIELD_SECRET  = os.getenv("HIGGSFIELD_SECRET", "")

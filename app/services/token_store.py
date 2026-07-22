@@ -929,6 +929,39 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sar_sku ON stock_alert_resolutions(original_sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sar_ts ON stock_alert_resolutions(ts)")
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: amazon_buyer_messages — mensajes reales de compradores Amazon
+        # (Buyer-Seller Messaging) capturados vía el buzón Gmail dedicado que
+        # Amazon reenvía en Notification Preferences → Messaging → Buyer
+        # Messages (NO existe vía SP-API, ver reference_amazon_sp_api_docs).
+        # message_id (header Message-ID del correo) es único — evita duplicar
+        # el mismo mensaje si el poller vuelve a verlo. reply_to_addr es la
+        # dirección tokenizada de Amazon (nombre@marketplace.amazon.com.mx) a
+        # la que hay que enviar la respuesta para que Amazon la relance al
+        # comprador real.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_buyer_messages (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id       TEXT NOT NULL,
+                direction       TEXT NOT NULL DEFAULT 'inbound',
+                order_id        TEXT NOT NULL DEFAULT '',
+                asin            TEXT NOT NULL DEFAULT '',
+                product_title   TEXT NOT NULL DEFAULT '',
+                buyer_name      TEXT NOT NULL DEFAULT '',
+                subject         TEXT NOT NULL DEFAULT '',
+                body_text       TEXT NOT NULL DEFAULT '',
+                reply_to_addr   TEXT NOT NULL DEFAULT '',
+                message_id      TEXT NOT NULL DEFAULT '',
+                in_reply_to     TEXT NOT NULL DEFAULT '',
+                ts              REAL NOT NULL DEFAULT 0,
+                read_at         REAL,
+                replied_by      TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_abm_message_id ON amazon_buyer_messages(message_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_seller_ts ON amazon_buyer_messages(seller_id, ts)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_order ON amazon_buyer_messages(order_id)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
         # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
@@ -1655,6 +1688,76 @@ async def mark_resolution_reactivated(resolution_id: int, username: str) -> None
             (_t.time(), username, resolution_id),
         )
         await db.commit()
+
+
+# ─── amazon_buyer_messages helpers ───────────────────────────────────────────
+
+async def insert_buyer_message(msg: dict) -> int | None:
+    """Inserta un mensaje (inbound u outbound) parseado del buzón dedicado.
+    INSERT OR IGNORE por message_id — el poller puede volver a ver el mismo
+    correo en cada pasada sin duplicar filas. Retorna None si ya existía."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("""
+            INSERT OR IGNORE INTO amazon_buyer_messages
+                (seller_id, direction, order_id, asin, product_title, buyer_name,
+                 subject, body_text, reply_to_addr, message_id, in_reply_to, ts)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            msg["seller_id"], msg.get("direction", "inbound"),
+            msg.get("order_id", ""), msg.get("asin", ""), msg.get("product_title", ""),
+            msg.get("buyer_name", ""), msg.get("subject", ""), msg.get("body_text", ""),
+            msg.get("reply_to_addr", ""), msg.get("message_id", ""),
+            msg.get("in_reply_to", ""), msg.get("ts", 0.0),
+        ))
+        await db.commit()
+        return cur.lastrowid if cur.rowcount else None
+
+
+async def get_buyer_messages(seller_id: str, days: int = 30, limit: int = 50) -> list[dict]:
+    """Mensajes (in+outbound) de una cuenta, más reciente primero, para la
+    sección 'Mensajes de Compradores' de Salud y Retornos Amazon. limit
+    acota el feed a lo reciente/accionable — el buzón dedicado puede ya
+    traer años de historial (reenvío de Amazon activo desde antes de esta
+    feature), no tiene caso cargar todo eso de una vez."""
+    import time as _t
+    cutoff = _t.time() - days * 86400
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT id, seller_id, direction, order_id, asin, product_title, buyer_name,
+                   subject, body_text, reply_to_addr, message_id, in_reply_to,
+                   ts, read_at, replied_by
+            FROM amazon_buyer_messages
+            WHERE seller_id = ? AND ts >= ?
+            ORDER BY ts DESC
+            LIMIT ?
+        """, (seller_id, cutoff, limit))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_buyer_messages_read(message_ids: list[int]) -> None:
+    """Marca varios mensajes como leídos en una sola transacción — evita el
+    problema de disparar N updates individuales (contención en SQLite) al
+    renderizar una lista con muchos mensajes sin leer de una vez."""
+    if not message_ids:
+        return
+    import time as _t
+    now = _t.time()
+    placeholders = ",".join("?" * len(message_ids))
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            f"UPDATE amazon_buyer_messages SET read_at = ? WHERE id IN ({placeholders}) AND read_at IS NULL",
+            (now, *message_ids),
+        )
+        await db.commit()
+
+
+async def get_buyer_message(message_id: int) -> dict | None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM amazon_buyer_messages WHERE id = ?", (message_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
 
 
 # ─── ml_message_views helpers ────────────────────────────────────────────────
