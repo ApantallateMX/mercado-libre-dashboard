@@ -50,6 +50,39 @@ específica por no tener sus tokens en el entorno local.
 
 ---
 
+## 2026-07-22 — FIX: mapa de motivos de devolución Amazon incompleto + entorno local ahora prueba las 3 cuentas (incluye ExclusiveBulbs USA)
+
+**Archivos:** `app/main.py` (`_AMZ_REASON_MAP`), `.env.production` (local, gitignored).
+
+Jovan cerró el pendiente de arriba de forma tajante: *"puedes debes
+hacer que puedas probar y que todo funcione igual así que busca todo y
+generaliza"*. Se resolvió sin depender de que él verificara nada a mano:
+
+- Se sacaron las credenciales `AMAZON3_*` (ExclusiveBulbs, ya existían
+  en Railway prod) vía la API GraphQL de Railway y se agregaron al
+  `.env.production` LOCAL (gitignored, confirmado con
+  `git check-ignore -v`) para poder levantar el servidor local con las
+  3 cuentas Amazon activas en vez de solo 2.
+- Con ExclusiveBulbs corriendo en local, se probó `top-skus` y
+  `customer-comments` contra datos reales (208 devoluciones, 24 con
+  comentario) y aparecieron códigos de motivo sin traducir:
+  `DAMAGED_BY_FC`, `UNDELIVERABLE_UNKNOWN`, `UNWANTED_ITEM`,
+  `ORDERED_WRONG_ITEM`, `APPAREL_TOO_SMALL` — `_AMZ_REASON_MAP` solo
+  cubría 12 códigos, los que habían aparecido en la muestra original de
+  VECKTOR/AUTOBOT.
+- Se amplió el mapa a ~25 códigos oficiales de Amazon (no solo los 5
+  que faltaban, para no volver a parchar reactivamente la próxima vez
+  que aparezca una cuenta o categoría de producto distinta).
+
+Verificado en vivo (Playwright, 375px y 1920px, ambas cuentas): VECKTOR
+(MX) 10 motivos distintos traducidos; ExclusiveBulbs (USA, marketplace
+`ATVPDKIKX0DER`, distinto de MX) 9 motivos distintos traducidos, título
+real, comentario real. 0 overflow, 0 errores de consola. Confirma que
+el bug era solamente de traducción — el reporte, parseo y caché ya
+funcionaban igual sin importar cuenta o marketplace.
+
+---
+
 ## 2026-07-21 — FEAT + BUG: comentarios reales de clientes en Retornos Amazon (FBA) — y fix de bug preexistente que dejaba sin datos reales a Quality Score/Top SKUs desde Fase 2.1
 
 **Archivos:** `app/services/amazon_client.py`, `app/main.py`, `app/templates/amazon_returns.html`.
