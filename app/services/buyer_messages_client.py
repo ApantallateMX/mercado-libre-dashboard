@@ -136,14 +136,36 @@ def parse_buyer_message_email(raw_bytes: bytes) -> dict | None:
     }
 
 
+def _find_all_mail_folder(M: imaplib.IMAP4_SSL) -> str:
+    """Encuentra el nombre real del folder "Todos los correos" vía el
+    atributo especial \\All (RFC 6154) en vez de asumir un nombre en inglés
+    ("All Mail") — el nombre visible cambia según el idioma de la cuenta de
+    Gmail (ej. "[Gmail]/Todos" en español). Cae a INBOX si no lo encuentra."""
+    typ, data = M.list()
+    if typ == "OK":
+        for line in data:
+            line_str = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else str(line)
+            if "\\All" in line_str:
+                # Formato: (flags) "delimiter" "nombre del folder"
+                match = re.search(r'"([^"]+)"$', line_str)
+                if match:
+                    return match.group(1)
+    return "INBOX"
+
+
 def _poll_account_sync(cfg: dict) -> list[dict]:
     """Bloqueante — se llama envuelta en asyncio.to_thread. Busca correos
-    entrantes del dominio de Amazon buyer-messaging y parsea los nuevos."""
+    entrantes del dominio de Amazon buyer-messaging y parsea los nuevos.
+    Busca en "Todos los correos" (no solo INBOX) porque Jovan usa un filtro
+    de Gmail que etiqueta y archiva (Skip Inbox) los correos de Amazon para
+    mantener su bandeja limpia — un mensaje archivado ya no aparece en INBOX
+    pero sigue existiendo ahí sin importar la etiqueta."""
     found: list[dict] = []
     M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=20)
     try:
         M.login(cfg["email"], cfg["app_password"])
-        M.select("INBOX", readonly=True)
+        all_mail_folder = _find_all_mail_folder(M)
+        M.select(f'"{all_mail_folder}"', readonly=True)
         typ, data = M.search(None, 'FROM "marketplace.amazon.com"')
         if typ != "OK":
             return found
