@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-22 — FEAT/FIX: Firma real, filtro de pendientes, búsqueda por orden y mover Mensajes de Compradores a Salud
+
+**Archivos:** `app/main.py`, `app/services/buyer_messages_client.py`, `app/templates/amazon_returns.html`, `app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.
+
+Tras el fix de envío, Jovan encontró 3 problemas más usando la feature en vivo:
+
+1. **Header plegado rompía el envío**: al responder salía "Header values may
+   not contain linefeed or carriage return characters". El Subject original
+   de Amazon viene "plegado" (RFC 5322 — headers largos continúan en la
+   siguiente línea con `\r\n` + espacio) y no se normalizaba al guardarlo.
+   Se corrigió en `_decode_header_value()` (colapsa cualquier whitespace a
+   un espacio) + defensivo en `_build_mime_message()` para filas ya
+   guardadas. Nuevo `/api/diag/fix-buyer-message-subjects` limpió 105 de 201
+   filas ya guardadas en producción (el poller no las iba a re-procesar
+   solo, `INSERT OR IGNORE` por `message_id`).
+2. **Firma real al responder** — nunca "admin" (Jovan: "no sería correcto").
+   Se usa `display_name` o `username` de la sesión, se agrega al final del
+   correo antes de enviarlo (y se guarda el texto CON firma en el historial).
+3. **Ocultar por default los ya respondidos** — Jovan veía mensajes ya
+   contestados mezclados con pendientes. Nuevo campo `needs_response` por
+   hilo (true si el último mensaje es del comprador) + parámetro
+   `only_pending` (default true) en `/api/amazon/buyer-messages`. Botón para
+   alternar "solo pendientes"/"todos".
+4. **Buscar histórico completo por número de orden** — nuevo parámetro
+   `order_id` que ignora el filtro de pendientes y la ventana de días.
+
+**Limitación real descubierta (no arreglable)**: Jovan preguntó por qué
+mensajes ya respondidos por un compañero directo en Seller Central se veían
+"sin responder". Investigado a fondo contra el buzón real (Edgar, orden
+702-8392732-7983458): **Amazon no reenvía ninguna copia de las respuestas
+dadas desde Seller Central** — de los ~13,600 correos de `donotreply@amazon.com`
+en la bandeja, ninguno confirma "ya respondiste a X" con el contenido. Es
+una limitación de origen, no un bug del parser — no hay forma de detectar
+eso vía email ni SP-API. Mitigación: usar "Tomar"/"Marcar resuelto" de aquí
+en adelante para que el sistema quede preciso.
+
+**Reorganización**: Jovan señaló que en ML los "Mensajes" post-venta viven
+en la pestaña Salud (`health_messages.html`), no en Retornos — se movió
+"Mensajes de Compradores" de `amazon_returns.html` a la pestaña Salud de
+`amazon_dashboard.html` (mismo patrón entre plataformas). Verificado con
+Playwright: `/amazon/returns` ya no tiene la sección (resto intacto),
+`/amazon?tab=salud` la tiene funcionando (36 hilos, Tomar/IA, 0 overflow).
+
+---
+
 ## 2026-07-22 — FIX CRÍTICO: Responder en Mensajes de Compradores no funcionaba en producción — migración de SMTP a Gmail API/OAuth
 
 **Archivos:** `app/services/buyer_messages_client.py`, `app/auth.py`, `app/config.py`, `app/main.py`.
