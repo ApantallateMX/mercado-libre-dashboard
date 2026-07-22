@@ -7,6 +7,78 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-22 — FEAT: Mensajes de Compradores Amazon — leer y responder desde el dashboard (sin SP-API)
+
+**Archivos:** `app/config.py`, `app/services/buyer_messages_client.py` (nuevo), `app/services/token_store.py`, `app/main.py`, `app/templates/amazon_returns.html`.
+
+Jovan pidió ver, ligado a la orden, si un comprador Amazon escribió un mensaje
+post-venta (como el panel "Buyer Messages" de Seller Central) y poder
+responder desde el dashboard. Investigación SP-API (misma sesión, ver entrada
+anterior de "mapa de motivos") ya había confirmado que **no existe ningún
+endpoint de lectura** — la Messaging API es solo de salida. Jovan mostró
+Replyco como prueba de que sí se puede, cuestionando la conclusión.
+
+Investigación adicional confirmó el mecanismo real de Replyco/eDesk/
+ChannelReply: **ninguna API de Amazon** — usan el reenvío de correo que
+Amazon ofrece en Seller Central (Notification Preferences → Messaging →
+Buyer Messages) hacia un buzón propio, más "Approved Senders" para poder
+responder por email y que Amazon relance la respuesta al comprador de forma
+anónima. Plan completo aprobado en `.claude/plans/stateful-marinating-marshmallow.md`.
+
+- **Buzón dedicado**: Gmail nuevo por cuenta Amazon (`vecktordiez@gmail.com`
+  para VECKTOR), con verificación en 2 pasos + contraseña de aplicación.
+  `AMAZON_INBOX_EMAIL`/`AMAZON_INBOX_APP_PASSWORD` (+ `AMAZON2_.../AMAZON3_...`)
+  en `config.py` — cuenta sin buzón configurado se salta sola sin romper nada.
+- **`buyer_messages_client.py`** (nuevo): poller IMAP (`imaplib` + `asyncio.to_thread`,
+  cada 5 min) + envío SMTP para responder. El parser se construyó viendo
+  correos REALES de la bandeja de VECKTOR (que ya tenía años de reenvío
+  activo) en vez de adivinar el formato: el texto del comprador vive entre
+  `------------- Mensaje: -------------` y `------------- Finalizar mensaje -------------`;
+  el order_id sale de `# XXX-XXXXXXX-XXXXXXX:`; ASIN y título del producto ya
+  vienen embebidos en el cuerpo (no hace falta join a ninguna tabla); la
+  dirección de respuesta es la misma del From/Reply-To, tokenizada por Amazon
+  (`nombre@marketplace.amazon.com.mx`).
+- **`token_store.py`**: tabla `amazon_buyer_messages` (UNIQUE por `message_id`
+  — el poller puede re-ver el mismo correo sin duplicar), helpers
+  `insert_buyer_message` / `get_buyer_messages` (con límite) /
+  `mark_buyer_messages_read` (bulk) / `get_buyer_message`.
+- **`main.py`**: `GET /api/amazon/buyer-messages`, `POST .../mark-read` (bulk),
+  `POST .../{id}/reply` (envía el correo real, registra el outbound, log_action).
+  Poll loop registrado al arrancar la app junto a los demás loops de fondo.
+- **`amazon_returns.html`**: sección nueva "Mensajes de Compradores" — mismo
+  patrón cards mobile + tabla desktop que "Comentarios de Clientes", con
+  textarea + botón "Responder" por mensaje sin leer.
+
+**2 bugs reales encontrados y corregidos en la verificación local (antes de
+push, no en producción):**
+1. El buzón de VECKTOR ya traía años de historial real — el primer poll trajo
+   200 mensajes de una. `get_buyer_messages` sin límite hubiera devuelto un
+   feed enorme sin sentido — se acotó a 50 más recientes.
+2. El frontend marcaba como leído con **un fetch por mensaje** — con 200
+   mensajes sin leer eso son 200 peticiones simultáneas, generando
+   contención real en SQLite (la segunda pestaña de prueba se quedó
+   colgada en "Cargando..." varios segundos). Se reemplazó por un solo
+   endpoint bulk (`mark-read` con lista de IDs).
+3. Cards mobile y tabla desktop reusaban el mismo `id` (`msg-card-N`,
+   `reply-text-N`) — el botón "Responder" en escritorio hubiera leído el
+   textarea oculto de mobile (siempre vacío) por `getElementById` devolver
+   el primer match. IDs ahora prefijados por variante (`m-`/`d-`).
+
+Verificado en vivo contra VECKTOR (única cuenta con buzón configurado hasta
+ahora): 50 mensajes reales renderizados con título/ASIN/orden/texto correctos
+(acentos correctos confirmados, ej. "Recibí la pantalla"), 0 overflow, 0
+errores de consola en 375/1920px. Mecanismo de respuesta probado de punta a
+punta contra el endpoint real (fila de prueba con `reply_to_addr` apuntando a
+la propia cuenta, nunca a un comprador real) — entrega SMTP confirmada, fila
+outbound registrada, original marcado como leído.
+
+**Pendiente (Fase 2, bloqueada en Jovan):** repetir el setup manual (Gmail
+dedicado + Seller Central: Notification Preferences, Customer Service/
+Reply-To Email, Approved Senders) para AUTOBOT AMZ MX y ExclusiveBulbs — el
+código ya es genérico por `seller_id`, no requiere cambios.
+
+---
+
 ## 2026-07-21 — FIX: Retornos Amazon mostraba SKU sin nombre de producto (Quality Score + Top SKUs)
 
 **Archivos:** `app/main.py`, `app/templates/amazon_returns.html`.
