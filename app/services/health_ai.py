@@ -254,6 +254,53 @@ def build_message_reply_prompt(thread_messages, last_buyer_message):
     return system, user, 300
 
 
+def build_buyer_message_reply_prompt(buyer_message, thread_history, product_title="",
+                                      order_id="", marketplace_name="MX", prior_handler=None):
+    """Amazon Buyer-Seller Messaging (via buzon dedicado, NO SP-API — ver
+    reference_amazon_sp_api_docs). A diferencia de build_message_reply_prompt
+    (ML, 100% espanol), Amazon cubre MX y USA — responde en el idioma del
+    mensaje del comprador, no siempre espanol."""
+    lang_note = (
+        "Responde en INGLES (la cuenta es de EE.UU.)" if (marketplace_name or "").upper() == "US"
+        else "Responde en ESPANOL"
+    )
+    system = (
+        "Eres un vendedor profesional de atencion post-venta en Amazon. "
+        "Responde mensajes de compradores de forma util, concreta y profesional.\n"
+        "REGLAS:\n"
+        f"- {lang_note} — pero si el comprador escribio en otro idioma, responde en ESE idioma\n"
+        "- NUNCA compartas datos de contacto externos (telefono, email, WhatsApp)\n"
+        "- Maximo 500 caracteres\n"
+        "- Tono amable y servicial\n"
+        "- Si es un problema de envio/entrega, sugiere revisar el estado del pedido en Amazon\n"
+        "- Si ya hay una respuesta previa de un companero en este mismo hilo, NO la repitas ni la "
+        "contradigas — dale continuidad como si fueras la misma persona atendiendo\n"
+        "- Responde SOLO con el texto del mensaje, sin explicaciones ni comillas"
+    )
+
+    context = ""
+    if product_title:
+        context += f"Producto: {product_title}\n"
+    if order_id:
+        context += f"Orden: {order_id}\n"
+    if prior_handler:
+        context += f"⚠️ Este hilo ya fue atendido antes por otro companero ({prior_handler}) — mantén continuidad.\n"
+
+    history = ""
+    for msg in (thread_history or []):
+        sender = "Tú (vendedor)" if msg.get("direction") == "outbound" else "Comprador"
+        history += f"  {sender}: {msg.get('text', '')}\n"
+
+    user = (
+        f"{context}\n"
+        "Historial de la conversacion:\n"
+        f"{history}\n"
+        f'Ultimo mensaje del comprador: "{buyer_message}"\n\n'
+        "Genera una respuesta profesional:"
+    )
+    return system, user, 300
+
+
 def parse_claim_analysis(raw_text):
     """Parse claim analysis JSON from Claude response."""
     if not raw_text:

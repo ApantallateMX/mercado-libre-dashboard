@@ -18,6 +18,7 @@ from app.services.health_ai import (
     build_claim_response_prompt,
     build_claim_analysis_prompt,
     build_message_reply_prompt,
+    build_buyer_message_reply_prompt,
     parse_claim_analysis,
 )
 
@@ -396,6 +397,29 @@ async def suggest_message(request: Request):
     system, prompt, max_tokens = build_message_reply_prompt(
         body.get("thread_messages", []),
         body.get("last_buyer_message", ""),
+    )
+    return StreamingResponse(
+        _sse_stream(system, prompt, max_tokens),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/suggest-buyer-message-reply")
+async def suggest_buyer_message_reply(request: Request):
+    """SSE stream: suggest a reply for an Amazon buyer-seller message thread
+    (buzon dedicado, no SP-API). Mismo mecanismo que /suggest-message (ML)
+    pero cubre MX+USA y toma en cuenta si otro companero ya atendio el hilo."""
+    if not _ai_available():
+        return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
+    body = await request.json()
+    system, prompt, max_tokens = build_buyer_message_reply_prompt(
+        body.get("buyer_message", ""),
+        body.get("thread_history", []),
+        product_title=body.get("product_title", ""),
+        order_id=body.get("order_id", ""),
+        marketplace_name=body.get("marketplace_name", "MX"),
+        prior_handler=body.get("prior_handler"),
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),

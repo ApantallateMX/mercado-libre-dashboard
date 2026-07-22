@@ -18045,25 +18045,63 @@ async def amazon_returns_customer_comments(
         return {"error": str(e), "rows": [], "total_returns": 0}
 
 
+def _amz_thread_key(reply_to_addr: str) -> str:
+    """Prefijo reusando ml_message_views (pack_id/account_id genéricos) —
+    mismo truco que ya usan los reclamos ('claim:'), evita crear una tabla
+    nueva solo para llevar quién está atendiendo un hilo."""
+    return f"amz:{reply_to_addr}"
+
+
 @app.get("/api/amazon/buyer-messages")
 async def amazon_buyer_messages_list(
     days: int = Query(30, ge=1, le=365),
     seller_id: str = Query(""),
 ):
-    """Mensajes reales de compradores (Buyer-Seller Messaging) capturados vía
-    el buzón Gmail dedicado — NO es SP-API (no existe endpoint de lectura,
-    ver reference_amazon_sp_api_docs). Mismo mecanismo que usan Replyco/eDesk:
-    reenvío de correo configurado en Seller Central → Notification
-    Preferences → Messaging → Buyer Messages."""
+    """Hilos de mensajes reales de compradores (Buyer-Seller Messaging)
+    capturados vía el buzón Gmail dedicado — NO es SP-API (no existe endpoint
+    de lectura, ver reference_amazon_sp_api_docs). Agrupa por reply_to_addr
+    (la dirección tokenizada de Amazon = identificador estable de "esta
+    conversación con este comprador") en vez de devolver mensajes sueltos,
+    para que Tomar/Atendiendo/IA-con-historial tengan sentido, igual que
+    Mensajes ML."""
     sid = seller_id.strip()
     if not sid:
-        return {"error": "No hay cuenta Amazon activa", "rows": [], "total": 0, "unread": 0}
+        return {"error": "No hay cuenta Amazon activa", "threads": [], "total": 0, "unread": 0}
     try:
         rows = await token_store.get_buyer_messages(sid, days)
         unread = sum(1 for r in rows if r["direction"] == "inbound" and not r.get("read_at"))
-        return {"days": days, "rows": rows, "total": len(rows), "unread": unread}
+
+        by_thread: dict = {}
+        for r in rows:
+            key = r["reply_to_addr"] or r["order_id"] or str(r["id"])
+            th = by_thread.setdefault(key, {
+                "reply_to_addr": r["reply_to_addr"], "buyer_name": r["buyer_name"],
+                "order_id": r["order_id"], "asin": r["asin"], "product_title": r["product_title"],
+                "messages": [], "last_ts": 0,
+            })
+            th["messages"].append(r)
+            th["last_ts"] = max(th["last_ts"], r["ts"] or 0)
+            # el nombre/orden/producto más reciente disponible gana (algunos
+            # inbound viejos pueden no traerlos si Amazon no los incluyó)
+            if r["direction"] == "inbound":
+                th["buyer_name"] = r["buyer_name"] or th["buyer_name"]
+                th["order_id"] = r["order_id"] or th["order_id"]
+                th["asin"] = r["asin"] or th["asin"]
+                th["product_title"] = r["product_title"] or th["product_title"]
+
+        threads = sorted(by_thread.values(), key=lambda t: t["last_ts"], reverse=True)
+        for th in threads:
+            th["messages"].sort(key=lambda m: m["ts"] or 0)
+            th["unread"] = sum(1 for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
+
+        pack_ids = [_amz_thread_key(t["reply_to_addr"]) for t in threads if t["reply_to_addr"]]
+        views = await token_store.get_message_views(pack_ids, sid) if pack_ids else {}
+        for th in threads:
+            th["view_info"] = views.get(_amz_thread_key(th["reply_to_addr"]))
+
+        return {"days": days, "threads": threads, "total": len(rows), "unread": unread}
     except Exception as e:
-        return {"error": str(e), "rows": [], "total": 0, "unread": 0}
+        return {"error": str(e), "threads": [], "total": 0, "unread": 0}
 
 
 @app.post("/api/amazon/buyer-messages/mark-read")
@@ -18083,25 +18121,75 @@ async def amazon_buyer_messages_mark_read(request: Request):
     return JSONResponse({"ok": True})
 
 
-@app.post("/api/amazon/buyer-messages/{message_id}/reply")
-async def amazon_buyer_message_reply(message_id: int, request: Request):
-    """Responde un mensaje de comprador desde el dashboard — envía un correo
-    real desde el buzón dedicado de la cuenta hacia la dirección tokenizada
-    de Amazon (reply_to_addr), que la relanza al comprador de forma anónima."""
+@app.post("/api/amazon/buyer-messages/take")
+async def amazon_buyer_messages_take(request: Request):
+    """Asigna explícitamente un hilo de comprador al usuario actual — mismo
+    patrón que /api/health/messages/{pack_id}/take (ML)."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
+        seller_id = (body.get("seller_id") or "").strip()
+        reply_to_addr = (body.get("reply_to_addr") or "").strip()
     except Exception:
         return JSONResponse({"detail": "JSON inválido"}, status_code=400)
-    text = (body.get("text") or "").strip()
+    if not seller_id or not reply_to_addr:
+        return JSONResponse({"detail": "seller_id y reply_to_addr son requeridos"}, status_code=400)
+    username = du["username"]
+    await token_store.take_message(_amz_thread_key(reply_to_addr), seller_id, username)
+    return JSONResponse({"ok": True, "taken_by": username})
+
+
+@app.post("/api/amazon/buyer-messages/status")
+async def amazon_buyer_messages_status(request: Request):
+    """Actualiza el estado interno de un hilo: pending / in_progress / resolved."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+        seller_id = (body.get("seller_id") or "").strip()
+        reply_to_addr = (body.get("reply_to_addr") or "").strip()
+        status = (body.get("status") or "").strip()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    if status not in ("pending", "in_progress", "resolved"):
+        return JSONResponse({"detail": "Status inválido"}, status_code=400)
+    if not seller_id or not reply_to_addr:
+        return JSONResponse({"detail": "seller_id y reply_to_addr son requeridos"}, status_code=400)
+    await token_store.update_message_view_status(_amz_thread_key(reply_to_addr), seller_id, status)
+    return JSONResponse({"ok": True, "status": status})
+
+
+@app.post("/api/amazon/buyer-messages/{message_id}/reply")
+async def amazon_buyer_message_reply(
+    message_id: int, request: Request,
+    text: str = Form(...),
+    attachment: UploadFile = File(None),
+):
+    """Responde un mensaje de comprador desde el dashboard — envía un correo
+    real desde el buzón dedicado de la cuenta hacia la dirección tokenizada
+    de Amazon (reply_to_addr), que la relanza al comprador de forma anónima.
+    El adjunto (si viene) se lee en memoria y se descarta tras enviarlo — no
+    se persiste en disco (ver riesgo de disco lleno documentado en memoria
+    del proyecto)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    text = (text or "").strip()
     if not text:
         return JSONResponse({"detail": "El texto de la respuesta es requerido"}, status_code=400)
 
     original = await token_store.get_buyer_message(message_id)
     if not original:
         return JSONResponse({"detail": "Mensaje no encontrado"}, status_code=404)
+
+    attachment_tuple = None
+    if attachment is not None and attachment.filename:
+        data = await attachment.read()
+        if data:
+            attachment_tuple = (attachment.filename, data, attachment.content_type or "application/octet-stream")
 
     from app.services import buyer_messages_client as _bmc
     try:
@@ -18111,6 +18199,7 @@ async def amazon_buyer_message_reply(message_id: int, request: Request):
             subject=original["subject"],
             body=text,
             in_reply_to=original["message_id"],
+            attachment=attachment_tuple,
         )
     except Exception as e:
         return JSONResponse({"detail": f"No se pudo enviar: {e}"}, status_code=502)
@@ -18125,13 +18214,14 @@ async def amazon_buyer_message_reply(message_id: int, request: Request):
         "in_reply_to": original["message_id"], "ts": _t_bmr.time(),
     })
     await token_store.mark_buyer_messages_read([message_id])
+    await token_store.take_message(_amz_thread_key(original["reply_to_addr"]), original["seller_id"], du["username"])
 
     try:
         ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
         await user_store.log_action(
             username=du["username"], user_id=du.get("id"),
             action="amazon_buyer_message_reply", item_id=original.get("order_id", ""),
-            detail={"seller_id": original["seller_id"], "text": text},
+            detail={"seller_id": original["seller_id"], "text": text, "had_attachment": bool(attachment_tuple)},
             ip=ip, section="Salud",
         )
     except Exception:

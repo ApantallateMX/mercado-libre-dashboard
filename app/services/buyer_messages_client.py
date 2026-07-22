@@ -197,8 +197,16 @@ async def poll_loop() -> None:
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 
-def _send_reply_sync(cfg: dict, to_addr: str, subject: str, body: str, in_reply_to: str) -> str:
-    """Bloqueante — se llama envuelta en asyncio.to_thread."""
+def _send_reply_sync(
+    cfg: dict, to_addr: str, subject: str, body: str, in_reply_to: str,
+    attachment: tuple[str, bytes, str] | None = None,
+) -> str:
+    """Bloqueante — se llama envuelta en asyncio.to_thread. attachment, si se
+    da, es (filename, contenido, content_type) — NO se persiste en disco en
+    ningún punto de este flujo, solo vive en memoria hasta que smtplib lo
+    manda. No está confirmado que Amazon preserve el adjunto al relanzar el
+    correo al comprador real (es el canal de reenvío, no la API oficial de
+    Seller Central) — se manda de todos modos, pendiente de verificar."""
     msg = EmailMessage()
     msg["From"] = cfg["email"]
     msg["To"] = to_addr
@@ -209,14 +217,22 @@ def _send_reply_sync(cfg: dict, to_addr: str, subject: str, body: str, in_reply_
         msg["References"] = in_reply_to
     msg.set_content(body)
 
+    if attachment:
+        filename, data, content_type = attachment
+        maintype, _, subtype = (content_type or "application/octet-stream").partition("/")
+        msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
+
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as smtp:
         smtp.login(cfg["email"], cfg["app_password"])
         smtp.send_message(msg)
     return msg["Message-ID"] or ""
 
 
-async def send_reply(seller_id: str, to_addr: str, subject: str, body: str, in_reply_to: str = "") -> str:
+async def send_reply(
+    seller_id: str, to_addr: str, subject: str, body: str, in_reply_to: str = "",
+    attachment: tuple[str, bytes, str] | None = None,
+) -> str:
     cfg = next((c for c in AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == seller_id), None)
     if cfg is None:
         raise ValueError(f"No hay buzón configurado para seller_id={seller_id}")
-    return await asyncio.to_thread(_send_reply_sync, cfg, to_addr, subject, body, in_reply_to)
+    return await asyncio.to_thread(_send_reply_sync, cfg, to_addr, subject, body, in_reply_to, attachment)

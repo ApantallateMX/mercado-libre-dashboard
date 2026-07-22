@@ -364,6 +364,52 @@ window.suggestMessageReply = function (btn) {
     });
 };
 
+/* ---------- Amazon buyer messages ---------- */
+
+window.suggestBuyerMessageReply = function (btn) {
+    var threadId = btn.getAttribute('data-thread-id');
+    var panelId = 'ai-panel-bmsg-' + threadId;
+    var textId = 'ai-text-bmsg-' + threadId;
+    var spinnerId = 'ai-spin-bmsg-' + threadId;
+    var actionsId = 'ai-act-bmsg-' + threadId;
+
+    _showPanel(panelId, spinnerId);
+    var actEl = document.getElementById(actionsId);
+    if (actEl) actEl.classList.add('hidden');
+    document.getElementById(textId).textContent = '';
+
+    btn.disabled = true;
+    btn.innerHTML = '<svg class="animate-spin h-4 w-4 inline mr-1" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>Generando...';
+
+    var container = document.getElementById('amz-thread-messages-' + threadId);
+    var threadHistory = [];
+    var lastBuyerMsg = '';
+    if (container) {
+        var items = container.querySelectorAll('[data-msg-role]');
+        items.forEach(function (el) {
+            var isSeller = el.getAttribute('data-msg-role') === 'seller';
+            var text = el.getAttribute('data-msg-text') || el.textContent.trim();
+            threadHistory.push({ direction: isSeller ? 'outbound' : 'inbound', text: text });
+            if (!isSeller) lastBuyerMsg = text;
+        });
+    }
+
+    var payload = {
+        buyer_message: lastBuyerMsg,
+        thread_history: threadHistory,
+        product_title: btn.getAttribute('data-product-title') || '',
+        order_id: btn.getAttribute('data-order-id') || '',
+        marketplace_name: btn.getAttribute('data-marketplace') || 'MX',
+        prior_handler: btn.getAttribute('data-prior-handler') || null,
+    };
+
+    streamAiResponse('/api/health-ai/suggest-buyer-message-reply', payload, textId, function (fullText) {
+        _hideSpinnerShowActions(spinnerId, actionsId);
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA';
+    });
+};
+
 /* ---------- Use / Copy suggestion ---------- */
 
 window.useAiSuggestion = function (type, id) {
@@ -377,6 +423,9 @@ window.useAiSuggestion = function (type, id) {
     } else if (type === 'message') {
         sourceId = 'ai-text-msg-' + id;
         targetId = 'msg-input-' + id;
+    } else if (type === 'buyer_message') {
+        sourceId = 'ai-text-bmsg-' + id;
+        targetId = 'reply-text-' + id;
     }
     var source = document.getElementById(sourceId);
     var target = document.getElementById(targetId);
