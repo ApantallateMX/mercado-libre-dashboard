@@ -14994,6 +14994,37 @@ async def diag_trigger_catalog_sync(token: str = ""):
     return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
 
 
+@app.get("/api/diag/smtp-test")
+async def diag_smtp_test(token: str = ""):
+    """Diagnóstico: prueba si el egress de Railway puede conectar por SMTP a
+    Gmail — Jovan reportó que 'Responder' en Mensajes de Compradores se
+    queda colgado en 'Enviando...'. Sospecha: muchos hosts bloquean egress
+    SMTP (25/465/587) por antiabuso, y smtplib.SMTP_SSL no tenía timeout, así
+    que un bloqueo silencioso (sin RST) cuelga la conexión indefinidamente
+    en vez de fallar rápido."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import time as _t_smtp
+    from app.services.buyer_messages_client import AMAZON_BUYER_INBOX_ACCOUNTS, SMTP_HOST, SMTP_PORT
+    if not AMAZON_BUYER_INBOX_ACCOUNTS:
+        return JSONResponse({"ok": False, "error": "Sin cuentas de buzón configuradas"})
+    cfg = AMAZON_BUYER_INBOX_ACCOUNTS[0]
+
+    def _test():
+        import smtplib
+        t0 = _t_smtp.time()
+        try:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=12) as smtp:
+                smtp.login(cfg["email"], cfg["app_password"])
+            return {"ok": True, "elapsed_s": round(_t_smtp.time() - t0, 2)}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "elapsed_s": round(_t_smtp.time() - t0, 2)}
+
+    result = await asyncio.to_thread(_test)
+    return JSONResponse(result)
+
+
 @app.get("/api/diag/db-size")
 async def diag_db_size(token: str = ""):
     """Diagnóstico URGENTE: tamaño de tokens.db, filas por tabla, y tamaño de

@@ -420,6 +420,7 @@ async def suggest_buyer_message_reply(request: Request):
         order_id=body.get("order_id", ""),
         marketplace_name=body.get("marketplace_name", "MX"),
         prior_handler=body.get("prior_handler"),
+        user_context=body.get("user_context"),
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),

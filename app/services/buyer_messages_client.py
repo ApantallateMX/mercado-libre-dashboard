@@ -133,7 +133,7 @@ def _poll_account_sync(cfg: dict) -> list[dict]:
     """Bloqueante — se llama envuelta en asyncio.to_thread. Busca correos
     entrantes del dominio de Amazon buyer-messaging y parsea los nuevos."""
     found: list[dict] = []
-    M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=20)
     try:
         M.login(cfg["email"], cfg["app_password"])
         M.select("INBOX", readonly=True)
@@ -222,7 +222,7 @@ def _send_reply_sync(
         maintype, _, subtype = (content_type or "application/octet-stream").partition("/")
         msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
 
-    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as smtp:
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
         smtp.login(cfg["email"], cfg["app_password"])
         smtp.send_message(msg)
     return msg["Message-ID"] or ""

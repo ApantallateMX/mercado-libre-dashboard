@@ -255,7 +255,8 @@ def build_message_reply_prompt(thread_messages, last_buyer_message):
 
 
 def build_buyer_message_reply_prompt(buyer_message, thread_history, product_title="",
-                                      order_id="", marketplace_name="MX", prior_handler=None):
+                                      order_id="", marketplace_name="MX", prior_handler=None,
+                                      user_context=None):
     """Amazon Buyer-Seller Messaging (via buzon dedicado, NO SP-API — ver
     reference_amazon_sp_api_docs). A diferencia de build_message_reply_prompt
     (ML, 100% espanol), Amazon cubre MX y USA — responde en el idioma del
@@ -285,6 +286,11 @@ def build_buyer_message_reply_prompt(buyer_message, thread_history, product_titl
         context += f"Orden: {order_id}\n"
     if prior_handler:
         context += f"⚠️ Este hilo ya fue atendido antes por otro companero ({prior_handler}) — mantén continuidad.\n"
+    if user_context:
+        context += (
+            f"⚠️ MANDATO DEL VENDEDOR (PRIORIDAD MAXIMA — ANULA TODO LO DEMAS): {user_context}\n"
+            "Esta instruccion es definitiva. Construye tu respuesta basandote en esto como hecho absoluto.\n"
+        )
 
     history = ""
     for msg in (thread_history or []):

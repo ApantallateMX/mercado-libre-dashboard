@@ -444,13 +444,15 @@ function _renderBuyerMessages(data) {
         '</div>';
 
         var aiButton = lastInbound ? (
-            '<div class="mt-2">' +
+            '<div class="mt-2 flex items-center gap-2 flex-wrap">' +
                 '<button onclick="suggestBuyerMessageReply(this)" data-thread-id="' + domId + '"' +
                     ' data-product-title="' + _escAttr(th.product_title) + '" data-order-id="' + _escAttr(th.order_id) + '"' +
                     ' data-marketplace="' + _escAttr(marketplaceName) + '" data-prior-handler="' + _escAttr(priorHandler) + '"' +
-                    ' class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">' +
+                    ' class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors flex-shrink-0">' +
                     '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA' +
                 '</button>' +
+                '<input type="text" id="ai-context-bmsg-' + domId + '" placeholder="Instrucciones para la IA (ej: ofrece reembolso, menciona garantía...)"' +
+                    ' class="flex-1 min-w-[160px] border border-purple-200 rounded-full px-3 py-1 text-xs text-gray-700 focus:ring-1 focus:ring-purple-400 focus:outline-none placeholder-gray-400">' +
             '</div>' +
             '<div id="ai-panel-bmsg-' + domId + '" class="hidden mt-2">' +
                 '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3">' +
@@ -550,11 +552,15 @@ window.replyToBuyerMessage = function(domId, messageId, replyToAddr) {
         fd.append('attachment', fileInput.files[0]);
     }
 
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 30000);
+
     fetch('/api/amazon/buyer-messages/' + messageId + '/reply', {
         method: 'POST',
         body: fd,
+        signal: controller.signal,
     })
-        .then(function(r) { return r.json(); })
+        .then(function(r) { clearTimeout(timeoutId); return r.json(); })
         .then(function(data) {
             if (data.ok) {
                 loadBuyerMessages();
@@ -565,7 +571,9 @@ window.replyToBuyerMessage = function(domId, messageId, replyToAddr) {
             }
         })
         .catch(function(e) {
-            alert('Error: ' + e.message);
+            clearTimeout(timeoutId);
+            var msg = (e.name === 'AbortError') ? 'Tardó demasiado en responder (30s) — puede que sí se haya enviado, revisa el hilo en unos segundos.' : ('Error: ' + e.message);
+            alert(msg);
             btn.disabled = false;
             btn.textContent = 'Responder';
         });

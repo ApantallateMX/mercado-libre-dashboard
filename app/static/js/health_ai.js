@@ -394,6 +394,9 @@ window.suggestBuyerMessageReply = function (btn) {
         });
     }
 
+    var contextInput = document.getElementById('ai-context-bmsg-' + threadId);
+    var userContext = contextInput ? contextInput.value.trim() : '';
+
     var payload = {
         buyer_message: lastBuyerMsg,
         thread_history: threadHistory,
@@ -401,6 +404,7 @@ window.suggestBuyerMessageReply = function (btn) {
         order_id: btn.getAttribute('data-order-id') || '',
         marketplace_name: btn.getAttribute('data-marketplace') || 'MX',
         prior_handler: btn.getAttribute('data-prior-handler') || null,
+        user_context: userContext,
     };
 
     streamAiResponse('/api/health-ai/suggest-buyer-message-reply', payload, textId, function (fullText) {
