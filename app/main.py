@@ -18143,6 +18143,8 @@ def _amz_thread_key(reply_to_addr: str) -> str:
 async def amazon_buyer_messages_list(
     days: int = Query(30, ge=1, le=365),
     seller_id: str = Query(""),
+    order_id: str = Query(""),
+    only_pending: bool = Query(True),
 ):
     """Hilos de mensajes reales de compradores (Buyer-Seller Messaging)
     capturados vía el buzón Gmail dedicado — NO es SP-API (no existe endpoint
@@ -18150,12 +18152,23 @@ async def amazon_buyer_messages_list(
     (la dirección tokenizada de Amazon = identificador estable de "esta
     conversación con este comprador") en vez de devolver mensajes sueltos,
     para que Tomar/Atendiendo/IA-con-historial tengan sentido, igual que
-    Mensajes ML."""
+    Mensajes ML.
+
+    order_id: si se da, busca el histórico completo de ESA orden (ignora days
+    y only_pending — Jovan quiere poder ver todo lo que se habló con ese
+    cliente, ya esté resuelto o no).
+    only_pending (default True): oculta los hilos donde el último mensaje ya
+    es nuestro (ya se respondió) — Jovan no quiere ver de nuevo lo que ya se
+    contestó, solo lo que sigue esperando respuesta."""
     sid = seller_id.strip()
+    oid = order_id.strip()
     if not sid:
         return {"error": "No hay cuenta Amazon activa", "threads": [], "total": 0, "unread": 0}
     try:
-        rows = await token_store.get_buyer_messages(sid, days)
+        effective_days = 3650 if oid else days
+        rows = await token_store.get_buyer_messages(sid, effective_days, limit=(1000 if oid else 50))
+        if oid:
+            rows = [r for r in rows if r["order_id"] == oid]
         unread = sum(1 for r in rows if r["direction"] == "inbound" and not r.get("read_at"))
 
         by_thread: dict = {}
@@ -18180,6 +18193,12 @@ async def amazon_buyer_messages_list(
         for th in threads:
             th["messages"].sort(key=lambda m: m["ts"] or 0)
             th["unread"] = sum(1 for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
+            # Pendiente = el último mensaje del hilo es del comprador (nunca
+            # se le contestó, o escribió de nuevo después de la respuesta).
+            th["needs_response"] = th["messages"][-1]["direction"] == "inbound" if th["messages"] else False
+
+        if only_pending and not oid:
+            threads = [t for t in threads if t["needs_response"]]
 
         pack_ids = [_amz_thread_key(t["reply_to_addr"]) for t in threads if t["reply_to_addr"]]
         views = await token_store.get_message_views(pack_ids, sid) if pack_ids else {}
@@ -18278,13 +18297,18 @@ async def amazon_buyer_message_reply(
         if data:
             attachment_tuple = (attachment.filename, data, attachment.content_type or "application/octet-stream")
 
+    # Firma con el nombre real de quien responde — nunca "admin" (Jovan pidió
+    # explícitamente no usarlo, no identifica a una persona real).
+    signer = (du.get("display_name") or du.get("username") or "").strip()
+    body_with_signature = f"{text}\n\n{signer}" if signer and signer.lower() != "admin" else text
+
     from app.services import buyer_messages_client as _bmc
     try:
         sent_message_id = await _bmc.send_reply(
             seller_id=original["seller_id"],
             to_addr=original["reply_to_addr"],
             subject=original["subject"],
-            body=text,
+            body=body_with_signature,
             in_reply_to=original["message_id"],
             attachment=attachment_tuple,
         )
@@ -18296,7 +18320,7 @@ async def amazon_buyer_message_reply(
         "seller_id": original["seller_id"], "direction": "outbound",
         "order_id": original["order_id"], "asin": original["asin"],
         "product_title": original["product_title"], "buyer_name": original["buyer_name"],
-        "subject": original["subject"], "body_text": text,
+        "subject": original["subject"], "body_text": body_with_signature,
         "reply_to_addr": original["reply_to_addr"], "message_id": sent_message_id,
         "in_reply_to": original["message_id"], "ts": _t_bmr.time(),
     })

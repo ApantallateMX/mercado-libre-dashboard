@@ -124,7 +124,19 @@
         </svg>
         <h2 class="text-sm font-semibold text-gray-700">Mensajes de Compradores</h2>
         <span id="amz-ret-msgs-unread" class="hidden text-[10px] font-bold bg-red-500 text-white px-1.5 py-0.5 rounded-full"></span>
-        <span class="text-[10px] text-gray-400">— capturados vía buzón dedicado, no es un endpoint de Amazon</span>
+        <span class="text-[10px] text-gray-400 hidden sm:inline">— capturados vía buzón dedicado, no es un endpoint de Amazon</span>
+    </div>
+    <div class="px-5 pt-4 flex flex-wrap items-center gap-2">
+        <button id="amz-msgs-toggle" onclick="toggleAmzMsgsPending()" class="text-xs px-3 py-1.5 rounded-full bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200 transition">
+            Mostrando: solo pendientes
+        </button>
+        <div class="flex items-center gap-1 ml-auto">
+            <input id="amz-msgs-order-search" type="text" placeholder="Buscar histórico por # de orden..."
+                   class="text-xs border border-gray-200 rounded-full px-3 py-1.5 w-56 focus:outline-none focus:ring-1 focus:ring-teal-400"
+                   onkeydown="if(event.key==='Enter'){searchAmzMsgsByOrder();}">
+            <button onclick="searchAmzMsgsByOrder()" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold transition">Buscar</button>
+            <button id="amz-msgs-clear-search" onclick="clearAmzMsgsSearch()" class="hidden text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 font-semibold transition">✕</button>
+        </div>
     </div>
     <div id="amz-ret-buyer-messages" class="p-5">
         <div class="flex items-center justify-center gap-3 py-8 text-sm text-gray-400">
@@ -349,13 +361,39 @@ function _renderCustomerComments(data) {
     el.innerHTML = summary + cards + table;
 }
 
+var amzMsgsOnlyPending = true;
+var amzMsgsOrderSearch = '';
+
 function loadBuyerMessages() {
     var el = document.getElementById('amz-ret-buyer-messages');
-    fetch('/api/amazon/buyer-messages?' + _params())
+    var qs = _params() + '&only_pending=' + (amzMsgsOnlyPending ? 'true' : 'false');
+    if (amzMsgsOrderSearch) qs += '&order_id=' + encodeURIComponent(amzMsgsOrderSearch);
+    fetch('/api/amazon/buyer-messages?' + qs)
         .then(function(r) { return r.json(); })
         .then(function(data) { _renderBuyerMessages(data); })
         .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
 }
+
+window.toggleAmzMsgsPending = function() {
+    amzMsgsOnlyPending = !amzMsgsOnlyPending;
+    document.getElementById('amz-msgs-toggle').textContent = amzMsgsOnlyPending ? 'Mostrando: solo pendientes' : 'Mostrando: todos';
+    loadBuyerMessages();
+};
+
+window.searchAmzMsgsByOrder = function() {
+    var val = (document.getElementById('amz-msgs-order-search').value || '').trim();
+    if (!val) return;
+    amzMsgsOrderSearch = val;
+    document.getElementById('amz-msgs-clear-search').classList.remove('hidden');
+    loadBuyerMessages();
+};
+
+window.clearAmzMsgsSearch = function() {
+    amzMsgsOrderSearch = '';
+    document.getElementById('amz-msgs-order-search').value = '';
+    document.getElementById('amz-msgs-clear-search').classList.add('hidden');
+    loadBuyerMessages();
+};
 
 function _fmtDate(ts) {
     if (!ts) return '';
@@ -378,7 +416,10 @@ function _renderBuyerMessages(data) {
     if (data.error) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">' + data.error + '</p>'; badge.classList.add('hidden'); return; }
     if (data.unread > 0) { badge.textContent = data.unread + ' sin leer'; badge.classList.remove('hidden'); } else { badge.classList.add('hidden'); }
     if (!threads.length) {
-        el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">Sin mensajes de compradores en este periodo.</p>';
+        var emptyMsg = amzMsgsOrderSearch
+            ? 'Sin mensajes para la orden ' + _escHtml(amzMsgsOrderSearch) + '.'
+            : (amzMsgsOnlyPending ? 'No hay mensajes pendientes de responder — todo al día. (Dale a "Mostrando: solo pendientes" para ver el historial completo)' : 'Sin mensajes de compradores en este periodo.');
+        el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">' + emptyMsg + '</p>';
         return;
     }
 
