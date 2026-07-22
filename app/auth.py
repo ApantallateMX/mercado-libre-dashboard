@@ -801,11 +801,12 @@ async def gmail_connect(request: Request, env_var: str = "AMAZON_GMAIL_REFRESH_T
         "client_id": GMAIL_OAUTH_CLIENT_ID,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        # gmail.send: para responder. gmail.settings.basic: para crear la
-        # etiqueta/filtro de organización (Jovan pidió que el correo de
-        # Amazon se etiquete y archive automático) sin que tenga que tocar
-        # la configuración de Gmail a mano.
-        "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.settings.basic",
+        # gmail.send: para responder. gmail.settings.basic: para crear el
+        # FILTRO (Settings.filters). gmail.labels: para crear/leer la
+        # ETIQUETA (son scopes distintos en la API de Gmail — confirmado
+        # con error real: gmail.settings.basic solo no alcanza para
+        # users.labels.list/create, tira ACCESS_TOKEN_SCOPE_INSUFFICIENT).
+        "scope": "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.settings.basic https://www.googleapis.com/auth/gmail.labels",
         "access_type": "offline",
         "prompt": "consent",  # fuerza a que Google reemita refresh_token siempre
         "state": f"{state}|{env_var}",
