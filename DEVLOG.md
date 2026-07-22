@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-22 — FEAT/FIX: "Marcar todo como atendido" (borrón y cuenta nueva) + bug real de status ignorado en filtro pendientes
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.
+
+Jovan mostró un caso concreto (Martha, orden 702-4735302-6793818) donde
+Seller Central mostraba "Resolved on Jul 21" con una respuesta real (de un
+compañero llamado Jorge, vía plantilla de factura) pero el dashboard lo
+seguía marcando como "sin responder". Se investigó a fondo contra el buzón
+real: **confirmado de nuevo (segunda vez, ya con Edgar antes) que Amazon no
+comparte ninguna copia de respuestas dadas directo en Seller Central** — ni
+por email ni por API. Se le presentó la opción de automatizar un navegador
+contra Seller Central (con los riesgos reales: fragilidad, zona gris de
+TOS, credenciales guardadas) — Jovan prefirió no tomar ese riesgo.
+
+**Decisión: "borrón y cuenta nueva".** Limpiar el historial acumulado de
+una vez (marcando todo como atendido) y de ahí en adelante usar
+Tomar/Marcar resuelto para lo nuevo, ya que eso SÍ lo puede rastrear el
+dashboard con certeza (lo que pasa a través de él mismo).
+
+- `token_store.bulk_mark_resolved()`: marca varios hilos resueltos en una
+  sola transacción.
+- `POST /api/amazon/buyer-messages/mark-all-resolved`: trae todos los
+  hilos actuales de la cuenta y los marca resueltos de un jalón.
+- Botón **"Marcar todo como atendido"** en la pestaña Salud, con
+  confirmación explicando que es una limpieza de una sola vez.
+
+**Bug real encontrado al probar esto**: el filtro `only_pending` (agregado
+en la entrada anterior) solo miraba si el último mensaje era del comprador
+(`needs_response`), **ignorando por completo si alguien ya lo había
+marcado resuelto a mano** — exactamente el problema que reportó Jovan con
+Martha. Corregido: `needs_response` ahora es "último mensaje es del
+comprador **y** no está marcado resuelto".
+
+Verificado en local: tras `mark-all-resolved`, "solo pendientes" pasa de
+36 a 0; insertando un mensaje nuevo simulado, solo ese vuelve a aparecer
+como pendiente (los otros 36 siguen ocultos, correctamente).
+
+---
+
 ## 2026-07-22 — FEAT/FIX: Firma real, filtro de pendientes, búsqueda por orden y mover Mensajes de Compradores a Salud
 
 **Archivos:** `app/main.py`, `app/services/buyer_messages_client.py`, `app/templates/amazon_returns.html`, `app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.
