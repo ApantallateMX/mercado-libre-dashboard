@@ -14994,6 +14994,31 @@ async def diag_trigger_catalog_sync(token: str = ""):
     return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
 
 
+@app.post("/api/diag/fix-buyer-message-subjects")
+async def diag_fix_buyer_message_subjects(token: str = ""):
+    """Normaliza subjects ya guardados con \\r\\n de header plegado sin
+    limpiar (RFC 5322) — filas guardadas antes del fix del parser. Sin esto,
+    responder a esos mensajes truena con 'Header values may not contain
+    linefeed or carriage return characters' (email.message lo rechaza)."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import re as _re_fix
+    import aiosqlite as _aio_fix
+    fixed = 0
+    async with _aio_fix.connect(token_store.DATABASE_PATH) as db:
+        db.row_factory = _aio_fix.Row
+        cur = await db.execute("SELECT id, subject FROM amazon_buyer_messages")
+        rows = await cur.fetchall()
+        for row in rows:
+            clean = _re_fix.sub(r"\s+", " ", row["subject"] or "").strip()
+            if clean != row["subject"]:
+                await db.execute("UPDATE amazon_buyer_messages SET subject = ? WHERE id = ?", (clean, row["id"]))
+                fixed += 1
+        await db.commit()
+    return JSONResponse({"ok": True, "fixed": fixed, "total": len(rows)})
+
+
 @app.post("/api/diag/gmail-setup-filter")
 async def diag_gmail_setup_filter(token: str = "", seller_id: str = Query(...)):
     """Crea (vía API de Gmail) la etiqueta + filtro que organiza los correos

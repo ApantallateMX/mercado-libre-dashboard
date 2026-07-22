@@ -76,7 +76,13 @@ def _decode_header_value(raw: str) -> str:
             out.append(text.decode(enc or "utf-8", errors="replace"))
         else:
             out.append(text)
-    return "".join(out)
+    value = "".join(out)
+    # Los headers largos vienen "plegados" (RFC 2822/5322: continúan en la
+    # siguiente línea con \r\n + espacio) — sin normalizar esto, un Subject
+    # así guardado revienta más tarde al construir la respuesta
+    # (email.message rechaza headers con \r\n: "Header values may not
+    # contain linefeed or carriage return characters").
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _get_text_body(msg: email.message.Message) -> str | None:
@@ -236,6 +242,11 @@ def _build_mime_message(
     relanzar el correo al comprador real (es el canal de reenvío, no la API
     oficial de Seller Central) — se manda de todos modos, pendiente de
     verificar."""
+    # Defensivo: filas guardadas antes de este fix pueden traer el Subject
+    # con \r\n de header plegado (RFC 5322) sin normalizar — email.message
+    # rechaza cualquier header con salto de línea.
+    subject = re.sub(r"\s+", " ", subject or "").strip()
+
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to_addr
