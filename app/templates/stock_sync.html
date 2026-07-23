@@ -647,6 +647,62 @@
       </div>
     </div>
 
+    <!-- ── Eventos Estacionales (boost temporal al punto de reorden) ──── -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-sm font-bold text-gray-700">Eventos Estacionales</h2>
+          <p class="text-xs text-gray-400 mt-0.5">Sube temporalmente la recomendación de reorden antes de Buen Fin, Hot Sale, Navidad, etc. Nunca toca disponibilidad publicada — solo la sugerencia de compra/sync.</p>
+        </div>
+        <button onclick="seasonalOpenForm()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+          + Nuevo evento
+        </button>
+      </div>
+
+      <div id="seasonal-events-list" class="space-y-2">
+        <p class="text-xs text-gray-400">Cargando eventos...</p>
+      </div>
+
+      <div id="seasonal-form" class="hidden border-t border-gray-100 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <input type="hidden" id="seasonal-f-id">
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Nombre</label>
+          <input type="text" id="seasonal-f-name" placeholder="Buen Fin 2026"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Inicio del evento</label>
+          <input type="date" id="seasonal-f-start" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Fin del evento</label>
+          <input type="date" id="seasonal-f-end" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Días de anticipación</label>
+          <input type="number" id="seasonal-f-lead" min="0" max="90" value="14"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <p class="text-[11px] text-gray-400 mt-1">El boost empieza esta cantidad de días antes del inicio</p>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Multiplicador</label>
+          <input type="number" id="seasonal-f-mult" min="1" max="10" step="0.1" value="1.5"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <p class="text-[11px] text-gray-400 mt-1">1.5 = +50% a la recomendación de reorden</p>
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Categoría (opcional)</label>
+          <input type="text" id="seasonal-f-category" placeholder="TV (vacío = todas)"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <p class="text-[11px] text-gray-400 mt-1">Coincide con el título del producto — vacío aplica a todo el catálogo</p>
+        </div>
+        <div class="sm:col-span-2 lg:col-span-3 flex gap-2">
+          <button onclick="seasonalSaveEvent()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">Guardar evento</button>
+          <button onclick="seasonalCloseForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold px-4 py-2 rounded-xl transition">Cancelar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Reglas por cuenta ───────────────────────────────────────── -->
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
       <div class="flex items-center justify-between">
@@ -2105,6 +2161,7 @@ function distLoadData() {
         distRenderSettings();
         distRenderRules();
     }).catch(function(e) { distShowToast('Error cargando datos: ' + e, 'error'); });
+    loadSeasonalEvents();
 }
 
 function distRenderSettings() {
@@ -2243,6 +2300,109 @@ function distSaveSettings() {
     }).then(function(r){ return r.json(); }).then(function(d) {
         distShowToast('Umbrales actualizados', 'success');
     }).catch(function(e) { distShowToast('Error: ' + e, 'error'); });
+}
+
+// ── Eventos Estacionales ────────────────────────────────────────────────
+var _seasonalEvents = [];
+
+function loadSeasonalEvents() {
+    fetch('/api/seasonal-events').then(function(r){ return r.json(); }).then(function(d) {
+        _seasonalEvents = d.events || [];
+        seasonalRenderList();
+    }).catch(function(e) {
+        document.getElementById('seasonal-events-list').innerHTML =
+            '<p class="text-xs text-red-500">Error cargando eventos: ' + e + '</p>';
+    });
+}
+
+function seasonalFmtDate(s) {
+    if (!s) return '';
+    var parts = s.split('-');
+    return parts.length === 3 ? (parts[2] + '/' + parts[1] + '/' + parts[0]) : s;
+}
+
+function seasonalRenderList() {
+    var el = document.getElementById('seasonal-events-list');
+    if (!_seasonalEvents.length) {
+        el.innerHTML = '<p class="text-xs text-gray-400">Sin eventos estacionales configurados.</p>';
+        return;
+    }
+    var today = new Date().toISOString().slice(0, 10);
+    el.innerHTML = _seasonalEvents.map(function(ev) {
+        var isPast = ev.end_date < today;
+        var badgeClass = !ev.active ? 'bg-gray-100 text-gray-400' : (isPast ? 'bg-gray-100 text-gray-500' : 'bg-green-100 text-green-700');
+        var badgeText = !ev.active ? 'Inactivo' : (isPast ? 'Pasado' : 'Vigente/Próximo');
+        return '<div class="flex items-center justify-between gap-2 border border-gray-100 rounded-xl px-3 py-2.5 flex-wrap">' +
+            '<div>' +
+                '<div class="flex items-center gap-2">' +
+                    '<span class="font-semibold text-sm text-gray-800">' + ev.name + '</span>' +
+                    '<span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ' + badgeClass + '">' + badgeText + '</span>' +
+                '</div>' +
+                '<div class="text-[11px] text-gray-400 mt-0.5">' +
+                    seasonalFmtDate(ev.start_date) + ' → ' + seasonalFmtDate(ev.end_date) +
+                    ' &middot; boost ' + ev.multiplier + 'x, ' + ev.lead_days + ' días antes' +
+                    (ev.category_filter ? ' &middot; solo "' + ev.category_filter + '"' : ' &middot; todo el catálogo') +
+                '</div>' +
+            '</div>' +
+            '<div class="flex items-center gap-2 flex-shrink-0">' +
+                '<button onclick="seasonalOpenForm(' + ev.id + ')" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium">Editar</button>' +
+                '<button onclick="seasonalDeleteEvent(' + ev.id + ')" class="text-xs px-2.5 py-1 rounded-full border border-red-200 text-red-500 hover:bg-red-50 font-medium">Eliminar</button>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function seasonalOpenForm(eventId) {
+    var form = document.getElementById('seasonal-form');
+    form.classList.remove('hidden');
+    var ev = eventId ? _seasonalEvents.find(function(e) { return e.id === eventId; }) : null;
+    document.getElementById('seasonal-f-id').value = ev ? ev.id : '';
+    document.getElementById('seasonal-f-name').value = ev ? ev.name : '';
+    document.getElementById('seasonal-f-start').value = ev ? ev.start_date : '';
+    document.getElementById('seasonal-f-end').value = ev ? ev.end_date : '';
+    document.getElementById('seasonal-f-lead').value = ev ? ev.lead_days : 14;
+    document.getElementById('seasonal-f-mult').value = ev ? ev.multiplier : 1.5;
+    document.getElementById('seasonal-f-category').value = ev ? ev.category_filter : '';
+}
+
+function seasonalCloseForm() {
+    document.getElementById('seasonal-form').classList.add('hidden');
+}
+
+function seasonalSaveEvent() {
+    var id = document.getElementById('seasonal-f-id').value;
+    var name = document.getElementById('seasonal-f-name').value.trim();
+    var start = document.getElementById('seasonal-f-start').value;
+    var end = document.getElementById('seasonal-f-end').value;
+    if (!name || !start || !end) {
+        distShowToast('Nombre, inicio y fin son requeridos', 'error');
+        return;
+    }
+    var payload = {
+        name: name, start_date: start, end_date: end,
+        lead_days: parseInt(document.getElementById('seasonal-f-lead').value) || 14,
+        multiplier: parseFloat(document.getElementById('seasonal-f-mult').value) || 1.5,
+        category_filter: document.getElementById('seasonal-f-category').value.trim(),
+    };
+    if (id) payload.id = parseInt(id);
+    fetch('/api/seasonal-events', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        distShowToast('Evento guardado', 'success');
+        seasonalCloseForm();
+        loadSeasonalEvents();
+    }).catch(function(e) { distShowToast('Error: ' + e, 'error'); });
+}
+
+function seasonalDeleteEvent(eventId) {
+    if (!confirm('¿Eliminar este evento estacional?')) return;
+    fetch('/api/seasonal-events/' + eventId, { method: 'DELETE' })
+        .then(function(r){ return r.json(); }).then(function(d) {
+            distShowToast('Evento eliminado', 'success');
+            loadSeasonalEvents();
+        }).catch(function(e) { distShowToast('Error: ' + e, 'error'); });
 }
 
 // ── Score dinámico por SKU ─────────────────────────────────────────────

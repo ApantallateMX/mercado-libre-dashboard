@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-23 — FEAT: Boost estacional automático al punto de reorden (Feature 1/4 de "ideas Zoho")
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`,
+`generate_purchase_order.py`, `app/templates/stock_sync.html`,
+`app/templates/partials/products_stock_issues.html`.
+
+Primera de 4 mejoras inspiradas en comparar el sistema contra Zoho
+Inventory (análisis con binmanager-specialist + planning-specialist).
+Jovan ajustaba a mano el punto de reorden antes de Buen Fin/Hot Sale/
+Navidad — ahora es configurable y se aplica solo.
+
+- Tabla `seasonal_events` (nombre, fechas, `lead_days` de anticipación,
+  multiplicador, categoría opcional por texto libre, activo/inactivo).
+- `get_active_seasonal_boost()`/CRUD en `token_store.py`, junto a
+  `stock_distribution_settings`.
+- Inyectado en la recomendación de qty a sincronizar (`_rec_qty`/`_cap`,
+  `main.py` dentro de `_do_prewarm()`) — multiplica el target de demanda
+  proyectada mientras un evento esté vigente (con anticipación). Si hay
+  varios eventos traslapados, gana el multiplicador más alto (nunca se
+  suman). Badge nuevo indica "(temporada: nombre)" cuando aplica.
+- También se aplica en `generate_purchase_order.py` (script standalone)
+  vía `seasonal_boost()`, mismo criterio, consulta directa a SQLite sync.
+- Endpoints `GET/POST /api/seasonal-events`, `DELETE
+  /api/seasonal-events/{id}`.
+- UI: nueva tarjeta "Eventos Estacionales" en Sync Stock → Configurar
+  (crear/editar/eliminar eventos) + banner de transparencia en el Stock
+  tab cuando un boost está activo ("📈 Boost de temporada activo: ...").
+- Nunca toca disponibilidad publicada en ML/Amazon — solo sube la
+  recomendación de compra/sync, que sigue siendo manual.
+
+Verificado local: CRUD completo por curl, Playwright 375px/1920px sobre
+Sync Stock → Configurar (crear evento, 0 overflow, 0 errores de consola).
+
+---
+
 ## 2026-07-23 — FIX: Alertas de Stock en 0 tras cada deploy — snapshot bueno sobreescrito por bulk BM fallido
 
 **Archivo:** `app/main.py` (~línea 5670-5715, dentro de `_do_prewarm()`).

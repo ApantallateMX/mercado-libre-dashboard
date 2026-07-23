@@ -5499,7 +5499,51 @@ async def _prewarm_caches(user_id: str = None):
 
                 # Recomendación inteligente de qty a sincronizar por velocidad de ventas.
                 # Fórmula: stock para 14 días al ritmo actual, acotado a la cuota asignada.
+                # Boost estacional: si hay un evento vigente (Buen Fin/Hot Sale/Navidad,
+                # con lead_days de anticipación), se multiplica el target de demanda antes
+                # de acotar — nunca toca disponibilidad publicada, solo la recomendación.
                 import math as _math_rec
+                from datetime import datetime as _dt_boost, timedelta as _td_boost
+                _seasonal_events = await token_store.get_seasonal_events()
+                _today_boost = _dt_boost.utcnow().date()
+
+                def _seasonal_boost_for(_title: str, _cat_id: str) -> dict:
+                    best = {"multiplier": 1.0, "event_name": None}
+                    _title_up = (_title or "").upper()
+                    for ev in _seasonal_events:
+                        if not ev.get("active"):
+                            continue
+                        cat_f = (ev.get("category_filter") or "").strip()
+                        if cat_f and cat_f.upper() not in _title_up and cat_f.upper() != (_cat_id or "").upper():
+                            continue
+                        try:
+                            _start = _dt_boost.strptime(ev["start_date"], "%Y-%m-%d").date()
+                            _end = _dt_boost.strptime(ev["end_date"], "%Y-%m-%d").date()
+                        except (ValueError, TypeError):
+                            continue
+                        _lead = _td_boost(days=int(ev.get("lead_days") or 0))
+                        if (_start - _lead) <= _today_boost <= _end and ev["multiplier"] > best["multiplier"]:
+                            best = {"multiplier": ev["multiplier"], "event_name": ev["name"]}
+                    return best
+
+                # Para el banner de transparencia en el Stock tab — eventos vigentes
+                # HOY (sin importar categoría), independiente del cruce por producto.
+                _active_seasonal_events = []
+                for _ev in _seasonal_events:
+                    if not _ev.get("active"):
+                        continue
+                    try:
+                        _ev_start = _dt_boost.strptime(_ev["start_date"], "%Y-%m-%d").date()
+                        _ev_end = _dt_boost.strptime(_ev["end_date"], "%Y-%m-%d").date()
+                    except (ValueError, TypeError):
+                        continue
+                    _ev_lead = _td_boost(days=int(_ev.get("lead_days") or 0))
+                    if (_ev_start - _ev_lead) <= _today_boost <= _ev_end:
+                        _active_seasonal_events.append({
+                            "name": _ev["name"], "multiplier": _ev["multiplier"],
+                            "end_date": _ev["end_date"], "category_filter": _ev.get("category_filter") or "",
+                        })
+
                 for _rp in products:
                     _r_raw  = int(_rp.get("_bm_avail_raw") or _rp.get("_bm_avail") or 0)
                     _r_alloc = int(_rp.get("_bm_avail") or 0)
@@ -5508,18 +5552,22 @@ async def _prewarm_caches(user_id: str = None):
                         _rp["_rec_qty"] = 0; _rp["_rec_badge"] = ""; _rp["_rec_u30"] = 0
                         continue
                     _cap = _r_alloc if _r_alloc > 0 else _r_raw
+                    _boost = _seasonal_boost_for(_rp.get("title", ""), _rp.get("category_id", ""))
                     if _u30 == 0:
                         _rp["_rec_qty"]   = min(2, _cap)
                         _rp["_rec_badge"] = "sin historial"
                     else:
-                        _target = max(1, int(_math_rec.ceil(_u30 / 30.0 * 14)))
+                        _target = max(1, int(_math_rec.ceil(_u30 / 30.0 * 14 * _boost["multiplier"])))
                         _rp["_rec_qty"]   = max(1, min(_cap, _target))
                         _rp["_rec_badge"] = (
                             "alta demanda" if _u30 >= 20 else
                             "demanda media" if _u30 >= 6 else
                             "baja demanda"
                         )
+                    if _boost["multiplier"] > 1.0:
+                        _rp["_rec_badge"] = f"{_rp['_rec_badge']} (temporada: {_boost['event_name']})".strip()
                     _rp["_rec_u30"] = _u30
+                    _rp["_seasonal_boost"] = _boost["multiplier"]
 
                 # Persistir caché BM en DB para sobrevivir reinicios.
                 # SOLO guardar entradas con avail_total > 0 — los ceros de bulk fallido
@@ -5686,6 +5734,7 @@ async def _prewarm_caches(user_id: str = None):
                     "no_bm_sku_count": len(no_bm_sku),
                     "bm_catalog_size": len(_bm_catalog_skus),
                     "threshold": _DEFAULT_THRESHOLD,
+                    "active_seasonal_events": _active_seasonal_events,
                 }
 
                 # Guard: si el bulk de BM de esta corrida no verificó NINGÚN SKU de los
@@ -12768,6 +12817,41 @@ async def upsert_distribution_settings_api(request: Request):
         scarce_threshold_days=int(body.get("scarce_threshold_days", 7)),
         safety_buffer_units=int(body.get("safety_buffer_units", 2)),
     )
+    return {"ok": True}
+
+
+@app.get("/api/seasonal-events")
+async def get_seasonal_events_api():
+    """Lista los eventos estacionales (boost de reorden por temporada alta)."""
+    return {"events": await token_store.get_seasonal_events()}
+
+
+@app.post("/api/seasonal-events")
+async def upsert_seasonal_event_api(request: Request):
+    """Crea o actualiza (si trae 'id') un evento estacional."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    name = (body.get("name") or "").strip()
+    start_date = (body.get("start_date") or "").strip()
+    end_date = (body.get("end_date") or "").strip()
+    if not name or not start_date or not end_date:
+        return JSONResponse({"detail": "name, start_date y end_date son requeridos"}, status_code=400)
+    event_id = await token_store.upsert_seasonal_event(
+        name=name, start_date=start_date, end_date=end_date,
+        lead_days=int(body.get("lead_days", 14)),
+        multiplier=float(body.get("multiplier", 1.5)),
+        category_filter=(body.get("category_filter") or "").strip(),
+        active=bool(body.get("active", True)),
+        event_id=body.get("id"),
+    )
+    return {"ok": True, "id": event_id}
+
+
+@app.delete("/api/seasonal-events/{event_id}")
+async def delete_seasonal_event_api(event_id: int):
+    await token_store.delete_seasonal_event(event_id)
     return {"ok": True}
 
 

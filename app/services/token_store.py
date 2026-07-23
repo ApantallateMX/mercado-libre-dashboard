@@ -685,6 +685,25 @@ async def init_db():
             "VALUES (1, 3, 7, 1, 0)"
         )
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: seasonal_events — boost temporal al punto de reorden antes
+        # de eventos de temporada alta (Buen Fin, Hot Sale, Navidad, etc).
+        # lead_days = cuántos días ANTES de start_date ya se aplica el boost
+        # (para que llegue reposición a tiempo). category_filter vacío = todas.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS seasonal_events (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                name             TEXT NOT NULL,
+                start_date       TEXT NOT NULL,
+                end_date         TEXT NOT NULL,
+                lead_days        INTEGER NOT NULL DEFAULT 14,
+                multiplier       REAL NOT NULL DEFAULT 1.5,
+                category_filter  TEXT NOT NULL DEFAULT '',
+                active           INTEGER NOT NULL DEFAULT 1,
+                created_at       REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: account_deal_config — precios para deals por cuenta
         # deal_buffer_pct  = % que se añade al precio para absorber el descuento del deal
         # retail_target_pct = % del retail BM que se quiere recuperar tras el deal
@@ -3621,6 +3640,77 @@ async def upsert_distribution_settings(
             (scarce_threshold_units, scarce_threshold_days, safety_buffer_units, _t.time()),
         )
         await db.commit()
+
+
+async def get_seasonal_events() -> list:
+    """Retorna todos los eventos estacionales, más recientes primero."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM seasonal_events ORDER BY start_date DESC"
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def upsert_seasonal_event(
+    name: str, start_date: str, end_date: str, lead_days: int,
+    multiplier: float, category_filter: str = "", active: bool = True,
+    event_id: int = None,
+) -> int:
+    """Crea o actualiza un evento estacional. Retorna el id."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        if event_id:
+            await db.execute(
+                """UPDATE seasonal_events SET name=?, start_date=?, end_date=?,
+                   lead_days=?, multiplier=?, category_filter=?, active=?
+                   WHERE id=?""",
+                (name, start_date, end_date, lead_days, multiplier,
+                 category_filter, int(active), event_id),
+            )
+            await db.commit()
+            return event_id
+        cur = await db.execute(
+            """INSERT INTO seasonal_events
+               (name, start_date, end_date, lead_days, multiplier, category_filter, active, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, start_date, end_date, lead_days, multiplier,
+             category_filter, int(active), _t.time()),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def delete_seasonal_event(event_id: int) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM seasonal_events WHERE id = ?", (event_id,))
+        await db.commit()
+
+
+async def get_active_seasonal_boost(category: str = "") -> dict:
+    """Retorna el boost estacional vigente HOY (considerando lead_days) para
+    la categoría dada, o {"multiplier": 1.0, "event_name": None} si no hay
+    ninguno activo. Si hay varios eventos traslapados, gana el multiplier
+    más alto (nunca se suman)."""
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.utcnow().date()
+    events = await get_seasonal_events()
+    best = {"multiplier": 1.0, "event_name": None}
+    for ev in events:
+        if not ev.get("active"):
+            continue
+        cat_filter = (ev.get("category_filter") or "").strip()
+        if cat_filter and category and cat_filter.upper() != category.upper():
+            continue
+        try:
+            start = _dt.strptime(ev["start_date"], "%Y-%m-%d").date()
+            end = _dt.strptime(ev["end_date"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        lead = _td(days=int(ev.get("lead_days") or 0))
+        if (start - lead) <= today <= end and ev["multiplier"] > best["multiplier"]:
+            best = {"multiplier": ev["multiplier"], "event_name": ev["name"]}
+    return best
 
 
 async def get_account_sold_history(user_id: str) -> dict:

@@ -45,6 +45,17 @@
 })();
 </script>
 {% endif %}
+{% if active_seasonal_events %}
+<div class="flex flex-wrap items-center gap-2 text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 mb-3">
+  <span class="font-semibold">📈 Boost de temporada activo:</span>
+  {% for ev in active_seasonal_events %}
+  <span class="bg-white border border-indigo-200 rounded-full px-2.5 py-0.5 font-medium">
+    {{ ev.name }} &middot; {{ ev.multiplier }}x{% if ev.category_filter %} &middot; solo "{{ ev.category_filter }}"{% endif %} &middot; hasta {{ ev.end_date }}
+  </span>
+  {% endfor %}
+  <span class="text-indigo-400">— sube la recomendación de reorden, no toca lo publicado en ML/Amazon</span>
+</div>
+{% endif %}
 <!-- ═══ BUSCADOR DE STOCK ═══ -->
 <div class="bg-white rounded-xl shadow p-3 mb-4">
     <div class="relative">
