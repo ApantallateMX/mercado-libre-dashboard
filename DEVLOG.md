@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-23 — FIX: Alertas de Stock en 0 tras cada deploy — snapshot bueno sobreescrito por bulk BM fallido
+
+**Archivo:** `app/main.py` (~línea 5670-5715, dentro de `_do_prewarm()`).
+
+Jovan reportó (con screenshot) que justo después del deploy anterior, la
+pestaña Productos → Stock de BLOWTECHNOLOGIES mostraba TODAS las alertas en
+0 (Sin Stock, Revenue Perdido, Riesgo Sobreventa, Oportunidad Activar, Stock
+BM Disponible, Stock Crítico), mientras que métricas no dependientes de BM
+(Precio < Retail PH, Listings Eliminados) seguían normales. Pidió una
+solución definitiva, no reiniciar el caché a mano cada vez.
+
+**Diagnóstico:**
+- El sistema YA persiste `_stock_issues_cache` en SQLite
+  (`save_stock_issues_snapshot`/`load_all_stock_issues_snapshots`) y lo
+  recarga al arrancar (`_load_stock_issues_from_db()`, `lifespan()`) — esto
+  ya sobrevive deploys, no es nuevo.
+- **El bug real:** cuando el prewarm vuelve a correr después del restart y
+  el bulk de BM falla, se cuelga, o no verifica ningún SKU (confirmado en
+  vivo: una prueba directa contra el bulk de BM quedó colgada varios
+  minutos mientras una consulta puntual por SKU respondía normal — Jovan
+  confirmó que BM funciona bien logueándose directo, así que el cuelgue es
+  del lado de nuestra app, no de BM en sí), TODOS los conteos de alertas
+  dependen de `_bm_bulk_ok()` (requiere verificación de ESTE ciclo, no basta
+  con el dato cargado de DB) — si el bulk no verificó nada, todo sale 0. Ese
+  resultado de puros ceros se escribía sin condición sobre el snapshot bueno
+  anterior, tanto en memoria como en SQLite.
+
+**Fix:** antes de sobreescribir `_stock_issues_cache[key]` y persistir a
+SQLite, se cuenta cuántos SKUs candidatos quedaron verificados por el bulk
+de esta corrida. Si ese número es 0 (con candidatos > 0) y ya existe un
+snapshot anterior en memoria, se conserva el snapshot anterior (con su
+timestamp real, no se resetea) en vez de escribir el resultado en ceros —
+solo se loguea una advertencia. Si el bulk sí verificó algo (aunque sea
+parcial) o no había snapshot previo, se escribe normal como antes.
+
+**Riesgo señalado:** el fix corrige que esto se REPITA en futuros
+deploys/reinicios — no repara retroactivamente el snapshot ya corrompido en
+memoria de este incidente (ese necesita que el bulk de BM logre correr
+exitosamente al menos una vez más, o un "Actualizar BM" manual una vez BM
+responda).
+
+---
+
 ## 2026-07-23 — FEAT/FIX: Rediseño UX de Mensajes de Compradores (KPIs + urgencia) + bug de hoisting en toggle "solo pendientes"
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.

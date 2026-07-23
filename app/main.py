@@ -5687,12 +5687,32 @@ async def _prewarm_caches(user_id: str = None):
                     "bm_catalog_size": len(_bm_catalog_skus),
                     "threshold": _DEFAULT_THRESHOLD,
                 }
-                _stock_issues_cache[_sic_key] = (_sic_ts, _sic_data)
-                # Persistir en SQLite — sobrevive deploys de Railway
-                try:
-                    await token_store.save_stock_issues_snapshot(_sic_key, _sic_ts, _sic_data)
-                except Exception as _e:
-                    logger.warning(f"[STOCK-DB] Error guardando snapshot: {_e}")
+
+                # Guard: si el bulk de BM de esta corrida no verificó NINGÚN SKU de los
+                # candidatos (BM caído, colgado, o sesión rota — visto 2026-07-23, el bulk
+                # se quedó colgado mientras BM respondía bien a consultas puntuales), todos
+                # los conteos de arriba salen en 0 por el gateo de _bm_bulk_ok(). Sin este
+                # guard, ese resultado falso sobreescribe el snapshot bueno anterior (el que
+                # sí sobrevive deploys vía SQLite) con puros ceros. Mejor conservar el
+                # snapshot anterior — con su timestamp real — que mentir con "todo resuelto".
+                _bulk_candidate_skus = set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates)
+                _bulk_verified_count = sum(1 for _s in _bulk_candidate_skus if _bm_bulk_ok(_s))
+                _prev_sic_entry = _stock_issues_cache.get(_sic_key)
+                _bulk_looks_dead = bool(_bulk_candidate_skus) and _bulk_verified_count == 0
+
+                if _bulk_looks_dead and _prev_sic_entry:
+                    logger.warning(
+                        f"[STOCK-DB] Bulk BM no verificó ningún SKU de {len(_bulk_candidate_skus)} "
+                        f"candidatos (uid={client.user_id}) — conservando snapshot anterior "
+                        f"(edad {round(_time.time() - _prev_sic_entry[0])}s) en vez de sobreescribir con ceros."
+                    )
+                else:
+                    _stock_issues_cache[_sic_key] = (_sic_ts, _sic_data)
+                    # Persistir en SQLite — sobrevive deploys de Railway
+                    try:
+                        await token_store.save_stock_issues_snapshot(_sic_key, _sic_ts, _sic_data)
+                    except Exception as _e:
+                        logger.warning(f"[STOCK-DB] Error guardando snapshot: {_e}")
 
                 # Background: fetch per-SKU warehouse (MTY/CDMX/TJ) para productos de Activar.
                 # El bulk sólo da avail_total. El WH endpoint per-SKU da el desglose real.
