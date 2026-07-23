@@ -10315,6 +10315,59 @@ async def ads_campaigns_partial(
         await client.close()
 
 
+@app.get("/partials/ads-suggestions", response_class=HTMLResponse)
+async def ads_suggestions_partial(
+    request: Request,
+    date_from: str = Query(""),
+    date_to: str = Query("")
+):
+    """Sugerencias de presupuesto (idea tomada de Helium10 Ads) — reusa
+    _enrich_campaigns (mismos datos que la pestaña Campañas, sin llamadas
+    extra a MeLi). Regla v1 conservadora, sobre el rango de fechas
+    seleccionado (no un rolling de 3 días — no hay granularidad diaria por
+    campaña disponible sin fetches adicionales):
+    - ROAS < 85% de la meta (roas_target) con gasto real → bajar presupuesto 15%.
+    - Impresiones perdidas por presupuesto >20% Y ROAS >= meta (o sano si no
+      hay meta) → subir presupuesto 15% (está calificando para más demanda
+      de la que su presupuesto le permite capturar).
+    Nunca auto-aplica — el botón "Aplicar" llama al mismo
+    POST /api/ads/campaigns/{id} que ya usa el resto del tab."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p class='p-6 text-center text-gray-500'>No autenticado</p>")
+    try:
+        date_from, date_to = _default_dates(date_from, date_to)
+        try:
+            campaigns_data = await client.get_ads_campaigns(date_from, date_to)
+        except Exception as e:
+            return HTMLResponse(f"<p class='p-6 text-center text-gray-500'>Error obteniendo campañas: {e}</p>")
+
+        enriched = _enrich_campaigns(campaigns_data)
+        suggestions = []
+        for c in enriched:
+            if c["status"] != "active" or c["cost"] <= 0 or not c["daily_budget"]:
+                continue
+            roas = c["roas"]
+            roas_target = c.get("roas_target")
+            if roas_target and roas > 0 and roas < roas_target * 0.85:
+                suggestions.append({
+                    **c, "reason": "roas_bajo",
+                    "suggested_budget": round(c["daily_budget"] * 0.85, 0),
+                })
+            elif c.get("throttled_by_budget") and (not roas_target or roas >= roas_target):
+                suggestions.append({
+                    **c, "reason": "agotado",
+                    "suggested_budget": round(c["daily_budget"] * 1.15, 0),
+                })
+        suggestions.sort(key=lambda x: x["cost"], reverse=True)
+
+        return templates.TemplateResponse(request, "partials/ads_suggestions.html", {
+            "suggestions": suggestions,
+        })
+    finally:
+        await client.close()
+
+
 @app.get("/partials/ads-burning", response_class=HTMLResponse)
 async def ads_burning_partial(
     request: Request,

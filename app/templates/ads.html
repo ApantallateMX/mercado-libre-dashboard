@@ -119,6 +119,11 @@
                     class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
                 Asignar a Campana
             </button>
+            <button onclick="showTab('suggestions')" id="tab-suggestions"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap flex items-center gap-1.5">
+                Sugerencias
+                <span id="ads-suggestions-badge" class="hidden text-[10px] font-bold bg-yellow-400 text-gray-800 px-1.5 py-0.5 rounded-full"></span>
+            </button>
         </nav>
     </div>
 
@@ -323,6 +328,26 @@
             </div>
         </div>
     </div>
+
+    <!-- Sugerencias (idea tomada de Helium10, nunca auto-aplica) -->
+    <div id="panel-suggestions" class="hidden">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold text-gray-800">Sugerencias de Presupuesto</h2>
+                <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Nunca se aplica solo</span>
+            </div>
+        </div>
+        <div class="px-6 py-2 text-xs text-gray-400">
+            Compara el ROAS actual de cada campana contra su meta (roas_target) en el rango de fechas de arriba. Sube presupuesto si va bien y se esta quedando sin presupuesto; baja presupuesto si el ROAS esta claramente por debajo de la meta. Tu confirmas cada cambio.
+        </div>
+        <div id="ads-suggestions-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(3) %}
+                <div class="h-16 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
 </div>
 
 
@@ -444,7 +469,7 @@
     function showTab(name) {
         activeTab = name;
         // Ocultar todos los panels
-        ['campaigns', 'performance', 'by-category', 'brand', 'burning', 'no-ads', 'asignar'].forEach(function(t) {
+        ['campaigns', 'performance', 'by-category', 'brand', 'burning', 'no-ads', 'asignar', 'suggestions'].forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
             var tab = document.getElementById('tab-' + t);
             if (panel) panel.classList.add('hidden');
@@ -506,8 +531,47 @@
                     if (sel) sel.addEventListener('change', updateAssignBtn);
                     tabLoaded['no-ads'] = true;
                 });
+        } else if (name === 'suggestions') {
+            showSpinner(document.getElementById('ads-suggestions-table'));
+            fetch('/partials/ads-suggestions?' + p)
+                .then(r => r.text())
+                .then(html => {
+                    var el = document.getElementById('ads-suggestions-table');
+                    el.innerHTML = html;
+                    tabLoaded.suggestions = true;
+                    var count = el.querySelectorAll('[id^="adsug-"]').length;
+                    var badge = document.getElementById('ads-suggestions-badge');
+                    if (badge) {
+                        if (count > 0) { badge.textContent = count; badge.classList.remove('hidden'); }
+                        else badge.classList.add('hidden');
+                    }
+                });
         }
     }
+
+    window.applyAdsSuggestion = function(campaignId, newBudget, btn) {
+        btn.disabled = true;
+        btn.textContent = 'Aplicando...';
+        fetch('/api/ads/campaigns/' + campaignId, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ budget: newBudget }),
+        }).then(r => r.json()).then(function(d) {
+            if (d.ok) {
+                var row = btn.closest('[id^="adsug-"]');
+                if (row) row.remove();
+                tabLoaded.campaigns = false;  // refrescar campanas la proxima vez que se vea ese tab
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Aplicar';
+                alert(d.error || 'No se pudo aplicar');
+            }
+        }).catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = 'Aplicar';
+            alert('Error: ' + e);
+        });
+    };
 
     function loadByCategory() {
         var p = getDateParams();

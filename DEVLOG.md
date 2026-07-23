@@ -45,6 +45,37 @@ nunca excede el tope).
 
 ---
 
+## 2026-07-23 — FEAT: Mercado Ads — sugerencias de presupuesto (Feature 2/4 de "ideas Helium10")
+
+**Archivos:** `app/main.py`, `app/templates/ads.html`,
+`app/templates/partials/ads_suggestions.html`.
+
+Hallazgo de la investigación: Mercado Ads YA es un tab completo y rico
+(campañas, ROAS, IS%, Brand Ads, `update_campaign` con
+`check-write-permission`) — no había que construir nada desde cero,
+solo agregar una capa de sugerencias encima, como nuevo subtab
+"Sugerencias" dentro de `ads.html` (mismo patrón `showTab`/`loadTab` que
+las demás pestañas del tab, sin tabs nuevos de primer nivel).
+
+- Reusa `_enrich_campaigns()` (mismos datos que la pestaña Campañas, sin
+  llamadas extra a MeLi) — regla v1 sobre el rango de fechas
+  seleccionado (no rolling de 3 días, no hay granularidad diaria por
+  campaña sin fetches adicionales, documentado como simplificación):
+  ROAS &lt; 85% de la meta → sugerir bajar presupuesto 15%;
+  &gt;20% de impresiones perdidas por presupuesto Y ROAS en meta o sano
+  → sugerir subir 15%.
+- Nunca auto-aplica: botón "Aplicar" reusa el mismo
+  `POST /api/ads/campaigns/{id}` que ya usa el resto del tab (con su
+  gate de `check-write-permission` ya existente).
+- Sin tabla nueva — se calcula en vivo en cada carga del subtab (barato,
+  mismos datos que ya trae Campañas).
+
+Verificado local contra datos reales de producción (VECKTOR): 5
+sugerencias reales encontradas correctamente, Playwright 375px/1920px
+0 overflow / 0 errores de consola.
+
+---
+
 ## 2026-07-23 — FEAT: Boost estacional automático al punto de reorden (Feature 1/4 de "ideas Zoho")
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`,

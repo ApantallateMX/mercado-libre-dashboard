@@ -1,0 +1,33 @@
+{% if not suggestions %}
+<p class="p-6 text-center text-sm text-gray-400">Sin sugerencias por ahora — ninguna campaña activa se ve claramente por debajo o por encima de su meta de ROAS en este rango de fechas.</p>
+{% else %}
+<div class="p-4 space-y-2">
+    {% for s in suggestions %}
+    <div id="adsug-{{ s.id }}" class="bg-white rounded-lg shadow p-3 border-l-4 {{ 'border-red-400' if s.reason == 'roas_bajo' else 'border-green-400' }} flex flex-wrap items-center justify-between gap-3">
+        <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-medium text-gray-800 truncate">{{ s.name or s.id }}</span>
+                {% if s.reason == 'roas_bajo' %}
+                <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">🔴 ROAS bajo la meta</span>
+                {% else %}
+                <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-green-100 text-green-700">🟢 Se queda sin presupuesto</span>
+                {% endif %}
+            </div>
+            <div class="text-[11px] text-gray-400 mt-0.5">
+                ROAS actual: <strong>{{ "%.2f"|format(s.roas or 0) }}x</strong>
+                {% if s.roas_target %} (meta {{ "%.1f"|format(s.roas_target) }}x){% endif %}
+                &middot; Gasto: ${{ "%.2f"|format(s.cost or 0) }}
+                {% if s.reason == 'agotado' %} &middot; Pierdes {{ "%.0f"|format(s.lost_by_budget or 0) }}% de impresiones por presupuesto{% endif %}
+            </div>
+            <div class="text-xs text-gray-600 mt-1">
+                Presupuesto: ${{ "%.0f"|format(s.daily_budget or 0) }}/día → <strong class="text-gray-800">${{ "%.0f"|format(s.suggested_budget) }}/día</strong>
+            </div>
+        </div>
+        <button onclick="applyAdsSuggestion('{{ s.id }}', {{ s.suggested_budget }}, this)"
+                class="text-xs font-semibold bg-yellow-400 hover:bg-yellow-500 text-gray-800 px-4 py-2 rounded-lg transition flex-shrink-0">
+            Aplicar
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
