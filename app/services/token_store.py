@@ -704,6 +704,30 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLAS: sku_bundles / sku_bundle_components — bundle real (SKU
+        # combinado "SKU1 / SKU2" tal cual aparece en ML) con stock = mínimo
+        # de sus componentes y margen real, en vez del atajo de tomar solo
+        # el primer componente. bundle_sku debe coincidir EXACTO (tras
+        # strip()) con el SKU tal como aparece en el listing.
+        # own_price_mxn nulo = usar el precio actual de ML del listing.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sku_bundles (
+                bundle_sku     TEXT PRIMARY KEY,
+                own_price_mxn  REAL,
+                created_at     REAL NOT NULL DEFAULT 0,
+                updated_at     REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sku_bundle_components (
+                bundle_sku     TEXT NOT NULL,
+                component_sku  TEXT NOT NULL,
+                qty_per_bundle INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (bundle_sku, component_sku)
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: account_deal_config — precios para deals por cuenta
         # deal_buffer_pct  = % que se añade al precio para absorber el descuento del deal
         # retail_target_pct = % del retail BM que se quiere recuperar tras el deal
@@ -3711,6 +3735,60 @@ async def get_active_seasonal_boost(category: str = "") -> dict:
         if (start - lead) <= today <= end and ev["multiplier"] > best["multiplier"]:
             best = {"multiplier": ev["multiplier"], "event_name": ev["name"]}
     return best
+
+
+async def get_all_bundles() -> dict:
+    """Retorna {bundle_sku: {own_price_mxn, components: [{sku, qty}]}} para
+    TODOS los bundles definidos — pensado para cargarse una vez por ciclo
+    de prewarm, no por producto."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        bundles = await (await db.execute(
+            "SELECT bundle_sku, own_price_mxn FROM sku_bundles"
+        )).fetchall()
+        components = await (await db.execute(
+            "SELECT bundle_sku, component_sku, qty_per_bundle FROM sku_bundle_components"
+        )).fetchall()
+    result = {
+        b["bundle_sku"]: {"own_price_mxn": b["own_price_mxn"], "components": []}
+        for b in bundles
+    }
+    for c in components:
+        if c["bundle_sku"] in result:
+            result[c["bundle_sku"]]["components"].append(
+                {"sku": c["component_sku"], "qty": c["qty_per_bundle"]}
+            )
+    return result
+
+
+async def upsert_bundle(bundle_sku: str, own_price_mxn: float | None, components: list) -> None:
+    """Crea o reemplaza por completo la definición de un bundle (borra
+    componentes viejos e inserta los nuevos — el formulario siempre manda
+    la lista completa)."""
+    import time as _t
+    now = _t.time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute("SELECT created_at FROM sku_bundles WHERE bundle_sku = ?", (bundle_sku,))
+        existing = await cur.fetchone()
+        await db.execute(
+            """INSERT OR REPLACE INTO sku_bundles (bundle_sku, own_price_mxn, created_at, updated_at)
+               VALUES (?, ?, ?, ?)""",
+            (bundle_sku, own_price_mxn, existing[0] if existing else now, now),
+        )
+        await db.execute("DELETE FROM sku_bundle_components WHERE bundle_sku = ?", (bundle_sku,))
+        await db.executemany(
+            """INSERT INTO sku_bundle_components (bundle_sku, component_sku, qty_per_bundle)
+               VALUES (?, ?, ?)""",
+            [(bundle_sku, c["sku"], int(c.get("qty", 1) or 1)) for c in components if c.get("sku")],
+        )
+        await db.commit()
+
+
+async def delete_bundle(bundle_sku: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM sku_bundles WHERE bundle_sku = ?", (bundle_sku,))
+        await db.execute("DELETE FROM sku_bundle_components WHERE bundle_sku = ?", (bundle_sku,))
+        await db.commit()
 
 
 async def get_account_sold_history(user_id: str) -> dict:

@@ -284,6 +284,79 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_precio_piso"] = None
 
 
+def _apply_bundle_stock_override(products: list, bundles: dict):
+    """Para productos cuyo SKU coincide EXACTO con un bundle definido,
+    sobreescribe _bm_avail/_bm_avail_raw con el mínimo real de sus
+    componentes (stock_componente // qty_por_bundle) — reemplaza el atajo
+    de 'tomar solo el primer componente'. Requiere que _bm_stock_cache ya
+    tenga cada componente cacheado (se agregan como candidatos extra en
+    _do_prewarm antes del bulk BM)."""
+    if not bundles:
+        return
+    for p in products:
+        raw_sku = (p.get("sku") or "").strip()
+        bundle = bundles.get(raw_sku)
+        if not bundle or not bundle["components"]:
+            continue
+        avails = []
+        mty = cdmx = tj = reserved = 0
+        for comp in bundle["components"]:
+            bk = normalize_to_bm_sku(comp["sku"])
+            entry = _bm_stock_cache.get(bk)
+            data = entry[1] if entry else {}
+            qty = max(1, int(comp.get("qty", 1) or 1))
+            avails.append((data.get("avail_total", 0) or 0) // qty)
+            mty += (data.get("mty", 0) or 0)
+            cdmx += (data.get("cdmx", 0) or 0)
+            tj += (data.get("tj", 0) or 0)
+            reserved += (data.get("reserved_total", 0) or 0)
+        bundle_avail = min(avails) if avails else 0
+        p["_bm_avail"] = bundle_avail
+        p["_bm_avail_raw"] = bundle_avail
+        p["_bm_mty"] = mty
+        p["_bm_cdmx"] = cdmx
+        p["_bm_tj"] = tj
+        p["_bm_total"] = mty + cdmx
+        p["_bm_reserved"] = reserved
+        p["_is_bundle"] = True
+        p["_bundle_components"] = bundle["components"]
+
+
+def _apply_bundle_margin_override(products: list, bundles: dict):
+    """Para productos-bundle, recalcula costo/margen como la SUMA de sus
+    componentes (vía _sku_cost_map/_sku_retail_map, ya poblados por
+    prewarm) contra own_price_mxn (o el precio ML actual si no se definió)
+    — reemplaza el margen calculado hoy con el costo de un solo componente."""
+    if not bundles:
+        return
+    for p in products:
+        raw_sku = (p.get("sku") or "").strip()
+        bundle = bundles.get(raw_sku)
+        if not bundle or not bundle["components"]:
+            continue
+        cost_mxn = 0.0
+        retail_mxn = 0.0
+        for comp in bundle["components"]:
+            bk = normalize_to_bm_sku(comp["sku"])
+            qty = max(1, int(comp.get("qty", 1) or 1))
+            cost_mxn += (_sku_cost_map.get(bk, 0) or 0) * qty
+            retail_mxn += (_sku_retail_map.get(bk, 0) or 0) * qty
+        sale_price = bundle.get("own_price_mxn") or p.get("price", 0) or 0
+        p["_costo_mxn"] = round(cost_mxn, 2)
+        p["_retail_mxn"] = round(retail_mxn, 2)
+        p["_is_bundle"] = True
+        p["_bundle_own_price"] = bundle.get("own_price_mxn")
+        if sale_price > 0 and cost_mxn > 0:
+            comision = sale_price * _ml_fee(sale_price)
+            iva_comision = comision * 0.16
+            ganancia = sale_price - cost_mxn - comision - iva_comision - 150
+            p["_ganancia_est"] = round(ganancia, 2)
+            p["_margen_pct"] = round((ganancia / sale_price) * 100, 1)
+        else:
+            p["_ganancia_est"] = None
+            p["_margen_pct"] = None
+
+
 # Nicknames conocidos de cuentas propias — fallback cuando ML API rate-limita en startup
 _KNOWN_ML_NICKNAMES: dict = {
     "523916436": "APANTALLATEMX",
@@ -5475,6 +5548,14 @@ async def _prewarm_caches(user_id: str = None):
                     p for p in products
                     if p.get("sku") and p.get("status") in ("active", "paused", "inactive")
                 ]
+                # Bundles reales: agregar cada componente como candidato extra para que
+                # se incluya en el MISMO bulk BM de arriba — nunca una llamada BM aparte
+                # por componente (mismo cuidado de concurrencia que el resto del prewarm).
+                _bundles = await token_store.get_all_bundles()
+                for _bdl in _bundles.values():
+                    for _comp in _bdl["components"]:
+                        if _comp.get("sku"):
+                            bm_candidates.append({"sku": _comp["sku"], "status": "active"})
                 _prewarm_progress["done"] = 0
                 # Total = SKUs únicos normalizados (no productos totales).
                 # Con include_paused=True puede haber miles de listings del mismo SKU base;
@@ -5487,6 +5568,7 @@ async def _prewarm_caches(user_id: str = None):
                 _dist_settings = await token_store.get_distribution_settings() if _dist_rule else None
                 _sold_history = await token_store.get_account_sold_history(str(client.user_id)) if _dist_rule else None
                 _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
+                _apply_bundle_stock_override(products, _bundles)
 
                 # Helper: SKU bulk-verificado en ESTE ciclo de prewarm (ts > 0).
                 # Entradas cargadas de DB (ts = 0.0) pueden tener stock obsoleto.
@@ -5613,6 +5695,10 @@ async def _prewarm_caches(user_id: str = None):
                     if 0 < _rusd < 9999:
                         _sku_retail_map[_rsku] = round(_rusd * fx, 2)
                 logger.info(f"[PREWARM] _sku_retail_map: {len(_sku_retail_map)} SKUs con RetailPH MXN")
+
+                # Bundles: margen real (suma de componentes) — después de reconstruir
+                # _sku_cost_map/_sku_retail_map arriba, para que ya cubran los componentes.
+                _apply_bundle_margin_override(bm_candidates, _bundles)
 
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
@@ -7538,6 +7624,8 @@ async def products_inventory_partial(
         visits_map = enrich_results[2] if isinstance(enrich_results[2], dict) else {}
 
         _apply_bm_stock(page_products, bm_map)
+        _bundles_pp = await token_store.get_all_bundles()
+        _apply_bundle_stock_override(page_products, _bundles_pp)
 
         # Calcular CVR (Conversion Rate) = unidades vendidas / visitas * 100
         for p in page_products:
@@ -7549,6 +7637,7 @@ async def products_inventory_partial(
         if enrich == "full":
             usd_to_mxn = enrich_results[4] if len(enrich_results) > 4 else 0.0
             _calc_margins(page_products, usd_to_mxn)
+            _apply_bundle_margin_override(page_products, _bundles_pp)
             # Purchase experience (penalizaciones) + Best sellers — enrich=full only
             await asyncio.gather(
                 _get_page_purchase_experience(client, page_products),
@@ -7882,8 +7971,11 @@ async def products_deals_partial(request: Request):
         bm_map = _gr[0] if not isinstance(_gr[0], Exception) else {}
         usd_to_mxn = _gr[2] if not isinstance(_gr[2], Exception) else 17.0
         _apply_bm_stock(all_to_enrich, bm_map)
+        _bundles_deals = await token_store.get_all_bundles()
+        _apply_bundle_stock_override(all_to_enrich, _bundles_deals)
         _deal_cfg = await token_store.get_deal_config(str(client.user_id))
         _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"])
+        _apply_bundle_margin_override(all_to_enrich, _bundles_deals)
 
         # Persistir historial de ventas en background (no bloquea el render)
         _save_ml_orders_history_bg(all_orders, str(client.user_id), usd_to_mxn)
@@ -12852,6 +12944,50 @@ async def upsert_seasonal_event_api(request: Request):
 @app.delete("/api/seasonal-events/{event_id}")
 async def delete_seasonal_event_api(event_id: int):
     await token_store.delete_seasonal_event(event_id)
+    return {"ok": True}
+
+
+@app.get("/api/bundles")
+async def get_bundles_api():
+    """Lista todos los bundles (SKU combinado + componentes + precio propio)."""
+    bundles = await token_store.get_all_bundles()
+    return {"bundles": [
+        {"bundle_sku": bsku, "own_price_mxn": data["own_price_mxn"], "components": data["components"]}
+        for bsku, data in bundles.items()
+    ]}
+
+
+@app.post("/api/bundles")
+async def upsert_bundle_api(request: Request):
+    """Crea o reemplaza un bundle. bundle_sku debe coincidir EXACTO (tras
+    strip) con el SKU tal como aparece en el listing de ML."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    bundle_sku = (body.get("bundle_sku") or "").strip()
+    components = body.get("components") or []
+    if not bundle_sku:
+        return JSONResponse({"detail": "bundle_sku es requerido"}, status_code=400)
+    if not components:
+        return JSONResponse({"detail": "Al menos un componente es requerido"}, status_code=400)
+    own_price = body.get("own_price_mxn")
+    own_price = float(own_price) if own_price not in (None, "") else None
+    await token_store.upsert_bundle(bundle_sku, own_price, components)
+    return {"ok": True}
+
+
+@app.post("/api/bundles/delete")
+async def delete_bundle_api(request: Request):
+    """DELETE con path param no sirve aquí — bundle_sku suele traer '/'."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    bundle_sku = (body.get("bundle_sku") or "").strip()
+    if not bundle_sku:
+        return JSONResponse({"detail": "bundle_sku es requerido"}, status_code=400)
+    await token_store.delete_bundle(bundle_sku)
     return {"ok": True}
 
 

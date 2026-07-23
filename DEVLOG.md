@@ -42,6 +42,46 @@ Sync Stock → Configurar (crear evento, 0 overflow, 0 errores de consola).
 
 ---
 
+## 2026-07-23 — FEAT: Bundles reales con precio propio (Feature 2/4 de "ideas Zoho")
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`,
+`app/templates/stock_sync.html`.
+
+El atajo actual para SKUs combinados ("SKU1 / SKU2" → toma solo el primer
+componente) estaba duplicado en 3 variantes (`sku_utils.py:normalize_to_bm_sku`,
+`_clean_sku_for_bm` sin cortar a 10, y 5 `sku.split("/")[0]` literales) y
+solo servía para la clave de stock BM — nunca calculaba el stock/margen del
+bundle como entidad propia, lo que podía ocultar quiebres del segundo
+componente y subestimar el costo real.
+
+- Tablas `sku_bundles` (SKU combinado + precio propio opcional) y
+  `sku_bundle_components` (componentes + cantidad por bundle).
+- `_apply_bundle_stock_override()`: para SKUs que coinciden exacto con un
+  bundle definido, stock = `min(componente_avail // qty)` entre todos sus
+  componentes reales — reemplaza el "solo el primero".
+- `_apply_bundle_margin_override()`: costo/retail = suma de componentes
+  (vía `_sku_cost_map`/`_sku_retail_map`, ya poblados por prewarm) contra
+  el precio propio del bundle (o el precio ML actual si no se definió).
+- Los componentes de cada bundle se agregan como candidatos extra al
+  bulk BM normal del prewarm — nunca una llamada BM aparte por componente.
+- Aplicado en 3 puntos: el ciclo principal de prewarm (Stock tab/alertas —
+  donde el bug se diagnosticó originalmente), el listado de Productos
+  (`page_products`) y Deals (`all_to_enrich`). **Alcance consciente:** no
+  se propagó a 3-4 sitios más marginales (`sku_sales`, algunos endpoints
+  de sincronización puntual) — pendiente si se necesita en el futuro.
+- UI: tarjeta "Bundles" en Sync Stock → Configurar (crear/editar/eliminar,
+  componentes dinámicos).
+- Endpoints `GET/POST /api/bundles`, `POST /api/bundles/delete` (no DELETE
+  con path param — `bundle_sku` suele traer "/").
+
+Verificado local: CRUD completo por curl (incl. bundle_sku con "/"),
+prueba unitaria directa de ambas funciones de override con caché
+simulado (stock min correcto, margen con costo sumado correcto),
+Playwright 375px/1920px sobre Sync Stock → Configurar (crear bundle,
+0 overflow, 0 errores).
+
+---
+
 ## 2026-07-23 — FIX: Alertas de Stock en 0 tras cada deploy — snapshot bueno sobreescrito por bulk BM fallido
 
 **Archivo:** `app/main.py` (~línea 5670-5715, dentro de `_do_prewarm()`).

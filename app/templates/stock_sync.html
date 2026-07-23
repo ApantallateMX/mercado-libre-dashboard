@@ -703,6 +703,46 @@
       </div>
     </div>
 
+    <!-- ── Bundles (SKU combinado con stock/margen propios) ───────────── -->
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-sm font-bold text-gray-700">Bundles (SKU combinado)</h2>
+          <p class="text-xs text-gray-400 mt-0.5">Para SKUs tipo "SKU1 / SKU2": define sus componentes reales para que el stock (mínimo entre componentes) y el margen (suma de costos) se calculen correctamente, en vez de solo mirar el primer componente.</p>
+        </div>
+        <button onclick="bundleOpenForm()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+          + Nuevo bundle
+        </button>
+      </div>
+
+      <div id="bundles-list" class="space-y-2">
+        <p class="text-xs text-gray-400">Cargando bundles...</p>
+      </div>
+
+      <div id="bundle-form" class="hidden border-t border-gray-100 pt-4 space-y-3">
+        <input type="hidden" id="bundle-f-original-sku">
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">SKU combinado (exacto como aparece en el listing)</label>
+          <input type="text" id="bundle-f-sku" placeholder="SNTV001864 / SNPE000180"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Precio propio (MXN, opcional)</label>
+          <input type="number" id="bundle-f-price" min="0" step="0.01" placeholder="Vacío = usar precio actual de ML"
+                 class="w-full sm:w-64 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-medium text-gray-600 block mb-1">Componentes</label>
+          <div id="bundle-f-components" class="space-y-2"></div>
+          <button onclick="bundleAddComponentRow()" class="text-xs text-indigo-600 hover:underline mt-1">+ Agregar componente</button>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="bundleSave()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">Guardar bundle</button>
+          <button onclick="bundleCloseForm()" class="bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-semibold px-4 py-2 rounded-xl transition">Cancelar</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Reglas por cuenta ───────────────────────────────────────── -->
     <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
       <div class="flex items-center justify-between">
@@ -2162,6 +2202,7 @@ function distLoadData() {
         distRenderRules();
     }).catch(function(e) { distShowToast('Error cargando datos: ' + e, 'error'); });
     loadSeasonalEvents();
+    loadBundles();
 }
 
 function distRenderSettings() {
@@ -2403,6 +2444,117 @@ function seasonalDeleteEvent(eventId) {
             distShowToast('Evento eliminado', 'success');
             loadSeasonalEvents();
         }).catch(function(e) { distShowToast('Error: ' + e, 'error'); });
+}
+
+// ── Bundles (SKU combinado) ─────────────────────────────────────────────
+var _bundles = [];
+
+function loadBundles() {
+    fetch('/api/bundles').then(function(r){ return r.json(); }).then(function(d) {
+        _bundles = d.bundles || [];
+        bundleRenderList();
+    }).catch(function(e) {
+        document.getElementById('bundles-list').innerHTML =
+            '<p class="text-xs text-red-500">Error cargando bundles: ' + e + '</p>';
+    });
+}
+
+function bundleRenderList() {
+    var el = document.getElementById('bundles-list');
+    if (!_bundles.length) {
+        el.innerHTML = '<p class="text-xs text-gray-400">Sin bundles configurados.</p>';
+        return;
+    }
+    el.innerHTML = _bundles.map(function(b) {
+        var compsText = b.components.map(function(c) { return c.sku + ' x' + c.qty; }).join(', ');
+        return '<div class="flex items-center justify-between gap-2 border border-gray-100 rounded-xl px-3 py-2.5 flex-wrap">' +
+            '<div>' +
+                '<div class="font-semibold text-sm text-gray-800 font-mono">' + b.bundle_sku + '</div>' +
+                '<div class="text-[11px] text-gray-400 mt-0.5">' +
+                    'Componentes: ' + compsText +
+                    (b.own_price_mxn ? ' &middot; precio propio: $' + b.own_price_mxn + ' MXN' : ' &middot; usa precio ML actual') +
+                '</div>' +
+            '</div>' +
+            '<div class="flex items-center gap-2 flex-shrink-0">' +
+                '<button onclick="bundleOpenForm(' + JSON.stringify(b.bundle_sku) + ')" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium">Editar</button>' +
+                '<button onclick="bundleDelete(' + JSON.stringify(b.bundle_sku) + ')" class="text-xs px-2.5 py-1 rounded-full border border-red-200 text-red-500 hover:bg-red-50 font-medium">Eliminar</button>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function bundleAddComponentRow(sku, qty) {
+    var container = document.getElementById('bundle-f-components');
+    var row = document.createElement('div');
+    row.className = 'flex items-center gap-2 bundle-component-row';
+    row.innerHTML =
+        '<input type="text" placeholder="SKU componente" value="' + (sku ? sku.replace(/"/g, '&quot;') : '') + '" ' +
+            'class="bundle-comp-sku flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">' +
+        '<input type="number" min="1" value="' + (qty || 1) + '" ' +
+            'class="bundle-comp-qty w-20 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">' +
+        '<button onclick="this.closest(\'.bundle-component-row\').remove()" class="text-xs text-red-500 hover:underline flex-shrink-0">Quitar</button>';
+    container.appendChild(row);
+}
+
+function bundleOpenForm(bundleSku) {
+    var form = document.getElementById('bundle-form');
+    form.classList.remove('hidden');
+    document.getElementById('bundle-f-components').innerHTML = '';
+    var b = bundleSku ? _bundles.find(function(x) { return x.bundle_sku === bundleSku; }) : null;
+    document.getElementById('bundle-f-original-sku').value = b ? b.bundle_sku : '';
+    document.getElementById('bundle-f-sku').value = b ? b.bundle_sku : '';
+    document.getElementById('bundle-f-price').value = b && b.own_price_mxn ? b.own_price_mxn : '';
+    if (b) {
+        b.components.forEach(function(c) { bundleAddComponentRow(c.sku, c.qty); });
+    } else {
+        bundleAddComponentRow('', 1);
+        bundleAddComponentRow('', 1);
+    }
+}
+
+function bundleCloseForm() {
+    document.getElementById('bundle-form').classList.add('hidden');
+}
+
+function bundleSave() {
+    var bundleSku = document.getElementById('bundle-f-sku').value.trim();
+    var priceVal = document.getElementById('bundle-f-price').value.trim();
+    var rows = document.querySelectorAll('.bundle-component-row');
+    var components = [];
+    rows.forEach(function(row) {
+        var sku = row.querySelector('.bundle-comp-sku').value.trim();
+        var qty = parseInt(row.querySelector('.bundle-comp-qty').value) || 1;
+        if (sku) components.push({ sku: sku, qty: qty });
+    });
+    if (!bundleSku || !components.length) {
+        distShowToast('SKU combinado y al menos un componente son requeridos', 'error');
+        return;
+    }
+    fetch('/api/bundles', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            bundle_sku: bundleSku,
+            own_price_mxn: priceVal ? parseFloat(priceVal) : null,
+            components: components,
+        })
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        distShowToast('Bundle guardado', 'success');
+        bundleCloseForm();
+        loadBundles();
+    }).catch(function(e) { distShowToast('Error: ' + e, 'error'); });
+}
+
+function bundleDelete(bundleSku) {
+    if (!confirm('¿Eliminar el bundle "' + bundleSku + '"?')) return;
+    fetch('/api/bundles/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ bundle_sku: bundleSku })
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        distShowToast('Bundle eliminado', 'success');
+        loadBundles();
+    }).catch(function(e) { distShowToast('Error: ' + e, 'error'); });
 }
 
 // ── Score dinámico por SKU ─────────────────────────────────────────────
