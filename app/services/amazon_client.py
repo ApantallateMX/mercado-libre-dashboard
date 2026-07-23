@@ -1795,6 +1795,29 @@ class AmazonClient:
         except Exception as e:
             return {"pending_amount": None, "currency": "MXN", "error": str(e)}
 
+    async def get_buy_box_status(self, asin: str, marketplace_id: str) -> dict:
+        """¿Somos el Buy Box winner de este ASIN? Product Pricing API,
+        GET /products/pricing/v0/items/{asin}/offers. Confirmado contra
+        producción 2026-07-23: payload.Offers[] trae SellerId + IsBuyBoxWinner
+        por oferta, payload.Summary.TotalOfferCount = competidores totales."""
+        try:
+            resp = await self._request(
+                "GET", f"/products/pricing/v0/items/{asin}/offers",
+                params={"MarketplaceId": marketplace_id, "ItemCondition": "New"},
+            )
+        except Exception:
+            return {"is_winner": None, "total_competitors": 0, "buy_box_price": None}
+        payload = resp.get("payload", {}) or {}
+        offers = payload.get("Offers", []) or []
+        total = payload.get("Summary", {}).get("TotalOfferCount", len(offers))
+        buy_box_prices = payload.get("Summary", {}).get("BuyBoxPrices", []) or []
+        buy_box_price = buy_box_prices[0].get("ListingPrice", {}).get("Amount") if buy_box_prices else None
+        if total <= 1:
+            return {"is_winner": True, "total_competitors": total, "buy_box_price": buy_box_price}
+        our_offer = next((o for o in offers if o.get("SellerId") == self.seller_id), None)
+        is_winner = bool(our_offer.get("IsBuyBoxWinner")) if our_offer else None
+        return {"is_winner": is_winner, "total_competitors": total, "buy_box_price": buy_box_price}
+
     async def get_refunds_30d(self) -> dict:
         """
         Obtiene devoluciones / reembolsos de los últimos 30 días.

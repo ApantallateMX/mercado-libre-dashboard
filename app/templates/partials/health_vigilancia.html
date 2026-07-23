@@ -1,0 +1,51 @@
+<div class="space-y-6">
+    <div>
+        <div class="flex items-center gap-2 mb-3">
+            <h3 class="text-sm font-bold text-gray-800">Sin ganar el catálogo</h3>
+            <span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">≥24h seguidas</span>
+        </div>
+        {% if not not_winning %}
+        <p class="text-sm text-gray-400">Sin publicaciones detectadas perdiendo el catálogo por ahora (cobertura se llena gradualmente, ~20 por ciclo de 15 min).</p>
+        {% else %}
+        <div class="space-y-2">
+            {% for w in not_winning %}
+            <div class="bg-white border border-purple-100 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                    <p class="text-sm font-medium text-gray-800">{{ w.title[:70] }}</p>
+                    <p class="text-[11px] text-gray-400 font-mono mt-0.5">{{ w.sku }} &middot; {{ w.item_id }}</p>
+                </div>
+                <div class="text-xs font-semibold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-full whitespace-nowrap">
+                    {{ w.hours_not_winning }}h sin ganar &middot; {{ w.total_competitors }} competidores
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <div>
+        <div class="flex items-center gap-2 mb-3">
+            <h3 class="text-sm font-bold text-gray-800">Timeline de Cambios</h3>
+            <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Últimos 14 días</span>
+        </div>
+        {% if not changes %}
+        <p class="text-sm text-gray-400">Sin cambios de título/precio/imagen detectados todavía.</p>
+        {% else %}
+        <div class="space-y-2">
+            {% for c in changes %}
+            <div class="bg-white border border-gray-100 rounded-lg p-3 text-xs">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-mono text-gray-400">{{ c.sku }}</span>
+                    <span class="font-semibold px-2 py-0.5 rounded-full {{ 'bg-red-100 text-red-700' if c.field == 'price' else ('bg-blue-100 text-blue-700' if c.field == 'title' else 'bg-indigo-100 text-indigo-700') }}">
+                        {{ {'price': 'Precio', 'title': 'Título', 'image': 'Imagen'}.get(c.field, c.field) }} cambió
+                    </span>
+                </div>
+                {% if c.field != 'image' %}
+                <p class="text-gray-500 mt-1">"{{ c.old_value[:60] }}" → "{{ c.new_value[:60] }}"</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</div>

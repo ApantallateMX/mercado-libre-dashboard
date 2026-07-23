@@ -1513,6 +1513,30 @@ class MeliClient:
         except Exception:
             return {}
 
+    async def get_catalog_winner_status(self, item_id: str, catalog_product_id: str) -> dict:
+        """¿Somos la publicación ganadora del catálogo (equivalente a Buy Box)?
+        GET /products/{catalog_product_id}/items retorna los listings que
+        compiten por ese catalog_product_id — el primero con tag 'kvs_primary'
+        es el que ML muestra por default. Confirmado contra producción
+        2026-07-23: con 1 solo vendedor (nosotros) no siempre aparece el tag
+        (catalog_listing=False) — en ese caso, con 0-1 competidores reales,
+        se considera ganador por default (no hay a quién perderle)."""
+        if not catalog_product_id:
+            return {"is_winner": None, "total_competitors": 0}
+        try:
+            data = await self.get(f"/products/{catalog_product_id}/items")
+        except Exception:
+            return {"is_winner": None, "total_competitors": 0}
+        results = data.get("results", []) or []
+        total = data.get("paging", {}).get("total", len(results))
+        if total <= 1:
+            return {"is_winner": True, "total_competitors": total}
+        for r in results:
+            if str(r.get("item_id")) == str(item_id):
+                is_winner = "kvs_primary" in (r.get("tags") or [])
+                return {"is_winner": is_winner, "total_competitors": total}
+        return {"is_winner": None, "total_competitors": total}
+
     async def get_trends(self, category_id: str = None) -> list:
         """GET /trends/MLM[/{category_id}] — top 50 búsquedas más populares."""
         try:

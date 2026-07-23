@@ -694,12 +694,23 @@ async def lifespan(app: FastAPI):
                         if uid:
                             await _run_stock_sync_for_user(uid)
                             _backfill_order_zones_bg(uid)  # gradual, no bloquea (fire-and-forget)
+                            _check_ml_winner_status_bg(uid)  # idem, Vigilancia (Helium10 Alerts)
                             await asyncio.sleep(2)
                 except Exception:
                     pass
                 # Sincronizar stock de gaps con caché BM fresco
                 try:
                     await _sync_gap_stock_from_cache()
+                except Exception:
+                    pass
+                # Vigilancia Amazon (Buy Box) — mismo ciclo, cuentas Amazon
+                try:
+                    _amz_accounts = await token_store.get_all_amazon_accounts()
+                    for _amz_acc in _amz_accounts:
+                        _seller_id = _amz_acc.get("seller_id", "")
+                        if _seller_id:
+                            _check_amazon_buy_box_status_bg(_seller_id)
+                            await asyncio.sleep(2)
                 except Exception:
                     pass
             # Limpieza de caches en memoria al final de cada ciclo completo
@@ -1757,6 +1768,117 @@ def _backfill_order_zones_bg(account_id: str) -> None:
                 logger.info(f"[ZONE-BACKFILL] uid={account_id}: {updated}/{len(order_ids)} órdenes resueltas")
         finally:
             await client.close()
+    try:
+        asyncio.create_task(_do())
+    except Exception:
+        pass
+
+
+def _check_ml_winner_status_bg(account_id: str) -> None:
+    """Fire-and-forget: revisa hasta 20 listings por ciclo (rotación LRU) si
+    somos la publicación ganadora del catálogo — nunca todo el catálogo de
+    un jalón, mismo cuidado de rate-limit que el resto de esta app. 'Vigilancia'
+    (idea tomada de Helium10 Alerts)."""
+    async def _do():
+        from app.services import token_store as _ts
+        client = await get_meli_client(user_id=account_id)
+        if not client:
+            return
+        try:
+            try:
+                all_ids = await client.get_all_active_item_ids()
+            except Exception:
+                return
+            candidates = await _ts.get_snapshot_check_candidates("ml", account_id, all_ids, limit=20)
+            checked = 0
+            for iid in candidates:
+                try:
+                    item = await client.get(f"/items/{iid}")
+                    sku = _get_item_sku(item)
+                    title = item.get("title", "") or ""
+                    price = float(item.get("price") or 0)
+                    pics = item.get("pictures") or []
+                    img = (pics[0].get("url") or "") if pics else ""
+                    cpid = item.get("catalog_product_id")
+                    if cpid:
+                        status = await client.get_catalog_winner_status(iid, cpid)
+                    else:
+                        status = {"is_winner": None, "total_competitors": 0}
+                    await _ts.sync_listing_snapshot(
+                        "ml", account_id, iid, sku, title, price, img,
+                        status["is_winner"], status["total_competitors"],
+                    )
+                    checked += 1
+                except Exception:
+                    continue
+            if checked:
+                logger.info(f"[VIGILANCIA-ML] uid={account_id}: {checked} listings revisados")
+        finally:
+            await client.close()
+    try:
+        asyncio.create_task(_do())
+    except Exception:
+        pass
+
+
+def _check_amazon_buy_box_status_bg(seller_id: str) -> None:
+    """Fire-and-forget: equivalente Amazon de _check_ml_winner_status_bg —
+    hasta 20 ASINs por ciclo, rotación LRU, vía Product Pricing API."""
+    async def _do():
+        from app.services import token_store as _ts
+        from app.services.amazon_client import get_amazon_client as _gac
+        client = await _gac(seller_id=seller_id)
+        if not client:
+            return
+        try:
+            # pageSize máximo permitido por esta API es 20 (confirmado en vivo
+            # 2026-07-23 — 200 devuelve HTTP 400 InvalidInput). Se piden hasta
+            # 5 páginas (100 SKUs) para tener un pool real de rotación LRU —
+            # no es el catálogo completo, pero evita revisar siempre los
+            # mismos primeros 20.
+            items = []
+            next_token = None
+            try:
+                for _ in range(5):
+                    params = {"marketplaceIds": client.marketplace_id, "pageSize": 20, "includedData": "summaries"}
+                    if next_token:
+                        params["pageToken"] = next_token
+                    listings_resp = await client._request(
+                        "GET", f"/listings/2021-08-01/items/{seller_id}", params=params,
+                    )
+                    items.extend(listings_resp.get("items", []) or [])
+                    next_token = (listings_resp.get("pagination") or {}).get("nextToken")
+                    if not next_token:
+                        break
+            except Exception:
+                if not items:
+                    return
+            all_ids = [it.get("sku", "") for it in items if it.get("sku")]
+            candidates = set(await _ts.get_snapshot_check_candidates("amazon", seller_id, all_ids, limit=20))
+            checked = 0
+            for it in items:
+                sku = it.get("sku", "")
+                if sku not in candidates:
+                    continue
+                try:
+                    summaries = it.get("summaries", [])
+                    asin = (summaries[0].get("asin") if summaries else None) or ""
+                    title = (summaries[0].get("itemName") if summaries else "") or ""
+                    if not asin:
+                        continue
+                    status = await client.get_buy_box_status(asin, client.marketplace_id)
+                    price = status.get("buy_box_price") or 0
+                    await _ts.sync_listing_snapshot(
+                        "amazon", seller_id, asin, sku, title, price, "",
+                        status["is_winner"], status["total_competitors"],
+                    )
+                    checked += 1
+                except Exception:
+                    continue
+            if checked:
+                logger.info(f"[VIGILANCIA-AMZ] seller={seller_id}: {checked} ASINs revisados")
+        finally:
+            pass
     try:
         asyncio.create_task(_do())
     except Exception:
@@ -9880,6 +10002,23 @@ async def health_reputation_partial(request: Request):
         await client.close()
 
 
+@app.get("/partials/health-vigilancia", response_class=HTMLResponse)
+async def health_vigilancia_partial(request: Request):
+    """Vigilancia ML (idea tomada de Helium10 Alerts): publicaciones sin
+    ganar el catálogo hace >=24h + timeline de cambios de título/precio/
+    imagen. Datos poblados gradualmente por _check_ml_winner_status_bg."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    uid = str(client.user_id)
+    await client.close()
+    not_winning = await token_store.get_not_winning_listings("ml", uid, min_hours=24.0)
+    changes = await token_store.get_listing_change_log("ml", uid, days=14, limit=50)
+    return templates.TemplateResponse(request, "partials/health_vigilancia.html", {
+        "not_winning": not_winning, "changes": changes,
+    })
+
+
 @app.get("/partials/item-edit/{item_id}", response_class=HTMLResponse)
 async def item_edit_partial(request: Request, item_id: str):
     client = await get_meli_client()
@@ -13242,6 +13381,33 @@ async def delete_bundle_api(request: Request):
         return JSONResponse({"detail": "bundle_sku es requerido"}, status_code=400)
     await token_store.delete_bundle(bundle_sku)
     return {"ok": True}
+
+
+@app.get("/api/ml/vigilancia")
+async def ml_vigilancia_api():
+    """Vigilancia ML: publicaciones sin ganar el catálogo hace >=24h +
+    timeline de cambios recientes de título/precio/imagen (idea tomada de
+    Helium10 Alerts). Datos poblados gradualmente por
+    _check_ml_winner_status_bg (20 listings/cuenta/ciclo de 15 min)."""
+    client = await get_meli_client()
+    if not client:
+        return {"error": "No hay cuenta ML activa", "not_winning": [], "changes": []}
+    uid = str(client.user_id)
+    await client.close()
+    not_winning = await token_store.get_not_winning_listings("ml", uid, min_hours=24.0)
+    changes = await token_store.get_listing_change_log("ml", uid, days=14, limit=50)
+    return {"not_winning": not_winning, "changes": changes}
+
+
+@app.get("/api/amazon/vigilancia")
+async def amazon_vigilancia_api(seller_id: str = Query("")):
+    """Vigilancia Amazon: ASINs sin Buy Box hace >=24h + timeline de cambios.
+    Poblado gradualmente por _check_amazon_buy_box_status_bg."""
+    if not seller_id:
+        return {"error": "seller_id requerido", "not_winning": [], "changes": []}
+    not_winning = await token_store.get_not_winning_listings("amazon", seller_id, min_hours=24.0)
+    changes = await token_store.get_listing_change_log("amazon", seller_id, days=14, limit=50)
+    return {"not_winning": not_winning, "changes": changes}
 
 
 @app.get("/api/coverage-price-alerts")

@@ -76,6 +76,55 @@ sugerencias reales encontradas correctamente, Playwright 375px/1920px
 
 ---
 
+## 2026-07-23 — FEAT: Vigilancia — posición ganadora + timeline de cambios (Feature 3/4 de "ideas Helium10")
+
+**Archivos:** `app/services/token_store.py`, `app/services/meli_client.py`,
+`app/services/amazon_client.py`, `app/main.py`,
+`app/templates/health.html`, `app/templates/partials/health_vigilancia.html`,
+`app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.
+
+La más nueva en términos de API de las 4 mejoras — 2 integraciones nunca
+tocadas antes en este repo. Se verificó el formato REAL contra producción
+antes de construir el parseo final (mismo cuidado que con el shipment de
+ML en el round anterior):
+
+- **ML — ganador de catálogo**: confirmado en vivo que un item con
+  `catalog_product_id` se puede consultar vía
+  `GET /products/{catalog_product_id}/items`, que regresa la lista de
+  listings que compiten por ese producto — el que trae el tag
+  `kvs_primary` es el que ML muestra por default. Con 0-1 competidores
+  reales se considera ganador automático (no hay a quién perderle).
+  Nuevo método `get_catalog_winner_status()`.
+- **Amazon — Buy Box**: confirmado en vivo contra
+  `GET /products/pricing/v0/items/{asin}/offers` (Product Pricing API) —
+  cada oferta trae `SellerId` + `IsBuyBoxWinner`. Nuevo método
+  `get_buy_box_status()`. **Bug encontrado y corregido durante la
+  verificación**: el `pageSize` máximo de
+  `/listings/2021-08-01/items/{sellerId}` es 20 (200 tira HTTP 400
+  InvalidInput) — se agregó paginación real vía `pageToken` (hasta 5
+  páginas = 100 SKUs de pool de rotación).
+- Tablas nuevas `listing_snapshots` (snapshot actual: título/precio/
+  imagen/si ganamos + `not_winning_since`) y `listing_change_log`
+  (timeline append-only de cambios detectados). Comparación se hace en
+  `sync_listing_snapshot()` antes de sobreescribir el snapshot.
+- **Nunca revisa todo el catálogo de un jalón** — rotación LRU acotada a
+  20 listings/cuenta/ciclo de 15 min (`get_snapshot_check_candidates()`,
+  mismo cuidado de rate-limit que el resto de la app), vía
+  `_check_ml_winner_status_bg()`/`_check_amazon_buy_box_status_bg()`
+  enganchados al loop periódico ya existente.
+- UI: nuevo subtab "Vigilancia" en Salud de AMBAS plataformas — ML
+  (`health.html`, patrón `data-tab`/`loadTab()` ya existente) y Amazon
+  (`amazon_dashboard.html`, patrón `amz-salud-subtab-*` ya existente de
+  Mensajes de Compradores) — sin tabs nuevos de primer nivel.
+
+Verificado: unit tests de detección de cambios/rotación LRU/recuperación
+de "ganador", y corrida real contra producción (ML 20 listings
+revisados, Amazon 20 ASINs revisados incl. 1 SKU real perdiendo Buy Box
+detectado — SNTV005362-GRA3), Playwright 375px/1920px en ambas
+plataformas, 0 overflow / 0 errores.
+
+---
+
 ## 2026-07-23 — FEAT: Boost estacional automático al punto de reorden (Feature 1/4 de "ideas Zoho")
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`,

@@ -218,6 +218,44 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLAS: listing_snapshots / listing_change_log — "Vigilancia"
+        # (idea tomada de Helium10 Alerts, 2026-07-23). Snapshot actual por
+        # listing (título/precio/imagen/si somos ganador de catálogo o Buy
+        # Box) + timeline append-only de cambios detectados entre snapshots.
+        # not_winning_since: NULL si ganamos (o no se sabe) — se marca la
+        # primera vez que dejamos de ganar, para saber cuánto tiempo lleva.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS listing_snapshots (
+                platform           TEXT NOT NULL,
+                account_id         TEXT NOT NULL,
+                item_id            TEXT NOT NULL,
+                sku                TEXT NOT NULL DEFAULT '',
+                title              TEXT NOT NULL DEFAULT '',
+                price              REAL NOT NULL DEFAULT 0,
+                main_image_url     TEXT NOT NULL DEFAULT '',
+                is_winner          INTEGER,
+                total_competitors  INTEGER NOT NULL DEFAULT 0,
+                not_winning_since  REAL,
+                last_checked       REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (platform, account_id, item_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS listing_change_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform      TEXT NOT NULL,
+                account_id    TEXT NOT NULL,
+                item_id       TEXT NOT NULL,
+                sku           TEXT NOT NULL DEFAULT '',
+                field         TEXT NOT NULL,
+                old_value     TEXT NOT NULL DEFAULT '',
+                new_value     TEXT NOT NULL DEFAULT '',
+                detected_at   REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_lcl_account ON listing_change_log(platform, account_id, detected_at)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: coverage_price_alerts — sugerencia de precio por cobertura
         # de stock (días de supply). reason: 'escasez' (subir precio, se
         # está agotando) | 'sobrestock' (bajar precio, lleva mucho parado).
@@ -3894,6 +3932,112 @@ async def get_coverage_price_alerts(user_id: str) -> list:
             (user_id,),
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+async def get_snapshot_check_candidates(platform: str, account_id: str, all_ids: list, limit: int = 20) -> list:
+    """De all_ids (todos los listings activos), prioriza cuáles revisar este
+    ciclo para Vigilancia: primero los que nunca se han revisado, luego los
+    de last_checked más antiguo (rotación tipo LRU) — nunca revisa todo el
+    catálogo de un jalón, mismo cuidado de rate-limit que el resto de la app."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT item_id, last_checked FROM listing_snapshots WHERE platform=? AND account_id=?",
+            (platform, account_id),
+        )).fetchall()
+    checked = {r["item_id"]: r["last_checked"] for r in rows}
+    never_checked = [i for i in all_ids if i not in checked]
+    already_checked_sorted = sorted((i for i in all_ids if i in checked), key=lambda i: checked[i])
+    return (never_checked + already_checked_sorted)[:limit]
+
+
+async def sync_listing_snapshot(
+    platform: str, account_id: str, item_id: str, sku: str, title: str,
+    price: float, main_image_url: str, is_winner: bool | None, total_competitors: int,
+) -> None:
+    """Compara contra el snapshot anterior de este listing; si título/precio/
+    imagen cambiaron, lo registra en listing_change_log (timeline). Actualiza
+    not_winning_since la primera vez que is_winner pasa de True/None a False,
+    y lo limpia si vuelve a ganar."""
+    import time as _t
+    now = _t.time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        prev = await (await db.execute(
+            "SELECT * FROM listing_snapshots WHERE platform=? AND account_id=? AND item_id=?",
+            (platform, account_id, item_id),
+        )).fetchone()
+        prev = dict(prev) if prev else None
+
+        changes = []
+        if prev:
+            if prev["title"] and title and prev["title"] != title:
+                changes.append(("title", prev["title"], title))
+            if prev["price"] and price and abs(prev["price"] - price) > 0.01:
+                changes.append(("price", str(prev["price"]), str(price)))
+            if prev["main_image_url"] and main_image_url and prev["main_image_url"] != main_image_url:
+                changes.append(("image", prev["main_image_url"], main_image_url))
+        for field, old_v, new_v in changes:
+            await db.execute(
+                """INSERT INTO listing_change_log
+                   (platform, account_id, item_id, sku, field, old_value, new_value, detected_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (platform, account_id, item_id, sku, field, old_v, new_v, now),
+            )
+
+        not_winning_since = prev["not_winning_since"] if prev else None
+        if is_winner is False:
+            if not_winning_since is None:
+                not_winning_since = now
+        elif is_winner is True:
+            not_winning_since = None
+        # is_winner is None (desconocido) — conservar el valor previo tal cual
+
+        await db.execute(
+            """INSERT OR REPLACE INTO listing_snapshots
+               (platform, account_id, item_id, sku, title, price, main_image_url,
+                is_winner, total_competitors, not_winning_since, last_checked)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (platform, account_id, item_id, sku, title, price, main_image_url,
+             None if is_winner is None else int(is_winner), total_competitors,
+             not_winning_since, now),
+        )
+        await db.commit()
+
+
+async def get_listing_change_log(platform: str, account_id: str, days: int = 14, limit: int = 50) -> list:
+    import time as _t
+    cutoff = _t.time() - days * 86400
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT * FROM listing_change_log
+               WHERE platform=? AND account_id=? AND detected_at >= ?
+               ORDER BY detected_at DESC LIMIT ?""",
+            (platform, account_id, cutoff, limit),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_not_winning_listings(platform: str, account_id: str, min_hours: float = 24.0) -> list:
+    """SKUs/items que llevan >= min_hours seguidas sin ser ganadores de
+    catálogo (ML) / Buy Box (Amazon)."""
+    import time as _t
+    cutoff = _t.time() - min_hours * 3600
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT * FROM listing_snapshots
+               WHERE platform=? AND account_id=? AND is_winner=0
+               AND not_winning_since IS NOT NULL AND not_winning_since <= ?
+               ORDER BY not_winning_since ASC""",
+            (platform, account_id, cutoff),
+        )).fetchall()
+    now = _t.time()
+    return [
+        {**dict(r), "hours_not_winning": round((now - r["not_winning_since"]) / 3600, 1)}
+        for r in rows
+    ]
 
 
 async def delete_coverage_price_alert(user_id: str, item_id: str) -> None:

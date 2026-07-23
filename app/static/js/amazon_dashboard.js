@@ -861,12 +861,51 @@ window.switchAmzSaludSubtab = function(subtab) {
     amzSaludSubtab = subtab;
     document.getElementById('amz-salud-subtab-resumen').classList.toggle('hidden', subtab !== 'resumen');
     document.getElementById('amz-salud-subtab-mensajes').classList.toggle('hidden', subtab !== 'mensajes');
+    document.getElementById('amz-salud-subtab-vigilancia').classList.toggle('hidden', subtab !== 'vigilancia');
     document.querySelectorAll('.amz-salud-subtab-btn').forEach(function(btn) {
         var isActive = btn.id === 'amz-salud-subtab-btn-' + subtab;
         btn.className = 'amz-salud-subtab-btn flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 flex items-center gap-1.5 ' +
             (isActive ? 'border-orange-400 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300');
     });
 };
+
+function loadAmzVigilancia() {
+    var cont = document.getElementById('amz-vigilancia-content');
+    fetch('/api/amazon/vigilancia?seller_id=' + encodeURIComponent(window.amzActiveSellerId || ''))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.error) { cont.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">' + d.error + '</p>'; return; }
+            var html = '';
+            html += '<div class="flex items-center gap-2 mb-3"><h3 class="text-sm font-bold text-gray-800">Sin ganar el Buy Box</h3><span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">&ge;24h seguidas</span></div>';
+            if (!d.not_winning.length) {
+                html += '<p class="text-sm text-gray-400 mb-6">Sin ASINs detectados perdiendo el Buy Box por ahora (cobertura se llena gradualmente, ~20 por ciclo de 15 min).</p>';
+            } else {
+                html += '<div class="space-y-2 mb-6">' + d.not_winning.map(function(w) {
+                    return '<div class="bg-white border border-purple-100 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">' +
+                        '<div><p class="text-sm font-medium text-gray-800">' + _amzMsgsEscHtml(w.title || w.item_id) + '</p>' +
+                        '<p class="text-[11px] text-gray-400 font-mono mt-0.5">' + _amzMsgsEscHtml(w.sku) + ' &middot; ASIN ' + _amzMsgsEscHtml(w.item_id) + '</p></div>' +
+                        '<div class="text-xs font-semibold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-full whitespace-nowrap">' +
+                        w.hours_not_winning + 'h sin ganar &middot; ' + w.total_competitors + ' ofertas</div></div>';
+                }).join('') + '</div>';
+            }
+            html += '<div class="flex items-center gap-2 mb-3"><h3 class="text-sm font-bold text-gray-800">Timeline de Cambios</h3><span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Últimos 14 días</span></div>';
+            if (!d.changes.length) {
+                html += '<p class="text-sm text-gray-400">Sin cambios de título/precio detectados todavía.</p>';
+            } else {
+                html += '<div class="space-y-2">' + d.changes.map(function(c) {
+                    var fieldLabel = {price: 'Precio', title: 'Título', image: 'Imagen'}[c.field] || c.field;
+                    var badgeClass = c.field === 'price' ? 'bg-red-100 text-red-700' : (c.field === 'title' ? 'bg-blue-100 text-blue-700' : 'bg-indigo-100 text-indigo-700');
+                    return '<div class="bg-white border border-gray-100 rounded-lg p-3 text-xs">' +
+                        '<div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-gray-400">' + _amzMsgsEscHtml(c.sku) + '</span>' +
+                        '<span class="font-semibold px-2 py-0.5 rounded-full ' + badgeClass + '">' + fieldLabel + ' cambió</span></div>' +
+                        (c.field !== 'image' ? '<p class="text-gray-500 mt-1">"' + _amzMsgsEscHtml((c.old_value || '').slice(0, 60)) + '" &rarr; "' + _amzMsgsEscHtml((c.new_value || '').slice(0, 60)) + '"</p>' : '') +
+                        '</div>';
+                }).join('') + '</div>';
+            }
+            cont.innerHTML = html;
+        })
+        .catch(function(e) { cont.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
+}
 
 function loadAmzSaludTab() {
     var cont = document.getElementById('amz-health-content');
@@ -877,6 +916,7 @@ function loadAmzSaludTab() {
         .then(function(data){ renderAmzHealth(data, cont); amzTabLoaded.salud = true; })
         .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 bg-white rounded-xl shadow p-6">Error cargando salud: '+e.message+'</p>'; });
     loadAmzBuyerMessages();
+    loadAmzVigilancia();
     switchAmzSaludSubtab(amzSaludSubtab);
 }
 
