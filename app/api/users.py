@@ -88,13 +88,13 @@ async def list_users_api(request: Request):
             else '<span class="text-xs text-green-600">OK</span>'
         )
         last_login = u.get("last_login") or "—"
-        # Secciones restringidas
+        # Secciones restringidas (permisos por tab/subtab, esquema nuevo —
+        # se expande cualquier clave vieja del esquema plano al vuelo)
         raw_sections = u.get("allowed_sections")
-        sections_list = user_store._parse_allowed_sections(raw_sections)
+        sections_list = user_store._expand_legacy_sections(user_store._parse_allowed_sections(raw_sections))
         if sections_list:
-            section_labels = {k: v for k, v in user_store.ALL_SECTIONS}
             chips = "".join(
-                f'<span class="px-1.5 py-0.5 text-xs bg-purple-50 text-purple-600 rounded">{section_labels.get(s, s)}</span>'
+                f'<span class="px-1.5 py-0.5 text-xs bg-purple-50 text-purple-600 rounded">{user_store.describe_section_key(s)}</span>'
                 for s in sections_list
             )
             sections_html = f'<div class="flex flex-wrap gap-1">{chips}</div>'

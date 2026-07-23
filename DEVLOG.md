@@ -7,6 +7,70 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-23 — FEAT: Permisos jerárquicos por tab/subtab (ML + Amazon) + fix bug de redirección
+
+**Archivos:** `app/services/user_store.py`, `app/main.py`, `app/api/users.py`,
+`app/api/metrics.py`, `app/templates/health.html`,
+`app/templates/amazon_dashboard.html`, `app/templates/usuarios.html`,
+`app/static/js/amazon_dashboard.js`.
+
+### Bug reportado
+Jorge Sepúlveda con acceso otorgado a Amazon era redirigido a `/health`
+(ML) al intentar ver Salud/Mensajes de Compradores de Amazon. Causa
+raíz: el esquema viejo de permisos era una lista plana de "secciones" —
+`"salud"` (ML) y `"amazon"` (TODO Amazon, sin distinguir tabs internos)
+eran independientes; sin `"amazon"` marcado, cualquier vista de Amazon
+rebotaba. Además, los permisos van embebidos en el JWT de sesión — un
+cambio de permisos no aplicaba hasta que el usuario recargaba sesión.
+
+### Rediseño (pedido explícito: permisos por tab, con drill-down a subtabs,
+para ambas plataformas)
+- `user_store.PERMISSION_TREE`: árbol `{ml: {tab: {label, subtabs}}, amz: {...}}`
+  — cubre Dashboard/Ventas/Productos/Ads/Salud/Devoluciones/Planning/
+  Facturación/Sync (ML) y Dashboard/Ventas/Productos/Salud/Operaciones/
+  Finanzas/FBA/Listings/Deals/Retornos (Amazon), con subtabs reales donde
+  existen (ej. ML Salud: claims/questions/messages/reputation/vigilancia/
+  scores; Amazon Salud: resumen/mensajes/vigilancia).
+- Claves nuevas tipo `"ml.salud"` (tab completo) o `"ml.salud.messages"`
+  (solo ese subtab) reemplazan las claves planas viejas. Migración
+  transparente (`_expand_legacy_sections`): claves viejas como `"salud"`
+  o `"amazon"` se expanden al vuelo a las nuevas — sin script de
+  migración de DB, sin romper usuarios ya configurados.
+- `has_tab_access`/`has_subtab_access`/`get_allowed_subtabs`/
+  `first_allowed_location`: helpers de chequeo, usados por
+  `AuthMiddleware` (gating de página completa + `/amazon?tab=`),
+  `_build_nav_tabs` (filtro del nav) y `_require_subtab` (gating de
+  partials/endpoints de subtabs individuales — antes NINGÚN partial
+  tenía gating, solo la página contenedora).
+- Gating de subtab aplicado end-to-end en Salud (ML: 5 partials + scores;
+  Amazon: buyer-messages, vigilancia, amazon-health-data). Otros tabs con
+  subtabs (Productos/Ads/Sync en ML, Ventas en Amazon) ya están
+  representados en el árbol y en el panel de usuarios con la misma
+  granularidad tab/subtab — su gating a nivel de endpoint individual
+  queda pendiente si se necesita (mecanismo ya existe, es repetir el
+  patrón de `_require_subtab`).
+- `health.html`/`amazon_dashboard.html`: solo se renderizan los botones
+  de subtab permitidos; el subtab por defecto al entrar es el primero
+  permitido (no siempre "Reclamos"/"Resumen").
+- `usuarios.html`: checkboxes rediseñados como árbol (ML/Amazon ×
+  tab, con "▸ subtabs" expandible) en vez de la grilla plana de 10
+  secciones — fuente única de verdad (`PERMISSION_TREE`) inyectada desde
+  el backend, no duplicada en JS.
+- **Fix de staleness de JWT**: `user_store.update_user()` ahora invalida
+  las sesiones activas del usuario (`delete_user_sessions`) cuando cambia
+  `role` o `allowed_sections` — un cambio de permisos aplica de inmediato
+  (el usuario debe re-loguearse), en vez de esperar hasta 30 días.
+
+### Verificado localmente (JWT sintético + curl, 8 escenarios)
+Usuario restringido a `["ml.salud.messages","amz.salud.mensajes"]`:
+`/health` 200 (solo botón Mensajes), `/partials/health-messages` 200,
+`/partials/health-claims` 403, `/amazon?tab=salud` 200,
+`/amazon?tab=ventas` → redirect a `/health`, `/api/amazon/buyer-messages`
+200, `/api/metrics/amazon-health-data` 403, `/api/amazon/vigilancia` 403.
+Admin y usuario sin restricción: acceso completo sin cambios.
+
+---
+
 ## 2026-07-23 — FEAT: Listing Quality Score dinámico ML+Amazon (Feature 1/4 de "ideas Helium10")
 
 **Archivos:** `app/api/lanzar.py`, `app/api/amazon_products.py`,

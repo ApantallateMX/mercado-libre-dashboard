@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query, UploadFile, File, Form
+from fastapi import FastAPI, Request, Query, UploadFile, File, Form, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -865,6 +865,67 @@ _SECTION_FIRST_URL: dict[str, str] = {
     "amazon":       "/amazon",
 }
 
+# Mapeo de rutas de página a (plataforma, tab) del árbol jerárquico de permisos
+# (user_store.PERMISSION_TREE). "/amazon" y "/deuda-empresa" se resuelven aparte
+# en AuthMiddleware (multi-tab por query param / sección especial admin_only).
+_PATH_TO_TAB: dict[str, tuple[str, str]] = {
+    "/dashboard":        ("ml", "dashboard"),
+    "/multi-dashboard":  ("ml", "dashboard"),
+    "/inventory-global": ("ml", "dashboard"),
+    "/orders":           ("ml", "ventas"),
+    "/sku-sales":        ("ml", "ventas"),
+    "/sku-compare":      ("ml", "ventas"),
+    "/alertas-stock":    ("ml", "ventas"),
+    "/items":            ("ml", "productos"),
+    "/items-health":     ("ml", "productos"),
+    "/productos":        ("ml", "productos"),
+    "/sku-inventory":    ("ml", "productos"),
+    "/ads":              ("ml", "ads"),
+    "/health":           ("ml", "salud"),
+    "/returns":          ("ml", "devoluciones"),
+    "/planning":         ("ml", "planning"),
+    "/facturacion":      ("ml", "facturacion"),
+    "/stock-sync":       ("ml", "sync"),
+    "/amazon/products":  ("amz", "productos"),
+    "/amazon/returns":   ("amz", "returns"),
+}
+
+_ML_TAB_URL = {
+    "dashboard": "/dashboard", "ventas": "/orders", "productos": "/items",
+    "ads": "/ads", "salud": "/health", "devoluciones": "/returns",
+    "planning": "/planning", "facturacion": "/facturacion", "sync": "/stock-sync",
+    "deuda": "/deuda-empresa",
+}
+_AMZ_TAB_URL = {
+    "dashboard": "/amazon?tab=dashboard", "ventas": "/amazon?tab=ventas",
+    "productos": "/amazon/products", "salud": "/amazon?tab=salud",
+    "operaciones": "/amazon?tab=operaciones", "finanzas": "/amazon?tab=finanzas",
+    "fba": "/amazon?tab=fba", "listings": "/amazon?tab=listings",
+    "deals": "/amazon?tab=deals", "returns": "/amazon/returns",
+}
+
+
+def _tab_url(platform: str, tab: str) -> str:
+    if platform == "ml":
+        return _ML_TAB_URL.get(tab, "/facturacion")
+    if platform == "amz":
+        return _AMZ_TAB_URL.get(tab, "/facturacion")
+    return "/facturacion"
+
+
+def _require_subtab(request: Request, platform: str, tab: str, subtab: str):
+    """Gate de una sub-vista específica (ej. Salud→Mensajes). Se llama al
+    inicio de partials/endpoints de subtabs individuales — el gating de
+    AuthMiddleware solo cubre el tab completo, no cada subtab."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") == "admin":
+        return
+    sections = du.get("allowed_sections") or []
+    if not sections:
+        return
+    if not user_store.has_subtab_access(sections, platform, tab, subtab):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
+
 
 def _derive_audit_section(path: str) -> str:
     """Mapea un URL path a sección legible para auditoría y last_seen."""
@@ -911,10 +972,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if allowed_sections and du.get("role") != "admin":
             # Solo aplicar a rutas de página HTML (no API, no static)
             if not path.startswith("/api/") and not path.startswith("/static/"):
-                section = _PATH_TO_SECTION.get(path)
-                if section and section not in allowed_sections:
-                    # Redirigir a la primera sección permitida
-                    first_url = _SECTION_FIRST_URL.get(allowed_sections[0], "/facturacion")
+                denied = False
+                if path == "/deuda-empresa":
+                    denied = "deuda" not in allowed_sections
+                elif path == "/amazon":
+                    amz_tab = request.query_params.get("tab", "dashboard")
+                    denied = not user_store.has_tab_access(allowed_sections, "amz", amz_tab)
+                else:
+                    tab_info = _PATH_TO_TAB.get(path)
+                    if tab_info:
+                        plat, tab = tab_info
+                        denied = not user_store.has_tab_access(allowed_sections, plat, tab)
+                if denied:
+                    # Redirigir al primer tab/subtab permitido
+                    dplat, dtab, _dsub = user_store.first_allowed_location(allowed_sections)
+                    first_url = _tab_url(dplat, dtab) if dplat else "/facturacion"
                     return RedirectResponse(first_url, status_code=302)
         request.state.dashboard_user = du
         # Registrar presencia activa (fire-and-forget — no bloquea la respuesta)
@@ -1040,7 +1112,8 @@ async def login_verify(request: Request):
     # redirigir a su primera sección permitida
     allowed_sections = user.get("allowed_sections") or []
     if allowed_sections and user.get("role") != "admin" and next_url in ("/dashboard", "/"):
-        next_url = _SECTION_FIRST_URL.get(allowed_sections[0], "/facturacion")
+        _plat, _tab, _ = user_store.first_allowed_location(allowed_sections)
+        next_url = _tab_url(_plat, _tab) if _plat else "/facturacion"
     response = RedirectResponse(next_url, status_code=302)
     response.set_cookie("dash_session", token, max_age=2592000, httponly=True, samesite="lax")
     # Pre-warm caches
@@ -1164,75 +1237,75 @@ _NAV_TAB_DEFS = [
     dict(id="gral", label="Gral", icon="⊕",
          ml_href="/multi-dashboard", amz_href=None,
          ml_active=["multi_dashboard"], amz_active=None, amz_uses_dispatcher=False,
-         section="dashboard", admin_only=False, amz_gated=False, badge=None),
+         ml_tab="dashboard", amz_tab=None, admin_only=False, badge=None),
     dict(id="inventory_global", label="Inv.Global", icon="▦",
          ml_href="/inventory-global", amz_href=None,
          ml_active=["inventory_global"], amz_active=None, amz_uses_dispatcher=False,
-         section="dashboard", admin_only=True, amz_gated=False, badge=None,
+         ml_tab="dashboard", amz_tab=None, admin_only=True, badge=None,
          ml_hidden=True),
     dict(id="dashboard", label="Dashboard", icon="🏠",
          ml_href="/dashboard", amz_href="/amazon?tab=dashboard",
          ml_active=["dashboard"], amz_active="dashboard", amz_uses_dispatcher=True,
-         section="dashboard", admin_only=False, amz_gated=False, badge=None),
+         ml_tab="dashboard", amz_tab="dashboard", admin_only=False, badge=None),
     dict(id="ventas", label="Ventas", icon="📊",
          ml_href="/orders", amz_href="/amazon?tab=ventas",
          ml_active=["orders", "sku_sales", "sku_compare", "finanzas", "alertas_stock"], amz_active="ventas", amz_uses_dispatcher=True,
-         section="ventas", admin_only=False, amz_gated=False, badge=None),
+         ml_tab="ventas", amz_tab="ventas", admin_only=False, badge=None),
     dict(id="productos", label="Productos", icon="📦",
          ml_href="/items", amz_href="/amazon/products",
          ml_active=["items", "items_health", "sku_inventory", "productos"], amz_active="productos", amz_uses_dispatcher=True,
-         section="productos", admin_only=False, amz_gated=False, badge="orphans"),
+         ml_tab="productos", amz_tab="productos", admin_only=False, badge="orphans"),
     dict(id="ads", label="Ads", icon="📣",
          ml_href="/ads", amz_href=None,
          ml_active=["ads"], amz_active=None, amz_uses_dispatcher=False,
-         section="ads", admin_only=False, amz_gated=False, badge=None),
+         ml_tab="ads", amz_tab=None, admin_only=False, badge=None),
     dict(id="salud", label="Salud", icon="💚",
          ml_href="/health", amz_href="/amazon?tab=salud",
          ml_active=["health"], amz_active="salud", amz_uses_dispatcher=True,
-         section="salud", admin_only=False, amz_gated=False, badge="health"),
+         ml_tab="salud", amz_tab="salud", admin_only=False, badge="health"),
     dict(id="returns", label="Retornos", icon="🔄",
          ml_href="/returns", amz_href="/amazon/returns",
          ml_active=["returns"], amz_active=None, amz_uses_dispatcher=False,
-         section="devoluciones", admin_only=False, amz_gated=True, badge="returns"),
+         ml_tab="devoluciones", amz_tab="returns", admin_only=False, badge="returns"),
     dict(id="planning", label="Planeación", icon="⬡",
          ml_href="/planning", amz_href="/planning",
          ml_active=["planning"], amz_active=None, amz_uses_dispatcher=False,
-         section="planning", admin_only=False, amz_gated=True, badge=None),
+         ml_tab="planning", amz_tab=None, admin_only=False, badge=None),
     dict(id="facturacion", label="Facturación", icon="◈",
          ml_href="/facturacion", amz_href="/facturacion",
          ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
-         section="facturacion", admin_only=False, amz_gated=True, badge=None),
+         ml_tab="facturacion", amz_tab=None, admin_only=False, badge=None),
     dict(id="deuda", label="Deuda", icon="🏦",
          ml_href="/deuda-empresa", amz_href="/deuda-empresa",
          ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,
-         section="deuda", admin_only=True, amz_gated=True, badge=None),
+         ml_tab=None, amz_tab=None, admin_only=True, badge=None),
     dict(id="finanzas", label="Finanzas", icon="💰",
          ml_href=None, amz_href="/amazon?tab=finanzas",
          ml_active=None, amz_active="finanzas", amz_uses_dispatcher=True,
-         section="ventas", admin_only=False, amz_gated=False, badge=None,
+         ml_tab=None, amz_tab="finanzas", admin_only=False, badge=None,
          ml_hidden=True),
     dict(id="fba", label="FBA & Stock", icon="🚚",
          ml_href=None, amz_href="/amazon?tab=fba",
          ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
-         section=None, admin_only=False, amz_gated=False, badge=None),
+         ml_tab=None, amz_tab="fba", admin_only=False, badge=None),
     dict(id="listings", label="Listings", icon="🏷️",
          ml_href=None, amz_href="/amazon?tab=listings",
          ml_active=None, amz_active="listings", amz_uses_dispatcher=True,
-         section="productos", admin_only=False, amz_gated=False, badge=None,
+         ml_tab=None, amz_tab="listings", admin_only=False, badge=None,
          ml_hidden=True),
     dict(id="deals", label="Deals", icon="🎯",
          ml_href=None, amz_href="/amazon?tab=deals",
          ml_active=None, amz_active="deals", amz_uses_dispatcher=True,
-         section="productos", admin_only=False, amz_gated=False, badge=None,
+         ml_tab=None, amz_tab="deals", admin_only=False, badge=None,
          ml_hidden=True),
     dict(id="stock_sync", label="Sync Stock", icon="⇄",
          ml_href="/stock-sync", amz_href=None,
          ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
-         section="sync", admin_only=True, amz_gated=False, badge="bm_sync"),
+         ml_tab="sync", amz_tab=None, admin_only=True, badge="bm_sync"),
     dict(id="distribucion", label="Distribución", icon="⊞",
          ml_href=None, amz_href=None,
          ml_active=None, amz_active=None, amz_uses_dispatcher=False,
-         section="sync", admin_only=True, amz_gated=False, badge=None,
+         ml_tab="sync", amz_tab=None, admin_only=True, badge=None,
          ml_hidden=True),
 ]
 
@@ -1263,11 +1336,9 @@ def _build_nav_tabs(active_platform: str, dashboard_user) -> list:
         hidden_here = t.get("amz_hidden") if active_platform == "amz" else t.get("ml_hidden")
         if hidden_here:
             continue
-        section = t["section"]
-        if section and _sec:
-            gated_here = (active_platform != "amz") or t["amz_gated"]
-            if gated_here and section not in _sec:
-                continue
+        tab_key = t.get("amz_tab") if active_platform == "amz" else t.get("ml_tab")
+        if tab_key and _sec and not user_store.has_tab_access(_sec, active_platform, tab_key):
+            continue
         href = t["amz_href"] if active_platform == "amz" else t["ml_href"]
         out.append({**t, "href": href, "available": href is not None})
     return out
@@ -2403,6 +2474,7 @@ async def usuarios_page(request: Request):
     user = await get_current_user()
     return templates.TemplateResponse(request, "usuarios.html", {        "user": user,
         "active": "usuarios",
+        "permission_tree": user_store.PERMISSION_TREE,
         **ctx,
     })
 
@@ -3185,8 +3257,15 @@ async def health_page(request: Request):
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
+    du = ctx.get("dashboard_user") or {}
+    sections = du.get("allowed_sections") or []
+    all_subtabs = list(user_store.PERMISSION_TREE["ml"]["salud"]["subtabs"].keys())
+    allowed_subtabs = all_subtabs if (not sections or du.get("role") == "admin") \
+        else user_store.get_allowed_subtabs(sections, "ml", "salud")
     return templates.TemplateResponse(request, "health.html", {        "user": user,
         "active": "health",
+        "salud_allowed_subtabs": allowed_subtabs,
+        "salud_default_subtab": allowed_subtabs[0] if allowed_subtabs else None,
         **ctx
     })
 
@@ -8582,8 +8661,9 @@ def _elapsed_str(iso_date: str) -> tuple:
 
 
 @app.get("/api/health/scores")
-async def health_scores():
+async def health_scores(request: Request):
     """Score de salud por listing usando datos del prewarm cache (sin API calls extra)."""
+    _require_subtab(request, "ml", "salud", "scores")
     client = await get_meli_client()
     if not client:
         return JSONResponse({"error": "no_session", "items": []})
@@ -8950,6 +9030,7 @@ async def health_claims_partial(
     date_to: str = Query("", description="YYYY-MM-DD"),
     order_id: str = Query("", description="Filter by order/resource ID"),
 ):
+    _require_subtab(request, "ml", "salud", "claims")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -9277,6 +9358,7 @@ async def health_questions_partial(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
+    _require_subtab(request, "ml", "salud", "questions")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -9712,6 +9794,7 @@ async def health_messages_partial(
     date_to: str = Query("", description="YYYY-MM-DD"),
     q: str = Query("", description="Buscar por orden, comprador o producto"),
 ):
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -9867,6 +9950,7 @@ async def health_messages_partial(
 
 @app.get("/partials/health-reputation", response_class=HTMLResponse)
 async def health_reputation_partial(request: Request):
+    _require_subtab(request, "ml", "salud", "reputation")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -10007,6 +10091,7 @@ async def health_vigilancia_partial(request: Request):
     """Vigilancia ML (idea tomada de Helium10 Alerts): publicaciones sin
     ganar el catálogo hace >=24h + timeline de cambios de título/precio/
     imagen. Datos poblados gradualmente por _check_ml_winner_status_bg."""
+    _require_subtab(request, "ml", "salud", "vigilancia")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -13400,9 +13485,10 @@ async def ml_vigilancia_api():
 
 
 @app.get("/api/amazon/vigilancia")
-async def amazon_vigilancia_api(seller_id: str = Query("")):
+async def amazon_vigilancia_api(request: Request, seller_id: str = Query("")):
     """Vigilancia Amazon: ASINs sin Buy Box hace >=24h + timeline de cambios.
     Poblado gradualmente por _check_amazon_buy_box_status_bg."""
+    _require_subtab(request, "amz", "salud", "vigilancia")
     if not seller_id:
         return {"error": "seller_id requerido", "not_winning": [], "changes": []}
     not_winning = await token_store.get_not_winning_listings("amazon", seller_id, min_hours=24.0)
@@ -13545,6 +13631,17 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
     ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = active_tab
     ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
+    du = ctx.get("dashboard_user") or {}
+    sections = du.get("allowed_sections") or []
+    unrestricted = (not sections) or du.get("role") == "admin"
+    all_salud_subtabs = list(user_store.PERMISSION_TREE["amz"]["salud"]["subtabs"].keys())
+    all_ventas_subtabs = list(user_store.PERMISSION_TREE["amz"]["ventas"]["subtabs"].keys())
+    salud_allowed = all_salud_subtabs if unrestricted else user_store.get_allowed_subtabs(sections, "amz", "salud")
+    ventas_allowed = all_ventas_subtabs if unrestricted else user_store.get_allowed_subtabs(sections, "amz", "ventas")
+    ctx["amz_salud_allowed_subtabs"] = salud_allowed
+    ctx["amz_salud_default_subtab"] = salud_allowed[0] if salud_allowed else None
+    ctx["amz_ventas_allowed_subtabs"] = ventas_allowed
+    ctx["amz_ventas_default_subtab"] = ventas_allowed[0] if ventas_allowed else None
     return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx})
 
 
@@ -18894,6 +18991,7 @@ def _amz_response_deltas(messages: list) -> list:
 
 @app.get("/api/amazon/buyer-messages")
 async def amazon_buyer_messages_list(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     seller_id: str = Query(""),
     order_id: str = Query(""),
@@ -18913,6 +19011,7 @@ async def amazon_buyer_messages_list(
     only_pending (default True): oculta los hilos donde el último mensaje ya
     es nuestro (ya se respondió) — Jovan no quiere ver de nuevo lo que ya se
     contestó, solo lo que sigue esperando respuesta."""
+    _require_subtab(request, "amz", "salud", "mensajes")
     sid = seller_id.strip()
     oid = order_id.strip()
     if not sid:

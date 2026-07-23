@@ -83,6 +83,148 @@ ALL_SECTIONS = [
     ("amazon",       "Amazon"),
 ]
 
+# ─── Árbol de permisos jerárquico (tab → subtabs), por plataforma ─────────────
+# Cada tab puede otorgarse completo ("ml.salud") o por subtab específico
+# ("ml.salud.messages"). Tabs sin dict de subtabs son "todo o nada".
+# Mismo árbol usado por: middleware de acceso, filtro de nav, checkboxes del
+# panel de usuarios y gating de partials/endpoints de subtabs.
+PERMISSION_TREE = {
+    "ml": {
+        "dashboard":    {"label": "Dashboard",    "subtabs": None},
+        "ventas":       {"label": "Ventas",       "subtabs": None},
+        "productos":    {"label": "Productos",    "subtabs": {
+            "summary": "Resumen", "inventory": "Inventario", "stock": "Stock",
+            "deals": "Deals", "listings": "Listings", "full-candidates": "Candidatos FULL",
+        }},
+        "ads":          {"label": "Ads",          "subtabs": {
+            "campaigns": "Campañas", "performance": "Rendimiento", "by-category": "Por categoría",
+            "brand": "Brand Ads", "burning": "Quemando presupuesto", "no-ads": "Sin ads",
+            "asignar": "Asignar", "suggestions": "Sugerencias",
+        }},
+        "salud":        {"label": "Salud",        "subtabs": {
+            "claims": "Reclamos", "questions": "Preguntas", "messages": "Mensajes",
+            "reputation": "Reputación", "vigilancia": "Vigilancia", "scores": "Score",
+        }},
+        "devoluciones": {"label": "Devoluciones",  "subtabs": None},
+        "planning":     {"label": "Planning",      "subtabs": None},
+        "facturacion":  {"label": "Facturación",   "subtabs": None},
+        "sync":         {"label": "Sync Stock",    "subtabs": {
+            "ejecutar": "Ejecutar", "configurar": "Configurar",
+        }},
+    },
+    "amz": {
+        "dashboard":    {"label": "Dashboard",    "subtabs": None},
+        "ventas":       {"label": "Ventas",       "subtabs": {
+            "resumen": "Resumen", "sku": "Por SKU",
+        }},
+        "productos":    {"label": "Productos",    "subtabs": None},
+        "salud":        {"label": "Salud",        "subtabs": {
+            "resumen": "Resumen", "mensajes": "Mensajes de Compradores", "vigilancia": "Vigilancia",
+        }},
+        "operaciones":  {"label": "Operaciones",  "subtabs": None},
+        "finanzas":     {"label": "Finanzas",     "subtabs": None},
+        "fba":          {"label": "FBA & Stock",  "subtabs": None},
+        "listings":     {"label": "Listings",     "subtabs": None},
+        "deals":        {"label": "Deals",        "subtabs": None},
+        "returns":      {"label": "Retornos",     "subtabs": None},
+    },
+}
+
+# Migración de secciones "planas" (esquema viejo, previo al árbol tab→subtab)
+# a claves nuevas "plataforma.tab". "amazon" (acceso total a Amazon) se
+# expande a todos los tabs de la plataforma "amz". "deuda" no es parte del
+# árbol (es admin_only real) y se deja pasar tal cual.
+_LEGACY_ML_MAP = {
+    "dashboard": "ml.dashboard", "ventas": "ml.ventas", "sku": "ml.ventas",
+    "productos": "ml.productos", "ads": "ml.ads", "salud": "ml.salud",
+    "devoluciones": "ml.devoluciones", "planning": "ml.planning",
+    "facturacion": "ml.facturacion", "sync": "ml.sync",
+}
+
+
+def _expand_legacy_sections(sections: list) -> list:
+    """Convierte claves del esquema plano viejo (ej. 'salud', 'amazon') a las
+    claves nuevas 'plataforma.tab' del árbol de permisos. Claves ya en formato
+    nuevo (contienen '.') o especiales ('deuda') pasan sin cambio. Idempotente
+    — puede aplicarse sobre una lista ya expandida sin efecto adicional."""
+    if not sections:
+        return []
+    out = set()
+    for s in sections:
+        if not s or "." in s:
+            out.add(s)
+        elif s == "amazon":
+            out.update(f"amz.{tab}" for tab in PERMISSION_TREE["amz"])
+        elif s in _LEGACY_ML_MAP:
+            out.add(_LEGACY_ML_MAP[s])
+        else:
+            out.add(s)  # ej. "deuda" — passthrough, no forma parte del árbol
+    return sorted(out)
+
+
+def has_tab_access(sections: list, platform: str, tab: str) -> bool:
+    """True si el usuario tiene acceso a TODO o a AL MENOS UN subtab del tab."""
+    exp = _expand_legacy_sections(sections)
+    whole = f"{platform}.{tab}"
+    if whole in exp:
+        return True
+    prefix = whole + "."
+    return any(s.startswith(prefix) for s in exp)
+
+
+def has_subtab_access(sections: list, platform: str, tab: str, subtab: str) -> bool:
+    """True si el usuario tiene el tab completo O ese subtab específico."""
+    exp = _expand_legacy_sections(sections)
+    return f"{platform}.{tab}" in exp or f"{platform}.{tab}.{subtab}" in exp
+
+
+def get_allowed_subtabs(sections: list, platform: str, tab: str) -> list:
+    """Lista de keys de subtabs permitidos para ese tab. Si el tab no tiene
+    subtabs definidos en el árbol, o el usuario tiene el tab completo,
+    retorna TODAS las keys de subtabs (o [] si el tab no tiene subtabs)."""
+    all_subtabs = (PERMISSION_TREE.get(platform, {}).get(tab, {}) or {}).get("subtabs")
+    if not all_subtabs:
+        return []
+    exp = _expand_legacy_sections(sections)
+    if f"{platform}.{tab}" in exp:
+        return list(all_subtabs.keys())
+    prefix = f"{platform}.{tab}."
+    return [s[len(prefix):] for s in exp if s.startswith(prefix) and s[len(prefix):] in all_subtabs]
+
+
+def describe_section_key(key: str) -> str:
+    """Etiqueta legible para una clave del árbol ('ml.salud.messages' →
+    'ML · Salud → Mensajes'). Usada en los chips del panel de usuarios."""
+    if not key or "." not in key:
+        return {"deuda": "Deuda"}.get(key, key)
+    parts = key.split(".")
+    platform_label = "ML" if parts[0] == "ml" else "Amazon"
+    tab_meta = PERMISSION_TREE.get(parts[0], {}).get(parts[1], {})
+    tab_label = tab_meta.get("label", parts[1])
+    if len(parts) == 2:
+        return f"{platform_label} · {tab_label}"
+    subtab_label = (tab_meta.get("subtabs") or {}).get(parts[2], parts[2])
+    return f"{platform_label} · {tab_label} → {subtab_label}"
+
+
+def first_allowed_location(sections: list) -> tuple:
+    """Retorna (platform, tab, subtab_o_None) del primer acceso permitido —
+    usado para redirigir cuando se niega el acceso a una ruta. Prioriza ML
+    sobre Amazon (mismo orden que la navegación) y sigue el orden del árbol."""
+    exp = set(_expand_legacy_sections(sections))
+    if "deuda" in exp:
+        return ("ml", "deuda", None)
+    for platform in ("ml", "amz"):
+        for tab, meta in PERMISSION_TREE[platform].items():
+            if has_tab_access(sections, platform, tab):
+                subtabs = meta.get("subtabs")
+                if subtabs:
+                    allowed_sub = get_allowed_subtabs(sections, platform, tab)
+                    if allowed_sub:
+                        return (platform, tab, allowed_sub[0])
+                return (platform, tab, None)
+    return (None, None, None)
+
 
 # ─── Password hashing ────────────────────────────────────────────────────────
 def hash_password(password: str, salt: str = None) -> tuple[str, str]:
@@ -266,6 +408,11 @@ async def update_user(user_id: int, **kwargs) -> bool:
             (*fields.values(), user_id)
         )
         await db.commit()
+    if "allowed_sections" in fields or "role" in fields:
+        # Los permisos van embebidos en el JWT de sesión — si no se invalida,
+        # el usuario sigue con los permisos viejos hasta que el token expire
+        # (30 días) o cierre sesión manualmente. Forzar re-login inmediato.
+        await delete_user_sessions(user_id)
     return True
 
 

@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from app.services.meli_client import get_meli_client
 from app.services.amazon_client import get_amazon_client
-from app.services import token_store
+from app.services import token_store, user_store
 from app import order_net_revenue
 import time as _time
 import asyncio
@@ -1752,9 +1752,15 @@ def _amazon_health_alerts(cancel_rate: float, unshipped: int, unfulfillable: int
 
 @router.get("/amazon-health-data")
 async def get_amazon_health_data(
+    request: Request,
     seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
 ):
     """Métricas de salud de la cuenta Amazon: órdenes, FBA, cancelaciones."""
+    du = getattr(request.state, "dashboard_user", None)
+    if du and du.get("role") != "admin":
+        sections = du.get("allowed_sections") or []
+        if sections and not user_store.has_subtab_access(sections, "amz", "salud", "resumen"):
+            raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
     client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon configurada")

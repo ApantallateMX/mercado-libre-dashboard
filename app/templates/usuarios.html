@@ -138,8 +138,8 @@
             <button type="button" onclick="clearAllSections('create')" class="text-gray-400 hover:underline">Ninguna</button>
           </div>
         </div>
-        <p class="text-xs text-gray-400 mb-2">Si no marcas ninguna, el usuario tiene acceso a todas las secciones permitidas por su rol.</p>
-        <div id="create-sections-checkboxes" class="grid grid-cols-2 gap-1.5">
+        <p class="text-xs text-gray-400 mb-2">Si no marcas ninguna, el usuario tiene acceso a todo lo permitido por su rol. Marca un tab completo, o da clic en "subtabs" para dar acceso solo a partes específicas (ej. Salud → solo Mensajes).</p>
+        <div id="create-sections-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto">
           <!-- renderizado por JS -->
         </div>
       </div>
@@ -200,8 +200,8 @@
             <button type="button" onclick="clearAllSections('edit')" class="text-gray-400 hover:underline">Ninguna</button>
           </div>
         </div>
-        <p class="text-xs text-gray-400 mb-2">Si no marcas ninguna, el usuario tiene acceso a todas las secciones permitidas por su rol.</p>
-        <div id="edit-sections-checkboxes" class="grid grid-cols-2 gap-1.5">
+        <p class="text-xs text-gray-400 mb-2">Si no marcas ninguna, el usuario tiene acceso a todo lo permitido por su rol. Marca un tab completo, o da clic en "subtabs" para dar acceso solo a partes específicas (ej. Salud → solo Mensajes).</p>
+        <div id="edit-sections-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto">
           <!-- renderizado por JS -->
         </div>
       </div>
@@ -219,49 +219,91 @@
 </div>
 
 <script>
-// ── Catálogo de secciones (mismo orden que backend) ─────────────────────────
-var ALL_SECTIONS = [
-  {key:'dashboard',    label:'Dashboard'},
-  {key:'ventas',       label:'Ventas'},
-  {key:'productos',    label:'Productos'},
-  {key:'ads',          label:'Ads'},
-  {key:'salud',        label:'Salud'},
-  {key:'devoluciones', label:'Devoluciones'},
-  {key:'planning',     label:'Planning'},
-  {key:'facturacion',  label:'Facturación'},
-  {key:'sync',         label:'Sync Stock'},
-  {key:'amazon',       label:'Amazon'},
-];
+// ── Árbol de permisos (tab → subtabs), misma fuente que el backend ──────────
+var PERMISSION_TREE = {{ permission_tree | tojson }};
+var PLATFORM_LABEL = {ml: 'Mercado Libre', amz: 'Amazon'};
 
-// ── Render checkboxes de sección ─────────────────────────────────────────────
+// ── Render checkboxes de sección (jerárquico: tab completo o subtabs) ───────
 function renderSectionCheckboxes(prefix, selectedSections) {
   var container = document.getElementById(prefix+'-sections-checkboxes');
-  container.innerHTML = '';
-  ALL_SECTIONS.forEach(function(s) {
-    var checked = selectedSections && selectedSections.indexOf(s.key) >= 0 ? 'checked' : '';
-    container.innerHTML += '<label class="flex items-center gap-2 text-sm cursor-pointer">' +
-      '<input type="checkbox" value="'+s.key+'" '+checked+
-      ' class="section-cb rounded border-gray-300 text-blue-600 focus:ring-blue-500">' +
-      '<span class="text-gray-700">'+s.label+'</span></label>';
+  var selected = selectedSections || [];
+  var html = '';
+  ['ml', 'amz'].forEach(function(platform) {
+    html += '<div class="space-y-1.5">';
+    html += '<p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">'+PLATFORM_LABEL[platform]+'</p>';
+    Object.keys(PERMISSION_TREE[platform]).forEach(function(tab) {
+      var meta = PERMISSION_TREE[platform][tab];
+      var tabKey = platform + '.' + tab;
+      var tabChecked = selected.indexOf(tabKey) >= 0;
+      var subtabs = meta.subtabs;
+      var subtabKeys = subtabs ? Object.keys(subtabs) : [];
+      var anySubtabSelected = subtabKeys.some(function(st){ return selected.indexOf(tabKey+'.'+st) >= 0; });
+      html += '<div class="tab-group border border-gray-100 rounded-lg px-2 py-1.5">';
+      html += '<label class="flex items-center gap-2 text-sm cursor-pointer">' +
+        '<input type="checkbox" value="'+tabKey+'" '+(tabChecked?'checked':'')+
+        ' class="section-cb tab-cb rounded border-gray-300 text-blue-600 focus:ring-blue-500" onchange="onTabCbChange(this)">' +
+        '<span class="text-gray-700 flex-1">'+meta.label+'</span>';
+      if (subtabKeys.length) {
+        html += '<button type="button" class="text-[11px] text-blue-500 hover:underline shrink-0" onclick="toggleSubtabList(this)">'+
+          (anySubtabSelected && !tabChecked ? '▾' : '▸')+' subtabs</button>';
+      }
+      html += '</label>';
+      if (subtabKeys.length) {
+        var showList = anySubtabSelected && !tabChecked;
+        html += '<div class="subtab-list pl-6 mt-1 space-y-1 '+(showList?'':'hidden')+'">';
+        subtabKeys.forEach(function(st) {
+          var stKey = tabKey + '.' + st;
+          var stChecked = tabChecked || selected.indexOf(stKey) >= 0;
+          html += '<label class="flex items-center gap-2 text-xs cursor-pointer">' +
+            '<input type="checkbox" value="'+stKey+'" '+(stChecked?'checked':'')+(tabChecked?' disabled':'')+
+            ' class="section-cb subtab-cb rounded border-gray-300 text-blue-600 focus:ring-blue-500">' +
+            '<span class="text-gray-500">'+subtabs[st]+'</span></label>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
   });
+  container.innerHTML = html;
+}
+
+// Al marcar/desmarcar el tab completo: incluye/excluye sus subtabs
+function onTabCbChange(cb) {
+  var group = cb.closest('.tab-group');
+  if (!group) return;
+  var subCbs = group.querySelectorAll('.subtab-cb');
+  subCbs.forEach(function(scb) {
+    scb.disabled = cb.checked;
+    if (cb.checked) scb.checked = true;
+  });
+  var list = group.querySelector('.subtab-list');
+  if (list && cb.checked) list.classList.add('hidden');
+}
+
+function toggleSubtabList(btn) {
+  var group = btn.closest('.tab-group');
+  var list = group.querySelector('.subtab-list');
+  list.classList.toggle('hidden');
+  btn.textContent = (list.classList.contains('hidden') ? '▸' : '▾') + ' subtabs';
 }
 
 function getSectionCheckboxes(prefix) {
   var container = document.getElementById(prefix+'-sections-checkboxes');
   var checked = [];
-  container.querySelectorAll('input[type=checkbox]:checked').forEach(function(cb){
+  container.querySelectorAll('input[type=checkbox]:checked:not(:disabled)').forEach(function(cb){
     checked.push(cb.value);
   });
   return checked;
 }
 
 function selectAllSections(prefix) {
-  document.getElementById(prefix+'-sections-checkboxes')
-    .querySelectorAll('input[type=checkbox]').forEach(function(cb){ cb.checked=true; });
+  var container = document.getElementById(prefix+'-sections-checkboxes');
+  container.querySelectorAll('input.tab-cb').forEach(function(cb){ cb.checked=true; onTabCbChange(cb); });
 }
 function clearAllSections(prefix) {
-  document.getElementById(prefix+'-sections-checkboxes')
-    .querySelectorAll('input[type=checkbox]').forEach(function(cb){ cb.checked=false; });
+  var container = document.getElementById(prefix+'-sections-checkboxes');
+  container.querySelectorAll('input[type=checkbox]').forEach(function(cb){ cb.checked=false; cb.disabled=false; });
 }
 
 // ── Mostrar/ocultar bloque de secciones según rol ────────────────────────────
@@ -275,8 +317,9 @@ function onRoleChange(prefix) {
     // Si eligen editor_facturacion, pre-seleccionar Facturación automáticamente
     if (role === 'editor_facturacion') {
       document.getElementById(prefix+'-sections-checkboxes')
-        .querySelectorAll('input[type=checkbox]').forEach(function(cb){
-          cb.checked = cb.value === 'facturacion';
+        .querySelectorAll('input.tab-cb').forEach(function(cb){
+          cb.checked = cb.value === 'ml.facturacion';
+          onTabCbChange(cb);
         });
     }
   }

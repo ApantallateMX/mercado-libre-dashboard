@@ -82,34 +82,47 @@
         <div class="bg-white rounded-lg shadow">
             <div class="border-b border-gray-200">
                 <nav class="flex -mb-px items-center overflow-x-auto flex-nowrap" id="health-tabs">
+                    {% set _salud_subtabs = salud_allowed_subtabs if salud_allowed_subtabs is defined else ['claims','questions','messages','reputation','vigilancia','scores'] %}
+                    {% if 'claims' in _salud_subtabs %}
                     <button type="button" data-tab="claims"
                             class="health-tab flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600 flex items-center gap-1.5">
                         Reclamos
                         <span id="tab-badge-claims" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full leading-none"></span>
                     </button>
+                    {% endif %}
+                    {% if 'questions' in _salud_subtabs %}
                     <button type="button" data-tab="questions"
                             class="health-tab flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 flex items-center gap-1.5">
                         Preguntas
                         <span id="tab-badge-questions" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-yellow-500 text-white rounded-full leading-none"></span>
                     </button>
+                    {% endif %}
+                    {% if 'messages' in _salud_subtabs %}
                     <button type="button" data-tab="messages"
                             class="health-tab flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 flex items-center gap-1.5">
                         Mensajes
                         <span id="tab-badge-messages" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-blue-500 text-white rounded-full leading-none"></span>
                     </button>
+                    {% endif %}
+                    {% if 'reputation' in _salud_subtabs %}
                     <button type="button" data-tab="reputation"
                             class="health-tab flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
                         Reputacion
                     </button>
+                    {% endif %}
+                    {% if 'vigilancia' in _salud_subtabs %}
                     <button type="button" data-tab="vigilancia"
                             class="health-tab flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 flex items-center gap-1.5">
                         Vigilancia
                         <span id="tab-badge-vigilancia" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-purple-500 text-white rounded-full leading-none"></span>
                     </button>
+                    {% endif %}
+                    {% if 'scores' in _salud_subtabs %}
                     <button type="button" data-tab="scores"
                             class="health-tab flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
                         📊 Score
                     </button>
+                    {% endif %}
                     <!-- Manual refresh button -->
                     <div class="ml-auto pr-3 flex-shrink-0 flex items-center gap-2">
                         <span id="tab-last-update" class="text-[10px] text-gray-400"></span>
@@ -157,7 +170,7 @@ var _weekAgo = new Date(_today);
 _weekAgo.setDate(_today.getDate() - 6);
 
 var healthFilters = {
-    currentTab: 'claims',
+    currentTab: {{ (salud_default_subtab or 'claims') | tojson }},
     date_from: _fmtDate(_weekAgo),
     date_to: _fmtDate(_today),
     offsets: { claims: 0, questions: 0, messages: 0 },
@@ -767,7 +780,7 @@ document.getElementById('health-date-from').value = healthFilters.date_from;
 document.getElementById('health-date-to').value   = healthFilters.date_to;
 updateFilterIndicator();
 loadSummary();
-loadTab('claims');
+loadTab(healthFilters.currentTab);
 _updateTimestamp();
 _startAutoRefresh();
 </script>

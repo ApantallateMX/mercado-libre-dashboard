@@ -855,7 +855,7 @@ async function loadAmzFinanzasTab() {
 }
 
 // ─── TAB SALUD ────────────────────────────────────────────────────────────────
-var amzSaludSubtab = 'resumen';
+var amzSaludSubtab = window.amzSaludDefaultSubtab || 'resumen';
 
 window.switchAmzSaludSubtab = function(subtab) {
     amzSaludSubtab = subtab;
@@ -908,15 +908,18 @@ function loadAmzVigilancia() {
 }
 
 function loadAmzSaludTab() {
-    var cont = document.getElementById('amz-health-content');
-    cont.innerHTML = '<div class="animate-pulse space-y-3">'+Array(4).fill('<div class="h-20 bg-orange-50 rounded-xl"></div>').join('')+'</div>';
-    var _hSellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
-    fetch('/api/metrics/amazon-health-data' + _hSellerParam)
-        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-        .then(function(data){ renderAmzHealth(data, cont); amzTabLoaded.salud = true; })
-        .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 bg-white rounded-xl shadow p-6">Error cargando salud: '+e.message+'</p>'; });
-    loadAmzBuyerMessages();
-    loadAmzVigilancia();
+    var allowed = window.amzSaludAllowedSubtabs || ['resumen', 'mensajes', 'vigilancia'];
+    if (allowed.indexOf('resumen') >= 0) {
+        var cont = document.getElementById('amz-health-content');
+        cont.innerHTML = '<div class="animate-pulse space-y-3">'+Array(4).fill('<div class="h-20 bg-orange-50 rounded-xl"></div>').join('')+'</div>';
+        var _hSellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+        fetch('/api/metrics/amazon-health-data' + _hSellerParam)
+            .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+            .then(function(data){ renderAmzHealth(data, cont); amzTabLoaded.salud = true; })
+            .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 bg-white rounded-xl shadow p-6">Error cargando salud: '+e.message+'</p>'; });
+    }
+    if (allowed.indexOf('mensajes') >= 0) loadAmzBuyerMessages();
+    if (allowed.indexOf('vigilancia') >= 0) loadAmzVigilancia();
     switchAmzSaludSubtab(amzSaludSubtab);
 }
 
