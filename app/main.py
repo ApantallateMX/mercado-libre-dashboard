@@ -5700,6 +5700,37 @@ async def _prewarm_caches(user_id: str = None):
                 # _sku_cost_map/_sku_retail_map arriba, para que ya cubran los componentes.
                 _apply_bundle_margin_override(bm_candidates, _bundles)
 
+                # Precio sugerido por cobertura de stock — nunca auto-aplica, solo
+                # sugiere (el usuario confirma vía /sync-price, igual que
+                # ml_price_alerts). Regla v1, conservadora: escasez → +8% si quedan
+                # <7 días de supply y sí se está vendiendo; sobrestock → -12% si
+                # llevan >90 días de supply, nunca por debajo de _precio_piso.
+                _coverage_alerts = []
+                for _cp in bm_candidates:
+                    _ds = _cp.get("_days_supply")
+                    _price = _cp.get("price", 0) or 0
+                    _u30 = _cp.get("units_30d", 0) or 0
+                    if _ds is None or _price <= 0:
+                        continue
+                    if _ds < 7 and _u30 > 0:
+                        _coverage_alerts.append({
+                            "item_id": _cp["id"], "sku": _cp.get("sku", ""), "product_title": _cp.get("title", ""),
+                            "current_price": _price, "suggested_price": round(_price * 1.08),
+                            "reason": "escasez", "days_supply": _ds, "units_30d": _u30,
+                        })
+                    elif _ds > 90:
+                        _sugg = round(_price * 0.88)
+                        _piso = _cp.get("_precio_piso")
+                        if _piso and _sugg < _piso:
+                            _sugg = round(_piso)
+                        if _sugg < _price:
+                            _coverage_alerts.append({
+                                "item_id": _cp["id"], "sku": _cp.get("sku", ""), "product_title": _cp.get("title", ""),
+                                "current_price": _price, "suggested_price": _sugg,
+                                "reason": "sobrestock", "days_supply": _ds, "units_30d": _u30,
+                            })
+                await token_store.replace_coverage_price_alerts(str(client.user_id), _coverage_alerts)
+
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
                 # Items sincronizados recientemente (TTL 60 min, cross-user, DB-backed):
@@ -12989,6 +13020,21 @@ async def delete_bundle_api(request: Request):
         return JSONResponse({"detail": "bundle_sku es requerido"}, status_code=400)
     await token_store.delete_bundle(bundle_sku)
     return {"ok": True}
+
+
+@app.get("/api/coverage-price-alerts")
+async def get_coverage_price_alerts_api(request: Request):
+    """Lista sugerencias de precio por cobertura de stock (calculadas en el
+    último ciclo de prewarm) para la cuenta activa. Nunca auto-aplica —
+    usar /sync-price para confirmar y ejecutar el PUT real en ML."""
+    client = await get_meli_client()
+    if not client:
+        return {"error": "No hay cuenta ML activa", "alerts": []}
+    try:
+        alerts = await token_store.get_coverage_price_alerts(str(client.user_id))
+        return {"alerts": alerts}
+    finally:
+        await client.close()
 
 
 @app.get("/api/distribution/sku-score")

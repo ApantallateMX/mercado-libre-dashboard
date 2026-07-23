@@ -217,6 +217,30 @@ async def init_db():
                 UNIQUE(user_id, item_id)
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: coverage_price_alerts — sugerencia de precio por cobertura
+        # de stock (días de supply). reason: 'escasez' (subir precio, se
+        # está agotando) | 'sobrestock' (bajar precio, lleva mucho parado).
+        # Se recalcula completo cada ciclo de prewarm — nunca auto-aplica,
+        # el usuario confirma vía /sync-price (mismo mecanismo que
+        # ml_price_alerts, que ya hace el PUT real con auditoría).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS coverage_price_alerts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         TEXT NOT NULL,
+                item_id         TEXT NOT NULL,
+                sku             TEXT NOT NULL DEFAULT '',
+                product_title   TEXT NOT NULL DEFAULT '',
+                current_price   REAL NOT NULL DEFAULT 0,
+                suggested_price REAL NOT NULL DEFAULT 0,
+                reason          TEXT NOT NULL DEFAULT '',
+                days_supply     REAL,
+                units_30d       INTEGER NOT NULL DEFAULT 0,
+                last_scan       REAL NOT NULL DEFAULT 0,
+                UNIQUE(user_id, item_id)
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ml_listing_quality (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3788,6 +3812,48 @@ async def delete_bundle(bundle_sku: str) -> None:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("DELETE FROM sku_bundles WHERE bundle_sku = ?", (bundle_sku,))
         await db.execute("DELETE FROM sku_bundle_components WHERE bundle_sku = ?", (bundle_sku,))
+        await db.commit()
+
+
+async def replace_coverage_price_alerts(user_id: str, alerts: list) -> None:
+    """Reemplaza TODAS las alertas de precio-por-cobertura de esta cuenta
+    con el resultado fresco del ciclo de prewarm actual (igual que
+    stock_issues_cache — se recalcula completo, no se acumula)."""
+    import time as _t
+    now = _t.time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM coverage_price_alerts WHERE user_id = ?", (user_id,))
+        await db.executemany(
+            """INSERT INTO coverage_price_alerts
+               (user_id, item_id, sku, product_title, current_price, suggested_price,
+                reason, days_supply, units_30d, last_scan)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (user_id, a["item_id"], a.get("sku", ""), a.get("product_title", ""),
+                 a["current_price"], a["suggested_price"], a["reason"],
+                 a.get("days_supply"), a.get("units_30d", 0), now)
+                for a in alerts
+            ],
+        )
+        await db.commit()
+
+
+async def get_coverage_price_alerts(user_id: str) -> list:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM coverage_price_alerts WHERE user_id = ? ORDER BY reason, days_supply",
+            (user_id,),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def delete_coverage_price_alert(user_id: str, item_id: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "DELETE FROM coverage_price_alerts WHERE user_id = ? AND item_id = ?",
+            (user_id, item_id),
+        )
         await db.commit()
 
 

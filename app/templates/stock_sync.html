@@ -50,6 +50,20 @@
     </div>
   </div>
 
+  <!-- ── Precio sugerido por cobertura de stock ───────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-sm font-bold text-gray-700">Precio Sugerido por Cobertura de Stock</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Sube el precio si un SKU escasea y se vende rápido (&lt;7 días de supply); lo baja si sobra stock parado (&gt;90 días). Nunca se aplica solo — tú confirmas cada uno.</p>
+      </div>
+      <button onclick="loadCoverageAlerts()" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold transition">↻ Actualizar</button>
+    </div>
+    <div id="coverage-alerts-list" class="space-y-2">
+      <p class="text-xs text-gray-400">Cargando sugerencias...</p>
+    </div>
+  </div>
+
   <!-- ── Panel de Preview (cambios planificados) ───────────────── -->
   <div id="preview-panel" class="hidden bg-white rounded-2xl shadow-sm border border-indigo-200 p-5 space-y-4">
     <div class="flex items-center justify-between">
@@ -2156,6 +2170,72 @@ function triggerCatalogSync() {
 
 // Cargar estado del catálogo al abrir la página
 _loadCatalogStatus();
+
+// ════════════════════════════════════════════════════════════════════════════
+// Precio sugerido por cobertura de stock
+// ════════════════════════════════════════════════════════════════════════════
+function loadCoverageAlerts() {
+    var el = document.getElementById('coverage-alerts-list');
+    el.innerHTML = '<p class="text-xs text-gray-400">Cargando sugerencias...</p>';
+    fetch('/api/coverage-price-alerts').then(function(r){ return r.json(); }).then(function(d) {
+        var alerts = d.alerts || [];
+        if (d.error) { el.innerHTML = '<p class="text-xs text-red-500">' + d.error + '</p>'; return; }
+        if (!alerts.length) {
+            el.innerHTML = '<p class="text-xs text-gray-400">Sin sugerencias de precio por ahora — nada escasea ni está sobre-stockeado fuera de rango.</p>';
+            return;
+        }
+        el.innerHTML = alerts.map(function(a) {
+            var isEscasez = a.reason === 'escasez';
+            var badgeClass = isEscasez ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700';
+            var badgeText = isEscasez ? '🔴 Escasez — subir precio' : '🔵 Sobrestock — bajar precio';
+            var domId = 'cov-' + a.id;
+            return '<div id="' + domId + '" class="flex items-center justify-between gap-2 border border-gray-100 rounded-xl px-3 py-2.5 flex-wrap">' +
+                '<div>' +
+                    '<div class="flex items-center gap-2 flex-wrap">' +
+                        '<span class="font-semibold text-sm text-gray-800">' + (a.product_title || a.sku) + '</span>' +
+                        '<span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ' + badgeClass + '">' + badgeText + '</span>' +
+                    '</div>' +
+                    '<div class="text-[11px] text-gray-400 mt-0.5 font-mono">' + a.sku + '</div>' +
+                    '<div class="text-[11px] text-gray-400 mt-0.5">' +
+                        (a.days_supply != null ? Math.round(a.days_supply) + ' días de supply' : '') +
+                        ' &middot; $' + a.current_price + ' → <strong class="text-gray-700">$' + a.suggested_price + '</strong> MXN' +
+                    '</div>' +
+                '</div>' +
+                '<div class="flex items-center gap-2 flex-shrink-0">' +
+                    '<button onclick="applyCoverageAlert(' + JSON.stringify(a.item_id) + ', ' + a.suggested_price + ', this)" class="text-xs px-3 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition">Aplicar en ML</button>' +
+                    '<button onclick="document.getElementById(\'' + domId + '\').remove()" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-400 hover:bg-gray-50">Ignorar</button>' +
+                '</div>' +
+            '</div>';
+        }).join('');
+    }).catch(function(e) {
+        el.innerHTML = '<p class="text-xs text-red-500">Error: ' + e + '</p>';
+    });
+}
+
+window.applyCoverageAlert = function(itemId, newPrice, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Aplicando...';
+    fetch('/api/lanzar/sync-price', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ item_id: itemId, price: newPrice }),
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) {
+            var row = btn.closest('[id^="cov-"]');
+            if (row) row.remove();
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Aplicar en ML';
+            alert(d.error || 'No se pudo aplicar el precio');
+        }
+    }).catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Aplicar en ML';
+        alert('Error: ' + e);
+    });
+};
+
+loadCoverageAlerts();
 
 // ════════════════════════════════════════════════════════════════════════════
 // Sub-vistas: Ejecutar / Configurar

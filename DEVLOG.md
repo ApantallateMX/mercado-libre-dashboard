@@ -82,6 +82,42 @@ Playwright 375px/1920px sobre Sync Stock → Configurar (crear bundle,
 
 ---
 
+## 2026-07-23 — FEAT: Precio sugerido por cobertura de stock (Feature 3/4 de "ideas Zoho")
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`,
+`app/api/lanzar.py`, `app/templates/stock_sync.html`.
+
+`_days_supply`/`_is_scarce` ya se calculaban (distribución de pool,
+alertas restock/stagnant) pero ninguna regla los conectaba con una
+sugerencia de precio. Ahora sí, siguiendo el mismo molde ya probado de
+`ml_price_alerts` (sugerir → confirmar manual → aplicar).
+
+- Tabla `coverage_price_alerts` (mismo patrón que `ml_price_alerts`):
+  precio actual, sugerido, razón (`escasez`/`sobrestock`), días de
+  supply, unidades 30d. Se recalcula completa cada ciclo de prewarm
+  (reemplaza todo, no acumula).
+- **Regla v1, conservadora** (documentado como punto de partida a
+  ajustar con datos reales, no la versión final): `days_supply < 7` y
+  hay venta reciente → sugerir +8%; `days_supply > 90` → sugerir -12%,
+  nunca por debajo de `_precio_piso` ya calculado. Se descartó cruzar
+  "velocidad acelerando vs. histórica" (lo que proponía el especialista
+  de planeación) porque no hay ventana de velocidad histórica separada
+  ya calculada — quedó pendiente como refinamiento futuro si hace falta.
+- Nunca auto-aplica: el usuario confirma cada sugerencia con "Aplicar en
+  ML", que reusa `POST /api/lanzar/sync-price` (el mismo PUT real con
+  auditoría que ya usan las alertas de precio existentes) — se extendió
+  ese endpoint para también limpiar `coverage_price_alerts`, no solo
+  `ml_price_alerts`.
+- Endpoint `GET /api/coverage-price-alerts`.
+- UI: nueva tarjeta en Sync Stock → Ejecutar, con badge rojo (escasez)
+  o azul (sobrestock) y botones Aplicar/Ignorar por sugerencia.
+
+Verificado local: CRUD de la tabla por script directo, endpoint probado
+con datos de prueba en las 4 cuentas ML, Playwright 375px/1920px
+(0 overflow, 0 errores).
+
+---
+
 ## 2026-07-23 — FIX: Alertas de Stock en 0 tras cada deploy — snapshot bueno sobreescrito por bulk BM fallido
 
 **Archivo:** `app/main.py` (~línea 5670-5715, dentro de `_do_prewarm()`).

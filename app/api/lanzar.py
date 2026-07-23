@@ -1308,6 +1308,12 @@ async def sync_price(request: Request):
                 "DELETE FROM ml_price_alerts WHERE user_id=? AND item_id=?",
                 (user_id, item_id)
             )
+            # Idem para alertas de precio por cobertura de stock (Feature 3 Zoho) —
+            # no-op si el item no venía de ahí.
+            await db.execute(
+                "DELETE FROM coverage_price_alerts WHERE user_id=? AND item_id=?",
+                (user_id, item_id)
+            )
             await db.commit()
 
         # Auditoría
