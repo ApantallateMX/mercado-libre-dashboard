@@ -241,6 +241,25 @@ async def init_db():
                 UNIQUE(user_id, item_id)
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: stock_issue_streaks — cuántas horas seguidas lleva un SKU
+        # con un problema (ej. 'imbalanced' = Desbalance). El snapshot de
+        # alertas se sobreescribe cada ciclo (~15 min) sin memoria de cuánto
+        # lleva — esta tabla SÍ la guarda, para distinguir "recién detectado"
+        # de "posible error de configuración BM persistente" (ver caso
+        # LocationID 62/63 resuelto 2026-07-21).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_issue_streaks (
+                account_id     TEXT NOT NULL,
+                sku            TEXT NOT NULL,
+                issue_type     TEXT NOT NULL DEFAULT 'imbalanced',
+                product_title  TEXT NOT NULL DEFAULT '',
+                first_seen_ts  REAL NOT NULL,
+                last_seen_ts   REAL NOT NULL,
+                PRIMARY KEY (account_id, sku, issue_type)
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ml_listing_quality (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -801,6 +820,22 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_sku ON order_history(sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
+        # Migration: zona geográfica del comprador (ship_state_code = "MX-NLE" etc,
+        # ship_zone = "MTY"/"CDMX"/"TJ") — para cruzar demanda por zona vs almacén
+        # físico (feature de transferencias sugeridas). Solo ML por ahora: Amazon
+        # requiere un Restricted Data Token (PII) que Jovan debe solicitar/aprobar
+        # en Seller Central — ver DEVLOG. Nullable: se llena poco a poco, no hay
+        # backfill retroactivo automático de órdenes viejas.
+        try:
+            await db.execute("ALTER TABLE order_history ADD COLUMN ship_state_code TEXT DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE order_history ADD COLUMN ship_zone TEXT DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLAS: deuda semanal con la empresa proveedora — % fijo del retail
         # por unidad vendida (teles vs otras categorías). Un row del ledger
@@ -3857,6 +3892,69 @@ async def delete_coverage_price_alert(user_id: str, item_id: str) -> None:
         await db.commit()
 
 
+async def sync_stock_issue_streak(account_id: str, issue_type: str, current: dict) -> None:
+    """Actualiza las rachas de un tipo de problema (ej. 'imbalanced') para esta
+    cuenta. `current` = {sku: product_title} de los SKUs con el problema EN
+    ESTE ciclo. Los que ya no aparecen se borran (racha rota, problema
+    resuelto o desapareció). Los nuevos se insertan con first_seen_ts=ahora;
+    los que persisten solo actualizan last_seen_ts (first_seen_ts no cambia,
+    así el llamador puede calcular cuánto tiempo lleva)."""
+    import time as _t
+    now = _t.time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        existing_rows = await (await db.execute(
+            "SELECT sku FROM stock_issue_streaks WHERE account_id = ? AND issue_type = ?",
+            (account_id, issue_type),
+        )).fetchall()
+        existing_skus = {r[0] for r in existing_rows}
+        current_skus = set(current.keys())
+
+        gone = existing_skus - current_skus
+        if gone:
+            await db.executemany(
+                "DELETE FROM stock_issue_streaks WHERE account_id = ? AND issue_type = ? AND sku = ?",
+                [(account_id, issue_type, s) for s in gone],
+            )
+        new_skus = current_skus - existing_skus
+        if new_skus:
+            await db.executemany(
+                """INSERT INTO stock_issue_streaks
+                   (account_id, sku, issue_type, product_title, first_seen_ts, last_seen_ts)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [(account_id, s, issue_type, current[s], now, now) for s in new_skus],
+            )
+        still_there = current_skus & existing_skus
+        if still_there:
+            await db.executemany(
+                """UPDATE stock_issue_streaks SET last_seen_ts = ?, product_title = ?
+                   WHERE account_id = ? AND issue_type = ? AND sku = ?""",
+                [(now, current[s], account_id, issue_type, s) for s in still_there],
+            )
+        await db.commit()
+
+
+async def get_drift_alerts(account_id: str, issue_type: str = "imbalanced", min_hours: float = 24.0) -> list:
+    """Retorna SKUs que llevan >= min_hours consecutivas con el mismo
+    problema — probable error de configuración BM (ej. LocationID mal
+    clasificado), no un problema de venta real que cambia rápido."""
+    import time as _t
+    cutoff = _t.time() - min_hours * 3600
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT sku, product_title, first_seen_ts, last_seen_ts
+               FROM stock_issue_streaks
+               WHERE account_id = ? AND issue_type = ? AND first_seen_ts <= ?
+               ORDER BY first_seen_ts ASC""",
+            (account_id, issue_type, cutoff),
+        )).fetchall()
+    now = _t.time()
+    return [
+        {**dict(r), "hours_active": round((now - r["first_seen_ts"]) / 3600, 1)}
+        for r in rows
+    ]
+
+
 async def get_account_sold_history(user_id: str) -> dict:
     """Retorna {base_sku: sold_qty} para todos los SKUs con ventas históricas en esta cuenta.
     Usado para la excepción histórica: cuentas sin scarce_enabled pero con historial de ventas
@@ -3899,6 +3997,68 @@ async def set_deal_config(user_id: str, deal_buffer_pct: float, retail_target_pc
             (user_id, deal_buffer_pct, retail_target_pct, _t.time()),
         )
         await db.commit()
+
+
+async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 15) -> list:
+    """Órdenes ML recientes sin ship_zone aún resuelto — para el backfill
+    acotado (máx N por ciclo, nunca hammering de la API de ML). Solo el
+    order_id/item_id más reciente por SKU no importa aquí, cualquier fila
+    sirve para obtener el shipment_id... pero no lo tenemos guardado, así
+    que este helper solo identifica QUÉ falta; el shipment_id se resuelve
+    en vivo contra la orden actual en main.py."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT DISTINCT order_id FROM order_history
+               WHERE account_id = ? AND platform = ? AND (ship_zone IS NULL OR ship_zone = '')
+               ORDER BY created_at DESC LIMIT ?""",
+            (account_id, platform, limit),
+        )).fetchall()
+    return [r["order_id"] for r in rows]
+
+
+async def update_order_zone(order_id: str, ship_state_code: str, ship_zone: str) -> None:
+    """Actualiza la zona geográfica para TODAS las filas de esta orden
+    (una orden puede tener varios item_id, todas van al mismo domicilio)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE order_history SET ship_state_code = ?, ship_zone = ? WHERE order_id = ?",
+            (ship_state_code, ship_zone, order_id),
+        )
+        await db.commit()
+
+
+async def get_zone_demand(account_id: str, platform: str = "ml", days: int = 60) -> dict:
+    """Retorna {zone: total_units} de ventas recientes con zona ya resuelta —
+    insumo para cruzar demanda por zona vs. stock físico por zona."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            """SELECT ship_zone, SUM(quantity) FROM order_history
+               WHERE account_id = ? AND platform = ? AND ship_zone != '' AND order_date >= ?
+               GROUP BY ship_zone""",
+            (account_id, platform, cutoff),
+        )).fetchall()
+    return {r[0]: r[1] for r in rows if r[0]}
+
+
+async def get_zone_demand_by_sku(account_id: str, platform: str = "ml", days: int = 60) -> dict:
+    """Retorna {sku: {zone: units}} — para decidir, SKU por SKU, en qué zona
+    se vende más rápido (insumo de la sugerencia de transferencia)."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            """SELECT sku, ship_zone, SUM(quantity) FROM order_history
+               WHERE account_id = ? AND platform = ? AND ship_zone != '' AND sku != '' AND order_date >= ?
+               GROUP BY sku, ship_zone""",
+            (account_id, platform, cutoff),
+        )).fetchall()
+    result: dict = {}
+    for sku, zone, units in rows:
+        result.setdefault(sku, {})[zone] = units
+    return result
 
 
 async def upsert_order_history(rows: list[dict]) -> int:

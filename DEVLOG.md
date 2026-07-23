@@ -118,6 +118,78 @@ con datos de prueba en las 4 cuentas ML, Playwright 375px/1920px
 
 ---
 
+## 2026-07-23 — FEAT: Zonas de almacén reales + transferencias sugeridas + drift de catálogo (Feature 4/4 de "ideas Zoho")
+
+**Archivos:** `app/services/token_store.py`, `app/services/mx_zones.py`
+(nuevo), `app/main.py`, `app/templates/partials/products_stock_issues.html`.
+
+La más grande de las 4 mejoras — Jovan pidió explícitamente hacerla
+completa desde el inicio en vez de partirla en rondas, tras conocer que
+era más grande de lo estimado originalmente. 4 sub-partes:
+
+**4a — Bulk BM real para Tijuana (arregla dato vestigial):** `_bm_tj`
+siempre estaba en 0 — el fetch per-SKU que lo llenaba fue deshabilitado
+hace tiempo ("reduce concurrencia BM"), y `_bm_total` excluía TJ a
+propósito en 5 sitios. Se agregó un TERCER bulk BM scoped por LocationID
+`45,69,43,42` (Tijuana vendible), mismo patrón ya usado para MTY (LOC68)
+y CDMX (LOC47) — una llamada bulk más por ciclo, NO llamadas per-SKU
+(evita el problema de concurrencia BM que vivimos esta sesión con el
+bulk colgado). Aplicado tanto en el flujo GR principal como en el
+desglose específico de TVs (`_fetch_tv_wh_breakdown`, condiciones
+ICB/ICC). `_bm_total` ahora sí suma mty+cdmx+tj en los 5 sitios donde
+antes se excluía TJ (incluida una función propia de Feature 2/bundles).
+
+**4b — Alerta de drift de catálogo:** tabla `stock_issue_streaks`
+(cuenta+SKU+tipo de problema → primera vez visto, última vez visto),
+actualizada cada ciclo de prewarm cuando se calcula "Desbalance". Alerta
+nueva cuando un SKU lleva ≥24h seguidas en Desbalance — señal de que
+probablemente es un error de configuración BM (como el caso LocationID
+62/63 ya resuelto), no un problema de venta real que cambia rápido.
+
+**4c — Geolocalización de demanda (solo ML por ahora):** columnas
+`ship_state_code`/`ship_zone` en `order_history`. Confirmado en vivo
+(llamada real a `/shipments/{id}`) que `receiver_address.state` viene
+como `{"id": "MX-NLE", "name": "Nuevo León"}` — mapeo nuevo
+`app/services/mx_zones.py` de código de estado → zona (MTY/CDMX/TJ),
+heurística de negocio documentada como tal (cercanía aproximada, no
+logística exacta). **Backfill deliberadamente acotado**: máximo 15
+órdenes por cuenta por ciclo (~15 min) resuelven su zona vía `GET
+/orders/{id}` + `GET /shipments/{id}` — nunca todas de golpe, para no
+saturar la API de ML (mismo cuidado de concurrencia que con BM). Tarda
+varios ciclos en cubrir el historial reciente.
+**Amazon queda bloqueado**: SP-API restringe `ShippingAddress` desde
+2021 — requiere un Restricted Data Token (RDT) que Jovan debe
+solicitar/aprobar en Seller Central (similar al consentimiento OAuth que
+ya hicimos para Gmail). El schema ya está listo; la columna de zona
+simplemente queda vacía para Amazon hasta que se apruebe ese acceso.
+
+**4d — Transferencia sugerida entre almacenes:** cruza demanda por zona
+(de `order_history.ship_zone`, agregada por SKU) contra dónde está el
+stock físico (mty/cdmx/tj, ya reales gracias a 4a). Heurística v1,
+conservadora a propósito: solo sugiere si el desbalance demanda-vs-stock
+por zona es grande (≥30 puntos porcentuales) y hay historial mínimo de
+demanda (≥5 unidades) — evita sugerir con datos ruidosos o escasos al
+principio, mientras el backfill de 4c se va llenando. Solo lectura/
+sugerencia — el movimiento físico real se hace en BinManager.
+
+**Verificación:** unit tests directos de `zone_for_state_code`, drift
+alerts (streak creada/rota correctamente), tracking de zona de orden
+(missing→resuelta); heurística de transferencia verificada a mano con
+números de ejemplo; Playwright 375px/1920px sobre `/items?tab=stock` con
+datos sintéticos de las 3 secciones nuevas inyectados en el snapshot
+cacheado — 0 overflow, 0 errores (el overflow de 987px visto en el
+primer intento era de un snapshot viejo/stale sin estos campos, no de
+este código — confirmado al no aparecer ninguno de los bloques nuevos en
+esa respuesta).
+
+**Cierre de la iniciativa "ideas Zoho":** con esta, las 4 mejoras
+identificadas al comparar contra Zoho Inventory (con
+binmanager-specialist + planning-specialist) quedan implementadas y en
+producción: boost estacional, bundles reales, precio por cobertura, y
+zonas de almacén + transferencias + drift.
+
+---
+
 ## 2026-07-23 — FIX: Alertas de Stock en 0 tras cada deploy — snapshot bueno sobreescrito por bulk BM fallido
 
 **Archivo:** `app/main.py` (~línea 5670-5715, dentro de `_do_prewarm()`).

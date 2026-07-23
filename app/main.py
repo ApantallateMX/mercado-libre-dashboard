@@ -316,7 +316,7 @@ def _apply_bundle_stock_override(products: list, bundles: dict):
         p["_bm_mty"] = mty
         p["_bm_cdmx"] = cdmx
         p["_bm_tj"] = tj
-        p["_bm_total"] = mty + cdmx
+        p["_bm_total"] = mty + cdmx + tj
         p["_bm_reserved"] = reserved
         p["_is_bundle"] = True
         p["_bundle_components"] = bundle["components"]
@@ -693,6 +693,7 @@ async def lifespan(app: FastAPI):
                         uid = acc.get("user_id", "")
                         if uid:
                             await _run_stock_sync_for_user(uid)
+                            _backfill_order_zones_bg(uid)  # gradual, no bloquea (fire-and-forget)
                             await asyncio.sleep(2)
                 except Exception:
                     pass
@@ -1586,7 +1587,7 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
             p["_bm_mty"]   = max(0, data.get("mty", 0) or 0)
             p["_bm_cdmx"]  = max(0, data.get("cdmx", 0) or 0)
             p["_bm_tj"]    = max(0, data.get("tj", 0) or 0)
-            p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"]
+            p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"] + p["_bm_tj"]
 
 
 def _aggregate_sales_by_item(orders: list) -> dict:
@@ -1708,6 +1709,54 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
                 logger.debug(f"[ORDER-HIST] ML uid={account_id}: {len(rows)} filas guardadas")
             except Exception as _e:
                 logger.warning(f"[ORDER-HIST] Error guardando historial ML uid={account_id}: {_e}")
+    try:
+        asyncio.create_task(_do())
+    except Exception:
+        pass
+
+
+def _backfill_order_zones_bg(account_id: str) -> None:
+    """Fire-and-forget: resuelve la zona geográfica (MTY/CDMX/TJ) de hasta 15
+    órdenes por ciclo que aún no la tienen — NUNCA todas de golpe, para no
+    saturar la API de ML con llamadas extra (GET /orders/{id} + GET
+    /shipments/{id} por orden). Es un backfill gradual, no un proceso único;
+    tarda varios ciclos de prewarm en cubrir el historial reciente completo.
+    Solo ML — Amazon requiere Restricted Data Token, ver DEVLOG."""
+    async def _do():
+        from app.services import token_store as _ts
+        from app.services.mx_zones import zone_for_state_code
+        try:
+            order_ids = await _ts.get_orders_missing_zone(account_id, "ml", limit=15)
+        except Exception as _e:
+            logger.warning(f"[ZONE-BACKFILL] Error listando pendientes uid={account_id}: {_e}")
+            return
+        if not order_ids:
+            return
+        client = await get_meli_client(user_id=account_id)
+        if not client:
+            return
+        try:
+            updated = 0
+            for _oid in order_ids:
+                try:
+                    _order = await client.get_order(_oid)
+                    _ship_id = (_order.get("shipping") or {}).get("id")
+                    if not _ship_id:
+                        continue
+                    _shipment = await client.get_shipment(str(_ship_id))
+                    _state = ((_shipment.get("receiver_address") or {}).get("state") or {})
+                    _state_code = _state.get("id", "") if isinstance(_state, dict) else ""
+                    if not _state_code:
+                        continue
+                    _zone = zone_for_state_code(_state_code)
+                    await _ts.update_order_zone(_oid, _state_code, _zone)
+                    updated += 1
+                except Exception:
+                    continue  # una orden problemática no debe tumbar el resto del backfill
+            if updated:
+                logger.info(f"[ZONE-BACKFILL] uid={account_id}: {updated}/{len(order_ids)} órdenes resueltas")
+        finally:
+            await client.close()
     try:
         asyncio.create_task(_do())
     except Exception:
@@ -5307,8 +5356,10 @@ _bm_bulk_gr_cache:   tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC
 _bm_bulk_all_cache:  tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/ICB/ICC/NEW rows) LOC47+68
 _bm_bulk_loc47_cache:     tuple[float, list] | None = None  # (timestamp, GR rows)  solo LOC47 = CDMX
 _bm_bulk_loc68_cache:     tuple[float, list] | None = None  # (timestamp, GR rows)  solo LOC68 = MTY
+_bm_bulk_loctj_cache:     tuple[float, list] | None = None  # (timestamp, GR rows)  LOC45+69+43+42 = Tijuana vendible
 _bm_bulk_loc47_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC47 = CDMX (TVs ICB/ICC)
 _bm_bulk_loc68_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC68 = MTY (TVs ICB/ICC)
+_bm_bulk_loctj_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) LOC45+69+43+42 = Tijuana (TVs ICB/ICC)
 _bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (evita instancias concurrentes)
 _bm_prev_bulk_sku_set: set = set()  # SKUs (clave BM normalizada) del bulk anterior — para detectar desapariciones
 _activate_suppressed: dict = {}     # {user_id_str: set(item_id_str)} — ítems ocultados de Activar, persistido en DB
@@ -5810,6 +5861,13 @@ async def _prewarm_caches(user_id: str = None):
                     and _bm_bulk_ok(p.get("sku", ""))
                 ]
                 imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0), reverse=True)
+                # Racha de Desbalance — memoria de cuántas horas seguidas lleva un SKU
+                # así, para distinguir "recién detectado" de "posible error de config BM
+                # persistente" (ej. LocationID mal clasificado, como 62/63 resuelto antes).
+                await token_store.sync_stock_issue_streak(
+                    str(client.user_id), "imbalanced",
+                    {p.get("sku", ""): p.get("title", "") for p in imbalanced if p.get("sku")},
+                )
 
                 # Alert: SKU con formato BM que no aparece en bm_product_catalog
                 # Fuente de verdad: catálogo BM descargado (no runtime cache/bulk).
@@ -5832,6 +5890,49 @@ async def _prewarm_caches(user_id: str = None):
                             _seen_no_bm.add(_norm)
                             no_bm_sku.append(_p)
 
+                # Drift de catálogo: SKUs con Desbalance persistente (>=24h seguidas) —
+                # probable error de configuración BM, no problema de venta real.
+                _drift_alerts = await token_store.get_drift_alerts(str(client.user_id), "imbalanced", min_hours=24.0)
+
+                # Transferencia sugerida entre almacenes físicos — cruza demanda por
+                # zona (de órdenes ML con ship_zone ya resuelto, ver backfill gradual)
+                # contra dónde está el stock físico (mty/cdmx/tj, ya reales con el bulk
+                # de Tijuana agregado arriba). Heurística v1: solo sugiere si el
+                # desbalance demanda-vs-stock por zona es grande (>=30 puntos
+                # porcentuales) y hay suficiente historial de demanda (>=5 unidades) —
+                # deliberadamente conservador para no sugerir con datos ruidosos/escasos.
+                _zone_demand_by_sku = await token_store.get_zone_demand_by_sku(str(client.user_id), "ml", days=60)
+
+                def _suggest_transfer(_mty, _cdmx, _tj, _demand):
+                    _stock = {"MTY": _mty, "CDMX": _cdmx, "TJ": _tj}
+                    _total_stock = _mty + _cdmx + _tj
+                    _total_demand = sum(_demand.values())
+                    if _total_stock <= 0 or _total_demand < 5:
+                        return None
+                    _gaps = {z: (_demand.get(z, 0) / _total_demand) - (_stock[z] / _total_stock) for z in _stock}
+                    _target = max(_gaps, key=_gaps.get)
+                    _source = min(_gaps, key=_gaps.get)
+                    if _target == _source or (_gaps[_target] - _gaps[_source]) < 0.30 or _stock[_source] < 2:
+                        return None
+                    _qty = min(_stock[_source], max(1, round(_stock[_source] * 0.3)))
+                    return {"from_zone": _source, "to_zone": _target, "qty": _qty}
+
+                transfer_suggestions = []
+                for _tp in bm_candidates:
+                    _t_mty = _tp.get("_bm_mty", 0) or 0
+                    _t_cdmx = _tp.get("_bm_cdmx", 0) or 0
+                    _t_tj = _tp.get("_bm_tj", 0) or 0
+                    if not (_t_mty or _t_cdmx or _t_tj):
+                        continue
+                    _t_demand = _zone_demand_by_sku.get(_tp.get("sku", ""), {})
+                    _sugg = _suggest_transfer(_t_mty, _t_cdmx, _t_tj, _t_demand)
+                    if _sugg:
+                        transfer_suggestions.append({
+                            "sku": _tp.get("sku", ""), "product_title": _tp.get("title", ""),
+                            "mty": _t_mty, "cdmx": _t_cdmx, "tj": _t_tj,
+                            "demand_by_zone": _t_demand, **_sugg,
+                        })
+
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
                 _sic_ts   = _time.time()
@@ -5852,6 +5953,10 @@ async def _prewarm_caches(user_id: str = None):
                     "bm_catalog_size": len(_bm_catalog_skus),
                     "threshold": _DEFAULT_THRESHOLD,
                     "active_seasonal_events": _active_seasonal_events,
+                    "drift_alerts": _drift_alerts,
+                    "drift_alerts_count": len(_drift_alerts),
+                    "transfer_suggestions": transfer_suggestions,
+                    "transfer_suggestions_count": len(transfer_suggestions),
                 }
 
                 # Guard: si el bulk de BM de esta corrida no verificó NINGÚN SKU de los
@@ -6034,7 +6139,7 @@ async def _fetch_tv_wh_breakdown():
     - Solo actualiza entradas SNTV* en _bm_stock_cache (mutación in-place → result_map también se actualiza).
     - Flag _bm_tv_loc_running previene instancias concurrentes.
     """
-    global _bm_tv_loc_running, _bm_bulk_loc47_all_cache, _bm_bulk_loc68_all_cache
+    global _bm_tv_loc_running, _bm_bulk_loc47_all_cache, _bm_bulk_loc68_all_cache, _bm_bulk_loctj_all_cache
     import logging as _tvl
     _tvlog = _tvl.getLogger(__name__)
 
@@ -6091,8 +6196,28 @@ async def _fetch_tv_wh_breakdown():
                 if _bm_bulk_loc68_all_cache:
                     _r68 = _bm_bulk_loc68_all_cache[1]
 
-        if not _r47 and not _r68:
-            _tvlog.warning("[BM-TV-WH] Ambos bulks fallaron — sin actualización TV")
+        # ── LOC-TJ ALL (45,69,43,42) — agregado 2026-07-23, antes tj quedaba en 0 ──
+        _rtj = None
+        if _bm_bulk_loctj_all_cache and (_now - _bm_bulk_loctj_all_cache[0]) < _ttl:
+            _rtj = _bm_bulk_loctj_all_cache[1]
+            _tvlog.info(f"[BM-TV-WH] LOC-TJ-ALL cache ({len(_rtj)} rows)")
+        else:
+            try:
+                _ftj = await asyncio.wait_for(
+                    _tv_bm.get_bulk_stock(conditions=_TV_COND, location_id="45,69,43,42"), timeout=60.0)
+                if _ftj:
+                    _bm_bulk_loctj_all_cache = (_time.time(), _slim_bulk_rows(_ftj))
+                    _rtj = _ftj
+                    _tvlog.info(f"[BM-TV-WH] LOC-TJ-ALL fetch OK: {len(_ftj)} filas")
+                elif _bm_bulk_loctj_all_cache:
+                    _rtj = _bm_bulk_loctj_all_cache[1]
+            except Exception as _etj:
+                _tvlog.warning(f"[BM-TV-WH] LOC-TJ-ALL error: {_etj}")
+                if _bm_bulk_loctj_all_cache:
+                    _rtj = _bm_bulk_loctj_all_cache[1]
+
+        if not _r47 and not _r68 and not _rtj:
+            _tvlog.warning("[BM-TV-WH] Los 3 bulks fallaron — sin actualización TV")
             return
 
         # Construir lookups
@@ -6116,6 +6241,7 @@ async def _fetch_tv_wh_breakdown():
 
         _ex47, _by47 = _tv_lkp_build(_r47 or [])
         _ex68, _by68 = _tv_lkp_build(_r68 or [])
+        _extj, _bytj = _tv_lkp_build(_rtj or [])
 
         _tv_n = 0
         for _ck, (_cts, _cd) in list(_bm_stock_cache.items()):
@@ -6123,16 +6249,18 @@ async def _fetch_tv_wh_breakdown():
                 continue  # solo SNTV* verificadas
             _cdmx = _tv_lkp(_ex47, _by47, _ck.upper())
             _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
+            _tj   = _tv_lkp(_extj, _bytj, _ck.upper())
             _avt  = _cd.get("avail_total", 0) or 0
-            _lsum = _cdmx + _mty
+            _lsum = _cdmx + _mty + _tj
             # Confiar en el bulk per-location ALL (ICB/ICC incluido) sobre el bulk combinado.
-            # El bulk combinado LOC47+68 retorna a veces un Available inferior al real
+            # El bulk combinado LOC47+68+TJ retorna a veces un Available inferior al real
             # (discrepancia de agregación en BM API). Si per-location suma más, actualizar
             # avail_total para que BM Disp refleje el valor correcto.
             if _lsum > _avt:
                 _cd["avail_total"] = _lsum
             _cd["cdmx"] = _cdmx
             _cd["mty"]  = _mty
+            _cd["tj"]   = _tj
             _cd["_wh_fetched"] = True
             # Actualizar ts a tiempo actual: marca esta entrada como bulk-verificada (ts > 0).
             # Sin esto, SNTV* quedan con ts=0 (DB warm-start) y serían excluidas de alertas.
@@ -6478,11 +6606,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bulk_gr_rows = _bm_bulk_gr_cache[1]
                     logger.warning(f"[BM-CACHE] GR fallback a cache stale tras error fetch")
 
-        # ── Bulk por ubicación: LOC47=CDMX, LOC68=MTY (para desglose MTY/CDMX) ──
-        # Solo cuando el GR bulk fue fresco (mismo ciclo) — evitar 2 fetches extra si ya hay cache.
-        global _bm_bulk_loc47_cache, _bm_bulk_loc68_cache
+        # ── Bulk por ubicación: LOC47=CDMX, LOC68=MTY, LOC45+69+43+42=Tijuana
+        # (para desglose MTY/CDMX/TJ). Solo cuando el GR bulk fue fresco (mismo
+        # ciclo) — evitar fetches extra si ya hay cache. TJ agregado 2026-07-23
+        # (antes _bm_tj quedaba siempre en 0 — ver DEVLOG, "zonas de almacén").
+        global _bm_bulk_loc47_cache, _bm_bulk_loc68_cache, _bm_bulk_loctj_cache
         _bulk_loc47_rows = None  # CDMX (LOC 47)
         _bulk_loc68_rows = None  # MTY  (LOC 68)
+        _bulk_loctj_rows = None  # Tijuana (LOC 45,69,43,42)
         if _bulk_gr_rows is not None and not _bm_is_down_now:
             # Reutilizar si la cache de ubicación es tan fresca como el GR bulk
             _loc_ttl = 900  # mismo TTL que GR bulk
@@ -6524,6 +6655,25 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     logger.warning(f"[BM-CACHE] LOC68 bulk error: {_le68}")
                     if _bm_bulk_loc68_cache:
                         _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
+            if _bm_bulk_loctj_cache and (_time.time() - _bm_bulk_loctj_cache[0]) < _loc_ttl:
+                _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
+                logger.info(f"[BM-CACHE] Reutilizando LOC-TJ (45,69,43,42) cache ({len(_bulk_loctj_rows)} rows)")
+            else:
+                try:
+                    _fresh_ltj = await asyncio.wait_for(
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="45,69,43,42"),
+                        timeout=270.0,
+                    )
+                    if _fresh_ltj:
+                        _bm_bulk_loctj_cache = (_time.time(), _slim_bulk_rows(_fresh_ltj))
+                        _bulk_loctj_rows = _fresh_ltj
+                        logger.info(f"[BM-CACHE] LOC-TJ bulk OK: {len(_fresh_ltj)} filas")
+                    elif _bm_bulk_loctj_cache:
+                        _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
+                except Exception as _letj:
+                    logger.warning(f"[BM-CACHE] LOC-TJ bulk error: {_letj}")
+                    if _bm_bulk_loctj_cache:
+                        _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
 
         # ── ALL bulk (solo si hay SKUs SNTV-ICB/ICC/bundle) ──────────────────
         _bulk_all_rows = None
@@ -6676,11 +6826,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         f"{_diag_fallback} via TotalQty fallback")
             _used_bulk = True
 
-            # ── Segunda pasada: MTY/CDMX desde bulks por ubicación ────────────
-            # LOC47=CDMX, LOC68=MTY. Usa GR per-location para todos los SKUs.
-            if _bulk_loc47_rows is not None or _bulk_loc68_rows is not None:
+            # ── Segunda pasada: MTY/CDMX/TJ desde bulks por ubicación ─────────
+            # LOC47=CDMX, LOC68=MTY, LOC45+69+43+42=Tijuana. Usa GR per-location
+            # para todos los SKUs. TJ agregado 2026-07-23 — antes quedaba en 0
+            # siempre (dato vestigial, ver DEVLOG "zonas de almacén").
+            if _bulk_loc47_rows is not None or _bulk_loc68_rows is not None or _bulk_loctj_rows is not None:
                 _loc_exact47, _loc_base47 = _build_lookup(_bulk_loc47_rows or [])
                 _loc_exact68, _loc_base68 = _build_lookup(_bulk_loc68_rows or [])
+                _loc_exacttj, _loc_basetj = _build_lookup(_bulk_loctj_rows or [])
                 _wh_updated = 0
                 for _wh_sku in to_fetch:
                     _wh_bk = normalize_to_bm_sku(_wh_sku)
@@ -6691,21 +6844,24 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         continue  # solo actualizar entradas verificadas
                     _cdmx_avail, _ = _lookup(_loc_exact47, _loc_base47, _wh_bk)
                     _mty_avail,  _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
+                    _tj_avail,   _ = _lookup(_loc_exacttj, _loc_basetj, _wh_bk)
                     _wh_ts, _wh_data = _existing
                     # Mutar _wh_data IN PLACE para que result_map (mismo objeto) también se actualice.
                     # Si se crea dict nuevo, result_map queda desactualizado y el template muestra "—".
                     _avail_total = _wh_data.get("avail_total", 0) or 0
-                    _loc_sum = _mty_avail + _cdmx_avail
+                    _loc_sum = _mty_avail + _cdmx_avail + _tj_avail
                     if _loc_sum > _avail_total and _avail_total > 0:
                         _scale = _avail_total / _loc_sum
                         _mty_avail  = round(_mty_avail  * _scale)
-                        _cdmx_avail = _avail_total - _mty_avail
+                        _cdmx_avail = round(_cdmx_avail * _scale)
+                        _tj_avail   = _avail_total - _mty_avail - _cdmx_avail
                     _wh_data["cdmx"] = _cdmx_avail
                     _wh_data["mty"]  = _mty_avail
+                    _wh_data["tj"]   = _tj_avail
                     _wh_data["_wh_fetched"] = True
                     # No se necesita re-asignar _bm_stock_cache — _wh_data ya es el objeto referenciado.
                     _wh_updated += 1
-                logger.info(f"[BM-WH] Desglose MTY/CDMX actualizado para {_wh_updated} SKUs desde LOC47/LOC68")
+                logger.info(f"[BM-WH] Desglose MTY/CDMX/TJ actualizado para {_wh_updated} SKUs desde LOC47/LOC68/LOC-TJ")
 
             # ── Reconciliación bulk-a-bulk: SKUs que desaparecieron del ciclo anterior ────────────
             # Compara el bulk actual vs el anterior para detectar SKUs que tenían stock y ya no
@@ -7042,7 +7198,7 @@ def _apply_bm_stock(
                 p["_bm_mty"] = tot_mty
                 p["_bm_cdmx"] = tot_cdmx
                 p["_bm_tj"] = tot_tj
-                p["_bm_total"] = tot_mty + tot_cdmx
+                p["_bm_total"] = tot_mty + tot_cdmx + tot_tj
                 p["_bm_avail"] = tot_avail
                 p["_bm_avail_raw"] = tot_avail_raw
                 p["_bm_reserved"] = tot_reserved
@@ -7064,7 +7220,10 @@ def _apply_bm_stock(
                     p["_bm_mty"] = inv["mty"]
                     p["_bm_cdmx"] = inv["cdmx"]
                     p["_bm_tj"] = inv["tj"]
-                    p["_bm_total"] = inv["total"]
+                    # inv["total"] es el warehouse_total calculado al crear la entrada (siempre
+                    # 0 — rows_wh viene vacío); mty/cdmx/tj se actualizan DESPUÉS in-place vía
+                    # la segunda pasada del prewarm, así que hay que sumarlos aquí, no leer "total".
+                    p["_bm_total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
                     p["_bm_avail"] = _pool
                     p["_bm_avail_raw"] = _pool_raw
                     p["_bm_reserved"] = inv.get("reserved_total", 0)
@@ -7084,7 +7243,7 @@ def _apply_bm_stock(
                 p["_bm_mty"] = inv["mty"]
                 p["_bm_cdmx"] = inv["cdmx"]
                 p["_bm_tj"] = inv["tj"]
-                p["_bm_total"] = inv["total"]
+                p["_bm_total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
                 p["_bm_avail"] = _pool
                 p["_bm_avail_raw"] = _pool_raw
                 p["_bm_reserved"] = inv.get("reserved_total", 0)

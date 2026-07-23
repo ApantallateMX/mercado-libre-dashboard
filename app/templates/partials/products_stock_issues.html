@@ -228,6 +228,34 @@ window._stockFilter = function(q) {
     {% endif %}
 </div>
 
+{% if transfer_suggestions %}
+<!-- ===== Transferencias sugeridas entre almacenes (MTY/CDMX/Tijuana) ===== -->
+<div class="mb-8" id="transfer-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-teal-400 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Transferencias Sugeridas Entre Almacenes</h3>
+        <span class="text-xs text-gray-400">({{ transfer_suggestions_count }})</span>
+    </div>
+    <div class="bg-teal-50 border border-teal-200 rounded-lg px-4 py-2 mb-3 text-xs text-teal-800">
+        Cruza dónde se vende más (envíos recientes por zona) contra dónde está el stock físico. Solo lectura — el movimiento real se hace en BinManager. Requiere suficiente historial de envíos con zona resuelta; se llena gradualmente.
+    </div>
+    <div class="space-y-2">
+        {% for t in transfer_suggestions %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-teal-400 flex items-center justify-between gap-2 flex-wrap">
+            <div>
+                <p class="text-xs font-medium text-gray-800">{{ t.product_title[:70] }}</p>
+                <p class="font-mono text-[11px] text-gray-400">{{ t.sku }}</p>
+                <p class="text-[11px] text-gray-500 mt-0.5">Stock: MTY {{ t.mty }} &middot; CDMX {{ t.cdmx }} &middot; Tijuana {{ t.tj }}</p>
+            </div>
+            <div class="text-xs font-semibold text-teal-700 bg-teal-100 px-3 py-1.5 rounded-full whitespace-nowrap">
+                Mover {{ t.qty }} de {{ t.from_zone }} → {{ t.to_zone }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 <!-- ===== Seccion A: Reabastecer ===== -->
 <div class="mb-8" id="restock-section">
     <div class="flex items-center justify-between mb-3">
@@ -1309,6 +1337,18 @@ window._stockFilter = function(q) {
     <div class="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 mb-3 text-xs text-purple-800">
         MeLi tiene publicada una cantidad mayor al stock vendible en BM. Si se venden todas las unidades de MeLi puede haber sobreventas. Reducir stock en MeLi al nivel BM.
     </div>
+
+    {% if drift_alerts %}
+    <div class="bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 mb-3 text-xs text-amber-800">
+        <p class="font-semibold mb-1">⚠️ {{ drift_alerts_count }} SKU(s) llevan &ge;24h seguidas en Desbalance — probable error de configuración BM, no un problema de venta real:</p>
+        <ul class="space-y-0.5">
+            {% for d in drift_alerts[:10] %}
+            <li>&bull; <span class="font-mono font-bold">{{ d.sku }}</span> — {{ d.product_title[:60] }} ({{ d.hours_active }}h)</li>
+            {% endfor %}
+            {% if drift_alerts_count > 10 %}<li class="text-amber-500">...y {{ drift_alerts_count - 10 }} más</li>{% endif %}
+        </ul>
+    </div>
+    {% endif %}
 
     <!-- Mobile -->
     <div class="md:hidden space-y-2">
