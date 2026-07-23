@@ -7,6 +7,61 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-23 — FEAT/FIX: Rediseño UX de Mensajes de Compradores (KPIs + urgencia) + bug de hoisting en toggle "solo pendientes"
+
+**Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.
+
+Jovan pidió rediseñar la sección porque la veía "confusa/rara" y quería
+métricas (cuántos pendientes, cuánto lleva sin responder un mensaje, etc.).
+Se consultó al especialista `uxui-designer` para la dirección visual
+(mockup navegable con toggle Antes/Después) y con ese insumo se armó el
+plan técnico leyendo el código real antes de tocar nada.
+
+**Diagnóstico del especialista, confirmado en el código:** las acciones
+(Tomar/Marcar resuelto) se renderizaban antes que el mensaje del comprador,
+no había ninguna señal de urgencia (solo una fecha gris de 11px), el badge
+de estado mezclaba "quién lo tocó" con "si el comprador sigue esperando", y
+`_renderAmzBuyerMessages` generaba **dos copias completas del DOM por
+hilo** (`cards` móvil + `table` escritorio con IDs distintos) — si escribías
+una respuesta y la ventana cruzaba el breakpoint `md`, se perdía porque
+saltabas a la copia oculta.
+
+**Cambios:**
+- `main.py` (`GET /api/amazon/buyer-messages`): nuevo bloque `stats`
+  calculado sobre todos los hilos (antes del filtro `only_pending`, para
+  que no dependa del toggle) — pendientes, desglose de urgencia
+  (`<24h`/`24-72h`/`>72h`), hilo más antiguo sin respuesta, tiempo promedio
+  de respuesta (par inbound→outbound), resueltos en últimas 24h.
+- `token_store.update_message_view_status`: ahora también refresca
+  `viewed_at` al cambiar de status (antes solo se ponía al "Tomar"), para
+  que el KPI de "resueltos" sea preciso. Compartido con Mensajes ML — bajo
+  riesgo, hoy nada en esa UI usa ese timestamp.
+- `amazon_dashboard.html`: barra de 4 tarjetas KPI arriba de la toolbar
+  existente.
+- `amazon_dashboard.js`: se eliminó la duplicación cards/table (una sola
+  estructura responsive por hilo), se reordenó el contenido (vista previa
+  del mensaje primero, acciones secundarias al final, un solo CTA
+  dominante "Responder"), se agregó chip de urgencia por hilo y
+  agrupación en secciones (Urgente / Por atender / Recientes / Resueltos
+  colapsado).
+
+**Bug real encontrado al verificar con Playwright:** las variables
+`amzMsgsOnlyPending`/`amzMsgsOrderSearch` se declaraban en medio del
+archivo (junto al resto del código de Mensajes), pero `loadAmzSaludTab()`
+puede dispararse más arriba en el mismo script al navegar directo a
+`?tab=salud` — por *hoisting* de `var`, ese primer fetch mandaba
+`only_pending=false` aunque el botón dijera "solo pendientes". Se movieron
+ambas declaraciones al inicio del archivo, antes de cualquier disparo de
+tab. Confirmado con un patch de `window.fetch` en Playwright: antes del fix
+la variable llegaba `undefined` al momento del primer fetch; después,
+`true` como se esperaba.
+
+**Verificación:** Playwright en 375px y 1920px — 0 overflow, 0 errores de
+consola, KPIs con datos reales, expand/collapse de hilo y de sección
+"Resueltos" funcionando.
+
+---
+
 ## 2026-07-22 — FEAT/FIX: "Marcar todo como atendido" (borrón y cuenta nueva) + bug real de status ignorado en filtro pendientes
 
 **Archivos:** `app/main.py`, `app/services/token_store.py`, `app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`.

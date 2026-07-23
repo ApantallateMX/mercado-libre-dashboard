@@ -1787,11 +1787,14 @@ async def take_message(pack_id: str, account_id: str, taken_by: str) -> None:
 
 
 async def update_message_view_status(pack_id: str, account_id: str, status: str) -> None:
-    """Actualiza el estado de un mensaje: pending / in_progress / resolved."""
+    """Actualiza el estado de un mensaje: pending / in_progress / resolved.
+    Refresca viewed_at para que refleje el último toque (usado por KPIs de
+    'resuelto en las últimas 24h'), no solo la primera vez que se tomó."""
+    import time as _t
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
-            "UPDATE ml_message_views SET status = ? WHERE pack_id = ? AND account_id = ?",
-            (status, pack_id, account_id),
+            "UPDATE ml_message_views SET status = ?, viewed_at = ? WHERE pack_id = ? AND account_id = ?",
+            (status, _t.time(), pack_id, account_id),
         )
         await db.commit()
 

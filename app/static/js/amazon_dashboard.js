@@ -51,6 +51,14 @@ function _amzErrorBanner(msg) {
 }
 var amzTabLoaded = { dashboard: amzActiveTab === 'dashboard', ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false, deals: false };
 
+// Declaradas aquí (no más abajo, junto a Mensajes de Compradores) porque
+// loadAmzSaludTab() puede dispararse de inmediato más abajo en este mismo
+// script (navegación directa a ?tab=salud) — con "var" más abajo, el hoisting
+// dejaba amzMsgsOnlyPending en undefined en ese primer fetch y mandaba
+// only_pending=false aunque el toggle dijera "solo pendientes".
+var amzMsgsOnlyPending = true;
+var amzMsgsOrderSearch = '';
+
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
 function toDateStr(d) {
@@ -2754,9 +2762,6 @@ window.calcFbaSim = function(simId) {
 // desde amazon_returns.html a petición de Jovan.
 // ─────────────────────────────────────────────────────────────────────────────
 
-var amzMsgsOnlyPending = true;
-var amzMsgsOrderSearch = '';
-
 function _amzMsgsEscHtml(s) {
     return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -2844,10 +2849,65 @@ window.markAllAmzMsgsResolved = function() {
         });
 };
 
+function _amzMsgsFmtDuration(hours) {
+    if (hours == null) return '—';
+    if (hours < 1) return Math.max(1, Math.round(hours * 60)) + ' min';
+    if (hours < 24) return Math.round(hours) + ' h';
+    var days = Math.floor(hours / 24), rem = Math.round(hours % 24);
+    return days + 'd ' + rem + 'h';
+}
+
+function _renderAmzMsgsKpis(stats) {
+    var el = document.getElementById('amz-msgs-kpis');
+    if (!el) return;
+    if (!stats) { el.innerHTML = ''; return; }
+    var u = stats.urgency || { under24: 0, h24_72: 0, over72: 0 };
+    var oldest = stats.oldest_pending;
+    el.innerHTML =
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-red-400">' +
+            '<div class="text-xs text-gray-500 font-medium mb-1">Pendientes de responder</div>' +
+            '<div class="text-2xl font-bold text-gray-800">' + stats.pending_count + '</div>' +
+            '<div class="text-[11px] text-gray-400 mt-1">🔴 ' + u.over72 + ' &middot; 🟠 ' + u.h24_72 + ' &middot; 🟢 ' + u.under24 + '</div>' +
+        '</div>' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-orange-400">' +
+            '<div class="text-xs text-gray-500 font-medium mb-1">Más antiguo sin respuesta</div>' +
+            '<div class="text-xl font-bold text-gray-800">' + (oldest ? _amzMsgsFmtDuration(oldest.hours) : '—') + '</div>' +
+            '<div class="text-[11px] text-gray-400 mt-1 truncate">' + (oldest ? _amzMsgsEscHtml(oldest.buyer_name || 'Comprador') : 'Sin pendientes') + '</div>' +
+        '</div>' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-violet-400">' +
+            '<div class="text-xs text-gray-500 font-medium mb-1">Tiempo promedio de respuesta</div>' +
+            '<div class="text-xl font-bold text-gray-800">' + (stats.avg_response_hours != null ? _amzMsgsFmtDuration(stats.avg_response_hours) : '—') + '</div>' +
+            '<div class="text-[11px] text-gray-400 mt-1">' + (stats.avg_response_sample || 0) + ' respuesta(s)</div>' +
+        '</div>' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-400">' +
+            '<div class="text-xs text-gray-500 font-medium mb-1">Resueltos (últimas 24h)</div>' +
+            '<div class="text-2xl font-bold text-gray-800">' + (stats.resolved_today || 0) + '</div>' +
+        '</div>';
+}
+
+window.toggleAmzThreadExpand = function(domId) {
+    var box = document.getElementById('amz-thread-messages-' + domId);
+    var btn = document.getElementById('amz-thread-toggle-' + domId);
+    if (!box) return;
+    var willShow = box.classList.contains('hidden');
+    box.classList.toggle('hidden');
+    if (btn) btn.textContent = willShow ? 'Ocultar conversación' : 'Ver conversación completa';
+};
+
+window.toggleAmzMsgsSection = function(sid, btn) {
+    var box = document.getElementById(sid);
+    if (!box) return;
+    var willShow = box.classList.contains('hidden');
+    box.classList.toggle('hidden');
+    var arrow = btn.querySelector('[data-arrow]');
+    if (arrow) arrow.textContent = willShow ? '▾' : '▸';
+};
+
 function _renderAmzBuyerMessages(data) {
     var el = document.getElementById('amz-msgs-content');
     var badge = document.getElementById('amz-msgs-unread');
     var threads = data.threads || [];
+    _renderAmzMsgsKpis(data.stats);
     if (data.error) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">' + data.error + '</p>'; if (badge) badge.classList.add('hidden'); return; }
     if (badge) {
         if (data.unread > 0) { badge.textContent = data.unread + ' sin leer'; badge.classList.remove('hidden'); } else { badge.classList.add('hidden'); }
@@ -2858,6 +2918,20 @@ function _renderAmzBuyerMessages(data) {
             : (amzMsgsOnlyPending ? 'No hay mensajes pendientes de responder — todo al día. (Dale a "Mostrando: solo pendientes" para ver el historial completo)' : 'Sin mensajes de compradores en este periodo.');
         el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">' + emptyMsg + '</p>';
         return;
+    }
+
+    function urgencyOf(th) {
+        if (!th.needs_response) return null;
+        var ageHours = (Date.now() / 1000 - (th.last_ts || 0)) / 3600;
+        var tier = ageHours >= 72 ? 'urgent' : (ageHours >= 24 ? 'warn' : 'ok');
+        return { ageHours: ageHours, tier: tier };
+    }
+
+    function urgencyChip(u) {
+        if (!u) return '';
+        var styles = { urgent: 'bg-red-100 text-red-700', warn: 'bg-orange-100 text-orange-700', ok: 'bg-teal-100 text-teal-700' };
+        var dot = { urgent: '🔴', warn: '🟠', ok: '🟢' }[u.tier];
+        return '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ' + styles[u.tier] + '">' + dot + ' ' + _amzMsgsFmtDuration(u.ageHours) + ' sin respuesta</span>';
     }
 
     function statusBadge(th, domId) {
@@ -2878,26 +2952,31 @@ function _renderAmzBuyerMessages(data) {
         var vi = th.view_info;
         var status = vi ? vi.status : 'none';
         var takeBtn = (!vi || status === 'pending')
-            ? '<button onclick="takeAmzThread(\'' + domId + '\', this)" class="text-xs px-3 py-1 rounded-full bg-violet-100 text-violet-700 hover:bg-violet-200 font-semibold transition">Tomar</button>'
+            ? '<button onclick="takeAmzThread(\'' + domId + '\', this)" class="text-xs px-2.5 py-1 rounded-full border border-violet-200 text-violet-600 hover:bg-violet-50 font-medium transition">Tomar</button>'
             : '';
         var resolveBtn = (vi && status !== 'resolved')
-            ? '<button onclick="setAmzThreadStatus(\'' + domId + '\', \'resolved\', this)" class="text-xs px-3 py-1 rounded-full bg-green-100 text-green-700 hover:bg-green-200 font-semibold transition">Marcar resuelto</button>'
+            ? '<button onclick="setAmzThreadStatus(\'' + domId + '\', \'resolved\', this)" class="text-xs px-2.5 py-1 rounded-full border border-green-200 text-green-600 hover:bg-green-50 font-medium transition">Marcar resuelto</button>'
             : (vi && status === 'resolved')
-                ? '<button onclick="setAmzThreadStatus(\'' + domId + '\', \'pending\', this)" class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 font-semibold transition">Reabrir</button>'
+                ? '<button onclick="setAmzThreadStatus(\'' + domId + '\', \'pending\', this)" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium transition">Reabrir</button>'
                 : '';
-        return '<div class="flex items-center gap-2 mb-2 flex-wrap">' + takeBtn + resolveBtn + '</div>';
+        if (!takeBtn && !resolveBtn) return '';
+        return '<div class="flex items-center gap-2 mt-2 flex-wrap">' +
+            '<span class="text-[10px] text-gray-400">Otras acciones:</span>' + takeBtn + resolveBtn + '</div>';
     }
 
-    function threadHtml(th, variant) {
-        var domId = variant + '-' + _amzMsgsSanitizeId(th.reply_to_addr);
+    function threadHtml(th) {
+        var domId = _amzMsgsSanitizeId(th.reply_to_addr);
         var lastInbound = null;
         for (var i = th.messages.length - 1; i >= 0; i--) {
             if (th.messages[i].direction === 'inbound') { lastInbound = th.messages[i]; break; }
         }
         var priorHandler = (th.view_info && th.view_info.viewed_by) ? th.view_info.viewed_by : '';
+        var u = urgencyOf(th);
+        var borderColor = u ? { urgent: 'border-red-400', warn: 'border-orange-400', ok: 'border-teal-300' }[u.tier] : 'border-gray-200';
 
-        var head = '<div class="flex items-center justify-between gap-2 flex-wrap">' +
+        var head = '<div class="flex items-center gap-2 flex-wrap">' +
                 '<span class="font-semibold text-sm text-gray-800">' + _amzMsgsEscHtml(th.buyer_name || 'Comprador') + '</span>' +
+                urgencyChip(u) +
                 statusBadge(th, domId) +
                 (th.unread > 0 ? '<span class="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">' + th.unread + ' nuevo(s)</span>' : '') +
                 '<span class="text-xs text-gray-400 ml-auto">' + _amzMsgsFmtDate(th.last_ts) + '</span>' +
@@ -2908,7 +2987,16 @@ function _renderAmzBuyerMessages(data) {
             '</div>' +
             (th.product_title ? '<p class="text-xs text-gray-500 truncate mt-0.5">' + _amzMsgsEscHtml(th.product_title) + '</p>' : '');
 
-        var messages = '<div id="amz-thread-messages-' + domId + '" class="mt-2 space-y-1.5 max-h-48 overflow-y-auto">' +
+        var previewText = lastInbound ? lastInbound.body_text || '' : '';
+        var truncated = previewText.length > 180 ? previewText.slice(0, 180) + '…' : previewText;
+        var preview = lastInbound ? (
+            '<blockquote class="mt-2 border-l-2 border-teal-300 pl-2.5 text-sm text-gray-700 whitespace-pre-line">' + _amzMsgsEscHtml(truncated) + '</blockquote>'
+        ) : '';
+        var expandToggle = th.messages.length > 1 ? (
+            '<button id="amz-thread-toggle-' + domId + '" onclick="toggleAmzThreadExpand(\'' + domId + '\')" class="text-xs text-teal-600 hover:underline mt-1">Ver conversación completa (' + th.messages.length + ' mensajes)</button>'
+        ) : '';
+
+        var messages = '<div id="amz-thread-messages-' + domId + '" class="hidden mt-2 space-y-1.5 max-h-64 overflow-y-auto">' +
             th.messages.map(function(m) {
                 var isOut = m.direction === 'outbound';
                 return '<div class="flex ' + (isOut ? 'justify-end' : 'justify-start') + '">' +
@@ -2952,25 +3040,45 @@ function _renderAmzBuyerMessages(data) {
                 '<textarea id="reply-text-' + domId + '" rows="2" placeholder="Escribe tu respuesta..." class="w-full text-xs border border-gray-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-teal-400"></textarea>' +
                 '<div class="flex items-center justify-between mt-1 gap-2 flex-wrap">' +
                     '<input type="file" id="reply-file-' + domId + '" class="text-[11px] text-gray-500 max-w-[180px]">' +
-                    '<button onclick="replyToBuyerMessage(\'' + domId + '\', ' + lastInbound.id + ')" id="reply-btn-' + domId + '" class="text-xs font-semibold bg-teal-500 hover:bg-teal-600 text-white px-3 py-1 rounded-lg transition">Responder</button>' +
+                    '<button onclick="replyToBuyerMessage(\'' + domId + '\', ' + lastInbound.id + ')" id="reply-btn-' + domId + '" class="text-xs font-semibold bg-teal-500 hover:bg-teal-600 text-white px-4 py-1.5 rounded-lg transition shadow-sm">Responder</button>' +
                 '</div>' +
             '</div>'
         ) : '';
 
-        return head + meta + actionButtons(th, domId) + messages + aiButton + replyBox;
+        return '<div id="thread-card-' + domId + '" data-reply-to-addr="' + _amzMsgsEscAttr(th.reply_to_addr) + '" class="border border-gray-100 rounded-xl p-4 border-l-4 ' + borderColor + '">' +
+            head + meta + preview + expandToggle + messages + aiButton + replyBox + actionButtons(th, domId) +
+        '</div>';
     }
 
-    var cards = '<div class="md:hidden space-y-3">' + threads.map(function(th) {
-        var domId = 'm-' + _amzMsgsSanitizeId(th.reply_to_addr);
-        return '<div id="thread-card-' + domId + '" data-reply-to-addr="' + _amzMsgsEscAttr(th.reply_to_addr) + '" class="border border-gray-100 rounded-xl p-3">' + threadHtml(th, 'm') + '</div>';
-    }).join('') + '</div>';
+    function section(title, colorClass, list, collapsedDefault) {
+        if (!list.length) return '';
+        var body = '<div class="space-y-3">' + list.map(threadHtml).join('') + '</div>';
+        if (!collapsedDefault) {
+            return '<div class="mb-5">' +
+                '<div class="text-xs font-bold ' + colorClass + ' uppercase tracking-wide mb-2">' + title + ' (' + list.length + ')</div>' +
+                body +
+            '</div>';
+        }
+        var sid = 'amz-msgs-section-' + _amzMsgsSanitizeId(title);
+        return '<div class="mb-5">' +
+            '<button onclick="toggleAmzMsgsSection(\'' + sid + '\', this)" class="flex items-center gap-1.5 text-xs font-bold ' + colorClass + ' uppercase tracking-wide mb-2">' +
+                '<span data-arrow>▸</span>' + title + ' (' + list.length + ')' +
+            '</button>' +
+            '<div id="' + sid + '" class="hidden">' + body + '</div>' +
+        '</div>';
+    }
 
-    var table = '<div class="hidden md:block space-y-3">' + threads.map(function(th) {
-        var domId = 'd-' + _amzMsgsSanitizeId(th.reply_to_addr);
-        return '<div id="thread-card-' + domId + '" data-reply-to-addr="' + _amzMsgsEscAttr(th.reply_to_addr) + '" class="border border-gray-100 rounded-xl p-3 max-w-3xl">' + threadHtml(th, 'd') + '</div>';
-    }).join('') + '</div>';
+    var pending = threads.filter(function(t) { return t.needs_response; });
+    var other = threads.filter(function(t) { return !t.needs_response; });
+    var urgent = pending.filter(function(t) { return urgencyOf(t).tier === 'urgent'; });
+    var warn = pending.filter(function(t) { return urgencyOf(t).tier === 'warn'; });
+    var ok = pending.filter(function(t) { return urgencyOf(t).tier === 'ok'; });
 
-    el.innerHTML = cards + table;
+    el.innerHTML =
+        section('🔴 Urgente — más de 72h sin responder', 'text-red-600', urgent, false) +
+        section('🟠 Por atender — 24 a 72h', 'text-orange-600', warn, false) +
+        section('🟢 Recientes — menos de 24h', 'text-teal-600', ok, false) +
+        section('Resueltos / ya respondidos', 'text-gray-500', other, true);
 
     // Marcar como leídos los inbound sin leer que se acaban de mostrar —
     // UNA sola llamada con todos los IDs, no una por mensaje.

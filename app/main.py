@@ -18139,6 +18139,21 @@ def _amz_thread_key(reply_to_addr: str) -> str:
     return f"amz:{reply_to_addr}"
 
 
+def _amz_response_deltas(messages: list) -> list:
+    """Para cada tramo de mensajes inbound seguido de una respuesta outbound,
+    devuelve el delta en segundos entre el último inbound del tramo y esa
+    respuesta — insumo para el KPI de tiempo promedio de respuesta."""
+    deltas = []
+    pending_inbound_ts = None
+    for m in messages:
+        if m["direction"] == "inbound":
+            pending_inbound_ts = m["ts"] or 0
+        elif pending_inbound_ts is not None:
+            deltas.append((m["ts"] or 0) - pending_inbound_ts)
+            pending_inbound_ts = None
+    return deltas
+
+
 @app.get("/api/amazon/buyer-messages")
 async def amazon_buyer_messages_list(
     days: int = Query(30, ge=1, le=365),
@@ -18208,10 +18223,48 @@ async def amazon_buyer_messages_list(
             already_resolved = th["view_info"] and th["view_info"].get("status") == "resolved"
             th["needs_response"] = last_is_inbound and not already_resolved
 
+        # stats se calcula sobre TODOS los hilos (antes del filtro only_pending)
+        # para que los KPIs no dependan del toggle de "solo pendientes".
+        now_ts = _time_module.time()
+        pending_threads = [t for t in threads if t["needs_response"]]
+        urgency = {"under24": 0, "h24_72": 0, "over72": 0}
+        oldest_pending = None
+        for t in pending_threads:
+            age_hours = (now_ts - (t["last_ts"] or now_ts)) / 3600
+            if age_hours < 24:
+                urgency["under24"] += 1
+            elif age_hours < 72:
+                urgency["h24_72"] += 1
+            else:
+                urgency["over72"] += 1
+            if oldest_pending is None or (t["last_ts"] or 0) < oldest_pending["ts"]:
+                oldest_pending = {"buyer_name": t["buyer_name"], "ts": t["last_ts"], "hours": age_hours}
+
+        response_deltas = []
+        for t in threads:
+            response_deltas.extend(_amz_response_deltas(t["messages"]))
+        avg_response_hours = (sum(response_deltas) / len(response_deltas) / 3600) if response_deltas else None
+
+        resolved_cutoff = now_ts - 86400
+        resolved_today = sum(
+            1 for t in threads
+            if t["view_info"] and t["view_info"].get("status") == "resolved"
+            and (t["view_info"].get("viewed_at") or 0) >= resolved_cutoff
+        )
+
+        stats = {
+            "pending_count": len(pending_threads),
+            "urgency": urgency,
+            "oldest_pending": oldest_pending,
+            "avg_response_hours": avg_response_hours,
+            "avg_response_sample": len(response_deltas),
+            "resolved_today": resolved_today,
+        }
+
         if only_pending and not oid:
             threads = [t for t in threads if t["needs_response"]]
 
-        return {"days": days, "threads": threads, "total": len(rows), "unread": unread}
+        return {"days": days, "threads": threads, "total": len(rows), "unread": unread, "stats": stats}
     except Exception as e:
         return {"error": str(e), "threads": [], "total": 0, "unread": 0}
 
