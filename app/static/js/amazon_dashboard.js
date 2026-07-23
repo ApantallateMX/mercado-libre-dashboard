@@ -847,6 +847,19 @@ async function loadAmzFinanzasTab() {
 }
 
 // ─── TAB SALUD ────────────────────────────────────────────────────────────────
+var amzSaludSubtab = 'resumen';
+
+window.switchAmzSaludSubtab = function(subtab) {
+    amzSaludSubtab = subtab;
+    document.getElementById('amz-salud-subtab-resumen').classList.toggle('hidden', subtab !== 'resumen');
+    document.getElementById('amz-salud-subtab-mensajes').classList.toggle('hidden', subtab !== 'mensajes');
+    document.querySelectorAll('.amz-salud-subtab-btn').forEach(function(btn) {
+        var isActive = btn.id === 'amz-salud-subtab-btn-' + subtab;
+        btn.className = 'amz-salud-subtab-btn flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 flex items-center gap-1.5 ' +
+            (isActive ? 'border-orange-400 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300');
+    });
+};
+
 function loadAmzSaludTab() {
     var cont = document.getElementById('amz-health-content');
     cont.innerHTML = '<div class="animate-pulse space-y-3">'+Array(4).fill('<div class="h-20 bg-orange-50 rounded-xl"></div>').join('')+'</div>';
@@ -856,6 +869,7 @@ function loadAmzSaludTab() {
         .then(function(data){ renderAmzHealth(data, cont); amzTabLoaded.salud = true; })
         .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 bg-white rounded-xl shadow p-6">Error cargando salud: '+e.message+'</p>'; });
     loadAmzBuyerMessages();
+    switchAmzSaludSubtab(amzSaludSubtab);
 }
 
 function renderAmzHealth(d, cont) {
