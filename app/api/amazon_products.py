@@ -3670,6 +3670,17 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
             asin_list.append(asin)
     bsr_index = await _get_bsr_cached(client, asin_list)
 
+    # Señal dinámica: stock real en BM (idea tomada de Helium10 Listing Analyzer,
+    # 2026-07-23). Vía import dinámico para evitar import circular con main.py
+    # (main.py importa este router). price_comp_score (vs Buy Box) y claims_score
+    # quedan pendientes: el primero depende de la Feature "Vigilancia"/Buy Box
+    # (aún no implementada) y el segundo de cruzar con datos de Retornos — no se
+    # agregan todavía para no fingir una señal que no existe.
+    import sys as _sys_lq
+    from app.services.sku_utils import normalize_to_bm_sku as _norm_lq
+    _main_mod_lq = _sys_lq.modules.get("app.main")
+    _bm_cache_lq = getattr(_main_mod_lq, "_bm_stock_cache", {}) if _main_mod_lq else {}
+
     items = []
     for listing in listings:
         summaries = listing.get("summaries", [])
@@ -3679,14 +3690,20 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
         issues = listing.get("issues", [])
         status = _listing_status(summaries)
 
-        score = 100
+        # Estático, reescalado a 85 pts (antes 100) — deja 15 pts para stock real.
+        static_score = 100
         issues_count = len(issues)
-        score -= 15 * min(issues_count, 4)
+        static_score -= 15 * min(issues_count, 4)
         if status in ("INACTIVE", "SUPPRESSED"):
-            score -= 30
+            static_score -= 30
         elif status == "DISCOVERABLE":
-            score -= 10
-        score = max(0, score)
+            static_score -= 10
+        static_score = max(0, static_score) * 0.85
+
+        _bm_entry = _bm_cache_lq.get(_norm_lq(sku)) if sku else None
+        _avail = (_bm_entry[1].get("avail_total", 0) if _bm_entry else 0) or 0
+        stock_score = 15 if _avail >= 5 else (7 if _avail > 0 else 0)
+        score = min(100, int(static_score + stock_score))
 
         if score >= 85:
             grade = "A"
@@ -3701,6 +3718,8 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
         for issue in issues[:3]:
             msg = issue.get("message") or issue.get("code") or str(issue)
             issue_messages.append(msg)
+        if stock_score == 0:
+            issue_messages.append("Sin stock en BM")
 
         # BSR — from Catalog API (bsr_index built above)
         bsr_data = bsr_index.get(asin, {})
@@ -3718,6 +3737,7 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
             "issues": issue_messages,
             "bsr_rank": bsr_rank,
             "bsr_category": bsr_category,
+            "stock_score": stock_score,
         })
 
     items.sort(key=lambda x: x["score"])

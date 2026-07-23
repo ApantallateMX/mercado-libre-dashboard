@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-23 — FEAT: Listing Quality Score dinámico ML+Amazon (Feature 1/4 de "ideas Helium10")
+
+**Archivos:** `app/api/lanzar.py`, `app/api/amazon_products.py`,
+`app/services/token_store.py`, `app/main.py`.
+
+Jovan mandó 9 links de Helium10 (suite de vendedores Amazon) y pidió
+analizar qué tomar para AMBAS plataformas, integrado en tabs que ya
+existen (sin tabs nuevos). Consultado con `amazon-specialist` +
+`mercadolibre-strategist` en paralelo. Investigación de código confirmó
+que Listings ML y Amazon YA tienen un quality score (no se creó nada
+desde cero) — el hueco real, señalado por ambos especialistas: el score
+era 100% estático (título/fotos/atributos/precio), sin señales de
+mercado (precio vs competencia, stock, reclamos).
+
+- **ML** (`lanzar.py:_process_item_body` + bloque de persistencia):
+  estático reescalado 100→70, + `stock_score` (0/7/15, BM real vía
+  `_bm_stock_cache`), `price_comp_score` (0/5/10, reusa
+  `ml_competition_alerts` ya calculado, sin duplicar el cálculo),
+  `claims_score` (0/5, reclamos abiertos en `claims_history.status=
+  'opened'`). 3 columnas nuevas en `ml_listing_quality` para guardar el
+  desglose (migración `ALTER TABLE` con el patrón try/except ya usado).
+- **Amazon** (`amazon_products.py:/listing-quality`): estático reescalado
+  100→85 + `stock_score` (0/7/15, mismo `_bm_stock_cache` vía import
+  dinámico para evitar ciclo con main.py). `price_comp_score` (depende
+  de Buy Box, aún no implementado — Feature 3 de este mismo roadmap) y
+  `claims_score` (depende de cruzar con Retornos) quedan pendientes a
+  propósito, documentados en el código, no fingidos con un valor fijo.
+- Sin tabs nuevos: se sigue mostrando en `/items?tab=listings` (ML) y
+  `#amz-tab-listings` (Amazon) — la UI ya renderiza genéricamente
+  `issues[]`/score, solo se agregaron mensajes nuevos ("Sin stock en
+  BM", "Precio no competitivo", "Reclamo abierto").
+
+Verificado: migración de columnas confirmada, fórmula reescalada
+probada con datos de ejemplo (máx. estático 70 + dinámico 30 = 100,
+nunca excede el tope).
+
+---
+
 ## 2026-07-23 — FEAT: Boost estacional automático al punto de reorden (Feature 1/4 de "ideas Zoho")
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`,

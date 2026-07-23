@@ -278,6 +278,19 @@ async def init_db():
                 UNIQUE(user_id, item_id)
             )
         """)
+        # Migration: señales dinámicas del score (idea tomada de Helium10 Listing
+        # Analyzer, 2026-07-23) — antes el score era 100% estático (título/fotos/
+        # atributos/precio). Guardar el desglose para mostrarlo en el detalle de UI.
+        for _col, _def in (
+            ("stock_score", "INTEGER NOT NULL DEFAULT 0"),
+            ("price_comp_score", "INTEGER NOT NULL DEFAULT 0"),
+            ("claims_score", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            try:
+                await db.execute(f"ALTER TABLE ml_listing_quality ADD COLUMN {_col} {_def}")
+                await db.commit()
+            except Exception:
+                pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS ml_competition_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

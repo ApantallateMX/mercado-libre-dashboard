@@ -349,10 +349,14 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                         attrs = body.get("attributes") or []
                         has_gtin  = any(a.get("id") in ("GTIN", "EAN", "UPC") for a in attrs)
                         has_brand = any(a.get("id") == "BRAND" for a in attrs)
-                        title_score  = min(len(title), 60) / 60 * 25
-                        pics_score   = min(pics, 6) / 6 * 25
-                        attr_score   = (10 if has_brand else 0) + (15 if has_gtin else 0)
-                        price_score  = 25 if price > 0 else 0
+                        # Estático, reescalado a 70 pts (antes 100) — deja 30 pts para
+                        # señales dinámicas (stock/precio-vs-competencia/reclamos), que
+                        # se agregan más abajo donde ya hay acceso a bm_map/claims por
+                        # cuenta (aquí solo se tiene el body del item, no ese contexto).
+                        title_score  = min(len(title), 60) / 60 * 17.5
+                        pics_score   = min(pics, 6) / 6 * 17.5
+                        attr_score   = ((10 if has_brand else 0) + (15 if has_gtin else 0)) * 0.7
+                        price_score  = 17.5 if price > 0 else 0
                         quality_score = int(title_score + pics_score + attr_score + price_score)
                         if price > 0:
                             active_prices_map.setdefault(base, [])
@@ -811,21 +815,47 @@ async def _run_gap_scan(user_id: str | None = None):
                     logger.info(f"  {nickname}: {price_alert_count} alertas de precio")
 
                     # ── Calidad de listings (per-cuenta) ──────────────────────
+                    # Señales dinámicas (30 pts, sobre el estático de 70 ya calculado
+                    # en _process_item_body): stock real en BM, precio vs competencia
+                    # (mismo criterio que ml_competition_alerts abajo, sin recalcular
+                    # dos veces), y reclamos abiertos (claims_history.status='opened').
+                    _open_claims_cur = await db.execute(
+                        "SELECT sku, COUNT(*) FROM claims_history "
+                        "WHERE account_id=? AND platform='ml' AND status='opened' GROUP BY sku",
+                        (user_id,),
+                    )
+                    _open_claims_by_sku = {r[0]: r[1] for r in await _open_claims_cur.fetchall()}
+
                     quality_count = 0
                     await db.execute("DELETE FROM ml_listing_quality WHERE user_id=?", (user_id,))
                     for base_sku, item_list in active_prices_map.items():
+                        prod = bm_map.get(base_sku) or {}
+                        stock_qty = _bm_qty(prod) if prod else 0
+                        stock_score = 15 if stock_qty >= 5 else (7 if stock_qty > 0 else 0)
+                        comp_price = float(prod.get("CompetitorPrice", 0) or 0)
+                        has_open_claim = _open_claims_by_sku.get(base_sku, 0) > 0
+                        claims_score = 0 if has_open_claim else 5
                         for item_info in item_list:
-                            prod  = bm_map.get(base_sku) or {}
                             title = item_info.get("title", "") or prod.get("Title", "")
+                            ml_price = item_info.get("price", 0)
+                            if comp_price > 0 and ml_price > 0:
+                                diff_pct = abs((ml_price - comp_price) / comp_price * 100)
+                                price_comp_score = 10 if diff_pct <= 5 else (5 if diff_pct <= 15 else 0)
+                            else:
+                                price_comp_score = 10  # sin dato de competencia — neutral, no penaliza
+                            dynamic_total = stock_score + price_comp_score + claims_score
+                            final_score = min(100, int(item_info.get("quality_score", 0)) + dynamic_total)
                             await db.execute("""
                                 INSERT OR REPLACE INTO ml_listing_quality
                                     (user_id, nickname, sku, item_id, product_title, ml_price,
-                                     quality_score, pics_count, has_gtin, has_brand, title_len, last_scan)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                                     quality_score, pics_count, has_gtin, has_brand, title_len, last_scan,
+                                     stock_score, price_comp_score, claims_score)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """, (user_id, nickname, base_sku, item_info["item_id"], title,
-                                  item_info.get("price", 0), item_info.get("quality_score", 0),
+                                  item_info.get("price", 0), final_score,
                                   item_info.get("pics", 0), 1 if item_info.get("has_gtin") else 0,
-                                  1 if item_info.get("has_brand") else 0, len(title), now_iso))
+                                  1 if item_info.get("has_brand") else 0, len(title), now_iso,
+                                  stock_score, price_comp_score, claims_score))
                             quality_count += 1
                     logger.info(f"  {nickname}: {quality_count} scores de calidad")
 

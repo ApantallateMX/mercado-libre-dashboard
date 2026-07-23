@@ -2387,11 +2387,21 @@ async def ml_listing_quality():
             issues.append("Sin GTIN/UPC")
         if not r.get("has_brand"):
             issues.append("Sin marca")
+        # Señales dinámicas (Feature Helium10 2026-07-23) — 0 = peor caso de esa señal
+        if (r.get("stock_score") or 0) == 0:
+            issues.append("Sin stock en BM")
+        if (r.get("price_comp_score") or 0) == 0:
+            issues.append("Precio no competitivo (>15% sobre competencia)")
+        if (r.get("claims_score") or 0) == 0:
+            issues.append("Reclamo abierto")
         items.append({
             "sku": r.get("sku", ""), "item_id": r.get("item_id", ""),
             "title": r.get("product_title") or r.get("sku", ""),
             "price": r.get("ml_price"), "score": score, "grade": grade,
             "issues": issues, "last_scan": r.get("last_scan", ""),
+            "stock_score": r.get("stock_score") or 0,
+            "price_comp_score": r.get("price_comp_score") or 0,
+            "claims_score": r.get("claims_score") or 0,
         })
 
     total = len(items)
