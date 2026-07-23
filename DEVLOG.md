@@ -125,6 +125,52 @@ plataformas, 0 overflow / 0 errores.
 
 ---
 
+## 2026-07-23 — FEAT: Reembolsos FBA ya aprobados (Feature 4/4 de "ideas Helium10" — CIERRA la iniciativa)
+
+**Archivos:** `app/services/amazon_client.py`, `app/main.py`,
+`app/templates/amazon_returns.html`.
+
+Última de las 4 mejoras — la de mayor incertidumbre de API, nunca antes
+tocada en este repo. Idea tomada de Helium10 Managed Refund Service
+(cobra 15-18% de comisión por presentar el reclamo) — se detecta gratis
+con el mismo reporte que Amazon ya expone.
+
+- Nuevo método `get_reimbursements_report()` (`amazon_client.py`), mismo
+  patrón exacto que `get_returns_report()` (Reports API: request → poll
+  → download → parse). **Verificado en vivo contra producción antes de
+  construir el parseo final** (VECKTOR, 60 días): `GET_FBA_
+  REIMBURSEMENTS_DATA` confirma columnas `approval-date, reimbursement-
+  id, amazon-order-id, reason, sku, asin, product-name, amount-total,
+  quantity-reimbursed-cash, ...`. Razones reales vistas: `CustomerReturn`,
+  `Lost_Warehouse`, `Reimbursement_Reversal`, `CustomerServiceIssue`.
+- Cache de 6h (mismo patrón que el reporte de devoluciones — generar el
+  reporte es lento, ~1-2 min de polling).
+- Endpoint `GET /api/amazon/returns/reimbursements` + nueva sección
+  "Reembolsos FBA" en `amazon_returns.html` (mismo estilo que Comentarios
+  de Clientes/Top SKUs ya existentes — sin tabs nuevos).
+- **Alcance v1, documentado como tal**: solo muestra reembolsos YA
+  aprobados por Amazon (monto, motivo, fecha) — NO cruza contra el
+  Inventory Ledger para detectar inventario dañado/perdido que AÚN NO se
+  ha reembolsado (requeriría un reporte adicional y lógica de cruce más
+  compleja, queda fuera de esta ronda a propósito en vez de construir una
+  reconciliación poco confiable bajo presión de tiempo).
+
+Verificado end-to-end contra producción real (VECKTOR, 30 y 60 días): 45
+y 99 reembolsos reales respectivamente, $121,477.80 y $297,265.15 MXN
+recuperados, incluido el desglose "Lost_Warehouse" que es justo la señal
+de inventario perdido que se buscaba. Playwright 375px/1920px, 0
+overflow / 0 errores.
+
+**Cierre de la iniciativa "ideas Helium10":** con esta, las 4 mejoras
+identificadas al comparar contra Helium10 (con `amazon-specialist` +
+`mercadolibre-strategist`) quedan implementadas y en producción: Listing
+Quality Score dinámico, Mercado Ads sugerido, Vigilancia (Buy Box/
+ganador + timeline), y Reembolsos FBA — todas integradas dentro de tabs
+ya existentes, sin agregar tabs nuevos de primer nivel, tal como pidió
+Jovan.
+
+---
+
 ## 2026-07-23 — FEAT: Boost estacional automático al punto de reorden (Feature 1/4 de "ideas Zoho")
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`,

@@ -18120,6 +18120,37 @@ async def _fetch_amazon_returns_report_cached(seller_id: str, days: int) -> list
         return []
 
 
+# ── Reembolsos FBA ya aprobados (idea tomada de Helium10 Managed Refund
+# Service — lo detectamos gratis con el reporte que Amazon ya expone, sin
+# pagarle comisión a un tercero por presentar el reclamo). Mismo patrón de
+# cache que el reporte de devoluciones (generar el reporte es caro/lento).
+_amz_reimbursements_cache: dict = {}
+_AMZ_REIMBURSEMENTS_TTL = 3600 * 6
+
+async def _fetch_amazon_reimbursements_cached(seller_id: str, days: int) -> list:
+    import time as _tri
+    from datetime import datetime as _dtri, timedelta as _tdri
+    key = (seller_id, days)
+    entry = _amz_reimbursements_cache.get(key)
+    if entry and (_tri.time() - entry[0]) < _AMZ_REIMBURSEMENTS_TTL:
+        return entry[1]
+    try:
+        from app.services.amazon_client import get_amazon_client as _get_amz_reimb
+        client = await _get_amz_reimb(seller_id)
+        if not client:
+            return []
+        capped_days = min(days, 60)
+        _now = _dtri.utcnow()
+        date_from = (_now - _tdri(days=capped_days)).strftime("%Y-%m-%d")
+        date_to = _now.strftime("%Y-%m-%d")
+        items = await client.get_reimbursements_report(date_from, date_to)
+        _amz_reimbursements_cache[key] = (_tri.time(), items)
+        return items
+    except Exception as _exc:
+        logger.warning(f"[AMZ-REIMBURSEMENTS] Error {seller_id}: {_exc}")
+        return []
+
+
 # ── Ventas por SKU Amazon (Fase 2.5 del nav unificado) ─────────────────────────
 # get_sku_sales() es N+1 (1 request de items por orden) — igual que
 # get_sales_summary_30d(), nunca en vivo por request. Stale-while-revalidate
@@ -18804,6 +18835,39 @@ async def amazon_returns_customer_comments(
         }
     except Exception as e:
         return {"error": str(e), "rows": [], "total_returns": 0}
+
+
+@app.get("/api/amazon/returns/reimbursements")
+async def amazon_reimbursements_api(
+    days: int = Query(30, ge=1, le=365),
+    seller_id: str = Query(""),
+):
+    """Reembolsos FBA ya aprobados por Amazon (inventario perdido/dañado en
+    almacén, etc — idea tomada de Helium10 Managed Refund Service, aquí se
+    detecta gratis con el reporte que Amazon ya expone). V1: solo muestra lo
+    ya aprobado — no cruza contra Inventory Ledger para detectar pérdidas
+    aún no reembolsadas (pendiente, ver amazon_client.get_reimbursements_report)."""
+    sid = seller_id.strip()
+    if not sid:
+        return {"error": "No hay cuenta Amazon activa", "rows": [], "summary": {}}
+    try:
+        items = await _fetch_amazon_reimbursements_cached(sid, days)
+        rows = sorted(items, key=lambda r: r.get("approval_date", ""), reverse=True)
+        for r in rows:
+            r["reason_label"] = _amz_reason_label(r.get("reason", ""))
+        total_amount = sum(r.get("amount_total", 0) for r in rows)
+        by_reason: dict = {}
+        for r in rows:
+            reason = r.get("reason", "")
+            by_reason[reason] = by_reason.get(reason, 0) + r.get("amount_total", 0)
+        summary = {
+            "total_count": len(rows),
+            "total_amount": round(total_amount, 2),
+            "by_reason": {k: round(v, 2) for k, v in by_reason.items()},
+        }
+        return {"days": days, "rows": rows, "summary": summary}
+    except Exception as e:
+        return {"error": str(e), "rows": [], "summary": {}}
 
 
 def _amz_thread_key(reply_to_addr: str) -> str:

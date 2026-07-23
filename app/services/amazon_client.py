@@ -1189,6 +1189,105 @@ class AmazonClient:
         logger.warning(f"[Amazon Reports] Timeout esperando reporte de devoluciones {report_id} ({max_wait_secs}s)")
         return []
 
+    async def get_reimbursements_report(self, date_from: str, date_to: str, max_wait_secs: int = 180) -> list:
+        """
+        Reporte GET_FBA_REIMBURSEMENTS_DATA — reembolsos FBA YA aprobados por
+        Amazon (inventario perdido/dañado en almacén, devoluciones con FNSKU
+        incorrecto, etc). Idea tomada de Helium10 Managed Refund Service —
+        aquí se detecta con el mismo reporte que Amazon ya expone gratis, sin
+        pagarle comisión a un tercero por presentar el reclamo.
+
+        Columnas confirmadas en vivo contra producción 2026-07-23 (VECKTOR):
+        approval-date, reimbursement-id, case-id, amazon-order-id, reason,
+        sku, fnsku, asin, product-name, condition, currency-unit,
+        amount-per-unit, amount-total, quantity-reimbursed-cash,
+        original-reimbursement-id, original-reimbursement-type.
+        reason vistos: CustomerReturn, Lost_Warehouse, Reimbursement_Reversal.
+
+        NOTA DE ALCANCE (v1, no es reconciliación perfecta): esto muestra
+        reembolsos YA aprobados por Amazon — no cruza contra el Inventory
+        Ledger para detectar inventario dañado/perdido que AÚN NO se ha
+        reembolsado (eso requeriría un reporte adicional, GET_LEDGER_DETAIL_
+        VIEW_DATA, y una lógica de cruce más compleja — queda fuera de esta
+        ronda, documentado como pendiente).
+
+        Args:
+            date_from, date_to: "YYYY-MM-DD". Amazon limita el rango del reporte.
+
+        Returns:
+            Lista de dicts: {reimbursement_id, order_id, sku, asin, product_name,
+                              approval_date, reason, amount_total, currency, quantity}
+        """
+        import csv, io as _io
+
+        created_after = f"{date_from}T00:00:00Z"
+        created_before = f"{date_to}T23:59:59Z"
+        logger.info(f"[Amazon Reports] Creando reporte de reembolsos FBA {date_from}→{date_to}…")
+        body = {
+            "reportType": "GET_FBA_REIMBURSEMENTS_DATA",
+            "marketplaceIds": [self.marketplace_id],
+            "dataStartTime": created_after,
+            "dataEndTime": created_before,
+        }
+        result = await self._request("POST", "/reports/2021-06-30/reports", json_body=body)
+        report_id = result.get("reportId", "")
+        if not report_id:
+            raise ValueError(f"Amazon no devolvió reportId: {result}")
+
+        wait_interval = 15
+        attempts = max(4, max_wait_secs // wait_interval)
+
+        for attempt in range(attempts):
+            await asyncio.sleep(wait_interval)
+            status_data = await self.get_report_status(report_id)
+            proc_status = status_data.get("processingStatus", "")
+            logger.debug(f"[Amazon Reports] reimbursements {report_id} → {proc_status} (intento {attempt+1}/{attempts})")
+
+            if proc_status == "DONE":
+                doc_id = status_data.get("reportDocumentId", "")
+                if not doc_id:
+                    raise ValueError("DONE pero sin reportDocumentId")
+                doc_info = await self.get_report_document_url(doc_id)
+                url = doc_info.get("url", "")
+                compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
+                content = await self.download_report_document(url, compressed)
+
+                items = []
+                reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                logger.info(f"[Amazon Reports] Columnas reimbursements TSV: {reader.fieldnames}")
+                for row in reader:
+                    sku = (row.get("sku") or "").strip()
+                    if not sku:
+                        continue
+                    try:
+                        amount = float(row.get("amount-total") or 0)
+                    except (ValueError, TypeError):
+                        amount = 0.0
+                    try:
+                        qty = int(float(row.get("quantity-reimbursed-cash") or 1))
+                    except (ValueError, TypeError):
+                        qty = 1
+                    items.append({
+                        "reimbursement_id": (row.get("reimbursement-id") or "").strip(),
+                        "order_id": (row.get("amazon-order-id") or "").strip(),
+                        "sku": sku,
+                        "asin": (row.get("asin") or "").strip(),
+                        "product_name": (row.get("product-name") or "").strip(),
+                        "approval_date": (row.get("approval-date") or "")[:10],
+                        "reason": (row.get("reason") or "").strip(),
+                        "amount_total": amount,
+                        "currency": (row.get("currency-unit") or "MXN").strip(),
+                        "quantity": qty,
+                    })
+                logger.info(f"[Amazon Reports] {len(items)} reembolsos FBA para {self.seller_id}")
+                return items
+
+            elif proc_status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
+
+        logger.warning(f"[Amazon Reports] Timeout esperando reporte de reembolsos {report_id} ({max_wait_secs}s)")
+        return []
+
     async def get_merchant_listings_report(self, max_wait_secs: int = 300) -> list:
         """
         Obtiene TODOS los listings del vendedor via Reports API.

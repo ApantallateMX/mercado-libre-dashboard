@@ -116,6 +116,23 @@
     </div>
 </div>
 
+<!-- Reembolsos FBA ya aprobados (idea tomada de Helium10 Managed Refund Service) -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="px-6 py-3 flex items-center gap-2 border-b border-gray-100">
+        <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+        </svg>
+        <h2 class="text-sm font-semibold text-gray-700">Reembolsos FBA</h2>
+        <span class="text-[10px] text-gray-400">— inventario perdido/dañado en almacén ya reembolsado por Amazon, detectado gratis (sin comisión a terceros)</span>
+    </div>
+    <div id="amz-ret-reimbursements" class="p-5">
+        <div class="flex items-center justify-center gap-3 py-8 text-sm text-gray-400">
+            <svg class="animate-spin h-5 w-5 text-orange-500" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+            Cargando reembolsos...
+        </div>
+    </div>
+</div>
+
 <a href="/amazon?tab=salud" class="flex items-center gap-1 text-xs text-teal-600 hover:text-teal-800 font-medium transition mb-6">
     ✉️ Mensajes de Compradores se movió a la pestaña Salud →
 </a>
@@ -333,8 +350,66 @@ function _renderCustomerComments(data) {
     el.innerHTML = summary + cards + table;
 }
 
+function loadReimbursements() {
+    var el = document.getElementById('amz-ret-reimbursements');
+    fetch('/api/amazon/returns/reimbursements?' + _params())
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderReimbursements(data); })
+        .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
+}
 
-function loadAll() { loadSummary(); loadTimeline(); loadQualityScores(); loadTopSkus(); loadCustomerComments(); }
+function _renderReimbursements(data) {
+    var el = document.getElementById('amz-ret-reimbursements');
+    var rows = data.rows || [];
+    if (data.error) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">' + data.error + '</p>'; return; }
+    if (!rows.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">Sin reembolsos FBA aprobados en este periodo.</p>';
+        return;
+    }
+    var s = data.summary || {};
+    var byReasonHtml = Object.keys(s.by_reason || {}).map(function(k) {
+        return '<span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">' + _escHtml(k) + ': $' + (s.by_reason[k] || 0).toLocaleString('es-MX', {minimumFractionDigits: 2}) + '</span>';
+    }).join(' ');
+    var summary = '<div class="flex flex-wrap items-center gap-2 mb-3 text-xs">' +
+        '<span class="font-bold text-green-700 bg-green-50 px-3 py-1 rounded-full">Total recuperado: $' + (s.total_amount || 0).toLocaleString('es-MX', {minimumFractionDigits: 2}) + '</span>' +
+        '<span class="text-gray-400">' + s.total_count + ' reembolsos</span>' + byReasonHtml + '</div>';
+
+    var cards = '<div class="md:hidden space-y-2">' + rows.map(function(r) {
+        return '<div class="border border-gray-100 rounded-xl p-3">' +
+            '<div class="flex items-center justify-between gap-2">' +
+                '<span class="font-mono text-xs font-semibold text-gray-700">' + _escHtml(r.sku) + '</span>' +
+                '<span class="text-xs font-bold text-green-600">$' + r.amount_total.toFixed(2) + '</span>' +
+            '</div>' +
+            '<p class="text-xs text-gray-500 truncate mt-0.5">' + _escHtml(r.product_name) + '</p>' +
+            '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">' +
+                '<span>' + _escHtml(r.approval_date) + '</span>' +
+                '<span>' + _escHtml(r.reason) + '</span>' +
+                '<span>Cant. ' + r.quantity + '</span>' +
+            '</div>' +
+        '</div>';
+    }).join('') + '</div>';
+
+    var table = '<div class="hidden md:block overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="text-left text-gray-500 border-b">' +
+        '<th class="py-2 pr-3">Fecha</th><th class="py-2 pr-3">Orden</th><th class="py-2 pr-3">SKU / Producto</th>' +
+        '<th class="py-2 pr-3">Razón</th><th class="py-2 pr-3 text-right">Cant.</th><th class="py-2 pr-3 text-right">Monto</th>' +
+        '</tr></thead><tbody>' + rows.map(function(r) {
+        return '<tr class="border-b border-gray-100 hover:bg-gray-50 align-top">' +
+            '<td class="py-2 pr-3 whitespace-nowrap text-gray-500">' + _escHtml(r.approval_date) + '</td>' +
+            '<td class="py-2 pr-3 font-mono whitespace-nowrap">' + _escHtml(r.order_id) + '</td>' +
+            '<td class="py-2 pr-3"><span class="font-mono font-semibold">' + _escHtml(r.sku) + '</span><br>' +
+                '<span class="text-gray-400 truncate block max-w-[220px]">' + _escHtml(r.product_name) + '</span></td>' +
+            '<td class="py-2 pr-3 whitespace-nowrap">' + _escHtml(r.reason) + '</td>' +
+            '<td class="py-2 pr-3 text-right">' + r.quantity + '</td>' +
+            '<td class="py-2 pr-3 text-right font-semibold text-green-600">$' + r.amount_total.toFixed(2) + '</td>' +
+            '</tr>';
+    }).join('') + '</tbody></table></div>';
+
+    el.innerHTML = summary + cards + table;
+}
+
+
+function loadAll() { loadSummary(); loadTimeline(); loadQualityScores(); loadTopSkus(); loadCustomerComments(); loadReimbursements(); }
 
 if (!sellerId) {
     document.getElementById('amz-ret-summary').innerHTML =
