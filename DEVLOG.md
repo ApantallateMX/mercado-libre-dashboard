@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-24 — FEAT+FIX: Mensajes de Compradores Amazon — Fase 2 (AUTOBOT + ExclusiveBulbs)
+
+**Archivos:** `app/config.py`, `app/auth.py`, `app/services/buyer_messages_client.py`.
+
+Se completó la Fase 2 pendiente (ver `.claude/memory/project_amazon_buyer_messages_plan.md`):
+conectar los buzones dedicados de AUTOBOT AMZ MX y ExclusiveBulbs, igual que
+VECKTOR (Fase 1).
+
+### Bloqueante nuevo: 1 solo cliente OAuth de Gmail no alcanzaba
+El cliente OAuth original (VECKTOR) quedó en modo "Testing" bajo una cuenta
+de Google que no se pudo recuperar/identificar a tiempo — cualquier Gmail
+nuevo agregado a "Test users" ahí habría funcionado, pero sin acceso a esa
+cuenta no se podía. Se resolvió creando un proyecto de Google Cloud nuevo
+por cada cuenta (uno para AUTOBOT, otro para ExclusiveBulbs) en vez de
+insistir en rastrear la cuenta original. `_gmail_oauth_client_for(env_var)`
+en `auth.py` generaliza el flujo OAuth para elegir el Client ID/Secret
+correcto según qué cuenta se está autorizando (`GMAIL_OAUTH_CLIENT_ID_2/3`
++ `_SECRET_2/3` en Railway) — Vecktor sigue con el cliente original,
+intacto.
+
+### Bug real encontrado en producción: parser de mensajes solo reconocía español
+AUTOBOT y ExclusiveBulbs también tenían activo **Replyco** (servicio de
+terceros) en el campo "Reply-To Email"/Customer Service de Seller Central —
+Jovan confirmó migrar completamente a nuestro sistema, se actualizó ese
+campo a los Gmail dedicados en las 3-4 tiendas de cada cuenta.
+
+Al conectar ExclusiveBulbs (vende en MX/CA/US/BR) apareció un bug real:
+`_MSG_RE` en `buyer_messages_client.py` solo reconocía el formato en
+español que trae VECKTOR ("Mensaje:"/"Finalizar mensaje") — verificado
+contra 200 mensajes reales del buzón de ExclusiveBulbs, el parser
+descartaba silenciosamente TODOS (0/200) porque Amazon manda esta
+notificación en el idioma de cada marketplace: inglés ("Message"/"End
+message"), portugués ("Mensagem"/"Encerrar mensagem"), y una variante en
+español distinta a la de Vecktor ("Iniciar mensaje"/"Finalizar mensaje").
+Corregido con alternancia de idiomas en el regex + un patrón de respaldo
+(`_MSG_FALLBACK_RE`) para mensajes que traen el cierre pero no el marcador
+de apertura. Verificado en vivo: 0/200 → 191/200 (95.5%) parseados
+correctamente contra el buzón real. Quedan ~9 casos raros sin resolver
+(mensajes sin referencia de producto/orden y sin marcador de apertura, o
+correos sin parte de texto plano) — documentados en el código, no se
+persiguieron más por rendimiento decreciente.
+
+### Estado final
+Las 3 cuentas Amazon (VECKTOR, AUTOBOT, ExclusiveBulbs) con Mensajes de
+Compradores completo: lectura (IMAP) + respuesta (Gmail API vía OAuth) +
+sin Replyco.
+
+---
+
 ## 2026-07-24 — FIX DE RAÍZ: cuentas ML mostrando ID numérico en vez de nickname (recurrente)
 
 **Archivos:** `app/services/token_store.py`, `app/services/meli_client.py`, `app/main.py`.

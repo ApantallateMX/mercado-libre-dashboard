@@ -57,8 +57,25 @@ _SUBJECT_ORDER_RE = re.compile(r'\(Pedido:\s*(\d{3}-\d{7}-\d{7})\)')
 _ASIN_RE = re.compile(r'ASIN:\s*([A-Z0-9]{10})')
 _PRODUCT_LINE_RE = re.compile(r'^\s*\d+\s*/\s*(.+?)\s*\|.*\[ASIN:\s*([A-Z0-9]{10})\]', re.MULTILINE)
 _MSG_RE = re.compile(
-    r'-{5,}\s*Mensaje:\s*-{5,}\s*(.*?)\s*-{5,}\s*Finalizar mensaje\s*-{5,}',
-    re.DOTALL,
+    # Cuentas con marketplaces en varios idiomas (ej. ExclusiveBulbs: MX/CA/US/BR)
+    # reciben esta notificación de Amazon en el idioma de cada marketplace —
+    # confirmado contra mensajes reales: español ("Iniciar mensaje"/
+    # "Finalizar mensaje", y una variante más vieja "Mensaje:"), inglés
+    # ("Message"/"End message"), portugués ("Mensagem"/"Encerrar mensagem").
+    # El cierre exige un token conocido (no cualquier palabra) para no cortar
+    # el match en un sub-encabezado interno de un hilo con cita ("Mensaje de
+    # respuesta"/"Mensaje original") en vez del cierre real del mensaje.
+    r'-{5,}\s*(?:Mensaje|Iniciar mensaje|Message|Mensagem)\s*:?\s*-{5,}\s*(.*?)\s*-{5,}\s*'
+    r'(?:Finalizar mensaje|End message|Encerrar mensagem)\s*-{5,}',
+    re.DOTALL | re.IGNORECASE,
+)
+# Variante sin marcador de apertura — el texto del comprador arranca justo
+# después de la línea de producto/ASIN y solo trae el cierre. Se usa como
+# respaldo si _MSG_RE no matchea.
+_MSG_FALLBACK_RE = re.compile(
+    r'\[ASIN:\s*[A-Z0-9]{10}\]\s*\r?\n\r?\n(.*?)\s*-{5,}\s*'
+    r'(?:Finalizar mensaje|End message|Encerrar mensagem)\s*-{5,}',
+    re.DOTALL | re.IGNORECASE,
 )
 _FROM_NAME_RE = re.compile(r'^([^<]+)<')
 _FROM_ADDR_RE = re.compile(r'<(.+?)>')
@@ -112,7 +129,7 @@ def parse_buyer_message_email(raw_bytes: bytes) -> dict | None:
     if not body:
         return None
 
-    msg_match = _MSG_RE.search(body)
+    msg_match = _MSG_RE.search(body) or _MSG_FALLBACK_RE.search(body)
     if not msg_match:
         return None
 
