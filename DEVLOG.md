@@ -7,6 +7,70 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-24 — FEAT: consolidación de tabs Amazon (Finanzas/Listings/Deals/Operaciones → subtabs)
+
+**Archivos:** `app/templates/amazon_dashboard.html`, `app/templates/amazon_products.html`,
+`app/static/js/amazon_dashboard.js`, `app/api/amazon_products.py`,
+`app/templates/partials/amazon_products_listings.html` (nuevo),
+`app/templates/partials/amazon_products_deals.html` (nuevo),
+`app/services/user_store.py`, `app/main.py`.
+
+Análisis pedido por Jovan: revisar todos los tabs de Amazon y ML para ver
+cuáles se pueden fusionar como subtabs de otro y reducir el nav. ML ya
+estaba consolidado (Listings/Deals dentro de Productos, Finanzas dentro de
+Ventas, Distribución dentro de Sync Stock); Amazon tenía 4 candidatos para
+copiar el mismo patrón:
+
+- **Finanzas → subtab de Ventas** (💰 Finanzas, 3ra sub-vista junto a
+  Resumen/Por SKU) — mismo patrón que ML's Ventas ya usa.
+- **Listings + Deals → subtabs de Productos** (`/amazon/products`) — mismo
+  patrón que ML's Productos ya usa. Cross-page: se crearon 2 shells
+  estáticos server-side (`amazon_products_listings.html`/`_deals.html`,
+  endpoints `GET /api/amazon/products/listings`/`/deals`) que solo montan
+  el HTML — el fetch/render real lo siguen haciendo las MISMAS funciones
+  JS de siempre (`loadListingsTab`/`loadDealsTab`/etc, sin reescribir
+  nada), reusadas incluyendo `amazon_dashboard.js` en la página de
+  Productos. Ese archivo tenía código de "carga inicial" sin guardar que
+  hubiera roto la página de Productos (referencias a elementos que solo
+  existen en `/amazon`) — se guardó detrás de
+  `if (document.getElementById('amz-tab-dashboard'))`.
+- **Operaciones (huérfano, sin nav propio, solo alcanzable por links de
+  alertas) → subtab "Catálogo" de FBA & Stock** (junto a "Reabastecimiento",
+  el contenido que ya tenía FBA).
+
+Amazon pasó de 11 tabs de nivel superior a 8 (Dashboard, Ventas, Productos,
+Salud, Retornos, Planeación, Facturación, FBA & Stock), quedando
+estructuralmente simétrico con ML.
+
+**Permisos**: `PERMISSION_TREE["amz"]` actualizado — `ventas.subtabs` gana
+`finanzas`, `productos.subtabs` gana `listings`/`deals` (antes `None`),
+`fba.subtabs` gana `reabastecimiento`/`catalogo` (antes `None`);
+`finanzas`/`listings`/`deals`/`operaciones` desaparecen como tabs propios
+del árbol. Migración de claves viejas (emitidas el mismo día, antes de
+esta consolidación) vía `_LEGACY_AMZ_TAB_MAP`. Los botones de subtab de
+Ventas y FBA ahora sí respetan permisos (antes de este cambio se
+calculaba el contexto pero nunca se usó para ocultar botones — bug
+encontrado al probar con un usuario restringido a un solo subtab: se
+veían los 3 botones de Ventas en vez de solo el permitido). Corregido
+igual que Salud: subtabs no permitidos no se renderizan, el subtab
+default (primero permitido) se muestra sin `hidden` y su botón sale
+resaltado, y el JS de "carga inicial" dispara el loader correcto según
+`window.amzVentasDefaultSubtab`/`window.amzFbaDefaultSubtab` en vez de
+asumir siempre Resumen/Reabastecimiento.
+
+Compat: `/amazon?tab=finanzas|operaciones` redirige a
+`/amazon?tab=ventas|fba`; `/amazon?tab=listings|deals` redirige a
+`/amazon/products` (sin selección automática de subtab en el redirect,
+limitación aceptada — caso raro de links viejos).
+
+Verificado localmente: usuario admin ve los 3 subtabs de Ventas y los 2 de
+FBA + Listings/Deals en Productos; usuario restringido a un subtab
+específico solo ve ese botón y ese panel visible; los divs viejos
+(`amz-tab-operaciones`/`amz-tab-finanzas`/`amz-tab-listings`/`amz-tab-deals`)
+ya no existen en el HTML; JS de ambas páginas pasa `node --check`.
+
+---
+
 ## 2026-07-24 — FEAT+FIX: Mensajes de Compradores Amazon — Fase 2 (AUTOBOT + ExclusiveBulbs)
 
 **Archivos:** `app/config.py`, `app/auth.py`, `app/services/buyer_messages_client.py`.

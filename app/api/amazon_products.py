@@ -1564,6 +1564,24 @@ def _trigger_bm_prefetch(listings: list) -> None:
 # porque amazon_dashboard.html los sigue usando.
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/products/listings", response_class=HTMLResponse)
+async def amazon_products_listings_shell(request: Request):
+    """Shell estático — Listings ya no es tab propio, se fusionó aquí como
+    subtab de Productos. Sin datos server-side: loadListingsTab() (JS) hace
+    todo el fetch/render vía /api/amazon/listing-quality, igual que cuando
+    vivía en /amazon?tab=listings — solo cambió dónde se monta el shell."""
+    return _templates.TemplateResponse(request, "partials/amazon_products_listings.html", {})
+
+
+@router.get("/products/deals", response_class=HTMLResponse)
+async def amazon_products_deals_shell(request: Request):
+    """Shell estático — Deals ya no es tab propio, se fusionó aquí como
+    subtab de Productos. Sin datos server-side: loadDealsSection()/
+    loadCompPricingSection()/loadDealCandidates() (JS) hacen todo el
+    fetch/render, igual que cuando vivía en /amazon?tab=deals."""
+    return _templates.TemplateResponse(request, "partials/amazon_products_deals.html", {})
+
+
 @router.get("/products/resumen", response_class=HTMLResponse)
 async def amazon_products_resumen(request: Request):
     """

@@ -49,7 +49,15 @@ function _amzErrorBanner(msg) {
         '<button onclick="loadAmazonData()" class="mt-2 text-xs text-orange-500 underline">Reintentar</button>' +
         '</div>';
 }
-var amzTabLoaded = { dashboard: amzActiveTab === 'dashboard', ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false, deals: false };
+var amzTabLoaded = { dashboard: amzActiveTab === 'dashboard', ventas: amzActiveTab === 'ventas', salud: false, fba: false };
+// Flags de lazy-load de subtabs — declaradas aquí (antes del bloque de "carga
+// inicial" más abajo) para poder marcarlas en cuanto esa carga inicial ya
+// resolvió el subtab default; si se declararan más abajo (como antes),
+// "var x = false" las hubiera reseteado después de que la carga inicial ya
+// las hubiera puesto en true.
+var _amzVentasSkuLoaded = false;
+var _amzVentasFinanzasLoaded = false;
+var _amzFbaCatalogoLoaded = false;
 
 // Declaradas aquí (no más abajo, junto a Mensajes de Compradores) porque
 // loadAmzSaludTab() puede dispararse de inmediato más abajo en este mismo
@@ -83,7 +91,7 @@ function fmtCompact(n) {
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
-    ['dashboard', 'ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings', 'deals'].forEach(function(t) {
+    ['dashboard', 'ventas', 'salud', 'fba'].forEach(function(t) {
         var el = document.getElementById('amz-tab-' + t);
         if (el) el.classList.toggle('hidden', t !== tabName);
     });
@@ -102,15 +110,22 @@ function switchAmzTab(tabName) {
         amzTabLoaded[tabName] = true;
         if (tabName === 'dashboard') loadAmazonDashboard();
         else if (tabName === 'salud') loadAmzSaludTab();
-        else if (tabName === 'operaciones') loadAmzOperacionesTab();
-        else if (tabName === 'finanzas') loadAmzFinanzasTab();
         else if (tabName === 'fba') loadFbaTab();
-        else if (tabName === 'listings') loadListingsTab();
-        else if (tabName === 'deals') loadDealsTab();
         else if (tabName === 'ventas') { loadAmzBriefing(); loadAmzRecentOrders(); loadTopProducts(); }
     } else if (tabName === 'ventas') {
         loadAmzBriefing();
     }
+}
+
+// Finanzas y Operaciones ya no son tabs de nivel superior — quedaron fusionados
+// como subtabs de Ventas ("💰 Finanzas") y FBA & Stock ("Catálogo") respectivamente.
+function switchAmzToVentasFinanzas() {
+    switchAmzTab('ventas');
+    window.setAmzVentasView('finanzas');
+}
+function switchAmzToFbaCatalogo() {
+    switchAmzTab('fba');
+    window.setAmzFbaView('catalogo');
 }
 
 // ─── Range helpers ────────────────────────────────────────────────────────────
@@ -543,11 +558,11 @@ async function loadAmzAlerts() {
 
     var html = '<div class="flex flex-wrap gap-2 mb-1">';
     if (d.suppressed && d.suppressed.length)
-      html += '<button onclick="switchAmzTab(\'operaciones\')" class="flex items-center gap-1.5 text-sm bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-xl px-3 py-1.5 transition">🚫 ' + d.suppressed.length + ' suprimido' + (d.suppressed.length > 1 ? 's' : '') + '</button>';
+      html += '<button onclick="switchAmzToFbaCatalogo()" class="flex items-center gap-1.5 text-sm bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-xl px-3 py-1.5 transition">🚫 ' + d.suppressed.length + ' suprimido' + (d.suppressed.length > 1 ? 's' : '') + '</button>';
     if (d.no_stock_active && d.no_stock_active.length)
-      html += '<button onclick="switchAmzTab(\'operaciones\')" class="flex items-center gap-1.5 text-sm bg-orange-50 border border-orange-200 text-orange-700 hover:bg-orange-100 rounded-xl px-3 py-1.5 transition">📦 ' + d.no_stock_active.length + ' sin stock</button>';
+      html += '<button onclick="switchAmzToFbaCatalogo()" class="flex items-center gap-1.5 text-sm bg-orange-50 border border-orange-200 text-orange-700 hover:bg-orange-100 rounded-xl px-3 py-1.5 transition">📦 ' + d.no_stock_active.length + ' sin stock</button>';
     if (d.low_stock && d.low_stock.length)
-      html += '<button onclick="switchAmzTab(\'operaciones\')" class="flex items-center gap-1.5 text-sm bg-yellow-50 border border-yellow-200 text-yellow-700 hover:bg-yellow-100 rounded-xl px-3 py-1.5 transition">⚠️ ' + d.low_stock.length + ' stock bajo (&lt;' + d.threshold + 'u)</button>';
+      html += '<button onclick="switchAmzToFbaCatalogo()" class="flex items-center gap-1.5 text-sm bg-yellow-50 border border-yellow-200 text-yellow-700 hover:bg-yellow-100 rounded-xl px-3 py-1.5 transition">⚠️ ' + d.low_stock.length + ' stock bajo (&lt;' + d.threshold + 'u)</button>';
     html += '</div>';
     document.getElementById('amz-alerts-content').innerHTML = html;
   } catch(e) { document.getElementById('amz-alerts-content').innerHTML = ''; }
@@ -1099,26 +1114,45 @@ function loadAmzBalance() {
 }
 
 // ─── Carga inicial ─────────────────────────────────────────────────────────────
-setRange(30);
-highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
-if (amzActiveTab === 'salud') {
-    loadAmzSaludTab();
-    amzTabLoaded.salud = true;
-} else if (amzActiveTab === 'operaciones') {
-    loadAmzOperacionesTab();
-} else if (amzActiveTab === 'finanzas') {
-    loadAmzFinanzasTab();
-} else if (amzActiveTab === 'ventas') {
-    loadAmzBriefing();
-    loadAmzRecentOrders();
-    setTimeout(loadTopProducts, 1500);
-} else {
-    // dashboard (default)
-    loadAmazonDashboard();
+// Guardado detrás de un check de página: este archivo también se incluye en
+// la página de Productos (/amazon/products) solo para reusar loadListingsTab/
+// loadDealsSection/etc — ese bloque de carga inicial es específico de la
+// página /amazon (usa elementos que no existen en Productos).
+if (document.getElementById('amz-tab-dashboard')) {
+    setRange(30);
+    highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
+    if (amzActiveTab === 'salud') {
+        loadAmzSaludTab();
+        amzTabLoaded.salud = true;
+    } else if (amzActiveTab === 'ventas') {
+        var _vDefault = window.amzVentasDefaultSubtab || 'resumen';
+        if (_vDefault === 'sku') {
+            _amzVentasSkuLoaded = true;
+            loadAmzSkuSales();
+        } else if (_vDefault === 'finanzas') {
+            _amzVentasFinanzasLoaded = true;
+            loadAmzFinanzasTab();
+        } else {
+            loadAmzBriefing();
+            loadAmzRecentOrders();
+            setTimeout(loadTopProducts, 1500);
+        }
+    } else if (amzActiveTab === 'fba') {
+        amzTabLoaded.fba = true;
+        if ((window.amzFbaDefaultSubtab || 'reabastecimiento') === 'catalogo') {
+            _amzFbaCatalogoLoaded = true;
+            loadAmzOperacionesTab();
+        } else {
+            loadFbaTab();
+        }
+    } else {
+        // dashboard (default)
+        loadAmazonDashboard();
+    }
+    loadAmzBalance();
+    loadAmzAlerts();
+    loadAmzStatsRow();
 }
-loadAmzBalance();
-loadAmzAlerts();
-loadAmzStatsRow();
 
 function saveManualAmazonToken() {
     var token = (document.getElementById('amz-manual-token') || {}).value || '';
@@ -1206,12 +1240,11 @@ async function loadTopProducts() {
   }
 }
 
-// ─── Ventas — sub-vista Resumen / Por SKU ───────────────────────────────────
-var _amzVentasSkuLoaded = false;
+// ─── Ventas — sub-vista Resumen / Por SKU / Finanzas ────────────────────────
 var _amzSkuDays = 30;
 
 window.setAmzVentasView = function(view) {
-    ['resumen', 'sku'].forEach(function(v) {
+    ['resumen', 'sku', 'finanzas'].forEach(function(v) {
         var el = document.getElementById('amz-ventas-' + v);
         if (el) el.classList.toggle('hidden', v !== view);
         var btn = document.getElementById('amz-ventas-view-' + v);
@@ -1225,6 +1258,30 @@ window.setAmzVentasView = function(view) {
     if (view === 'sku' && !_amzVentasSkuLoaded) {
         _amzVentasSkuLoaded = true;
         loadAmzSkuSales();
+    }
+    if (view === 'finanzas' && !_amzVentasFinanzasLoaded) {
+        _amzVentasFinanzasLoaded = true;
+        loadAmzFinanzasTab();
+    }
+};
+
+// ─── FBA & Stock — sub-vista Reabastecimiento / Catálogo (antes "Operaciones") ──
+
+window.setAmzFbaView = function(view) {
+    ['reabastecimiento', 'catalogo'].forEach(function(v) {
+        var el = document.getElementById('amz-fba-' + v);
+        if (el) el.classList.toggle('hidden', v !== view);
+        var btn = document.getElementById('amz-fba-view-' + v);
+        if (btn) {
+            btn.classList.toggle('bg-orange-500', v === view);
+            btn.classList.toggle('text-white', v === view);
+            btn.classList.toggle('text-gray-600', v !== view);
+            btn.classList.toggle('hover:bg-orange-50', v !== view);
+        }
+    });
+    if (view === 'catalogo' && !_amzFbaCatalogoLoaded) {
+        _amzFbaCatalogoLoaded = true;
+        loadAmzOperacionesTab();
     }
 };
 
@@ -2055,8 +2112,8 @@ function _renderAmzStatsRow() {
 
   row.innerHTML = cards.map(function(c) {
     var action = c.filter === 'operaciones'
-      ? 'switchAmzTab(\'operaciones\')'
-      : 'switchAmzTab(\'operaciones\'); setAmzOpsFilter(\'' + c.filter + '\')';
+      ? 'switchAmzToFbaCatalogo()'
+      : 'switchAmzToFbaCatalogo(); setAmzOpsFilter(\'' + c.filter + '\')';
     return '<div onclick="' + action + '" class="kpi-card bg-white rounded-xl border p-4 flex items-center gap-3 cursor-pointer ' + c.hover + ' transition">' +
       '<div class="w-10 h-10 rounded-xl ' + c.bg + ' flex items-center justify-center shrink-0">' + c.icon + '</div>' +
       '<div><p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">' + c.label + '</p>' +

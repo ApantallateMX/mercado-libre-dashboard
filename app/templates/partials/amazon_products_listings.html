@@ -1,0 +1,28 @@
+<!-- Shell estático — antes tab propio "Listings", fusionado dentro de Productos.
+     El contenido real lo llena loadListingsTab() (amazon_dashboard.js), igual
+     que cuando vivía en /amazon?tab=listings — solo cambió dónde se monta. -->
+
+<!-- Score distribution -->
+<div id="amz-lq-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
+
+<!-- Tabla de calidad de listings -->
+<div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+  <div class="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
+    <div>
+      <h3 class="font-semibold text-gray-800">Calidad de Listings</h3>
+      <p class="text-xs text-gray-400 mt-0.5">Score basado en issues, estado y datos del listing</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <select id="amz-lq-filter" onchange="loadListingsTab()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
+        <option value="all">Todos</option>
+        <option value="D">Solo grado D (crítico)</option>
+        <option value="C">Grado C y D</option>
+        <option value="issues">Con issues</option>
+      </select>
+      <button onclick="loadListingsTab()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻</button>
+    </div>
+  </div>
+  <div id="amz-lq-table-wrap" class="overflow-x-auto">
+    <div class="text-center py-10 text-gray-400 text-sm">Cargando calidad de listings...</div>
+  </div>
+</div>

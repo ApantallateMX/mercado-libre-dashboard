@@ -76,6 +76,18 @@
             🔄 Devoluciones
         </button>
 
+        <button data-tab="listings" data-url="/api/amazon/products/listings"
+                class="amz-prod-tab flex-none px-5 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap transition
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            🏷️ Listings
+        </button>
+
+        <button data-tab="deals" data-url="/api/amazon/products/deals"
+                class="amz-prod-tab flex-none px-5 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap transition
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            🎯 Deals
+        </button>
+
     </div>
 </div>
 
@@ -214,6 +226,14 @@
 
 var _amzProdActiveTab = null;
 window.amzActiveSellerId = "{{ active_amazon_id or '' }}";
+// Placeholder solo para que amazon_dashboard.js cargue sin error al incluirlo
+// aquí (reusa loadListingsTab/loadDealsSection/etc para los subtabs Listings/
+// Deals) — su bloque de "carga inicial" está guardado detrás de un check de
+// página y no hace nada en esta página.
+var amzActiveTab = 'listings';
+</script>
+<script src="/static/js/amazon_dashboard.js?v={{ build_id }}"></script>
+<script>
 
 function loadAmzProdTab(tabName, url, btn) {
     if (_amzProdActiveTab === tabName) return;
@@ -256,6 +276,10 @@ function loadAmzProdTab(tabName, url, btn) {
             if (tabName === 'seller-flex' && document.getElementById('sfx-auto-sync-trigger')) {
                 _sfxStartPollingOnly('');
             }
+            // Listings y Deals: shell estático, el contenido lo llenan las
+            // funciones de amazon_dashboard.js (mismas que usaba /amazon?tab=X)
+            if (tabName === 'listings') { loadListingsTab(); }
+            if (tabName === 'deals') { loadDealsTab(); }
             // Sin Lanzar usa su propio loader — no hace nada extra aquí
         })
         .catch(function(e) {

@@ -240,15 +240,25 @@
      ══════════════════════════════════════════════════════════════════════ -->
 <div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
 
-<!-- ─── Sub-vista: Resumen / Por SKU ───────────────────────────────────── -->
+<!-- ─── Sub-vista: Resumen / Por SKU / Finanzas ─────────────────────────── -->
+{% set _amz_ventas_subtabs = amz_ventas_allowed_subtabs if amz_ventas_allowed_subtabs is defined else ['resumen','sku','finanzas'] %}
+{% set _amz_ventas_default = amz_ventas_default_subtab if amz_ventas_default_subtab is defined else 'resumen' %}
 <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium mb-5 w-fit">
+    {% if 'resumen' in _amz_ventas_subtabs %}
     <button id="amz-ventas-view-resumen" onclick="window.setAmzVentasView('resumen')"
-            class="px-3 py-1.5 bg-orange-500 text-white">Resumen</button>
+            class="px-3 py-1.5 {% if _amz_ventas_default == 'resumen' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">Resumen</button>
+    {% endif %}
+    {% if 'sku' in _amz_ventas_subtabs %}
     <button id="amz-ventas-view-sku" onclick="window.setAmzVentasView('sku')"
-            class="px-3 py-1.5 text-gray-600 hover:bg-orange-50 border-l border-gray-200">Por SKU</button>
+            class="px-3 py-1.5 {% if _amz_ventas_default == 'sku' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">Por SKU</button>
+    {% endif %}
+    {% if 'finanzas' in _amz_ventas_subtabs %}
+    <button id="amz-ventas-view-finanzas" onclick="window.setAmzVentasView('finanzas')"
+            class="px-3 py-1.5 {% if _amz_ventas_default == 'finanzas' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">💰 Finanzas</button>
+    {% endif %}
 </div>
 
-<div id="amz-ventas-resumen">
+<div id="amz-ventas-resumen" {% if _amz_ventas_default != 'resumen' %}class="hidden"{% endif %}>
 
 <!-- ─── Morning Briefing Card ──────────────────────────────────────────── -->
 <div id="amz-briefing-card" class="rounded-xl mb-5 overflow-hidden" style="background:#1a1a2e; border-left:4px solid #FF9900;">
@@ -360,7 +370,7 @@
 </div><!-- /amz-ventas-resumen -->
 
 <!-- ─── Ventas por SKU ──────────────────────────────────────────────────── -->
-<div id="amz-ventas-sku" class="hidden">
+<div id="amz-ventas-sku" {% if _amz_ventas_default != 'sku' %}class="hidden"{% endif %}>
     <div class="bg-white rounded-lg shadow p-4 mb-6">
         <div class="flex flex-wrap gap-1.5 items-center">
             <span class="text-xs text-gray-400 self-center mr-1">Período:</span>
@@ -377,6 +387,14 @@
     </div>
 </div>
 <!-- /amz-ventas-sku -->
+
+<!-- ─── Finanzas (liquidaciones) — antes tab propio, fusionado aquí ────────── -->
+<div id="amz-ventas-finanzas" {% if _amz_ventas_default != 'finanzas' %}class="hidden"{% endif %}>
+    <div id="amz-finanzas-content">
+        <div class="text-center py-12 text-gray-400 text-sm">Cargando liquidaciones...</div>
+    </div>
+</div>
+<!-- /amz-ventas-finanzas -->
 
 </div><!-- /amz-tab-ventas -->
 
@@ -483,10 +501,68 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: OPERACIONES
+     TAB: FBA & STOCK — subtabs: Reabastecimiento / Catálogo (antes "Operaciones")
      ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-operaciones" {% if active_amazon_tab != 'operaciones' %}class="hidden"{% endif %}>
+<div id="amz-tab-fba" class="hidden">
 
+  {% set _amz_fba_subtabs = amz_fba_allowed_subtabs if amz_fba_allowed_subtabs is defined else ['reabastecimiento','catalogo'] %}
+  {% set _amz_fba_default = amz_fba_default_subtab if amz_fba_default_subtab is defined else 'reabastecimiento' %}
+  <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium mb-5 w-fit">
+    {% if 'reabastecimiento' in _amz_fba_subtabs %}
+    <button id="amz-fba-view-reabastecimiento" onclick="window.setAmzFbaView('reabastecimiento')"
+            class="px-3 py-1.5 {% if _amz_fba_default == 'reabastecimiento' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">Reabastecimiento</button>
+    {% endif %}
+    {% if 'catalogo' in _amz_fba_subtabs %}
+    <button id="amz-fba-view-catalogo" onclick="window.setAmzFbaView('catalogo')"
+            class="px-3 py-1.5 {% if _amz_fba_default == 'catalogo' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">Catálogo</button>
+    {% endif %}
+  </div>
+
+  <div id="amz-fba-reabastecimiento" {% if _amz_fba_default != 'reabastecimiento' %}class="hidden"{% endif %}>
+  <!-- KPIs de FBA -->
+  <div id="amz-fba-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-orange-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-orange-100 rounded w-1/2"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-green-100 rounded w-1/2"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-yellow-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-yellow-100 rounded w-1/2"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-red-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-red-100 rounded w-1/2"></div>
+    </div>
+  </div>
+
+  <!-- Tabla de restock -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800">Calculadora de Reabastecimiento FBA</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Velocidad 30d · días de cobertura · qty a pedir</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="amz-fba-filter" onchange="loadFbaTab()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
+          <option value="all">Todos</option>
+          <option value="critical">Crítico (&lt;10d)</option>
+          <option value="warning">Advertencia (10-30d)</option>
+          <option value="out">Sin stock</option>
+        </select>
+        <button onclick="loadFbaTab()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻</button>
+      </div>
+    </div>
+    <div id="amz-fba-table-wrap" class="overflow-x-auto">
+      <div class="text-center py-10 text-gray-400 text-sm">Cargando datos de reabastecimiento...</div>
+    </div>
+  </div>
+  </div><!-- /amz-fba-reabastecimiento -->
+
+  <div id="amz-fba-catalogo" {% if _amz_fba_default != 'catalogo' %}class="hidden"{% endif %}>
   <!-- Alertas detalladas -->
   <div id="amz-ops-alerts" class="mb-6"></div>
 
@@ -560,172 +636,13 @@
       <span id="amz-threshold-saved" class="hidden text-sm text-green-600 font-medium">✓ Guardado</span>
     </div>
   </div>
+  </div><!-- /amz-fba-catalogo -->
 
 </div>
 
-<!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: FINANZAS
-     ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-finanzas" {% if active_amazon_tab != 'finanzas' %}class="hidden"{% endif %}>
-  <div id="amz-finanzas-content">
-    <div class="text-center py-12 text-gray-400 text-sm">Cargando liquidaciones...</div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: FBA & STOCK
-     ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-fba" class="hidden">
-
-  <!-- KPIs de FBA -->
-  <div id="amz-fba-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-orange-400 animate-pulse">
-      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
-      <div class="h-7 bg-orange-100 rounded w-1/2"></div>
-    </div>
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-400 animate-pulse">
-      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
-      <div class="h-7 bg-green-100 rounded w-1/2"></div>
-    </div>
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-yellow-400 animate-pulse">
-      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
-      <div class="h-7 bg-yellow-100 rounded w-1/2"></div>
-    </div>
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-red-400 animate-pulse">
-      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
-      <div class="h-7 bg-red-100 rounded w-1/2"></div>
-    </div>
-  </div>
-
-  <!-- Tabla de restock -->
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800">Calculadora de Reabastecimiento FBA</h3>
-        <p class="text-xs text-gray-400 mt-0.5">Velocidad 30d · días de cobertura · qty a pedir</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <select id="amz-fba-filter" onchange="loadFbaTab()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
-          <option value="all">Todos</option>
-          <option value="critical">Crítico (&lt;10d)</option>
-          <option value="warning">Advertencia (10-30d)</option>
-          <option value="out">Sin stock</option>
-        </select>
-        <button onclick="loadFbaTab()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻</button>
-      </div>
-    </div>
-    <div id="amz-fba-table-wrap" class="overflow-x-auto">
-      <div class="text-center py-10 text-gray-400 text-sm">Cargando datos de reabastecimiento...</div>
-    </div>
-  </div>
-
-</div>
-
-<!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: LISTINGS & CALIDAD
-     ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-listings" class="hidden">
-
-  <!-- Score distribution -->
-  <div id="amz-lq-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
-
-  <!-- Tabla de calidad de listings -->
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex flex-wrap items-center justify-between gap-2 px-6 py-4 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800">Calidad de Listings</h3>
-        <p class="text-xs text-gray-400 mt-0.5">Score basado en issues, estado y datos del listing</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <select id="amz-lq-filter" onchange="loadListingsTab()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
-          <option value="all">Todos</option>
-          <option value="D">Solo grado D (crítico)</option>
-          <option value="C">Grado C y D</option>
-          <option value="issues">Con issues</option>
-        </select>
-        <button onclick="loadListingsTab()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻</button>
-      </div>
-    </div>
-    <div id="amz-lq-table-wrap" class="overflow-x-auto">
-      <div class="text-center py-10 text-gray-400 text-sm">Cargando calidad de listings...</div>
-    </div>
-  </div>
-
-</div>
-
-<!-- ══ TAB: DEALS & PROMOCIONES ════════════════════════════════════════════ -->
-<div id="amz-tab-deals" class="hidden space-y-5">
-
-  <!-- KPIs -->
-  <div id="amz-deals-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
-    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
-    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
-    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
-  </div>
-  <!-- Buy Box Win % KPI -->
-  <div id="amz-bb-win-kpi" class="bg-white p-4 rounded-xl shadow border-b-4 border-gray-200">
-    <p class="text-xs text-gray-400 mb-1">🏆 Buy Box Win %</p>
-    <p class="text-2xl font-extrabold text-gray-300">—</p>
-    <p class="text-xs text-gray-400 mt-1">Cargando análisis de precios...</p>
-  </div>
-
-  <!-- Sección 1: Lightning Deals & Best Deals -->
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800">⚡ Lightning Deals & Best Deals</h3>
-        <p class="text-xs text-gray-400 mt-0.5">Deals activos y próximos en Amazon MX</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <select id="amz-deals-filter" onchange="loadDealsSection()"
-                class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-600">
-          <option value="">Todos</option>
-          <option value="RUNNING">Activos ahora</option>
-          <option value="UPCOMING">Próximos</option>
-          <option value="ENDED">Terminados</option>
-        </select>
-        <button onclick="loadDealsSection()" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻</button>
-      </div>
-    </div>
-    <div id="amz-deals-list">
-      <div class="text-center py-10 text-gray-400 text-sm">Cargando deals...</div>
-    </div>
-  </div>
-
-  <!-- Sección 2: Precios vs Buy Box -->
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800">📊 Nuestro Precio vs Buy Box</h3>
-        <p class="text-xs text-gray-400 mt-0.5">Top productos — gap con el Buy Box actual · Primera carga ~20s</p>
-      </div>
-      <button onclick="loadCompPricingSection(true)" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻ Actualizar</button>
-    </div>
-    <div id="amz-pricing-mini-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-100 border-b border-gray-100"></div>
-    <div id="amz-pricing-table">
-      <div class="text-center py-10 text-gray-400 text-sm">Cargando análisis de precios...</div>
-    </div>
-  </div>
-
-  <!-- Sección 3: Candidatos a Deal -->
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800">💡 Candidatos a Promoción</h3>
-        <p class="text-xs text-gray-400 mt-0.5">Stock alto o ventas bajas — productos ideales para activar con un deal</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <span id="amz-no-sales-warn" class="hidden text-xs bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-lg px-2 py-1">⚠️ Sin datos de ventas</span>
-        <button onclick="loadDealCandidates()" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻</button>
-      </div>
-    </div>
-    <div id="amz-candidates-table">
-      <div class="text-center py-10 text-gray-400 text-sm">Analizando candidatos...</div>
-    </div>
-  </div>
-
-</div><!-- /amz-tab-deals -->
+<!-- Listings y Deals ya no son tabs de /amazon — se fusionaron como subtabs
+     dentro de Productos (/amazon/products), ver amazon_products.html +
+     partials/amazon_products_listings.html / amazon_products_deals.html. -->
 
 <!-- ══════════════════════════════════════════════════════════════
      PANEL LATERAL AMAZON — slide from right (igual a ML)
@@ -780,6 +697,8 @@ window.amzActiveSellerId = '{{ active_amazon_id or "" }}';
 window.amzMarketplaceName = '{{ amazon_account.marketplace_name | default("MX") }}';
 window.amzSaludAllowedSubtabs = {{ (amz_salud_allowed_subtabs if amz_salud_allowed_subtabs is defined else ['resumen','mensajes','vigilancia']) | tojson }};
 window.amzSaludDefaultSubtab = {{ (amz_salud_default_subtab or 'resumen') | tojson }};
+window.amzVentasDefaultSubtab = {{ (amz_ventas_default_subtab or 'resumen') | tojson }};
+window.amzFbaDefaultSubtab = {{ (amz_fba_default_subtab or 'reabastecimiento') | tojson }};
 </script>
 <script src="/static/js/health_ai.js"></script>
 <script src="/static/js/amazon_dashboard.js"></script>

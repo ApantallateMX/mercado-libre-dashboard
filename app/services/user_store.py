@@ -115,19 +115,31 @@ PERMISSION_TREE = {
     "amz": {
         "dashboard":    {"label": "Dashboard",    "subtabs": None},
         "ventas":       {"label": "Ventas",       "subtabs": {
-            "resumen": "Resumen", "sku": "Por SKU",
+            "resumen": "Resumen", "sku": "Por SKU", "finanzas": "Finanzas",
         }},
-        "productos":    {"label": "Productos",    "subtabs": None},
+        "productos":    {"label": "Productos",    "subtabs": {
+            "listings": "Listings", "deals": "Deals",
+        }},
         "salud":        {"label": "Salud",        "subtabs": {
             "resumen": "Resumen", "mensajes": "Mensajes de Compradores", "vigilancia": "Vigilancia",
         }},
-        "operaciones":  {"label": "Operaciones",  "subtabs": None},
-        "finanzas":     {"label": "Finanzas",     "subtabs": None},
-        "fba":          {"label": "FBA & Stock",  "subtabs": None},
-        "listings":     {"label": "Listings",     "subtabs": None},
-        "deals":        {"label": "Deals",        "subtabs": None},
+        "fba":          {"label": "FBA & Stock",  "subtabs": {
+            "reabastecimiento": "Reabastecimiento", "catalogo": "Catálogo",
+        }},
         "returns":      {"label": "Retornos",     "subtabs": None},
     },
+}
+
+# Consolidación 2026-07-24: Finanzas/Listings/Deals/Operaciones (Amazon) dejaron
+# de ser tabs de nivel superior — quedaron fusionados como subtabs de Ventas/
+# Productos/FBA & Stock respectivamente (mismo patrón que ML ya usaba). Mapeo
+# de las claves viejas (emitidas el mismo día, antes de esta consolidación) a
+# sus equivalentes nuevos.
+_LEGACY_AMZ_TAB_MAP = {
+    "amz.finanzas": "amz.ventas.finanzas",
+    "amz.listings": "amz.productos.listings",
+    "amz.deals": "amz.productos.deals",
+    "amz.operaciones": "amz.fba.catalogo",
 }
 
 # Migración de secciones "planas" (esquema viejo, previo al árbol tab→subtab)
@@ -151,7 +163,11 @@ def _expand_legacy_sections(sections: list) -> list:
         return []
     out = set()
     for s in sections:
-        if not s or "." in s:
+        if not s:
+            continue
+        if s in _LEGACY_AMZ_TAB_MAP:
+            out.add(_LEGACY_AMZ_TAB_MAP[s])
+        elif "." in s:
             out.add(s)
         elif s == "amazon":
             out.update(f"amz.{tab}" for tab in PERMISSION_TREE["amz"])

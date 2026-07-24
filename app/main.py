@@ -919,9 +919,7 @@ _ML_TAB_URL = {
 _AMZ_TAB_URL = {
     "dashboard": "/amazon?tab=dashboard", "ventas": "/amazon?tab=ventas",
     "productos": "/amazon/products", "salud": "/amazon?tab=salud",
-    "operaciones": "/amazon?tab=operaciones", "finanzas": "/amazon?tab=finanzas",
-    "fba": "/amazon?tab=fba", "listings": "/amazon?tab=listings",
-    "deals": "/amazon?tab=deals", "returns": "/amazon/returns",
+    "fba": "/amazon?tab=fba", "returns": "/amazon/returns",
 }
 
 
@@ -1299,25 +1297,13 @@ _NAV_TAB_DEFS = [
          ml_href="/deuda-empresa", amz_href="/deuda-empresa",
          ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab=None, amz_tab=None, admin_only=True, badge=None),
-    dict(id="finanzas", label="Finanzas", icon="💰",
-         ml_href=None, amz_href="/amazon?tab=finanzas",
-         ml_active=None, amz_active="finanzas", amz_uses_dispatcher=True,
-         ml_tab=None, amz_tab="finanzas", admin_only=False, badge=None,
-         ml_hidden=True),
+    # Finanzas, Listings y Deals dejaron de ser tabs de nivel superior
+    # (consolidación 2026-07-24) — fusionados como subtabs de Ventas/
+    # Productos respectivamente (mismo patrón que ML ya usaba).
     dict(id="fba", label="FBA & Stock", icon="🚚",
          ml_href=None, amz_href="/amazon?tab=fba",
          ml_active=None, amz_active="fba", amz_uses_dispatcher=True,
          ml_tab=None, amz_tab="fba", admin_only=False, badge=None),
-    dict(id="listings", label="Listings", icon="🏷️",
-         ml_href=None, amz_href="/amazon?tab=listings",
-         ml_active=None, amz_active="listings", amz_uses_dispatcher=True,
-         ml_tab=None, amz_tab="listings", admin_only=False, badge=None,
-         ml_hidden=True),
-    dict(id="deals", label="Deals", icon="🎯",
-         ml_href=None, amz_href="/amazon?tab=deals",
-         ml_active=None, amz_active="deals", amz_uses_dispatcher=True,
-         ml_tab=None, amz_tab="deals", admin_only=False, badge=None,
-         ml_hidden=True),
     dict(id="stock_sync", label="Sync Stock", icon="⇄",
          ml_href="/stock-sync", amz_href=None,
          ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
@@ -13646,7 +13632,15 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
     if active_amazon_id:
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
 
-    active_tab = tab if tab in ("dashboard", "ventas", "salud", "operaciones", "finanzas", "fba", "listings", "deals") else "dashboard"
+    # Compat: links/bookmarks viejos a tabs fusionados el 2026-07-24 —
+    # redirigen a su nuevo tab padre (aterrizan en el subtab default).
+    _legacy_tab_redirect = {"finanzas": "ventas", "operaciones": "fba"}
+    if tab in ("listings", "deals"):
+        return RedirectResponse("/amazon/products", status_code=302)
+    if tab in _legacy_tab_redirect:
+        return RedirectResponse(f"/amazon?tab={_legacy_tab_redirect[tab]}", status_code=302)
+
+    active_tab = tab if tab in ("dashboard", "ventas", "salud", "fba") else "dashboard"
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = active_tab
@@ -13656,12 +13650,16 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
     unrestricted = (not sections) or du.get("role") == "admin"
     all_salud_subtabs = list(user_store.PERMISSION_TREE["amz"]["salud"]["subtabs"].keys())
     all_ventas_subtabs = list(user_store.PERMISSION_TREE["amz"]["ventas"]["subtabs"].keys())
+    all_fba_subtabs = list(user_store.PERMISSION_TREE["amz"]["fba"]["subtabs"].keys())
     salud_allowed = all_salud_subtabs if unrestricted else user_store.get_allowed_subtabs(sections, "amz", "salud")
     ventas_allowed = all_ventas_subtabs if unrestricted else user_store.get_allowed_subtabs(sections, "amz", "ventas")
+    fba_allowed = all_fba_subtabs if unrestricted else user_store.get_allowed_subtabs(sections, "amz", "fba")
     ctx["amz_salud_allowed_subtabs"] = salud_allowed
     ctx["amz_salud_default_subtab"] = salud_allowed[0] if salud_allowed else None
     ctx["amz_ventas_allowed_subtabs"] = ventas_allowed
     ctx["amz_ventas_default_subtab"] = ventas_allowed[0] if ventas_allowed else None
+    ctx["amz_fba_allowed_subtabs"] = fba_allowed
+    ctx["amz_fba_default_subtab"] = fba_allowed[0] if fba_allowed else None
     return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx})
 
 
