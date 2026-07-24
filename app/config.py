@@ -114,10 +114,15 @@ GMAIL_OAUTH_CLIENT_SECRET = os.getenv("GMAIL_OAUTH_CLIENT_SECRET", "")
 # Segundo proyecto/cliente OAuth de Google (creado 2026-07-24 porque el original
 # quedó en modo "Testing" bajo una cuenta de Google distinta a la que se usó
 # para las cuentas Amazon2/3 — más rápido crear uno nuevo que rastrear la
-# cuenta original). Usado SOLO para autorizar AMAZON2/AMAZON3; AMAZON (Vecktor)
-# sigue con el cliente original de arriba, ya autorizado y funcionando.
+# cuenta original). Usado para autorizar AMAZON2; AMAZON (Vecktor) sigue con
+# el cliente original de arriba, ya autorizado y funcionando.
 GMAIL_OAUTH_CLIENT_ID_2 = os.getenv("GMAIL_OAUTH_CLIENT_ID_2", "")
 GMAIL_OAUTH_CLIENT_SECRET_2 = os.getenv("GMAIL_OAUTH_CLIENT_SECRET_2", "")
+# Tercer proyecto/cliente (mismo motivo que el "_2" — cada cuenta de Google
+# usada para crear estos proyectos resultó ser distinta y no recuperable a
+# tiempo). Usado SOLO para AMAZON3.
+GMAIL_OAUTH_CLIENT_ID_3 = os.getenv("GMAIL_OAUTH_CLIENT_ID_3", "")
+GMAIL_OAUTH_CLIENT_SECRET_3 = os.getenv("GMAIL_OAUTH_CLIENT_SECRET_3", "")
 AMAZON_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON_GMAIL_REFRESH_TOKEN", "")
 AMAZON2_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON2_GMAIL_REFRESH_TOKEN", "")
 AMAZON3_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON3_GMAIL_REFRESH_TOKEN", "")

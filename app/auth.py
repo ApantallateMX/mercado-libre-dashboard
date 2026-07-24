@@ -45,6 +45,7 @@ from app.config import (
     AMAZON3_APP_SOLUTION_ID, AMAZON3_NICKNAME,
     GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET,
     GMAIL_OAUTH_CLIENT_ID_2, GMAIL_OAUTH_CLIENT_SECRET_2,
+    GMAIL_OAUTH_CLIENT_ID_3, GMAIL_OAUTH_CLIENT_SECRET_3,
 )
 from app.services import token_store
 from app.services import user_store
@@ -787,11 +788,14 @@ async def amazon_disconnect(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _gmail_oauth_client_for(env_var: str) -> tuple:
-    """AMAZON_GMAIL_REFRESH_TOKEN (Vecktor) usa el cliente original ya
-    autorizado; AMAZON2_.../AMAZON3_... usan el segundo cliente/proyecto."""
+    """Cada cuenta Amazon terminó con su propio proyecto/cliente de Google
+    Cloud (creados en sesiones separadas, cada vez bajo una cuenta de Google
+    distinta que no se pudo recuperar a tiempo para reusar el anterior)."""
     if env_var == "AMAZON_GMAIL_REFRESH_TOKEN":
         return GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET
-    return GMAIL_OAUTH_CLIENT_ID_2, GMAIL_OAUTH_CLIENT_SECRET_2
+    if env_var == "AMAZON2_GMAIL_REFRESH_TOKEN":
+        return GMAIL_OAUTH_CLIENT_ID_2, GMAIL_OAUTH_CLIENT_SECRET_2
+    return GMAIL_OAUTH_CLIENT_ID_3, GMAIL_OAUTH_CLIENT_SECRET_3
 
 
 @router.get("/gmail/connect")
