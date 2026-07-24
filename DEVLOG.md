@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-24 — FIX preventivo: blindar cuentas Amazon contra la misma carrera de datos que ya afectó a ML
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`.
+
+Arely reportó ver el nickname de AUTOBOT en el banner al tener VECKTOR
+seleccionado. Investigación a fondo (código completo del flujo cookie →
+`_accounts_ctx` → ruta → template → dropdown, más consulta directa a la
+DB) **no encontró un bug determinístico reproducible** — la DB tenía el
+nickname correcto en cada cuenta Amazon en el momento de revisar, las 2
+cookies (`active_account_id` ML / `active_amazon_id` Amazon) están
+correctamente separadas sin ningún cruce en el código, y el formulario
+de cada fila del dropdown solo puede mandar su propio `seller_id`.
+
+Sí se confirmó un hueco real: el lado Amazon **no tenía ninguna
+protección** contra la misma causa que sí se confirmó y arregló hoy más
+temprano para ML (`202867e` — Railway borra el SQLite en cada redeploy,
+uvicorn acepta requests antes de que el re-seed de fondo termine, una
+cuenta puede quedar con nickname vacío momentáneamente). Se aplicó el
+mismo patrón preventivamente:
+
+- `KNOWN_AMAZON_NICKNAMES` + `_with_amazon_nickname_fallback` en
+  `token_store.py`, aplicado en `get_amazon_account`/
+  `get_all_amazon_accounts` — igual que `KNOWN_ML_NICKNAMES` para ML.
+- `Cache-Control: no-store` en las 4 páginas Amazon (`/amazon`,
+  `/amazon/products`, `/amazon/orders`, `/amazon/returns`) — su
+  contenido depende de qué cuenta esté activa (cookie), no deberían
+  cachearse en el navegador; una de las hipótesis no descartadas era que
+  el banner mostrara una copia vieja del DOM.
+- Log de advertencia en `_accounts_ctx` cuando la cookie `active_amazon_id`
+  no coincide con ninguna cuenta cargada y se cae a la primera — antes
+  pasaba en silencio, ahora queda registrado para poder correlacionar si
+  se repite.
+
+No se puede confirmar al 100% que esto haya sido la causa exacta de lo
+que vio Arely, pero cierra el hueco estructural real que sí se confirmó,
+con el mismo patrón ya probado hoy para ML.
+
+---
+
 ## 2026-07-24 — FIX: "Marcar todo como atendido" (Mensajes Amazon) restringido a admin
 
 **Archivos:** `app/templates/amazon_dashboard.html`, `app/main.py`.

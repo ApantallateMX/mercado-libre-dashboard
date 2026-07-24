@@ -28,6 +28,28 @@ def _with_nickname_fallback(row: dict) -> dict:
     return row
 
 
+# Mismo patrón que KNOWN_ML_NICKNAMES pero para las 3 cuentas Amazon — agregado
+# 2026-07-24 tras un reporte de un usuario viendo el nickname de OTRA cuenta
+# en el banner de Amazon. La investigación no encontró una fila con nickname
+# incorrecto en ese momento, pero confirmó que el lado Amazon no tenía ningún
+# respaldo contra la misma carrera de datos (Railway borra el SQLite en cada
+# redeploy) que sí causó el bug de nicknames ML ese mismo día — este fallback
+# cierra ese hueco preventivamente, sin importar si fue o no la causa exacta.
+KNOWN_AMAZON_NICKNAMES: dict = {
+    "A20NFIUQNEYZ1E": "VECKTOR IMPORTS",
+    "A252KSQ687FNRO": "AUTOBOT AMZ MX",
+    "A22XNR713HGDVG": "ExclusiveBulbs",
+}
+
+
+def _with_amazon_nickname_fallback(row: dict) -> dict:
+    if row is not None and not row.get("nickname"):
+        fallback = KNOWN_AMAZON_NICKNAMES.get(str(row.get("seller_id", "")))
+        if fallback:
+            row["nickname"] = fallback
+    return row
+
+
 async def init_db():
     """Inicializa la base de datos SQLite. Crea el directorio si no existe (Railway Volume)."""
     db_path = Path(DATABASE_PATH)
@@ -2304,7 +2326,7 @@ async def get_amazon_account(seller_id: str) -> Optional[dict]:
             "SELECT * FROM amazon_accounts WHERE seller_id = ?", (seller_id,)
         )
         row = await cursor.fetchone()
-        return dict(row) if row else None
+        return _with_amazon_nickname_fallback(dict(row)) if row else None
 
 
 async def get_all_amazon_accounts() -> list:
@@ -2319,7 +2341,7 @@ async def get_all_amazon_accounts() -> list:
             "SELECT seller_id, nickname, marketplace_id, marketplace_name FROM amazon_accounts ORDER BY created_at"
         )
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [_with_amazon_nickname_fallback(dict(row)) for row in rows]
 
 
 async def delete_amazon_account(seller_id: str):

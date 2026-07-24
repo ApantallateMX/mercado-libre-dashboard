@@ -1423,6 +1423,7 @@ async def _accounts_ctx(request: Request) -> dict:
     amazon_accounts = await token_store.get_all_amazon_accounts()
     active_amazon_id = request.cookies.get("active_amazon_id")
     if active_amazon_id and not any(a["seller_id"] == active_amazon_id for a in amazon_accounts):
+        logger.warning(f"[ACCOUNTS-CTX] Cookie active_amazon_id={active_amazon_id} no coincide con ninguna cuenta cargada ({len(amazon_accounts)} disponibles) — cayendo a la primera cuenta")
         active_amazon_id = None
     if not active_amazon_id and amazon_accounts:
         active_amazon_id = amazon_accounts[0]["seller_id"]
@@ -13660,7 +13661,7 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
     ctx["amz_ventas_default_subtab"] = ventas_allowed[0] if ventas_allowed else None
     ctx["amz_fba_allowed_subtabs"] = fba_allowed
     ctx["amz_fba_default_subtab"] = fba_allowed[0] if fba_allowed else None
-    return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx})
+    return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/amazon/asin-search")
@@ -13904,7 +13905,7 @@ async def amazon_products_page(request: Request):
     ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = "productos"
     ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
-    return templates.TemplateResponse(request, "amazon_products.html", {"user": user, **ctx})
+    return templates.TemplateResponse(request, "amazon_products.html", {"user": user, **ctx}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/amazon/orders", response_class=HTMLResponse)
@@ -13923,7 +13924,7 @@ async def amazon_orders_page(request: Request):
     ctx["active_platform"] = "amz"
     ctx["active_amazon_tab"] = "orders"
     ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
-    return templates.TemplateResponse(request, "amazon_orders.html", {"user": user, **ctx})
+    return templates.TemplateResponse(request, "amazon_orders.html", {"user": user, **ctx}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/amazon/returns", response_class=HTMLResponse)
@@ -13939,7 +13940,7 @@ async def amazon_returns_page(request: Request):
     ctx["active_platform"] = "amz"
     ctx["active"] = "returns"
     ctx["nav_tabs"] = _build_nav_tabs("amz", ctx.get("dashboard_user"))
-    return templates.TemplateResponse(request, "amazon_returns.html", {"user": user, **ctx})
+    return templates.TemplateResponse(request, "amazon_returns.html", {"user": user, **ctx}, headers={"Cache-Control": "no-store"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
