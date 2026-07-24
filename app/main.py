@@ -357,13 +357,10 @@ def _apply_bundle_margin_override(products: list, bundles: dict):
             p["_margen_pct"] = None
 
 
-# Nicknames conocidos de cuentas propias — fallback cuando ML API rate-limita en startup
-_KNOWN_ML_NICKNAMES: dict = {
-    "523916436": "APANTALLATEMX",
-    "292395685": "AUTOBOT MEXICO",
-    "391393176": "BLOWTECHNOLOGIES",
-    "515061615": "LUTEMAMEXICO",
-}
+# Nicknames conocidos de cuentas propias — fallback cuando ML API rate-limita en
+# startup. Fuente única: token_store.KNOWN_ML_NICKNAMES (también usado como
+# fallback de lectura en get_tokens/get_any_tokens/get_all_tokens).
+_KNOWN_ML_NICKNAMES: dict = token_store.KNOWN_ML_NICKNAMES
 
 
 async def _seed_one(user_id: str, refresh_token: str, label: str, nickname_hint: str = ""):
@@ -591,13 +588,35 @@ async def lifespan(app: FastAPI):
         for attempt in range(1, 25):  # max 12 min
             await _seed_tokens()
             accounts = await token_store.get_all_tokens()
-            if len(accounts) >= n_expected:
-                print(f"[SEED-RETRY] Tokens OK en intento #{attempt}: {len(accounts)}/{n_expected} cuentas")
+            # "Completo" exige tanto la cantidad esperada de cuentas COMO que
+            # todas tengan nickname (get_all_tokens ya aplica el fallback del
+            # diccionario conocido — esto solo sigue reintentando para cuentas
+            # nuevas/desconocidas cuyo nickname genuinamente no se pudo obtener).
+            all_have_nickname = all(a.get("nickname") for a in accounts)
+            if len(accounts) >= n_expected and all_have_nickname:
+                print(f"[SEED-RETRY] Tokens OK en intento #{attempt}: {len(accounts)}/{n_expected} cuentas, todos con nickname")
                 return
-            print(f"[SEED-RETRY] Intento #{attempt}: {len(accounts)}/{n_expected} cuentas. Reintentando en 30s...")
+            print(f"[SEED-RETRY] Intento #{attempt}: {len(accounts)}/{n_expected} cuentas (nicknames completos: {all_have_nickname}). Reintentando en 30s...")
             import asyncio as _aio_retry
             await _aio_retry.sleep(30)
         print(f"[SEED-RETRY] Máx intentos alcanzado. Cuentas activas: {len(await token_store.get_all_tokens())}/{n_expected}")
+
+    async def _nickname_healing_loop():
+        """Auto-reparación indefinida (no solo en el arranque): cada 5 min,
+        vuelve a intentar poblar el nickname de cualquier cuenta que lo tenga
+        vacío. `_seed_tokens_with_retry` solo cubre los primeros ~12 min tras
+        el arranque — si una cuenta queda con nickname vacío después de eso
+        (ej. una cuenta nueva no conocida en KNOWN_ML_NICKNAMES, cuya llamada
+        a la API de ML falló justo en el rate-limit del arranque), antes se
+        quedaba así permanentemente hasta un diag manual. Este loop corre
+        para siempre y es barato: _seed_tokens() no refresca tokens que no
+        están expirados, solo revisa/rellena nicknames faltantes."""
+        while True:
+            await asyncio.sleep(300)
+            try:
+                await _seed_tokens()
+            except Exception as _e_nh:
+                logger.warning(f"[NICKNAME-HEAL] Fallo en sweep periódico: {_e_nh}")
 
     async def _deferred_init():
         """Inicialización diferida — corre después de que uvicorn ya acepta requests."""
@@ -616,6 +635,7 @@ async def lifespan(app: FastAPI):
 
         # 1. Refrescar tokens ML + Amazon (con retry si ML rate-limita)
         await _seed_tokens_with_retry()
+        asyncio.create_task(_nickname_healing_loop())
         await _seed_amazon_accounts()
         # 2. Monitor de precios BM (skip si DISABLE_BM_MONITOR=true)
         # Conectar caché local al monitor para que nunca golpee BM directamente

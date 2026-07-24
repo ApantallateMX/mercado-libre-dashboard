@@ -7,6 +7,58 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-24 — FIX DE RAÍZ: cuentas ML mostrando ID numérico en vez de nickname (recurrente)
+
+**Archivos:** `app/services/token_store.py`, `app/services/meli_client.py`, `app/main.py`.
+
+### Por qué seguía pasando después de "arreglarlo" la vez anterior
+La vez pasada solo corrí el diag endpoint (`/api/diag/refresh-ml-tokens`) para
+reparar el síntoma en caliente. La causa real nunca se tocó: existían **3
+implementaciones distintas** de "refrescar token + traer nickname de la API de
+ML + guardar", cada una copy-pasteada por separado:
+1. `main.py:_seed_one`/`_backfill_nickname` (arranque, con fallback a un
+   diccionario de nicknames conocidos + reintentos 12 min).
+2. `meli_client.py:_auto_seed_from_env` (path "de emergencia", disparado por
+   CUALQUIERA de los 225 call sites de `get_meli_client()` — **sin fallback
+   alguno**, si la llamada a `/users/{id}` fallaba el nickname quedaba `""`
+   para siempre).
+3. El diag endpoint manual (una tercera copia, con fallback pero solo
+   ejecutable a mano).
+
+Railway borra el SQLite en cada redeploy. Uvicorn acepta requests ~2s después
+de arrancar, mientras el seeding de fondo apenas empieza — cualquier request
+real en esa ventana dispara el path #2 (sin red de seguridad) en paralelo al
+path #1, duplicando las llamadas a la API de ML justo cuando es más probable
+que rate-limite (429). Además, `_seed_tokens_with_retry` daba por "completo"
+el seeding con solo contar filas en la tabla, sin verificar que tuvieran
+nickname — así que ni siquiera reintentaba por esto.
+
+### Fix de raíz (no otro parche manual)
+- `token_store.KNOWN_ML_NICKNAMES` — única fuente de verdad (antes vivía
+  duplicado en `main.py`), con fallback aplicado directamente dentro de
+  `get_tokens`/`get_any_tokens`/`get_all_tokens` — **el dropdown nunca más
+  puede mostrar un ID crudo para una de las 4 cuentas conocidas**, sin
+  importar qué tan mal salga el seeding de esa corrida (defensa en la capa de
+  lectura, no depende de que el seeding haya sido perfecto).
+- `_auto_seed_from_env()` (el path sin red de seguridad) ahora también aplica
+  el mismo fallback al escribir en DB — arregla el dato en origen, no solo en
+  la lectura.
+- `_seed_tokens_with_retry()` ahora exige nicknames completos (no solo el
+  conteo de filas) para darse por terminado — sigue reintentando si falta
+  alguno.
+- `_nickname_healing_loop()` (nuevo): barrido cada 5 min, para siempre (no
+  solo los primeros 12 min tras el arranque) — cubre el caso de una cuenta
+  NUEVA (no en el diccionario conocido) cuyo nickname falle justo en el
+  rate-limit del arranque; antes se quedaba así permanentemente hasta un
+  diag manual.
+
+### Verificado localmente
+Fila con nickname vacío forzado por SQL directo (bypaseando toda la lógica
+de guardado) → `get_tokens`/`get_all_tokens` devuelven el nickname correcto
+igual. Servidor arranca sin errores con los 3 archivos modificados.
+
+---
+
 ## 2026-07-23 — FEAT: Permisos jerárquicos por tab/subtab (ML + Amazon) + fix bug de redirección
 
 **Archivos:** `app/services/user_store.py`, `app/main.py`, `app/api/users.py`,

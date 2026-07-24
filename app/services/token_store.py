@@ -6,6 +6,27 @@ from typing import Optional
 from pathlib import Path
 from app.config import DATABASE_PATH
 
+# Nicknames conocidos de cuentas propias — fallback cuando la ML API rate-limita
+# durante el arranque (o cualquier otra falla) y una cuenta queda con nickname
+# vacío en DB. Única fuente de verdad — usado tanto al escribir (seeding) como
+# al leer (get_tokens/get_any_tokens/get_all_tokens), para que el dropdown de
+# cuentas NUNCA muestre un ID numérico crudo para una cuenta ya conocida,
+# sin importar qué tan mal haya salido el seeding de esa corrida.
+KNOWN_ML_NICKNAMES: dict = {
+    "523916436": "APANTALLATEMX",
+    "292395685": "AUTOBOT MEXICO",
+    "391393176": "BLOWTECHNOLOGIES",
+    "515061615": "LUTEMAMEXICO",
+}
+
+
+def _with_nickname_fallback(row: dict) -> dict:
+    if row is not None and not row.get("nickname"):
+        fallback = KNOWN_ML_NICKNAMES.get(str(row.get("user_id", "")))
+        if fallback:
+            row["nickname"] = fallback
+    return row
+
 
 async def init_db():
     """Inicializa la base de datos SQLite. Crea el directorio si no existe (Railway Volume)."""
@@ -2084,7 +2105,7 @@ async def get_tokens(user_id: str) -> Optional[dict]:
         )
         row = await cursor.fetchone()
         if row:
-            return dict(row)
+            return _with_nickname_fallback(dict(row))
         return None
 
 
@@ -2095,7 +2116,7 @@ async def get_any_tokens() -> Optional[dict]:
         cursor = await db.execute("SELECT * FROM tokens LIMIT 1")
         row = await cursor.fetchone()
         if row:
-            return dict(row)
+            return _with_nickname_fallback(dict(row))
         return None
 
 
@@ -2105,7 +2126,7 @@ async def get_all_tokens() -> list:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT user_id, nickname FROM tokens ORDER BY created_at")
         rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+        return [_with_nickname_fallback(dict(row)) for row in rows]
 
 
 async def get_daily_goal(user_id: str) -> float:

@@ -1797,6 +1797,8 @@ async def _auto_seed_from_env() -> int:
                         nickname = me.json().get("nickname", "")
             except Exception:
                 pass
+            if not nickname:
+                nickname = token_store.KNOWN_ML_NICKNAMES.get(str(uid), "")
             await token_store.save_tokens(uid, data["access_token"], data["refresh_token"],
                                           data.get("expires_in", 21600), nickname=nickname)
             seeded += 1
