@@ -44,6 +44,7 @@ from app.config import (
     AMAZON3_MARKETPLACE_ID, AMAZON3_MARKETPLACE_NAME,
     AMAZON3_APP_SOLUTION_ID, AMAZON3_NICKNAME,
     GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET,
+    GMAIL_OAUTH_CLIENT_ID_2, GMAIL_OAUTH_CLIENT_SECRET_2,
 )
 from app.services import token_store
 from app.services import user_store
@@ -776,19 +777,32 @@ async def amazon_disconnect(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 # GMAIL API OAuth — SOLO para enviar respuestas de Mensajes de Compradores
 # Amazon (buzón dedicado). Railway bloquea egress SMTP (465/587) — la API de
-# Gmail manda por HTTPS. Un solo Client ID/Secret sirve para las 3 cuentas;
-# cada Gmail dedicado se autoriza aquí por separado y genera su propio
-# refresh_token (se muestra una sola vez para copiarlo a Railway como
-# AMAZON_GMAIL_REFRESH_TOKEN / AMAZON2_.../AMAZON3_...).
+# Gmail manda por HTTPS. Originalmente un solo Client ID/Secret para las 3
+# cuentas; AMAZON2/AMAZON3 usan un segundo proyecto/cliente ("Dashboard
+# Autobot", creado 2026-07-24) porque el original estaba en modo Testing bajo
+# una cuenta de Google que no se pudo recuperar a tiempo — cada Gmail dedicado
+# se autoriza aquí por separado y genera su propio refresh_token (se muestra
+# una sola vez para copiarlo a Railway como AMAZON_GMAIL_REFRESH_TOKEN /
+# AMAZON2_.../AMAZON3_...).
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _gmail_oauth_client_for(env_var: str) -> tuple:
+    """AMAZON_GMAIL_REFRESH_TOKEN (Vecktor) usa el cliente original ya
+    autorizado; AMAZON2_.../AMAZON3_... usan el segundo cliente/proyecto."""
+    if env_var == "AMAZON_GMAIL_REFRESH_TOKEN":
+        return GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET
+    return GMAIL_OAUTH_CLIENT_ID_2, GMAIL_OAUTH_CLIENT_SECRET_2
+
 
 @router.get("/gmail/connect")
 async def gmail_connect(request: Request, env_var: str = "AMAZON_GMAIL_REFRESH_TOKEN"):
     """Inicia el flujo OAuth de Gmail para autorizar un buzón dedicado.
     env_var indica en qué variable de Railway va a terminar el refresh_token
-    (solo para mostrarlo en el callback, no afecta el flujo)."""
-    if not GMAIL_OAUTH_CLIENT_ID:
-        raise HTTPException(status_code=500, detail="GMAIL_OAUTH_CLIENT_ID no configurado")
+    (solo para mostrarlo en el callback, no afecta el flujo) y también decide
+    qué Client ID/Secret de Google usar (ver _gmail_oauth_client_for)."""
+    client_id, _client_secret_unused = _gmail_oauth_client_for(env_var)
+    if not client_id:
+        raise HTTPException(status_code=500, detail="Client ID de Gmail OAuth no configurado para esta cuenta")
 
     state = _build_amazon_state()  # nonce anti-CSRF genérico, no es específico de Amazon
     import os as _os_gmail
@@ -798,7 +812,7 @@ async def gmail_connect(request: Request, env_var: str = "AMAZON_GMAIL_REFRESH_T
     redirect_uri = f"{_app_base}/auth/gmail/callback"
 
     params = {
-        "client_id": GMAIL_OAUTH_CLIENT_ID,
+        "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         # gmail.send: para responder. gmail.settings.basic: para crear el
@@ -833,6 +847,8 @@ async def gmail_callback(request: Request, code: str = None, state: str = None, 
     if not _verify_amazon_state(_state_sig):
         return HTMLResponse("<h2>State inválido (posible CSRF)</h2>", status_code=400)
 
+    client_id, client_secret = _gmail_oauth_client_for(env_var)
+
     import os as _os_gmail
     _app_base = (_os_gmail.getenv("APP_BASE_URL") or "").rstrip("/")
     if not _app_base:
@@ -842,8 +858,8 @@ async def gmail_callback(request: Request, code: str = None, state: str = None, 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post("https://oauth2.googleapis.com/token", data={
             "code": code,
-            "client_id": GMAIL_OAUTH_CLIENT_ID,
-            "client_secret": GMAIL_OAUTH_CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         })

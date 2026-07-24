@@ -111,6 +111,13 @@ AMAZON3_INBOX_APP_PASSWORD = os.getenv("AMAZON3_INBOX_APP_PASSWORD", "")
 # por separado y genera su propio refresh_token.
 GMAIL_OAUTH_CLIENT_ID = os.getenv("GMAIL_OAUTH_CLIENT_ID", "")
 GMAIL_OAUTH_CLIENT_SECRET = os.getenv("GMAIL_OAUTH_CLIENT_SECRET", "")
+# Segundo proyecto/cliente OAuth de Google (creado 2026-07-24 porque el original
+# quedó en modo "Testing" bajo una cuenta de Google distinta a la que se usó
+# para las cuentas Amazon2/3 — más rápido crear uno nuevo que rastrear la
+# cuenta original). Usado SOLO para autorizar AMAZON2/AMAZON3; AMAZON (Vecktor)
+# sigue con el cliente original de arriba, ya autorizado y funcionando.
+GMAIL_OAUTH_CLIENT_ID_2 = os.getenv("GMAIL_OAUTH_CLIENT_ID_2", "")
+GMAIL_OAUTH_CLIENT_SECRET_2 = os.getenv("GMAIL_OAUTH_CLIENT_SECRET_2", "")
 AMAZON_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON_GMAIL_REFRESH_TOKEN", "")
 AMAZON2_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON2_GMAIL_REFRESH_TOKEN", "")
 AMAZON3_GMAIL_REFRESH_TOKEN = os.getenv("AMAZON3_GMAIL_REFRESH_TOKEN", "")
