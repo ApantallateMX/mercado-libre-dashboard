@@ -7,6 +7,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-24 — FIX: "Marcar todo como atendido" (Mensajes Amazon) restringido a admin
+
+**Archivos:** `app/templates/amazon_dashboard.html`, `app/main.py`.
+
+Arely reportó que veía este botón (borra de un jalón el historial acumulado
+de mensajes) sin ser admin — Jovan pidió que solo lo vea el rol admin.
+Ocultado en el template (`{% if dashboard_user.role == 'admin' %}`) Y
+reforzado en el endpoint `POST /api/amazon/buyer-messages/mark-all-resolved`
+(antes solo exigía estar logueado, cualquier rol podía llamarlo
+directamente aunque no viera el botón).
+
+---
+
 ## 2026-07-24 — FEAT: consolidación de tabs Amazon (Finanzas/Listings/Deals/Operaciones → subtabs)
 
 **Archivos:** `app/templates/amazon_dashboard.html`, `app/templates/amazon_products.html`,

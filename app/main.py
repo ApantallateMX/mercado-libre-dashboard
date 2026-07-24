@@ -19191,7 +19191,7 @@ async def amazon_buyer_messages_mark_all_resolved(request: Request):
     resueltos de un jalón; de ahí en adelante Tomar/Marcar resuelto se usa
     normal para lo nuevo que vaya llegando."""
     du = getattr(request.state, "dashboard_user", None) or {}
-    if not du:
+    if not du or du.get("role") != "admin":
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()
