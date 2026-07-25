@@ -695,7 +695,7 @@ window.answerQuestion = function(questionId) {
     });
 };
 
-window.sendChatMessage = function(packId) {
+window.sendChatMessage = function(packId, accountId) {
     var textarea = document.getElementById('msg-input-' + packId);
     var text = textarea.value.trim();
     if (!text) return;
@@ -704,7 +704,7 @@ window.sendChatMessage = function(packId) {
     btn.disabled = true; btn.textContent = 'Enviando...'; msgEl.textContent = '';
     fetch('/api/health/messages/' + packId + '/send', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text: text})
+        body: JSON.stringify({text: text, account_id: accountId || ''})
     })
     .then(function(r) {
         if (r.ok) {

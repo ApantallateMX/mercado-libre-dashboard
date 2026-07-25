@@ -9792,6 +9792,114 @@ async def health_search_partial(
         await client.close()
 
 
+async def _fetch_enriched_ml_conversations(
+    client, seller_id: str, offset: int, limit: int, date_from: str, date_to: str,
+    account_id: str = "", account_nickname: str = "",
+) -> list:
+    """Trae y enriquece conversaciones de UNA cuenta ML (pedidos + mensajes +
+    contexto de orden). Extraído de health_messages_partial para poder
+    reusarlo tanto para la vista de una sola cuenta como para el fan-out de
+    la bandeja unificada (Todas las cuentas) — misma lógica, sin duplicar."""
+    data = await client.get_messages(offset=offset, limit=limit, date_from=date_from, date_to=date_to)
+    raw_messages = data.get("results", data if isinstance(data, list) else [])
+
+    order_context_map = {}
+    order_ids_for_context = []
+    for msg in raw_messages:
+        oid = msg.get("order_id", msg.get("resource_id", ""))
+        if oid:
+            order_ids_for_context.append(str(oid))
+
+    if order_ids_for_context:
+        sem_oc = asyncio.Semaphore(5)
+        async def _fetch_order_ctx(oid):
+            async with sem_oc:
+                try:
+                    order = await client.get(f"/orders/{oid}")
+                    oi = order.get("order_items", [])
+                    item_info = oi[0].get("item", {}) if oi else {}
+                    return oid, {
+                        "product_title": item_info.get("title", ""),
+                        "total_amount": order.get("total_amount", 0),
+                        "currency": order.get("currency_id", ""),
+                        "buyer": order.get("buyer", {}).get("nickname", ""),
+                        "status": order.get("status", ""),
+                    }
+                except Exception:
+                    return oid, {}
+        oc_tasks = [_fetch_order_ctx(oid) for oid in list(set(order_ids_for_context))[:20]]
+        oc_results = await asyncio.gather(*oc_tasks, return_exceptions=True)
+        for r in oc_results:
+            if isinstance(r, tuple):
+                order_context_map[r[0]] = r[1]
+
+    enriched = []
+    for msg in raw_messages:
+        messages_list = msg.get("messages", [])
+        last_5 = messages_list[-5:] if messages_list else []
+
+        last_msg = messages_list[-1] if messages_list else None
+        last_from_buyer = False
+        last_elapsed = "-"
+        needs_response = False
+        if last_msg:
+            from_id = str(last_msg.get("from", {}).get("user_id", ""))
+            last_from_buyer = from_id != seller_id
+            needs_response = last_from_buyer
+            ts = last_msg.get("date_created", last_msg.get("date", ""))
+            if ts:
+                last_elapsed, _ = _elapsed_str(ts)
+
+        conv_date = msg.get("date_created", msg.get("date", ""))
+
+        enriched_msgs = []
+        for m in last_5:
+            from_id = str(m.get("from", {}).get("user_id", ""))
+            is_seller = from_id == seller_id
+            text_raw = m.get("text", "")
+            if isinstance(text_raw, dict):
+                text = text_raw.get("plain", str(text_raw))
+            else:
+                text = str(text_raw) if text_raw else "-"
+            msg_date = m.get("date_created", m.get("date", ""))
+            msg_time = msg_date[11:16] if msg_date and len(msg_date) > 16 else ""
+            enriched_msgs.append(SimpleNamespace(text=text, is_seller=is_seller, time=msg_time))
+
+        pack_id = msg.get("id", msg.get("pack_id", ""))
+        oid = str(msg.get("order_id", msg.get("resource_id", "")))
+        order_ctx = order_context_map.get(oid, {})
+
+        enriched.append(SimpleNamespace(
+            pack_id=pack_id,
+            order_id=oid,
+            date=conv_date[:10] if conv_date else "-",
+            _sort_date=conv_date or "",
+            last_from_buyer=last_from_buyer,
+            last_elapsed=last_elapsed,
+            needs_response=needs_response,
+            messages=enriched_msgs,
+            order_product=order_ctx.get("product_title", ""),
+            order_amount=order_ctx.get("total_amount", 0),
+            order_currency=order_ctx.get("currency", ""),
+            order_buyer=order_ctx.get("buyer", ""),
+            order_status=order_ctx.get("status", ""),
+            account_id=account_id or seller_id,
+            account_nickname=account_nickname,
+        ))
+    return enriched
+
+
+def _sort_ml_conversations(enriched: list) -> list:
+    """needs_response primero, y dentro de cada grupo, fecha descendente."""
+    from itertools import groupby as _grp
+    sorted_msgs = []
+    enriched_by_nr = sorted(enriched, key=lambda m: 0 if m.needs_response else 1)
+    for _, group in _grp(enriched_by_nr, key=lambda m: m.needs_response):
+        grp = sorted(list(group), key=lambda m: m._sort_date, reverse=True)
+        sorted_msgs.extend(grp)
+    return sorted_msgs
+
+
 @app.get("/partials/health-messages", response_class=HTMLResponse)
 async def health_messages_partial(
     request: Request,
@@ -9808,114 +9916,15 @@ async def health_messages_partial(
     try:
         df = date_from or None
         dt = date_to or None
-        try:
-            data = await client.get_messages(offset=offset, limit=limit,
-                                             date_from=df, date_to=dt)
-        except Exception:
-            data = {"results": [], "paging": {"total": 0, "offset": 0, "limit": limit}}
-        raw_messages = data.get("results", data if isinstance(data, list) else [])
-        paging = data.get("paging", {"total": len(raw_messages), "offset": offset, "limit": limit})
         seller_id = str(client.user_id)
+        try:
+            enriched = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
+            paging = {"total": len(enriched), "offset": offset, "limit": limit}
+        except Exception:
+            enriched = []
+            paging = {"total": 0, "offset": 0, "limit": limit}
 
-        # Collect order_ids for context enrichment
-        order_context_map = {}  # order_id -> {product, amount, buyer}
-        order_ids_for_context = []
-        for msg in raw_messages:
-            oid = msg.get("order_id", msg.get("resource_id", ""))
-            if oid:
-                order_ids_for_context.append(str(oid))
-
-        if order_ids_for_context:
-            sem_oc = asyncio.Semaphore(5)
-            async def _fetch_order_ctx(oid):
-                async with sem_oc:
-                    try:
-                        order = await client.get(f"/orders/{oid}")
-                        oi = order.get("order_items", [])
-                        item_info = oi[0].get("item", {}) if oi else {}
-                        return oid, {
-                            "product_title": item_info.get("title", ""),
-                            "total_amount": order.get("total_amount", 0),
-                            "currency": order.get("currency_id", ""),
-                            "buyer": order.get("buyer", {}).get("nickname", ""),
-                            "status": order.get("status", ""),
-                        }
-                    except Exception:
-                        return oid, {}
-            oc_tasks = [_fetch_order_ctx(oid) for oid in list(set(order_ids_for_context))[:20]]
-            oc_results = await asyncio.gather(*oc_tasks, return_exceptions=True)
-            for r in oc_results:
-                if isinstance(r, tuple):
-                    order_context_map[r[0]] = r[1]
-
-        enriched = []
-        for msg in raw_messages:
-            messages_list = msg.get("messages", [])
-            last_5 = messages_list[-5:] if messages_list else []
-
-            # Determine who wrote last and elapsed time
-            last_msg = messages_list[-1] if messages_list else None
-            last_from_buyer = False
-            last_elapsed = "-"
-            needs_response = False
-            if last_msg:
-                from_id = str(last_msg.get("from", {}).get("user_id", ""))
-                last_from_buyer = from_id != seller_id
-                needs_response = last_from_buyer
-                ts = last_msg.get("date_created", last_msg.get("date", ""))
-                if ts:
-                    last_elapsed, _ = _elapsed_str(ts)
-
-            conv_date = msg.get("date_created", msg.get("date", ""))
-
-            # Enrich individual messages
-            enriched_msgs = []
-            for m in last_5:
-                from_id = str(m.get("from", {}).get("user_id", ""))
-                is_seller = from_id == seller_id
-                text_raw = m.get("text", "")
-                if isinstance(text_raw, dict):
-                    text = text_raw.get("plain", str(text_raw))
-                else:
-                    text = str(text_raw) if text_raw else "-"
-                msg_date = m.get("date_created", m.get("date", ""))
-                msg_time = msg_date[11:16] if msg_date and len(msg_date) > 16 else ""
-                enriched_msgs.append(SimpleNamespace(
-                    text=text,
-                    is_seller=is_seller,
-                    time=msg_time,
-                ))
-
-            pack_id = msg.get("id", msg.get("pack_id", ""))
-            oid = str(msg.get("order_id", msg.get("resource_id", "")))
-            order_ctx = order_context_map.get(oid, {})
-
-            enriched.append(SimpleNamespace(
-                pack_id=pack_id,
-                order_id=oid,
-                date=conv_date[:10] if conv_date else "-",
-                _sort_date=conv_date or "",
-                last_from_buyer=last_from_buyer,
-                last_elapsed=last_elapsed,
-                needs_response=needs_response,
-                messages=enriched_msgs,
-                order_product=order_ctx.get("product_title", ""),
-                order_amount=order_ctx.get("total_amount", 0),
-                order_currency=order_ctx.get("currency", ""),
-                order_buyer=order_ctx.get("buyer", ""),
-                order_status=order_ctx.get("status", ""),
-            ))
-
-        # Sort: needs_response first, then newest first
-        enriched.sort(key=lambda m: (0 if m.needs_response else 1, m._sort_date), reverse=False)
-        # Within each group, sort by date descending
-        from itertools import groupby as _grp
-        sorted_msgs = []
-        enriched_by_nr = sorted(enriched, key=lambda m: 0 if m.needs_response else 1)
-        for _, group in _grp(enriched_by_nr, key=lambda m: m.needs_response):
-            grp = sorted(list(group), key=lambda m: m._sort_date, reverse=True)
-            sorted_msgs.extend(grp)
-        enriched = sorted_msgs
+        enriched = _sort_ml_conversations(enriched)
 
         # Búsqueda por orden, comprador o producto
         q_clean = (q or "").strip().lower()
@@ -9948,11 +9957,90 @@ async def health_messages_partial(
             "limit": limit,
             "seller_id": seller_id,
             "q": q,
+            "unified": False,
         })
     except Exception as e:
         return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando mensajes: {e}</p>')
     finally:
         await client.close()
+
+
+@app.get("/partials/health-messages-unified", response_class=HTMLResponse)
+async def health_messages_unified_partial(
+    request: Request,
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+    q: str = Query("", description="Buscar por orden, comprador o producto"),
+):
+    """Bandeja unificada ML — fan-out sobre las 4 cuentas (mismo patrón que
+    _compute_unified_returns), cada conversación tageada con account_id/
+    account_nickname para poder Tomar/Resolver/Enviar desde la cuenta
+    correcta sin depender de cuál esté 'activa' en el navegador."""
+    _require_subtab(request, "ml", "salud", "messages")
+    df = date_from or None
+    dt = date_to or None
+    accounts = await token_store.get_all_tokens()
+    sem_ml = asyncio.Semaphore(3)
+
+    async def _for_account(acc):
+        async with sem_ml:
+            uid = acc.get("user_id", "")
+            nick = acc.get("nickname") or uid
+            cli = await get_meli_client(user_id=uid)
+            if not cli:
+                return []
+            try:
+                return await _fetch_enriched_ml_conversations(cli, uid, 0, 30, df, dt, account_id=uid, account_nickname=nick)
+            except Exception:
+                return []
+            finally:
+                await cli.close()
+
+    nested = await asyncio.gather(*[_for_account(a) for a in accounts], return_exceptions=True)
+    enriched = []
+    for r in nested:
+        if isinstance(r, list):
+            enriched.extend(r)
+
+    enriched = _sort_ml_conversations(enriched)
+
+    q_clean = (q or "").strip().lower()
+    if q_clean:
+        enriched = [
+            c for c in enriched
+            if q_clean in str(c.order_id).lower()
+            or q_clean in str(c.pack_id).lower()
+            or q_clean in (c.order_buyer or "").lower()
+            or q_clean in (c.order_product or "").lower()
+        ]
+
+    _du = getattr(request.state, "dashboard_user", {}) or {}
+    _current_user = _du.get("sub") or _du.get("name") or "?"
+    # get_message_views es por-cuenta — se agrupan los pack_ids por account_id y se piden por separado
+    _by_account: dict = {}
+    for c in enriched:
+        _by_account.setdefault(c.account_id, []).append(str(c.pack_id))
+    _views_map = {}
+    for acc_id, pack_ids in _by_account.items():
+        try:
+            _vm = await token_store.get_message_views(pack_ids, acc_id)
+            for k, v in _vm.items():
+                _views_map[(acc_id, k)] = v
+        except Exception:
+            pass
+    for c in enriched:
+        c.view_info = _views_map.get((c.account_id, str(c.pack_id)))
+        c.current_user = _current_user
+
+    return templates.TemplateResponse(request, "partials/health_messages.html", {
+        "conversations": enriched[:50],
+        "paging": {"total": len(enriched), "offset": 0, "limit": 50},
+        "offset": 0,
+        "limit": 50,
+        "seller_id": "",
+        "q": q,
+        "unified": True,
+    })
 
 
 @app.get("/partials/health-reputation", response_class=HTMLResponse)
@@ -13428,6 +13516,45 @@ async def upsert_seasonal_event_api(request: Request):
 @app.delete("/api/seasonal-events/{event_id}")
 async def delete_seasonal_event_api(event_id: int):
     await token_store.delete_seasonal_event(event_id)
+    return {"ok": True}
+
+
+@app.get("/api/reply-templates")
+async def get_reply_templates_api(platform: str = Query("", description="'ml'/'amz' — incluye también las genéricas 'all'")):
+    """Plantillas de respuesta rápida para Mensajes de Compradores (ML + Amazon)."""
+    return {"templates": await token_store.get_reply_templates(platform)}
+
+
+@app.post("/api/reply-templates")
+async def upsert_reply_template_api(request: Request):
+    """Crea o actualiza (si trae 'id') una plantilla de respuesta."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    label = (body.get("label") or "").strip()
+    body_text = (body.get("body_text") or "").strip()
+    platform = (body.get("platform") or "all").strip()
+    if not label or not body_text:
+        return JSONResponse({"detail": "label y body_text son requeridos"}, status_code=400)
+    if platform not in ("ml", "amz", "all"):
+        platform = "all"
+    template_id = await token_store.upsert_reply_template(
+        label=label, body_text=body_text, platform=platform,
+        created_by=du.get("username", ""), template_id=body.get("id"),
+    )
+    return {"ok": True, "id": template_id}
+
+
+@app.delete("/api/reply-templates/{template_id}")
+async def delete_reply_template_api(template_id: int, request: Request):
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    await token_store.delete_reply_template(template_id)
     return {"ok": True}
 
 
@@ -19008,6 +19135,97 @@ def _amz_response_deltas(messages: list) -> list:
     return deltas
 
 
+async def _fetch_amazon_threads_for_seller(sid: str, days: int, oid: str = "", nickname: str = "") -> tuple:
+    """Trae y agrupa los mensajes de UNA cuenta Amazon en threads (con
+    view_info/needs_response). Extraído de amazon_buyer_messages_list para
+    reusarlo tanto en la vista de una sola cuenta como en el fan-out de la
+    bandeja unificada. Retorna (threads, total_rows)."""
+    effective_days = 3650 if oid else days
+    rows = await token_store.get_buyer_messages(sid, effective_days, limit=(1000 if oid else 50))
+    if oid:
+        rows = [r for r in rows if r["order_id"] == oid]
+
+    by_thread: dict = {}
+    for r in rows:
+        key = r["reply_to_addr"] or r["order_id"] or str(r["id"])
+        th = by_thread.setdefault(key, {
+            "reply_to_addr": r["reply_to_addr"], "buyer_name": r["buyer_name"],
+            "order_id": r["order_id"], "asin": r["asin"], "product_title": r["product_title"],
+            "messages": [], "last_ts": 0, "seller_id": sid, "seller_nickname": nickname,
+        })
+        th["messages"].append(r)
+        th["last_ts"] = max(th["last_ts"], r["ts"] or 0)
+        # el nombre/orden/producto más reciente disponible gana (algunos
+        # inbound viejos pueden no traerlos si Amazon no los incluyó)
+        if r["direction"] == "inbound":
+            th["buyer_name"] = r["buyer_name"] or th["buyer_name"]
+            th["order_id"] = r["order_id"] or th["order_id"]
+            th["asin"] = r["asin"] or th["asin"]
+            th["product_title"] = r["product_title"] or th["product_title"]
+
+    threads = sorted(by_thread.values(), key=lambda t: t["last_ts"], reverse=True)
+    for th in threads:
+        th["messages"].sort(key=lambda m: m["ts"] or 0)
+        th["unread"] = sum(1 for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
+
+    # view_info ANTES de filtrar — "pendiente" depende tanto de si el
+    # último mensaje es del comprador COMO de si alguien ya lo marcó
+    # resuelto a mano (ej. "Marcar todo como atendido" para limpiar
+    # historial de antes de esta feature, que Amazon no comparte por
+    # ningún canal). Sin esto, un hilo marcado resuelto seguía apareciendo
+    # como pendiente para siempre si nunca se le contestó DESDE AQUÍ.
+    pack_ids = [_amz_thread_key(t["reply_to_addr"]) for t in threads if t["reply_to_addr"]]
+    views = await token_store.get_message_views(pack_ids, sid) if pack_ids else {}
+    for th in threads:
+        th["view_info"] = views.get(_amz_thread_key(th["reply_to_addr"]))
+        last_is_inbound = th["messages"][-1]["direction"] == "inbound" if th["messages"] else False
+        already_resolved = th["view_info"] and th["view_info"].get("status") == "resolved"
+        th["needs_response"] = last_is_inbound and not already_resolved
+
+    return threads, len(rows)
+
+
+def _compute_amazon_thread_stats(threads: list) -> dict:
+    """stats se calcula sobre TODOS los hilos (antes del filtro only_pending)
+    para que los KPIs no dependan del toggle de 'solo pendientes' — reusado
+    igual para una cuenta o para el set unificado de varias."""
+    now_ts = _time_module.time()
+    pending_threads = [t for t in threads if t["needs_response"]]
+    urgency = {"under24": 0, "h24_72": 0, "over72": 0}
+    oldest_pending = None
+    for t in pending_threads:
+        age_hours = (now_ts - (t["last_ts"] or now_ts)) / 3600
+        if age_hours < 24:
+            urgency["under24"] += 1
+        elif age_hours < 72:
+            urgency["h24_72"] += 1
+        else:
+            urgency["over72"] += 1
+        if oldest_pending is None or (t["last_ts"] or 0) < oldest_pending["ts"]:
+            oldest_pending = {"buyer_name": t["buyer_name"], "ts": t["last_ts"], "hours": age_hours}
+
+    response_deltas = []
+    for t in threads:
+        response_deltas.extend(_amz_response_deltas(t["messages"]))
+    avg_response_hours = (sum(response_deltas) / len(response_deltas) / 3600) if response_deltas else None
+
+    resolved_cutoff = now_ts - 86400
+    resolved_today = sum(
+        1 for t in threads
+        if t["view_info"] and t["view_info"].get("status") == "resolved"
+        and (t["view_info"].get("viewed_at") or 0) >= resolved_cutoff
+    )
+
+    return {
+        "pending_count": len(pending_threads),
+        "urgency": urgency,
+        "oldest_pending": oldest_pending,
+        "avg_response_hours": avg_response_hours,
+        "avg_response_sample": len(response_deltas),
+        "resolved_today": resolved_today,
+    }
+
+
 @app.get("/api/amazon/buyer-messages")
 async def amazon_buyer_messages_list(
     request: Request,
@@ -19036,93 +19254,58 @@ async def amazon_buyer_messages_list(
     if not sid:
         return {"error": "No hay cuenta Amazon activa", "threads": [], "total": 0, "unread": 0}
     try:
-        effective_days = 3650 if oid else days
-        rows = await token_store.get_buyer_messages(sid, effective_days, limit=(1000 if oid else 50))
-        if oid:
-            rows = [r for r in rows if r["order_id"] == oid]
-        unread = sum(1 for r in rows if r["direction"] == "inbound" and not r.get("read_at"))
-
-        by_thread: dict = {}
-        for r in rows:
-            key = r["reply_to_addr"] or r["order_id"] or str(r["id"])
-            th = by_thread.setdefault(key, {
-                "reply_to_addr": r["reply_to_addr"], "buyer_name": r["buyer_name"],
-                "order_id": r["order_id"], "asin": r["asin"], "product_title": r["product_title"],
-                "messages": [], "last_ts": 0,
-            })
-            th["messages"].append(r)
-            th["last_ts"] = max(th["last_ts"], r["ts"] or 0)
-            # el nombre/orden/producto más reciente disponible gana (algunos
-            # inbound viejos pueden no traerlos si Amazon no los incluyó)
-            if r["direction"] == "inbound":
-                th["buyer_name"] = r["buyer_name"] or th["buyer_name"]
-                th["order_id"] = r["order_id"] or th["order_id"]
-                th["asin"] = r["asin"] or th["asin"]
-                th["product_title"] = r["product_title"] or th["product_title"]
-
-        threads = sorted(by_thread.values(), key=lambda t: t["last_ts"], reverse=True)
-        for th in threads:
-            th["messages"].sort(key=lambda m: m["ts"] or 0)
-            th["unread"] = sum(1 for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
-
-        # view_info ANTES de filtrar — "pendiente" depende tanto de si el
-        # último mensaje es del comprador COMO de si alguien ya lo marcó
-        # resuelto a mano (ej. "Marcar todo como atendido" para limpiar
-        # historial de antes de esta feature, que Amazon no comparte por
-        # ningún canal). Sin esto, un hilo marcado resuelto seguía apareciendo
-        # como pendiente para siempre si nunca se le contestó DESDE AQUÍ.
-        pack_ids = [_amz_thread_key(t["reply_to_addr"]) for t in threads if t["reply_to_addr"]]
-        views = await token_store.get_message_views(pack_ids, sid) if pack_ids else {}
-        for th in threads:
-            th["view_info"] = views.get(_amz_thread_key(th["reply_to_addr"]))
-            last_is_inbound = th["messages"][-1]["direction"] == "inbound" if th["messages"] else False
-            already_resolved = th["view_info"] and th["view_info"].get("status") == "resolved"
-            th["needs_response"] = last_is_inbound and not already_resolved
-
-        # stats se calcula sobre TODOS los hilos (antes del filtro only_pending)
-        # para que los KPIs no dependan del toggle de "solo pendientes".
-        now_ts = _time_module.time()
-        pending_threads = [t for t in threads if t["needs_response"]]
-        urgency = {"under24": 0, "h24_72": 0, "over72": 0}
-        oldest_pending = None
-        for t in pending_threads:
-            age_hours = (now_ts - (t["last_ts"] or now_ts)) / 3600
-            if age_hours < 24:
-                urgency["under24"] += 1
-            elif age_hours < 72:
-                urgency["h24_72"] += 1
-            else:
-                urgency["over72"] += 1
-            if oldest_pending is None or (t["last_ts"] or 0) < oldest_pending["ts"]:
-                oldest_pending = {"buyer_name": t["buyer_name"], "ts": t["last_ts"], "hours": age_hours}
-
-        response_deltas = []
-        for t in threads:
-            response_deltas.extend(_amz_response_deltas(t["messages"]))
-        avg_response_hours = (sum(response_deltas) / len(response_deltas) / 3600) if response_deltas else None
-
-        resolved_cutoff = now_ts - 86400
-        resolved_today = sum(
-            1 for t in threads
-            if t["view_info"] and t["view_info"].get("status") == "resolved"
-            and (t["view_info"].get("viewed_at") or 0) >= resolved_cutoff
-        )
-
-        stats = {
-            "pending_count": len(pending_threads),
-            "urgency": urgency,
-            "oldest_pending": oldest_pending,
-            "avg_response_hours": avg_response_hours,
-            "avg_response_sample": len(response_deltas),
-            "resolved_today": resolved_today,
-        }
-
+        threads, total_rows = await _fetch_amazon_threads_for_seller(sid, days, oid)
+        unread = sum(1 for th in threads for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
+        stats = _compute_amazon_thread_stats(threads)
         if only_pending and not oid:
             threads = [t for t in threads if t["needs_response"]]
-
-        return {"days": days, "threads": threads, "total": len(rows), "unread": unread, "stats": stats}
+        return {"days": days, "threads": threads, "total": total_rows, "unread": unread, "stats": stats}
     except Exception as e:
         return {"error": str(e), "threads": [], "total": 0, "unread": 0}
+
+
+@app.get("/api/amazon/buyer-messages-unified")
+async def amazon_buyer_messages_unified(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+    order_id: str = Query(""),
+    only_pending: bool = Query(True),
+):
+    """Bandeja unificada Amazon — fan-out sobre las 3 cuentas, cada thread
+    tageado con seller_id/seller_nickname para poder Tomar/Resolver/Responder
+    desde la cuenta correcta sin depender de cuál esté 'activa' en el
+    navegador (el endpoint de responder ya era seguro por diseño — ver
+    amazon_buyer_message_reply, que resuelve todo por message_id — pero
+    Tomar/Resolver sí necesitan el seller_id explícito de cada hilo)."""
+    _require_subtab(request, "amz", "salud", "mensajes")
+    oid = order_id.strip()
+    accounts = await token_store.get_all_amazon_accounts()
+    sem_amz = asyncio.Semaphore(3)
+
+    async def _for_account(acc):
+        async with sem_amz:
+            sid = acc.get("seller_id", "")
+            nick = acc.get("nickname") or sid
+            try:
+                threads, total = await _fetch_amazon_threads_for_seller(sid, days, oid, nickname=nick)
+                return threads, total
+            except Exception:
+                return [], 0
+
+    nested = await asyncio.gather(*[_for_account(a) for a in accounts], return_exceptions=True)
+    all_threads = []
+    total_rows = 0
+    for r in nested:
+        if isinstance(r, tuple):
+            all_threads.extend(r[0])
+            total_rows += r[1]
+
+    all_threads.sort(key=lambda t: t["last_ts"], reverse=True)
+    unread = sum(1 for th in all_threads for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
+    stats = _compute_amazon_thread_stats(all_threads)
+    if only_pending and not oid:
+        all_threads = [t for t in all_threads if t["needs_response"]]
+    return {"days": days, "threads": all_threads[:100], "total": total_rows, "unread": unread, "stats": stats}
 
 
 @app.post("/api/amazon/buyer-messages/mark-read")

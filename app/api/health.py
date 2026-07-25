@@ -59,6 +59,7 @@ class ClaimResponse(BaseModel):
 
 class MessageRequest(BaseModel):
     text: str
+    account_id: str = ""  # opcional — solo lo manda la bandeja unificada "Todas las cuentas"
 
 
 @router.get("/summary")
@@ -248,16 +249,16 @@ async def list_messages(
 
 
 @router.post("/messages/{pack_id}/take")
-async def take_message(pack_id: str, request: Request):
+async def take_message(pack_id: str, request: Request, account_id: str = Query("", description="Solo lo manda la bandeja unificada")):
     """Asigna explícitamente esta conversación al usuario actual."""
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         user = getattr(request.state, "dashboard_user", {}) or {}
         username = user.get("sub") or user.get("name") or "?"
-        account_id = str(client.user_id)
-        await _ts.take_message(pack_id, account_id, username)
+        acc = account_id or str(client.user_id)
+        await _ts.take_message(pack_id, acc, username)
         return {"ok": True, "taken_by": username}
     finally:
         await client.close()
@@ -265,19 +266,20 @@ async def take_message(pack_id: str, request: Request):
 
 class MessageStatusRequest(BaseModel):
     status: str  # pending | in_progress | resolved
+    account_id: str = ""  # opcional — solo lo manda la bandeja unificada
 
 
 @router.post("/messages/{pack_id}/status")
 async def update_message_status(pack_id: str, body: MessageStatusRequest, request: Request):
     """Actualiza el estado interno de una conversación."""
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=body.account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     if body.status not in ("pending", "in_progress", "resolved"):
         raise HTTPException(status_code=400, detail="Status inválido")
     try:
-        account_id = str(client.user_id)
-        await _ts.update_message_view_status(pack_id, account_id, body.status)
+        acc = body.account_id or str(client.user_id)
+        await _ts.update_message_view_status(pack_id, acc, body.status)
         return {"ok": True, "status": body.status}
     finally:
         await client.close()
@@ -321,8 +323,11 @@ async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: 
 
 @router.post("/messages/{pack_id}/send")
 async def send_message(pack_id: str, body: MessageRequest):
-    """Enviar mensaje en una conversacion."""
-    client = await get_meli_client()
+    """Enviar mensaje en una conversacion. account_id (opcional) permite
+    responder desde la bandeja unificada sin depender de cuál cuenta esté
+    'activa' en el navegador — sin él, se comporta exactamente igual que
+    antes (cuenta activa vía cookie)."""
+    client = await get_meli_client(user_id=body.account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:

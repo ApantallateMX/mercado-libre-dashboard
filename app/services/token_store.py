@@ -841,6 +841,20 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: reply_templates — respuestas rápidas/plantillas para
+        # Mensajes de Compradores (ML + Amazon). platform: 'ml'|'amz'|'all'.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reply_templates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                label       TEXT NOT NULL,
+                body_text   TEXT NOT NULL,
+                platform    TEXT NOT NULL DEFAULT 'all',
+                created_by  TEXT NOT NULL DEFAULT '',
+                created_at  REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLAS: sku_bundles / sku_bundle_components — bundle real (SKU
         # combinado "SKU1 / SKU2" tal cual aparece en ML) con stock = mínimo
         # de sus componentes y margen real, en vez del atajo de tomar solo
@@ -3861,6 +3875,53 @@ async def upsert_seasonal_event(
 async def delete_seasonal_event(event_id: int) -> None:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("DELETE FROM seasonal_events WHERE id = ?", (event_id,))
+        await db.commit()
+
+
+# ─── Plantillas de respuesta (Mensajes de Compradores ML + Amazon) ───────────
+async def get_reply_templates(platform: str = "") -> list:
+    """Retorna las plantillas — si platform se da ('ml'/'amz'), incluye esas
+    más las genéricas ('all'); si no se da, retorna todas."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if platform:
+            rows = await (await db.execute(
+                "SELECT * FROM reply_templates WHERE platform = ? OR platform = 'all' ORDER BY label",
+                (platform,),
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                "SELECT * FROM reply_templates ORDER BY platform, label"
+            )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def upsert_reply_template(
+    label: str, body_text: str, platform: str = "all",
+    created_by: str = "", template_id: int = None,
+) -> int:
+    """Crea o actualiza una plantilla de respuesta. Retorna el id."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        if template_id:
+            await db.execute(
+                "UPDATE reply_templates SET label=?, body_text=?, platform=? WHERE id=?",
+                (label, body_text, platform, template_id),
+            )
+            await db.commit()
+            return template_id
+        cur = await db.execute(
+            """INSERT INTO reply_templates (label, body_text, platform, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (label, body_text, platform, created_by, _t.time()),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def delete_reply_template(template_id: int) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM reply_templates WHERE id = ?", (template_id,))
         await db.commit()
 
 

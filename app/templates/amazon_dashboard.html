@@ -469,6 +469,16 @@
                 <button id="amz-msgs-toggle" onclick="toggleAmzMsgsPending()" class="text-xs px-3 py-1.5 rounded-full bg-teal-100 text-teal-700 font-semibold hover:bg-teal-200 transition">
                     Mostrando: solo pendientes
                 </button>
+                <span class="w-px h-4 bg-gray-200"></span>
+                <button id="amz-msgs-scope-own" onclick="window.setAmzMsgsScope('own')" class="text-xs px-3 py-1.5 rounded-full bg-blue-500 text-white font-semibold transition">
+                    Esta cuenta
+                </button>
+                <button id="amz-msgs-scope-all" onclick="window.setAmzMsgsScope('all')" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold transition">
+                    Todas las cuentas
+                </button>
+                <button onclick="window.openTemplatesModal('amz')" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold transition">
+                    📋 Plantillas
+                </button>
                 {% if dashboard_user and dashboard_user.role == 'admin' %}
                 <button id="amz-msgs-mark-all" onclick="markAllAmzMsgsResolved()" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 font-semibold hover:bg-gray-200 transition" title="Limpia el historial acumulado — úsalo solo una vez, luego usa Tomar/Marcar resuelto por hilo">
                     Marcar todo como atendido

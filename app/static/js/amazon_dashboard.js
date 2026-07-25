@@ -66,6 +66,7 @@ var _amzFbaCatalogoLoaded = false;
 // only_pending=false aunque el toggle dijera "solo pendientes".
 var amzMsgsOnlyPending = true;
 var amzMsgsOrderSearch = '';
+var amzMsgsScope = 'own';   // 'own' (cuenta activa) | 'all' (todas las cuentas)
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -2883,14 +2884,27 @@ function _amzMsgsFmtDate(ts) {
 function loadAmzBuyerMessages() {
     var el = document.getElementById('amz-msgs-content');
     if (!el) return;
-    var qs = 'seller_id=' + encodeURIComponent(window.amzActiveSellerId || '') + '&days=365' +
-        '&only_pending=' + (amzMsgsOnlyPending ? 'true' : 'false');
+    var unified = amzMsgsScope === 'all';
+    var url = unified ? '/api/amazon/buyer-messages-unified' : '/api/amazon/buyer-messages';
+    var qs = 'days=365&only_pending=' + (amzMsgsOnlyPending ? 'true' : 'false');
+    if (!unified) qs += '&seller_id=' + encodeURIComponent(window.amzActiveSellerId || '');
     if (amzMsgsOrderSearch) qs += '&order_id=' + encodeURIComponent(amzMsgsOrderSearch);
-    fetch('/api/amazon/buyer-messages?' + qs)
+    fetch(url + '?' + qs)
         .then(function(r) { return r.json(); })
         .then(function(data) { _renderAmzBuyerMessages(data); })
         .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
 }
+
+window.setAmzMsgsScope = function(scope) {
+    amzMsgsScope = scope;
+    var ownBtn = document.getElementById('amz-msgs-scope-own');
+    var allBtn = document.getElementById('amz-msgs-scope-all');
+    if (ownBtn && allBtn) {
+        ownBtn.className = 'text-xs px-3 py-1.5 rounded-full font-semibold transition ' + (scope === 'own' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200');
+        allBtn.className = 'text-xs px-3 py-1.5 rounded-full font-semibold transition ' + (scope === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200');
+    }
+    loadAmzBuyerMessages();
+};
 
 window.toggleAmzMsgsPending = function() {
     amzMsgsOnlyPending = !amzMsgsOnlyPending;
@@ -3076,6 +3090,7 @@ function _renderAmzBuyerMessages(data) {
 
         var head = '<div class="flex items-center gap-2 flex-wrap">' +
                 '<span class="font-semibold text-sm text-gray-800">' + _amzMsgsEscHtml(th.buyer_name || 'Comprador') + '</span>' +
+                (th.seller_nickname ? '<span class="px-2 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-700 font-semibold">' + _amzMsgsEscHtml(th.seller_nickname) + '</span>' : '') +
                 urgencyChip(u) +
                 statusBadge(th, domId) +
                 (th.unread > 0 ? '<span class="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">' + th.unread + ' nuevo(s)</span>' : '') +
@@ -3140,12 +3155,15 @@ function _renderAmzBuyerMessages(data) {
                 '<textarea id="reply-text-' + domId + '" rows="2" placeholder="Escribe tu respuesta..." class="w-full text-xs border border-gray-200 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-teal-400"></textarea>' +
                 '<div class="flex items-center justify-between mt-1 gap-2 flex-wrap">' +
                     '<input type="file" id="reply-file-' + domId + '" class="text-[11px] text-gray-500 max-w-[180px]">' +
+                    '<div class="flex items-center gap-2">' +
+                    '<button onclick="window.insertTemplateInto(\'reply-text-' + domId + '\', \'amz\')" class="text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition">📋 Plantillas</button>' +
                     '<button onclick="replyToBuyerMessage(\'' + domId + '\', ' + lastInbound.id + ')" id="reply-btn-' + domId + '" class="text-xs font-semibold bg-teal-500 hover:bg-teal-600 text-white px-4 py-1.5 rounded-lg transition shadow-sm">Responder</button>' +
+                    '</div>' +
                 '</div>' +
             '</div>'
         ) : '';
 
-        return '<div id="thread-card-' + domId + '" data-reply-to-addr="' + _amzMsgsEscAttr(th.reply_to_addr) + '" class="border border-gray-100 rounded-xl p-4 border-l-4 ' + borderColor + '">' +
+        return '<div id="thread-card-' + domId + '" data-reply-to-addr="' + _amzMsgsEscAttr(th.reply_to_addr) + '" data-seller-id="' + _amzMsgsEscAttr(th.seller_id || '') + '" class="border border-gray-100 rounded-xl p-4 border-l-4 ' + borderColor + '">' +
             head + meta + preview + expandToggle + messages + aiButton + replyBox + actionButtons(th, domId) +
         '</div>';
     }
@@ -3200,10 +3218,11 @@ function _renderAmzBuyerMessages(data) {
 window.takeAmzThread = function(domId, btn) {
     var card = btn.closest('[id^="thread-card-"]');
     var addr = card ? card.getAttribute('data-reply-to-addr') : '';
+    var sellerId = (card && card.getAttribute('data-seller-id')) || window.amzActiveSellerId;
     btn.disabled = true; btn.textContent = '...';
     fetch('/api/amazon/buyer-messages/take', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seller_id: window.amzActiveSellerId, reply_to_addr: addr }),
+        body: JSON.stringify({ seller_id: sellerId, reply_to_addr: addr }),
     })
         .then(function(r) { return r.json(); })
         .then(function() { loadAmzBuyerMessages(); })
@@ -3213,10 +3232,11 @@ window.takeAmzThread = function(domId, btn) {
 window.setAmzThreadStatus = function(domId, status, btn) {
     var card = btn.closest('[id^="thread-card-"]');
     var addr = card ? card.getAttribute('data-reply-to-addr') : '';
+    var sellerId = (card && card.getAttribute('data-seller-id')) || window.amzActiveSellerId;
     btn.disabled = true;
     fetch('/api/amazon/buyer-messages/status', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seller_id: window.amzActiveSellerId, reply_to_addr: addr, status: status }),
+        body: JSON.stringify({ seller_id: sellerId, reply_to_addr: addr, status: status }),
     })
         .then(function(r) { return r.json(); })
         .then(function() { loadAmzBuyerMessages(); })

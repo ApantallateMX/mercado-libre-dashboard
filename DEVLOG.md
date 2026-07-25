@@ -7,6 +7,70 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-25 — FEAT: Bandeja unificada de Mensajes (ML + Amazon) + Plantillas de respuesta
+
+**Archivos:** `app/main.py`, `app/api/health.py`, `app/services/token_store.py`,
+`app/templates/health.html`, `app/templates/partials/health_messages.html`,
+`app/templates/amazon_dashboard.html`, `app/static/js/amazon_dashboard.js`,
+`app/templates/base.html`, `app/templates/partials/reply_templates_modal.html` (nuevo).
+
+Jovan pidió poder ver y responder mensajes pendientes de TODAS las cuentas
+de una plataforma sin tener que cambiar de cuenta una por una, con ML y
+Amazon separados (para no confundir de dónde viene cada mensaje) y
+respuestas rápidas/plantillas reusables. Sin quitar la vista por cuenta
+que ya existía — es 100% adicional, con un toggle "Esta cuenta / Todas
+las cuentas".
+
+### ML — antes NO era seguro, ahora sí
+Investigación previa confirmó que `send_message`/`take_message`/
+`update_message_status` (ML) resolvían la cuenta 100% desde la cookie
+`active_account_id` vía `_active_user_id` ContextVar — nunca por un
+parámetro explícito. Responder un mensaje de la Cuenta B mientras la
+Cuenta A estaba "activa" en el navegador hubiera usado el `MeliClient`
+equivocado. Se agregó `account_id` opcional a los 3 endpoints
+(`app/api/health.py`) — si no se manda, se comporta exactamente igual
+que antes (compatibilidad total con la vista por cuenta).
+
+- `_fetch_enriched_ml_conversations()` (extraído de `health_messages_partial`,
+  sin duplicar lógica) + `GET /partials/health-messages-unified`: fan-out
+  sobre las 4 cuentas ML vía `get_meli_client(user_id=uid)` (mismo patrón
+  ya usado en `_compute_unified_returns`), cada conversación tageada con
+  `account_id`/`account_nickname`.
+- Cada `msg-conv-card` lleva `data-account-id` — Tomar/Resolver/Enviar
+  ahora se lo pasan a los 3 endpoints en vez de depender de la cookie.
+
+### Amazon — el endpoint de responder YA era seguro; Tomar/Resolver necesitaban el fix
+`POST /api/amazon/buyer-messages/{message_id}/reply` ya resuelve todo por
+`message_id` (lee `seller_id` de la fila en BD) — cero cambios ahí. Pero
+`takeAmzThread`/`setAmzThreadStatus` (frontend) mandaban
+`window.amzActiveSellerId` (la cuenta activa global) en vez del
+`seller_id` real del hilo — se corrigió leyendo `data-seller-id` de la
+tarjeta del hilo.
+
+- `_fetch_amazon_threads_for_seller()` + `_compute_amazon_thread_stats()`
+  (extraídos de `amazon_buyer_messages_list`) + `GET
+  /api/amazon/buyer-messages-unified`: fan-out sobre las 3 cuentas Amazon,
+  cada thread tageado con `seller_id`/`seller_nickname`.
+
+### Plantillas de respuesta (nuevo, compartido ML + Amazon)
+Tabla `reply_templates` (label, body_text, platform 'ml'/'amz'/'all') +
+CRUD (`GET/POST /api/reply-templates`, `DELETE /api/reply-templates/{id}`)
+siguiendo el mismo patrón que `seasonal_events`. Modal compartido
+(`partials/reply_templates_modal.html`, incluido una vez en `base.html`)
+usable desde cualquier textarea de respuesta — botón "📋 Plantillas" junto
+al de "Sugerir con IA" en ambas plataformas, más un botón de solo-gestión
+en la barra de filtros de Mensajes.
+
+### Verificado localmente contra datos reales
+Bandeja ML unificada mostró conversaciones reales de 3 cuentas distintas
+(AUTOBOT MEXICO, BLOWTECHNOLOGIES, LUTEMAMEXICO) en una sola lista con su
+badge de cuenta correcto. Bandeja Amazon unificada: 50 mensajes/5 hilos
+pendientes reales agregados. Permisos verificados: usuario sin acceso a
+Salud→Mensajes → 403 en ambos endpoints unificados; usuario con acceso →
+200. JS de ambas plataformas + el modal de plantillas pasan `node --check`.
+
+---
+
 ## 2026-07-25 — BUG FIX real: AUTOBOT/ExclusiveBulbs no podían responder mensajes ("unauthorized_client")
 
 **Archivos:** `app/config.py`, `app/services/buyer_messages_client.py`.
