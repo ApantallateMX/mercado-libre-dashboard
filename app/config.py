@@ -136,13 +136,16 @@ AMAZON_BUYER_INBOX_ACCOUNTS = [
     acc for acc in (
         {"seller_id": AMAZON_SELLER_ID, "nickname": AMAZON_NICKNAME,
          "email": AMAZON_INBOX_EMAIL, "app_password": AMAZON_INBOX_APP_PASSWORD,
-         "gmail_refresh_token": AMAZON_GMAIL_REFRESH_TOKEN},
+         "gmail_refresh_token": AMAZON_GMAIL_REFRESH_TOKEN,
+         "gmail_client_id": GMAIL_OAUTH_CLIENT_ID, "gmail_client_secret": GMAIL_OAUTH_CLIENT_SECRET},
         {"seller_id": AMAZON2_SELLER_ID, "nickname": AMAZON2_NICKNAME,
          "email": AMAZON2_INBOX_EMAIL, "app_password": AMAZON2_INBOX_APP_PASSWORD,
-         "gmail_refresh_token": AMAZON2_GMAIL_REFRESH_TOKEN},
+         "gmail_refresh_token": AMAZON2_GMAIL_REFRESH_TOKEN,
+         "gmail_client_id": GMAIL_OAUTH_CLIENT_ID_2, "gmail_client_secret": GMAIL_OAUTH_CLIENT_SECRET_2},
         {"seller_id": AMAZON3_SELLER_ID, "nickname": AMAZON3_NICKNAME,
          "email": AMAZON3_INBOX_EMAIL, "app_password": AMAZON3_INBOX_APP_PASSWORD,
-         "gmail_refresh_token": AMAZON3_GMAIL_REFRESH_TOKEN},
+         "gmail_refresh_token": AMAZON3_GMAIL_REFRESH_TOKEN,
+         "gmail_client_id": GMAIL_OAUTH_CLIENT_ID_3, "gmail_client_secret": GMAIL_OAUTH_CLIENT_SECRET_3},
     )
     if acc["seller_id"] and acc["email"] and acc["app_password"]
 ]

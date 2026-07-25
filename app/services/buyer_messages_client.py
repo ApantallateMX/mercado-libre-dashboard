@@ -38,7 +38,7 @@ import httpx
 from email.header import decode_header
 from email.message import EmailMessage
 
-from app.config import AMAZON_BUYER_INBOX_ACCOUNTS, GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET
+from app.config import AMAZON_BUYER_INBOX_ACCOUNTS
 from app.services import token_store
 
 IMAP_HOST = "imap.gmail.com"
@@ -281,14 +281,19 @@ def _build_mime_message(
     return msg
 
 
-async def _gmail_access_token(refresh_token: str) -> str:
+async def _gmail_access_token(refresh_token: str, client_id: str, client_secret: str) -> str:
     """Cambia el refresh_token (obtenido una vez en /auth/gmail/connect) por
     un access_token de corta duración — se hace en cada envío, es una sola
-    llamada HTTPS y evita tener que manejar expiración manualmente."""
+    llamada HTTPS y evita tener que manejar expiración manualmente. client_id/
+    secret DEBEN ser los del mismo proyecto de Google que emitió ese
+    refresh_token específico (cada cuenta Amazon2026-07-24 en adelante tiene
+    su propio proyecto/cliente OAuth) — usar el cliente equivocado da
+    'unauthorized_client', un bug real que pasó aquí el mismo día que se
+    crearon los clientes _2/_3 y no se propagó a esta función."""
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(GMAIL_TOKEN_URL, data={
-            "client_id": GMAIL_OAUTH_CLIENT_ID,
-            "client_secret": GMAIL_OAUTH_CLIENT_SECRET,
+            "client_id": client_id,
+            "client_secret": client_secret,
             "refresh_token": refresh_token,
             "grant_type": "refresh_token",
         })
@@ -317,7 +322,9 @@ async def send_reply(
     msg = _build_mime_message(cfg["email"], to_addr, subject, body, in_reply_to, attachment)
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
 
-    access_token = await _gmail_access_token(cfg["gmail_refresh_token"])
+    access_token = await _gmail_access_token(
+        cfg["gmail_refresh_token"], cfg["gmail_client_id"], cfg["gmail_client_secret"]
+    )
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(
             GMAIL_SEND_URL,
@@ -342,7 +349,9 @@ async def setup_organization_filter(seller_id: str, from_domain: str, label_name
     if not cfg.get("gmail_refresh_token"):
         raise ValueError(f"La cuenta {cfg['email']} no ha autorizado la API de Gmail todavía.")
 
-    access_token = await _gmail_access_token(cfg["gmail_refresh_token"])
+    access_token = await _gmail_access_token(
+        cfg["gmail_refresh_token"], cfg["gmail_client_id"], cfg["gmail_client_secret"]
+    )
     headers = {"Authorization": f"Bearer {access_token}"}
 
     async with httpx.AsyncClient(timeout=15.0) as client:

@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-25 — BUG FIX real: AUTOBOT/ExclusiveBulbs no podían responder mensajes ("unauthorized_client")
+
+**Archivos:** `app/config.py`, `app/services/buyer_messages_client.py`.
+
+Al crear los clientes OAuth `_2`/`_3` (ver entrada de ayer, "segundo/tercer
+cliente OAuth de Gmail") solo se actualizó el flujo de **conexión**
+(`/auth/gmail/connect` en `auth.py`) para usar el client_id/secret correcto
+de cada cuenta — pero **el envío real de respuestas**
+(`buyer_messages_client.py:_gmail_access_token`, llamado por `send_reply()`
+en cada mensaje contestado) seguía usando el ÚNICO cliente original
+(el de VECKTOR) para las 3 cuentas. Un refresh_token solo es válido bajo
+el client_id/secret que lo emitió — usar el de VECKTOR para renovar el
+token de AUTOBOT/ExclusiveBulbs da exactamente `401 unauthorized_client`,
+el error reportado.
+
+Fix: cada entrada de `AMAZON_BUYER_INBOX_ACCOUNTS` (`config.py`) ahora
+carga también su propio `gmail_client_id`/`gmail_client_secret` (el que
+corresponde a su refresh_token), y `_gmail_access_token()`/
+`setup_organization_filter()` los reciben como parámetro en vez de usar
+las constantes globales. Verificado localmente: las 3 cuentas renuevan
+su access_token de Gmail correctamente con su propio cliente.
+
+---
+
 ## 2026-07-24 — FIX preventivo: blindar cuentas Amazon contra la misma carrera de datos que ya afectó a ML
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`.
