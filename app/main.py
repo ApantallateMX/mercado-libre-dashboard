@@ -19854,8 +19854,13 @@ async def returns_claim_photo_file(path: str = Query(...)):
 # backfill on-demand del buscador de SKU, sin relación con el sync). Ver DEVLOG.
 # Bajado de 120 a 40 el 2026-07-18: con la DB en ~309MB, 120MB de fotos dejaba
 # muy poco margen antes de los 500MB del volumen — el disco se volvió a llenar
-# el mismo día. 40MB deja un colchón mucho más cómodo.
-_CLAIM_PHOTOS_BUDGET_MB = 40.0
+# el mismo día.
+# Subido a 80 el 2026-07-27 — ahora seguro porque cada foto se comprime al bajarla
+# (ver _compress_claim_photo): originales de ~1.3MB promedio bajan a ~100-150KB, un
+# ~10x. Con ~850 reclamos ML/mes (todas las cuentas) y ~60% tipo "Defectuoso" (los
+# que suelen traer foto), 80MB cubre cómodamente 1 mes completo con margen — sin
+# esto, ni el presupuesto viejo de 120MB uncompressed alcanzaba (ver incidente arriba).
+_CLAIM_PHOTOS_BUDGET_MB = 80.0
 # Regla adicional (2026-07-18, a petición de Jovan): ninguna foto vive más de 30
 # días SIN IMPORTAR el tamaño acumulado — se aplica ANTES del tope de tamaño, no
 # en vez de él. Un tope solo por antigüedad no protege contra ráfagas (ej. el
@@ -19863,6 +19868,34 @@ _CLAIM_PHOTOS_BUDGET_MB = 40.0
 # eso el tope de tamaño sigue siendo la red de seguridad real; esto es una regla
 # de higiene encima, para que nada se quede oxidado aunque sí haya espacio.
 _CLAIM_PHOTOS_MAX_AGE_DAYS = 30
+
+
+def _compress_claim_photo(content: bytes) -> bytes:
+    """Redimensiona/recomprime una foto de reclamo antes de guardarla a disco.
+    Las fotos de celular llegan a 2-3MB c/u — muy por encima de lo necesario para
+    distinguir el daño reportado (golpes, rayones, tinta derramada, etc.). Bajarlas
+    a máx. 1280px de lado más largo + JPEG calidad 75 da ~100-150KB por foto (~10x
+    menos) sin perder legibilidad real. Si Pillow falla por cualquier razón (formato
+    raro, imagen corrupta), se guarda el original tal cual — nunca se pierde la foto
+    por un error de compresión."""
+    try:
+        from PIL import Image
+        import io as _io_cp
+        img = Image.open(_io_cp.BytesIO(content))
+        img.load()
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        w, h = img.size
+        max_side = 1280
+        if max(w, h) > max_side:
+            scale = max_side / max(w, h)
+            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        out = _io_cp.BytesIO()
+        img.save(out, format="JPEG", quality=75, optimize=True)
+        compressed = out.getvalue()
+        return compressed if len(compressed) < len(content) else content
+    except Exception:
+        return content
 
 
 async def _enforce_claim_photos_budget() -> dict:
@@ -19946,7 +19979,6 @@ async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = 
     """Descarga en vivo una foto de reclamo (con auth) y la sirve al navegador —
     además la cachea a disco + DB para que la próxima carga sea local (fast path)."""
     import os as _os
-    import mimetypes
     from app.services import token_store as _ts_ph
 
     client = await get_meli_client(user_id=account_id or None)
@@ -19958,10 +19990,14 @@ async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = 
         if not content:
             return Response(status_code=404)
 
+        content = _compress_claim_photo(content)
+
         photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
         claim_dir = photos_dir / claim_id
         claim_dir.mkdir(parents=True, exist_ok=True)
-        local_path = claim_dir / f"0_{_os.path.basename(filename)}"
+        # .jpg forzado — _compress_claim_photo recodifica todo a JPEG.
+        _stem = _os.path.splitext(_os.path.basename(filename))[0]
+        local_path = claim_dir / f"0_{_stem}.jpg"
         if not local_path.exists():
             local_path.write_bytes(content)
             await _ts_ph.save_claim_photos(claim_id, "ml", [{
@@ -19971,8 +20007,7 @@ async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = 
             }])
             asyncio.create_task(_enforce_claim_photos_budget())
 
-        mime, _ = mimetypes.guess_type(filename)
-        return Response(content=content, media_type=mime or "image/jpeg")
+        return Response(content=content, media_type="image/jpeg")
     except Exception:
         return Response(status_code=502)
     finally:
@@ -21169,7 +21204,11 @@ async def returns_sku_claims_detail(
                                 continue
                             photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
                             claim_dir = photos_dir / row["claim_id"]
-                            local_path = claim_dir / f"0_{_os_bf.path.basename(fname)}"
+                            # Siempre .jpg — _compress_claim_photo recodifica todo a JPEG,
+                            # así que el nombre guardado debe reflejar eso (el original
+                            # puede venir .png/.webp, no queremos esa extensión con bytes JPEG).
+                            _stem = _os_bf.path.splitext(_os_bf.path.basename(fname))[0]
+                            local_path = claim_dir / f"0_{_stem}.jpg"
                             rel_path = str(local_path.relative_to(photos_dir.parent))
                             if rel_path in seen_files:
                                 continue
@@ -21178,6 +21217,7 @@ async def returns_sku_claims_detail(
                                 content = await cli.download_binary(dl_path)
                                 if not content:
                                     continue
+                                content = _compress_claim_photo(content)
                                 claim_dir.mkdir(parents=True, exist_ok=True)
                                 local_path.write_bytes(content)
                                 await _ts_scd.save_claim_photos(row["claim_id"], "ml", [{
