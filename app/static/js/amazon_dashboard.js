@@ -3162,7 +3162,7 @@ function _renderAmzBuyerMessages(data) {
                 '<div class="flex items-center justify-between mt-1 gap-2 flex-wrap">' +
                     '<input type="file" id="reply-file-' + domId + '" class="text-[11px] text-gray-500 max-w-[180px]">' +
                     '<div class="flex items-center gap-2">' +
-                    '<button onclick="window.insertTemplateInto(\'reply-text-' + domId + '\', \'amz\')" class="text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition">📋 Plantillas</button>' +
+                    '<button onclick="window.insertTemplateInto(\'reply-text-' + domId + '\', \'amz\', \'' + _amzMsgsEscAttr(th.seller_id || '') + '\')" class="text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition">📋 Plantillas</button>' +
                     '<button onclick="replyToBuyerMessage(\'' + domId + '\', ' + lastInbound.id + ')" id="reply-btn-' + domId + '" class="text-xs font-semibold bg-teal-500 hover:bg-teal-600 text-white px-4 py-1.5 rounded-lg transition shadow-sm">Responder</button>' +
                     '</div>' +
                 '</div>' +

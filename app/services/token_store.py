@@ -843,6 +843,8 @@ async def init_db():
         # ─────────────────────────────────────────────────────────────────
         # TABLA: reply_templates — respuestas rápidas/plantillas para
         # Mensajes de Compradores (ML + Amazon). platform: 'ml'|'amz'|'all'.
+        # account_id: '' = todas las cuentas de esa plataforma; si no, user_id
+        # ML o seller_id Amazon — cada cuenta puede necesitar responder distinto.
         # ─────────────────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS reply_templates (
@@ -850,10 +852,16 @@ async def init_db():
                 label       TEXT NOT NULL,
                 body_text   TEXT NOT NULL,
                 platform    TEXT NOT NULL DEFAULT 'all',
+                account_id  TEXT NOT NULL DEFAULT '',
                 created_by  TEXT NOT NULL DEFAULT '',
                 created_at  REAL NOT NULL DEFAULT 0
             )
         """)
+        try:
+            await db.execute("ALTER TABLE reply_templates ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
         # ─────────────────────────────────────────────────────────────────
         # TABLAS: sku_bundles / sku_bundle_components — bundle real (SKU
         # combinado "SKU1 / SKU2" tal cual aparece en ML) con stock = mínimo
@@ -3879,12 +3887,24 @@ async def delete_seasonal_event(event_id: int) -> None:
 
 
 # ─── Plantillas de respuesta (Mensajes de Compradores ML + Amazon) ───────────
-async def get_reply_templates(platform: str = "") -> list:
+async def get_reply_templates(platform: str = "", account_id: str = "") -> list:
     """Retorna las plantillas — si platform se da ('ml'/'amz'), incluye esas
-    más las genéricas ('all'); si no se da, retorna todas."""
+    más las genéricas ('all'). Si además se da account_id (cuenta activa del
+    hilo que se está respondiendo), excluye plantillas atadas a OTRA cuenta
+    específica — deja las de "todas las cuentas de esta plataforma"
+    (account_id='') y las de esta cuenta exacta. Sin account_id (modo gestión,
+    sin hilo activo) se listan TODAS las de esa plataforma sin importar a qué
+    cuenta estén atadas, para no esconder nada del CRUD."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        if platform:
+        if platform and account_id:
+            rows = await (await db.execute(
+                "SELECT * FROM reply_templates "
+                "WHERE (platform = ? OR platform = 'all') AND (account_id = '' OR account_id = ?) "
+                "ORDER BY label",
+                (platform, account_id),
+            )).fetchall()
+        elif platform:
             rows = await (await db.execute(
                 "SELECT * FROM reply_templates WHERE platform = ? OR platform = 'all' ORDER BY label",
                 (platform,),
@@ -3897,7 +3917,7 @@ async def get_reply_templates(platform: str = "") -> list:
 
 
 async def upsert_reply_template(
-    label: str, body_text: str, platform: str = "all",
+    label: str, body_text: str, platform: str = "all", account_id: str = "",
     created_by: str = "", template_id: int = None,
 ) -> int:
     """Crea o actualiza una plantilla de respuesta. Retorna el id."""
@@ -3905,15 +3925,15 @@ async def upsert_reply_template(
     async with aiosqlite.connect(DATABASE_PATH) as db:
         if template_id:
             await db.execute(
-                "UPDATE reply_templates SET label=?, body_text=?, platform=? WHERE id=?",
-                (label, body_text, platform, template_id),
+                "UPDATE reply_templates SET label=?, body_text=?, platform=?, account_id=? WHERE id=?",
+                (label, body_text, platform, account_id, template_id),
             )
             await db.commit()
             return template_id
         cur = await db.execute(
-            """INSERT INTO reply_templates (label, body_text, platform, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (label, body_text, platform, created_by, _t.time()),
+            """INSERT INTO reply_templates (label, body_text, platform, account_id, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (label, body_text, platform, account_id, created_by, _t.time()),
         )
         await db.commit()
         return cur.lastrowid

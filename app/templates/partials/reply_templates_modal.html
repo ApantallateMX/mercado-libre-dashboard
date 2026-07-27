@@ -1,9 +1,12 @@
 <!-- Modal compartido de Plantillas de respuesta — usado desde Mensajes ML y
      Mensajes de Compradores Amazon. Sirve para 2 cosas con el mismo modal:
      (1) insertar una plantilla en un textarea de respuesta específico
-         (window.openTemplatesModal('ml', 'msg-input-123')), o
+         (window.openTemplatesModal('ml', 'msg-input-123', accountId)), o
      (2) solo gestionar la lista (agregar/editar/borrar) sin insertar nada
-         (window.openTemplatesModal('ml')) — el botón "Usar" se oculta. -->
+         (window.openTemplatesModal('ml')) — el botón "Usar" se oculta.
+     Cada plantilla puede estar atada a UNA cuenta específica o a "todas las
+     cuentas" de esa plataforma — cada cuenta puede necesitar responder
+     distinto (tono, políticas, marca). -->
 <div id="templates-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto">
     <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
@@ -29,10 +32,13 @@
                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
           <textarea id="tpl-body" rows="3" placeholder="Texto de la respuesta..."
                     class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"></textarea>
-          <select id="tpl-platform" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+          <select id="tpl-platform" onchange="window._tplOnPlatformChange()" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
             <option value="all">Ambas plataformas (ML + Amazon)</option>
             <option value="ml">Solo Mercado Libre</option>
             <option value="amz">Solo Amazon</option>
+          </select>
+          <select id="tpl-account" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+            <option value="">Todas las cuentas</option>
           </select>
           <div class="flex gap-2">
             <button onclick="window.templatesSave()" class="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Guardar</button>
@@ -48,13 +54,52 @@
 var _tplList = [];
 var _tplTarget = null;   // id del textarea destino, o null si es solo gestión
 var _tplPlatform = 'all';
+var _tplAccountId = '';  // cuenta activa del hilo que se está respondiendo (si aplica)
+var _tplAccounts = null; // cache: {ml: [{id,nickname}], amazon: [{id,nickname}]}
 
-window.openTemplatesModal = function(platform, targetTextareaId) {
+function _tplLoadAccounts(cb) {
+    if (_tplAccounts) { cb(); return; }
+    fetch('/api/reply-templates/accounts')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { _tplAccounts = d; cb(); })
+        .catch(function() { _tplAccounts = {ml: [], amazon: []}; cb(); });
+}
+
+function _tplAccountsForPlatform(platform) {
+    if (!_tplAccounts) return [];
+    if (platform === 'amz') return _tplAccounts.amazon || [];
+    if (platform === 'ml') return _tplAccounts.ml || [];
+    return [];
+}
+
+function _tplAccountLabel(t) {
+    if (!t.account_id) return null;
+    var list = _tplAccountsForPlatform(t.platform);
+    var found = list.find(function(a) { return a.id === t.account_id; });
+    return found ? found.nickname : t.account_id;
+}
+
+window._tplOnPlatformChange = function(selectedAccountId) {
+    var platform = document.getElementById('tpl-platform').value;
+    var sel = document.getElementById('tpl-account');
+    var list = _tplAccountsForPlatform(platform);
+    var scopeLabel = platform === 'ml' ? ' de Mercado Libre' : (platform === 'amz' ? ' de Amazon' : '');
+    var html = '<option value="">Todas las cuentas' + scopeLabel + '</option>';
+    list.forEach(function(a) {
+        html += '<option value="' + a.id + '">Solo ' + a.nickname + '</option>';
+    });
+    sel.innerHTML = html;
+    sel.disabled = (platform === 'all');
+    sel.value = (platform !== 'all' && selectedAccountId) ? selectedAccountId : '';
+};
+
+window.openTemplatesModal = function(platform, targetTextareaId, accountId) {
     _tplPlatform = platform || 'all';
     _tplTarget = targetTextareaId || null;
+    _tplAccountId = accountId || '';
     document.getElementById('templates-modal').classList.remove('hidden');
     document.getElementById('templates-form').classList.add('hidden');
-    window.templatesLoad();
+    _tplLoadAccounts(function() { window.templatesLoad(); });
 };
 
 window.closeTemplatesModal = function() {
@@ -69,12 +114,18 @@ window.templatesToggleForm = function() {
         document.getElementById('tpl-id').value = '';
         document.getElementById('tpl-label').value = '';
         document.getElementById('tpl-body').value = '';
-        document.getElementById('tpl-platform').value = _tplPlatform === 'amz' ? 'amz' : (_tplPlatform === 'ml' ? 'ml' : 'all');
+        var platform = _tplPlatform === 'amz' ? 'amz' : (_tplPlatform === 'ml' ? 'ml' : 'all');
+        document.getElementById('tpl-platform').value = platform;
+        // Al crear una plantilla nueva desde un hilo de una cuenta específica,
+        // se pre-selecciona esa cuenta como conveniencia — sigue siendo editable.
+        window._tplOnPlatformChange(_tplAccountId);
     }
 };
 
 window.templatesLoad = function() {
-    fetch('/api/reply-templates?platform=' + encodeURIComponent(_tplPlatform))
+    var url = '/api/reply-templates?platform=' + encodeURIComponent(_tplPlatform);
+    if (_tplAccountId) url += '&account_id=' + encodeURIComponent(_tplAccountId);
+    fetch(url)
         .then(function(r) { return r.json(); })
         .then(function(d) {
             _tplList = d.templates || [];
@@ -93,11 +144,14 @@ window.templatesRender = function() {
     }
     var platformLabel = {ml: 'ML', amz: 'Amazon', all: 'Ambas'};
     el.innerHTML = _tplList.map(function(t) {
-        var esc = function(s) { return (s || '').replace(/'/g, "\\'").replace(/\n/g, '\\n'); };
+        var accountLabel = _tplAccountLabel(t);
+        var scopeBadge = accountLabel
+            ? '<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700">' + accountLabel + '</span>'
+            : '<span class="text-[10px] font-normal text-gray-400">(' + (platformLabel[t.platform] || t.platform) + ' — todas las cuentas)</span>';
         return '<div class="border border-gray-200 rounded-lg p-3">' +
             '<div class="flex items-start justify-between gap-2">' +
                 '<div class="min-w-0">' +
-                    '<p class="text-sm font-semibold text-gray-800">' + t.label + ' <span class="text-[10px] font-normal text-gray-400">(' + (platformLabel[t.platform] || t.platform) + ')</span></p>' +
+                    '<p class="text-sm font-semibold text-gray-800 flex items-center gap-1.5 flex-wrap">' + t.label + ' ' + scopeBadge + '</p>' +
                     '<p class="text-xs text-gray-500 mt-0.5 line-clamp-2">' + t.body_text + '</p>' +
                 '</div>' +
                 '<div class="flex items-center gap-1 shrink-0">' +
@@ -126,6 +180,7 @@ window.templatesEdit = function(id) {
     document.getElementById('tpl-label').value = t.label;
     document.getElementById('tpl-body').value = t.body_text;
     document.getElementById('tpl-platform').value = t.platform;
+    window._tplOnPlatformChange(t.account_id || '');
 };
 
 window.templatesSave = function() {
@@ -133,8 +188,9 @@ window.templatesSave = function() {
     var label = document.getElementById('tpl-label').value.trim();
     var body_text = document.getElementById('tpl-body').value.trim();
     var platform = document.getElementById('tpl-platform').value;
+    var account_id = document.getElementById('tpl-account').value;
     if (!label || !body_text) { alert('Nombre y texto son requeridos'); return; }
-    var payload = {label: label, body_text: body_text, platform: platform};
+    var payload = {label: label, body_text: body_text, platform: platform, account_id: account_id};
     if (id) payload.id = parseInt(id, 10);
     fetch('/api/reply-templates', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -156,8 +212,9 @@ window.templatesDelete = function(id) {
 };
 
 // Helper usado por los botones "📋 Plantillas" junto a cada textarea de
-// respuesta (ML y Amazon) — abre el modal ya apuntando a ESE textarea.
-window.insertTemplateInto = function(textareaId, platform) {
-    window.openTemplatesModal(platform, textareaId);
+// respuesta (ML y Amazon) — abre el modal ya apuntando a ESE textarea y a la
+// cuenta activa de ese hilo (accountId), para filtrar plantillas relevantes.
+window.insertTemplateInto = function(textareaId, platform, accountId) {
+    window.openTemplatesModal(platform, textareaId, accountId);
 };
 </script>

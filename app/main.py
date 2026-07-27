@@ -13519,10 +13519,25 @@ async def delete_seasonal_event_api(event_id: int):
     return {"ok": True}
 
 
+@app.get("/api/reply-templates/accounts")
+async def get_reply_templates_accounts_api():
+    """Lista de cuentas ML + Amazon para el selector de alcance de plantillas
+    ("solo esta cuenta" vs "todas las cuentas de la plataforma")."""
+    ml_accounts = await token_store.get_all_tokens()
+    amz_accounts = await token_store.get_all_amazon_accounts()
+    return {
+        "ml": [{"id": str(a["user_id"]), "nickname": a.get("nickname") or str(a["user_id"])} for a in ml_accounts],
+        "amazon": [{"id": a.get("seller_id", ""), "nickname": a.get("nickname") or a.get("seller_id", "")} for a in amz_accounts],
+    }
+
+
 @app.get("/api/reply-templates")
-async def get_reply_templates_api(platform: str = Query("", description="'ml'/'amz' — incluye también las genéricas 'all'")):
+async def get_reply_templates_api(
+    platform: str = Query("", description="'ml'/'amz' — incluye también las genéricas 'all'"),
+    account_id: str = Query("", description="Cuenta activa del hilo (user_id ML o seller_id Amazon) — filtra fuera plantillas atadas a OTRA cuenta específica. Vacío = modo gestión, muestra todas."),
+):
     """Plantillas de respuesta rápida para Mensajes de Compradores (ML + Amazon)."""
-    return {"templates": await token_store.get_reply_templates(platform)}
+    return {"templates": await token_store.get_reply_templates(platform, account_id)}
 
 
 @app.post("/api/reply-templates")
@@ -13538,12 +13553,15 @@ async def upsert_reply_template_api(request: Request):
     label = (body.get("label") or "").strip()
     body_text = (body.get("body_text") or "").strip()
     platform = (body.get("platform") or "all").strip()
+    account_id = (body.get("account_id") or "").strip()
     if not label or not body_text:
         return JSONResponse({"detail": "label y body_text son requeridos"}, status_code=400)
     if platform not in ("ml", "amz", "all"):
         platform = "all"
+    if platform == "all":
+        account_id = ""  # una cuenta pertenece a UNA plataforma — no tiene sentido combinarlo con "todas"
     template_id = await token_store.upsert_reply_template(
-        label=label, body_text=body_text, platform=platform,
+        label=label, body_text=body_text, platform=platform, account_id=account_id,
         created_by=du.get("username", ""), template_id=body.get("id"),
     )
     return {"ok": True, "id": template_id}

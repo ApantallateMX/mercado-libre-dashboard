@@ -308,7 +308,7 @@ window._setMsgStatus = function(packId, status, btn) {
             <textarea id="msg-input-{{ conv.pack_id }}" rows="2"
                       class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu mensaje..."></textarea>
             <div class="flex items-center gap-2 mt-2 flex-wrap">
-                <button onclick="window.insertTemplateInto('msg-input-{{ conv.pack_id }}', 'ml')"
+                <button onclick="window.insertTemplateInto('msg-input-{{ conv.pack_id }}', 'ml', '{{ conv.account_id }}')"
                         class="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-200 font-semibold transition">
                     📋 Plantillas
                 </button>
