@@ -16224,6 +16224,71 @@ async def diag_fix_claims_account_id(token: str = ""):
     return {"ok": True, "rows_fixed": fixed, "details": details}
 
 
+@app.get("/api/diag/claim-photos-capacity")
+async def diag_claim_photos_capacity(token: str = ""):
+    """DIAGNÓSTICO TEMPORAL — Jovan pidió estimar cuánto espacio necesitaríamos
+    para guardar fotos de reclamos de 1 mes completo (a raíz del bug de fotos
+    faltantes). Junta: tamaño actual de la DB, tamaño actual de claim_photos/,
+    volumen total de Railway (500MB, hardcodeado por ahora), y volumen real de
+    reclamos ML de los últimos 30 días (total y con razón tipo 'Defectuoso' —
+    la más propensa a traer fotos) para poder calcular con datos reales cuánto
+    pesaría guardar 1 mes, con y sin comprimir imágenes."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import os as _os_cap
+    import aiosqlite as _aio_cap
+    from datetime import datetime as _dt_cap, timedelta as _td_cap
+
+    db_size_mb = round(_os_cap.path.getsize(DATABASE_PATH) / 1024 / 1024, 1) if _os_cap.path.exists(DATABASE_PATH) else 0
+
+    photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+    photos_bytes = 0
+    n_photo_files = 0
+    if photos_dir.is_dir():
+        for root, _dirs, fnames in _os_cap.walk(photos_dir):
+            for f in fnames:
+                try:
+                    photos_bytes += _os_cap.path.getsize(_os_cap.path.join(root, f))
+                    n_photo_files += 1
+                except Exception:
+                    pass
+    photos_mb = round(photos_bytes / 1024 / 1024, 2)
+    avg_photo_kb = round((photos_bytes / n_photo_files) / 1024, 1) if n_photo_files else 0
+
+    date_from = (_dt_cap.utcnow() - _td_cap(days=30)).strftime("%Y-%m-%d")
+    async with _aio_cap.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_cap.Row
+        cur = await db.execute(
+            "SELECT COUNT(*) as n FROM claims_history WHERE platform='ml' AND date_created >= ?",
+            (date_from,),
+        )
+        total_30d = (await cur.fetchone())["n"]
+        cur = await db.execute(
+            "SELECT reason_id, COUNT(*) as n FROM claims_history WHERE platform='ml' AND date_created >= ? GROUP BY reason_id ORDER BY n DESC",
+            (date_from,),
+        )
+        reasons_30d = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute(
+            "SELECT COUNT(*) as n FROM claim_photos WHERE claim_id IN (SELECT claim_id FROM claims_history WHERE platform='ml' AND date_created >= ?)",
+            (date_from,),
+        )
+        photos_rows_30d = (await cur.fetchone())["n"]
+
+    return {
+        "db_size_mb": db_size_mb,
+        "claim_photos_dir_mb": photos_mb,
+        "claim_photos_files": n_photo_files,
+        "avg_photo_size_kb": avg_photo_kb,
+        "railway_volume_total_mb": 500,
+        "current_budget_mb": _CLAIM_PHOTOS_BUDGET_MB,
+        "current_max_age_days": _CLAIM_PHOTOS_MAX_AGE_DAYS,
+        "claims_last_30d_all_ml_accounts": total_30d,
+        "reasons_last_30d": reasons_30d,
+        "photo_rows_saved_last_30d": photos_rows_30d,
+    }
+
+
 @app.get("/api/diag/inspect-claim")
 async def diag_inspect_claim(token: str = "", claim_id: str = Query(""), account_id: str = Query("")):
     """DIAGNÓSTICO TEMPORAL — Jovan reportó un reclamo puntual (orden
