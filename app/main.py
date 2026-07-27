@@ -16192,6 +16192,50 @@ async def diag_migrate_billing_invoices_to_disk(token: str = ""):
     }
 
 
+@app.get("/api/diag/inspect-sku-claims")
+async def diag_inspect_sku_claims(token: str = "", sku: str = Query("")):
+    """DIAGNÓSTICO TEMPORAL — Jovan reportó reclamos que muestran 'Sin
+    comentario del comprador' aunque sí hubo plática real (con foto incluida)
+    con el comprador. Este endpoint trae, para un SKU dado, los reclamos con
+    buyer_comment vacío pero CON foto ya guardada, y para cada uno llama en
+    vivo a get_claim_messages() y regresa los sender_role/texto crudos de
+    Amazon — para ver exactamente qué rol trae el mensaje real del comprador
+    en vez de asumir que siempre es 'complainant'."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import token_store as _ts_isc
+    rows = await _ts_isc.get_claims_history(sku=sku.strip().upper() or None, limit=200)
+    out = []
+    clients: dict = {}
+    for row in rows:
+        photos = await _ts_isc.get_claim_photos(row["claim_id"])
+        if row.get("buyer_comment") or not photos:
+            continue
+        acc_id = row["account_id"]
+        cli = clients.get(acc_id)
+        if cli is None:
+            cli = await get_meli_client(user_id=acc_id or None)
+            clients[acc_id] = cli
+        if not cli:
+            continue
+        try:
+            msgs = await cli.get_claim_messages(row["claim_id"])
+            raw = [{
+                "sender_role": m.get("sender_role"),
+                "message_preview": (m.get("message") or m.get("text") or "")[:150],
+                "has_attachments": bool(m.get("attachments")),
+                "keys": list(m.keys()),
+            } for m in (msgs if isinstance(msgs, list) else [])]
+            out.append({"claim_id": row["claim_id"], "account_id": acc_id, "n_photos": len(photos), "messages": raw})
+        except Exception as e:
+            out.append({"claim_id": row["claim_id"], "account_id": acc_id, "error": str(e)})
+    for cli in clients.values():
+        if cli:
+            await cli.close()
+    return {"sku": sku, "inspected": len(out), "claims": out}
+
+
 @app.get("/api/diag/reset-claim-comments")
 async def diag_reset_claim_comments(token: str = ""):
     """One-time cleanup: limpia buyer_comment en claims_history. Antes se guardaban
