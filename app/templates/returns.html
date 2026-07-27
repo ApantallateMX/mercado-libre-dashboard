@@ -1362,6 +1362,17 @@ function _renderAiAnalysis(d, p) {
         html += '</ul></div>';
     }
 
+    // Comentarios y fotos de compradores (ML), filtrado a ESTA cuenta —
+    // mismo endpoint que usa el widget Global (/multi-dashboard), aquí con
+    // account_id para no mezclar cuentas (CLAUDE.md regla #4).
+    html += '<div class="mb-5">';
+    html += '<p class="text-xs font-bold text-gray-700 mb-2">💬 Comentarios y fotos de compradores (ML)</p>';
+    html += '<div id="ret-ai-comments"><div class="flex items-center gap-2 py-3 text-xs text-gray-400">' +
+            '<svg class="animate-spin h-4 w-4 text-purple-300" viewBox="0 0 24 24" fill="none">' +
+            '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>' +
+            '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>Cargando comentarios...</div></div>';
+    html += '</div>';
+
     // Share button from AI modal
     html += '<div class="border-t pt-4 flex gap-2">';
     html += '<button onclick="window.closeAiModal(); window.shareReport(\'' +
@@ -1375,6 +1386,50 @@ function _renderAiAnalysis(d, p) {
     html += '</div>';
 
     body.innerHTML = html;
+    _loadAiModalComments(p);
+}
+
+function _escapeAiHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function _renderAiClaimCards(claims) {
+    if (!claims || !claims.length) {
+        return '<p class="text-xs text-gray-400 py-2">Sin reclamos ML en este rango.</p>';
+    }
+    var html = '<div class="space-y-2">';
+    claims.forEach(function(c) {
+        var photosHtml = (c.photos || []).map(function(ph) {
+            return '<a href="' + ph.url + '" target="_blank"><img src="' + ph.url + '" class="w-14 h-14 object-cover rounded-lg border hover:opacity-80 transition" loading="lazy"></a>';
+        }).join('');
+        html += '<div class="bg-gray-50 rounded-lg p-3 border border-gray-100">' +
+            '<div class="flex flex-wrap items-center gap-2 mb-1.5 text-[10px]">' +
+                '<span class="text-gray-400">' + _escapeAiHtml(c.date_created) + '</span>' +
+                '<span class="px-1.5 py-0.5 bg-gray-200 rounded text-gray-600">' + _escapeAiHtml(c.reason_label) + '</span>' +
+                (c.status === 'opened' ? '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-semibold">Abierto</span>' : '') +
+                (c.amount_mxn > 0 ? '<span class="text-gray-400 ml-auto">$' + c.amount_mxn.toLocaleString('es-MX') + ' MXN</span>' : '') +
+            '</div>' +
+            (c.buyer_comment ? '<p class="text-xs text-gray-700">' + _escapeAiHtml(c.buyer_comment) + '</p>' : '<p class="text-xs text-gray-400 italic">Sin comentario del comprador</p>') +
+            (photosHtml ? '<div class="flex flex-wrap gap-1.5 mt-2">' + photosHtml + '</div>' : '') +
+        '</div>';
+    });
+    html += '</div>';
+    return html;
+}
+
+function _loadAiModalComments(p) {
+    var el = document.getElementById('ret-ai-comments');
+    if (!el) return;
+    var params = p.sku ? ('sku=' + encodeURIComponent(p.sku)) : ('item_id=' + encodeURIComponent(p.item_id));
+    params += '&account_id=' + encodeURIComponent(p.account_id || '');
+    if (p.date_from) params += '&date_from=' + encodeURIComponent(p.date_from);
+    if (p.date_to) params += '&date_to=' + encodeURIComponent(p.date_to);
+    fetch('/api/returns/sku-claims-detail?' + params)
+        .then(function(r) { return r.json(); })
+        .then(function(data) { el.innerHTML = _renderAiClaimCards(data.claims); })
+        .catch(function() {
+            el.innerHTML = '<p class="text-xs text-red-500 py-2">Error cargando comentarios</p>';
+        });
 }
 
 window.closeAiModal = function() {

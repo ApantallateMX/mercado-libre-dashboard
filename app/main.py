@@ -20934,15 +20934,17 @@ async def returns_supplier_package(
 async def returns_sku_claims_detail(
     sku: str = Query(""),
     item_id: str = Query("", description="Fallback cuando el listing no tiene SKU BM resuelto"),
+    account_id: str = Query("", description="Si se pasa, filtra a UNA sola cuenta ML (uso desde /returns por-cuenta). Vacío = todas las cuentas (uso del widget Global)."),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
     days: int = Query(0, description="Si se pasa (>0), también agrega reembolsos Amazon del mismo SKU en esa ventana — mismo cache 3h que el widget Global"),
 ):
     """Detalle claim-por-claim de un SKU (o item_id ML si no hay SKU resuelto):
-    comentario del comprador + fotos, sin filtrar por cuenta (excepción legítima —
-    este endpoint solo lo consume el widget 'Top Retornos Global', que ya es la vista
-    Global explícita — ver CLAUDE.md regla #4). Solo ML: Amazon no expone comentarios
-    ni fotos por su API (ver nota en /api/returns/sku-claim-rate).
+    comentario del comprador + fotos. Sin account_id trae TODAS las cuentas
+    (excepción legítima — usado por el widget 'Top Retornos Global', vista Global
+    explícita, ver CLAUDE.md regla #4). Con account_id, filtra a esa cuenta
+    únicamente (usado por /returns, que es siempre por-cuenta). Solo ML: Amazon no
+    expone comentarios ni fotos por su API (ver nota en /api/returns/sku-claim-rate).
 
     Los registros base (claim_id/sku/item_id/reason/fecha) ya se guardan solos cada
     vez que el widget refresca su cache (_compute_unified_returns) — no depende de
@@ -20956,10 +20958,11 @@ async def returns_sku_claims_detail(
 
     sku = sku.strip().upper()
     item_id = item_id.strip()
+    account_id = account_id.strip()
     if not sku and not item_id:
         return {"sku": sku, "total": 0, "claims": [], "error": "sku o item_id requerido"}
     claims = await _ts_scd.get_claims_history(
-        sku=sku or None, item_id=item_id or None,
+        sku=sku or None, item_id=item_id or None, account_id=account_id or None,
         date_from=date_from or None, date_to=date_to or None, limit=200,
     )
     # NOTA: no hacer return temprano aquí si claims está vacío — un SKU puede no
