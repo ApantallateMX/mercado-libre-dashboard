@@ -16192,55 +16192,36 @@ async def diag_migrate_billing_invoices_to_disk(token: str = ""):
     }
 
 
-@app.get("/api/diag/inspect-sku-claims")
-async def diag_inspect_sku_claims(token: str = "", sku: str = Query("")):
-    """DIAGNÓSTICO TEMPORAL — Jovan reportó reclamos que muestran 'Sin
-    comentario del comprador' aunque sí hubo plática real (con foto incluida)
-    con el comprador. Este endpoint trae, para un SKU dado, los reclamos con
-    buyer_comment vacío pero CON foto ya guardada, y para cada uno llama en
-    vivo a get_claim_messages() y regresa los sender_role/texto crudos de
-    Amazon — para ver exactamente qué rol trae el mensaje real del comprador
-    en vez de asumir que siempre es 'complainant'."""
+@app.get("/api/diag/fix-claims-account-id")
+async def diag_fix_claims_account_id(token: str = ""):
+    """One-time cleanup: la primera versión de _save_ml_claims_bg (2026-07-15)
+    guardaba account_id = NICKNAME de la cuenta ("BLOWTECHNOLOGIES") en vez del
+    user_id numérico. Se corrigió al día siguiente (commit 086614c) para que todo
+    el código actual use el user_id numérico — pero los reclamos viejos ya
+    guardados con el dato malo nunca se vuelven a tocar (los syncs solo cubren una
+    ventana reciente), así que get_meli_client(user_id=nickname) siempre devuelve
+    None y el backfill de comentario/foto en sku-claims-detail se salta esas filas
+    en silencio, para siempre. Este endpoint mapea nickname -> user_id real y
+    corrige lo ya guardado; después el backfill normal las toma solas."""
     _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DT:
         return JSONResponse({"error": "token inválido"}, status_code=403)
-    from app.services import token_store as _ts_isc
-    rows = await _ts_isc.get_claims_history(sku=sku.strip().upper() or None, limit=200)
-    overview = []
-    out = []
-    clients: dict = {}
-    for row in rows:
-        photos = await _ts_isc.get_claim_photos(row["claim_id"])
-        overview.append({
-            "claim_id": row["claim_id"], "account_id": row["account_id"],
-            "has_comment": bool(row.get("buyer_comment")),
-            "comment_preview": (row.get("buyer_comment") or "")[:80],
-            "n_photos": len(photos), "reason_id": row.get("reason_id"), "status": row.get("status"),
-        })
-        if row.get("buyer_comment") or not photos:
-            continue
-        acc_id = row["account_id"]
-        cli = clients.get(acc_id)
-        if cli is None:
-            cli = await get_meli_client(user_id=acc_id or None)
-            clients[acc_id] = cli
-        if not cli:
-            continue
-        try:
-            msgs = await cli.get_claim_messages(row["claim_id"])
-            raw = [{
-                "sender_role": m.get("sender_role"),
-                "message_preview": (m.get("message") or m.get("text") or "")[:150],
-                "has_attachments": bool(m.get("attachments")),
-                "keys": list(m.keys()),
-            } for m in (msgs if isinstance(msgs, list) else [])]
-            out.append({"claim_id": row["claim_id"], "account_id": acc_id, "n_photos": len(photos), "messages": raw})
-        except Exception as e:
-            out.append({"claim_id": row["claim_id"], "account_id": acc_id, "error": str(e)})
-    for cli in clients.values():
-        if cli:
-            await cli.close()
-    return {"sku": sku, "total_claims": len(rows), "overview": overview, "inspected": len(out), "claims": out}
+    accounts = await token_store.get_all_tokens()
+    nick_to_uid = {a.get("nickname"): str(a["user_id"]) for a in accounts if a.get("nickname")}
+    import aiosqlite as _aio_fc
+    fixed = 0
+    details = []
+    async with _aio_fc.connect(DATABASE_PATH) as db:
+        for nick, uid in nick_to_uid.items():
+            cur = await db.execute(
+                "UPDATE claims_history SET account_id = ? WHERE platform = 'ml' AND account_id = ?",
+                (uid, nick),
+            )
+            if cur.rowcount:
+                fixed += cur.rowcount
+                details.append({"nickname": nick, "user_id": uid, "rows_fixed": cur.rowcount})
+        await db.commit()
+    return {"ok": True, "rows_fixed": fixed, "details": details}
 
 
 @app.get("/api/diag/reset-claim-comments")

@@ -1585,8 +1585,18 @@ function _renderClaimCards(claims) {
 
 function loadRetDetailComments(sku, itemId) {
     const el = document.getElementById('ret-detail-comments');
+    // Mismo rango que el widget (p.count arriba) — antes esto traía TODO el
+    // historial sin filtrar, así que la lista de abajo mostraba muchos más
+    // reclamos de los que decía el encabezado (confuso, y muchos eran
+    // reclamos viejos fuera de ventana que nunca se re-sincronizan).
+    const days = document.getElementById('ret-widget-days').value || 30;
+    const today = new Date();
+    const from = new Date(today);
+    from.setDate(from.getDate() - Number(days));
+    const dateFrom = from.toISOString().slice(0, 10);
+    const dateTo = today.toISOString().slice(0, 10);
     const params = sku ? `sku=${encodeURIComponent(sku)}` : `item_id=${encodeURIComponent(itemId)}`;
-    fetch(`/api/returns/sku-claims-detail?${params}`)
+    fetch(`/api/returns/sku-claims-detail?${params}&date_from=${dateFrom}&date_to=${dateTo}`)
         .then(r => r.json())
         .then(data => { el.innerHTML = _renderClaimCards(data.claims); })
         .catch(() => {
