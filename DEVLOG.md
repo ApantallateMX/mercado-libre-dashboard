@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FEAT: plantillas de respuesta acotadas a UNA cuenta específica
+
+**Archivos:** `app/services/token_store.py` (`reply_templates` + `account_id`),
+`app/main.py` (`/api/reply-templates`, nuevo `/api/reply-templates/accounts`),
+`app/templates/partials/reply_templates_modal.html`,
+`app/templates/partials/health_messages.html`, `app/static/js/amazon_dashboard.js`.
+
+Jovan notó que las plantillas solo se separaban por plataforma (ML/Amazon/
+ambas) pero no por cuenta — BLOW, AUTOBOT, Lutema y Apantallate pueden
+necesitar responder distinto (tono, políticas) y no había forma de acotar
+una plantilla a una sola cuenta.
+
+- `reply_templates` gana `account_id` (`''` = todas las cuentas de esa
+  plataforma, o un user_id ML / seller_id Amazon específico).
+- `get_reply_templates(platform, account_id)`: con `account_id` dado
+  (viene del hilo activo que se está respondiendo), incluye las de "todas
+  las cuentas" + las de esa cuenta exacta, EXCLUYE las atadas a otra cuenta
+  distinta. Sin `account_id` (modo gestión, sin hilo activo) lista todas,
+  para no esconder nada al editar/borrar.
+- Nuevo `GET /api/reply-templates/accounts` — lista ML+Amazon para poblar
+  el selector de cuenta en el formulario.
+- Modal compartido: selector de cuenta que se repuebla según la plataforma
+  elegida (deshabilitado si es "ambas plataformas"), badge de alcance en
+  cada plantilla de la lista (nickname de cuenta o "todas las cuentas").
+- `openTemplatesModal`/`insertTemplateInto` ahora reciben también
+  `accountId` — actualizado en los 2 call sites (ML y Amazon) para pasar
+  la cuenta activa del hilo que se está respondiendo.
+
+Verificado en local con cuentas reales: una plantilla atada a BLOW aparece
+al responder en BLOW pero NO en APANTALLATEMX; una plantilla "todas las
+cuentas ML" aparece en ambas; el modo gestión (sin cuenta activa) las ve
+todas.
+
+---
+
 ## 2026-07-27 — FIX: mensajes de compradores Amazon se quedaban truncados sin forma de ver el resto
 
 **Archivos:** `app/static/js/amazon_dashboard.js` (`threadHtml`).
