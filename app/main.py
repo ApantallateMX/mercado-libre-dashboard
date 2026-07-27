@@ -15941,14 +15941,19 @@ async def diag_gmail_setup_filter(token: str = "", seller_id: str = Query(...)):
     """Crea (vía API de Gmail) la etiqueta + filtro que organiza los correos
     de Buyer Messages — Jovan pidió automatizarlo en vez de crearlo a mano en
     Gmail. Requiere que la cuenta ya haya autorizado /auth/gmail/connect con
-    el scope gmail.settings.basic."""
+    el scope gmail.settings.basic. label_name se deriva del nickname real de
+    la cuenta (antes estaba fijo en "Vektor Amazon" — bug real, hubiera
+    creado esa misma etiqueta también en las bandejas de Autobot/ExclusiveBulbs)."""
     _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DT:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     from app.services.buyer_messages_client import setup_organization_filter
+    from app.config import AMAZON_BUYER_INBOX_ACCOUNTS
+    cfg = next((c for c in AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == seller_id), None)
+    label_name = f"{(cfg['nickname'] if cfg else seller_id)} Amazon"
     try:
-        result = await setup_organization_filter(seller_id, "marketplace.amazon.com.mx", "Vektor Amazon")
-        return JSONResponse({"ok": True, "result": result})
+        result = await setup_organization_filter(seller_id, "marketplace.amazon.com.mx", label_name)
+        return JSONResponse({"ok": True, "label": label_name, "result": result})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 

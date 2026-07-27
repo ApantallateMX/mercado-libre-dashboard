@@ -7,6 +7,20 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FIX: `/api/diag/gmail-setup-filter` tenía el nombre de etiqueta fijo en "Vektor Amazon"
+
+**Archivos:** `app/main.py`.
+
+Jovan pidió aplicar a AUTOBOT y ExclusiveBulbs el mismo filtro de Gmail
+(etiqueta + archivar automático de correos de Amazon) que ya tenía
+VECKTOR, para mantener limpia la bandeja de cada cuenta. El endpoint que
+lo crea vía API de Gmail tenía el nombre de la etiqueta hardcodeado a
+"Vektor Amazon" — se hubiera creado esa misma etiqueta (incorrecta) en
+las otras 2 cuentas. Corregido para derivar el nombre del nickname real
+de cada cuenta (`AMAZON_BUYER_INBOX_ACCOUNTS`).
+
+---
+
 ## 2026-07-25 — FEAT: Bandeja unificada de Mensajes (ML + Amazon) + Plantillas de respuesta
 
 **Archivos:** `app/main.py`, `app/api/health.py`, `app/services/token_store.py`,
