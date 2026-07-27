@@ -16224,6 +16224,62 @@ async def diag_fix_claims_account_id(token: str = ""):
     return {"ok": True, "rows_fixed": fixed, "details": details}
 
 
+@app.get("/api/diag/inspect-claim")
+async def diag_inspect_claim(token: str = "", claim_id: str = Query(""), account_id: str = Query("")):
+    """DIAGNÓSTICO TEMPORAL — Jovan reportó un reclamo puntual (orden
+    2000013998495097, reclamo 5547962959, cuenta BLOW) donde ML sí muestra fotos
+    Y texto del comprador en el hilo de mensajería, pero nuestro sistema no trae
+    todo. Este endpoint muestra: (1) la fila cruda de claims_history, (2) las
+    fotos ya guardadas en claim_photos, y (3) la respuesta EN VIVO de
+    get_claim_messages(claim_id) — sender_role, texto y attachments de cada
+    mensaje tal como los da ML — para comparar contra lo que el dashboard
+    termina mostrando."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not claim_id:
+        return {"error": "claim_id requerido"}
+    from app.services import token_store as _ts_ic
+    import aiosqlite as _aio_ic
+
+    async with _aio_ic.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_ic.Row
+        cur = await db.execute("SELECT * FROM claims_history WHERE claim_id = ?", (claim_id,))
+        row = await cur.fetchone()
+        db_row = dict(row) if row else None
+
+    photos = await _ts_ic.get_claim_photos(claim_id)
+
+    if not account_id and db_row:
+        account_id = db_row.get("account_id", "")
+
+    live_messages = []
+    live_error = None
+    cli = await get_meli_client(user_id=account_id or None)
+    if not cli:
+        live_error = f"get_meli_client devolvió None para account_id='{account_id}'"
+    else:
+        try:
+            msgs = await cli.get_claim_messages(claim_id)
+            for m in (msgs if isinstance(msgs, list) else []):
+                live_messages.append({
+                    "sender_role": m.get("sender_role"),
+                    "message": (m.get("message") or m.get("text") or "")[:500],
+                    "attachments": m.get("attachments"),
+                    "keys": list(m.keys()),
+                })
+        except Exception as e:
+            live_error = str(e)
+        finally:
+            await cli.close()
+
+    return {
+        "claim_id": claim_id, "account_id_used": account_id,
+        "db_row": db_row, "photos_saved": photos,
+        "live_error": live_error, "live_messages": live_messages,
+    }
+
+
 @app.get("/api/diag/reset-claim-comments")
 async def diag_reset_claim_comments(token: str = ""):
     """One-time cleanup: limpia buyer_comment en claims_history. Antes se guardaban
