@@ -7,6 +7,52 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FIX: Retornos Global — `account_id` legacy + modal de comentarios desincronizado del conteo
+
+**Archivos:** `app/main.py` (endpoint `/api/diag/fix-claims-account-id`, reemplaza al
+temporal `/api/diag/inspect-sku-claims`), `app/templates/multi_dashboard.html`
+(`loadRetDetailComments`).
+
+Jovan reportó (con screenshot) que el modal de detalle de "Top Retornos Global"
+mostraba muchos reclamos con "Sin comentario del comprador" pese a haber plática
+real (incluso con foto) con el comprador. Pidió analizar bien y presentar un plan
+antes de tocar nada — se investigó primero, se presentó el diagnóstico, y se
+implementó tras su aprobación ("vamos con lo que es mejor").
+
+**Causa raíz 1 — `account_id` legacy:** la primerísima versión de
+`_save_ml_claims_bg` (2026-07-15) guardaba `account_id` = nickname de la cuenta
+("BLOWTECHNOLOGIES") en vez del user_id numérico. Se corrigió en el código al
+día siguiente (commit `086614c`), pero los reclamos ya guardados con el dato
+malo nunca se tocaron — como los syncs solo cubren una ventana reciente (30-180
+días), esas filas viejas quedaron congeladas para siempre.
+`get_meli_client(user_id="BLOWTECHNOLOGIES")` no encuentra token → devuelve
+`None` → el backfill de comentario/foto en `sku-claims-detail` se salta esas
+filas en silencio, sin error visible. Se corrió una limpieza única en
+producción: **2,296 filas corregidas** (BLOWTECHNOLOGIES 1052, APANTALLATEMX
+837, LUTEMAMEXICO 174, AUTOBOT MEXICO 233) — el backfill normal ahora las toma
+solas la próxima vez que alguien abra ese SKU.
+
+**Causa raíz 2 — modal con dos alcances distintos sin avisar:** el encabezado
+del modal muestra el conteo scoped a `days` del widget (ej. "25 retornos
+totales"), pero `loadRetDetailComments` llamaba a `sku-claims-detail` SIN fecha,
+trayendo hasta 200 reclamos de TODO el historial (95 en el caso reportado) —
+mostrando muchos más comentarios de los que el encabezado prometía, la mayoría
+reclamos viejos fuera de ventana (más propensos al bug #1). Ahora pasa el mismo
+rango de fechas que usa el widget, igual que ya hacía `searchRetSku`.
+
+**No es bug (documentado, sin cambio):** las fotos de reclamo se borran de disco
+pasados 30 días (`_CLAIM_PHOTOS_MAX_AGE_DAYS`) — medida deliberada tras el
+incidente de disco lleno del Railway Volume (2026-07-15). Con el fix #2 el
+detalle ya no mezcla reclamos tan viejos, así que se ven menos "0 fotos", pero
+la política de 30 días se deja igual a propósito.
+
+Confirmado: `returns.html` (ML por cuenta) y `amazon_returns.html` (Amazon por
+cuenta) ya tienen vistas equivalentes o más ricas (Quality Score, Ranking
+rápido, Top SKUs, Timeline, Comentarios) — no hace falta duplicar nada ahí, el
+problema real estaba en el widget Global.
+
+---
+
 ## 2026-07-27 — FIX: `/api/diag/gmail-setup-filter` tenía el nombre de etiqueta fijo en "Vektor Amazon"
 
 **Archivos:** `app/main.py`.
