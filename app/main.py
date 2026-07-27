@@ -21074,6 +21074,7 @@ async def returns_sku_claims_detail(
         } for p in photos_raw if p.get("local_path")]
         out.append({
             "claim_id": row["claim_id"],
+            "order_id": row["order_id"],
             "account": nick_map.get(row["account_id"], row["account_id"]),
             "date_created": row["date_created"],
             "reason_label": _claim_reason_label(row["reason_id"]),

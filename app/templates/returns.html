@@ -1405,6 +1405,8 @@ function _renderAiClaimCards(claims) {
         html += '<div class="bg-gray-50 rounded-lg p-3 border border-gray-100">' +
             '<div class="flex flex-wrap items-center gap-2 mb-1.5 text-[10px]">' +
                 '<span class="text-gray-400">' + _escapeAiHtml(c.date_created) + '</span>' +
+                (c.order_id ? '<span class="font-mono text-gray-500" title="Número de orden ML">Orden ' + _escapeAiHtml(c.order_id) + '</span>' : '') +
+                (c.claim_id ? '<span class="font-mono text-gray-400" title="ID del reclamo ML">Reclamo ' + _escapeAiHtml(c.claim_id) + '</span>' : '') +
                 '<span class="px-1.5 py-0.5 bg-gray-200 rounded text-gray-600">' + _escapeAiHtml(c.reason_label) + '</span>' +
                 (c.status === 'opened' ? '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-semibold">Abierto</span>' : '') +
                 (c.amount_mxn > 0 ? '<span class="text-gray-400 ml-auto">$' + c.amount_mxn.toLocaleString('es-MX') + ' MXN</span>' : '') +
