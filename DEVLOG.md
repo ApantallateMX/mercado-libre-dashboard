@@ -7,6 +7,53 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FIX: fotos de reclamo no se bajaban si el comentario ya venía del sync + DECISION: comprimir fotos y subir presupuesto de disco
+
+**Archivos:** `app/main.py` (`_compress_claim_photo`, `sku-claims-detail`,
+`claim-photo-proxy`, nuevos diags `inspect-claim` y `claim-photos-capacity`),
+`requirements.txt` (Pillow).
+
+Jovan reportó un caso puntual con orden/reclamo reales (2000017397188926 /
+5547962959, cuenta BLOW): ML sí muestra 3 fotos + texto del comprador en el
+hilo, nuestro dashboard solo traía el texto. Diagnosticado con el endpoint
+`inspect-claim`: `get_claim_messages` en vivo SÍ trae los 3 attachments,
+`buyer_comment` SÍ estaba bien guardado, pero `claim_photos` estaba vacío.
+
+**Causa raíz:** `_save_ml_claims_bg` (sync automático de fondo, cada hora)
+llena `buyer_comment` pero A PROPÓSITO nunca baja fotos (por el incidente de
+disco lleno de 2026-07-15). `sku-claims-detail` solo intentaba bajar fotos
+para reclamos con comentario VACÍO — en cuanto el sync de fondo le ganaba la
+carrera al usuario abriendo el SKU, el reclamo quedaba marcado "resuelto" y
+sus fotos nunca se volvían a intentar. Fix: la lista de reclamos a
+reprocesar ahora también incluye los que ya tienen comentario pero CERO
+fotos guardadas.
+
+**Pregunta de seguimiento de Jovan:** pidió bajar TODAS las fotos y guardar
+1 mes completo, con estimación de capacidad, o alternativa de comprimir si
+no alcanzaba. Con datos reales vía el nuevo diag `claim-photos-capacity`:
+DB en 309MB de los 500MB del volumen de Railway (solo ~190MB libres), ~850
+reclamos ML/mes (4 cuentas), ~64% tipo "Defectuoso" (los que suelen traer
+foto), fotos originales ~1.3MB promedio → guardar 1 mes sin comprimir
+hubiera necesitado 500MB-1GB+, imposible en el espacio disponible (un
+presupuesto de solo 120MB SIN comprimir ya había tumbado el disco el
+2026-07-18).
+
+**Decisión implementada:** comprimir. Nueva `_compress_claim_photo()` —
+redimensiona a máx. 1280px de lado largo + recodifica JPEG calidad 75 antes
+de guardar (si Pillow falla por cualquier razón, guarda el original sin
+comprimir, nunca se pierde la foto). Reducción real ~10-27x según contenido.
+Presupuesto de disco subido de 40MB a 80MB — con fotos ~10x más chicas, esto
+cubre 1 mes completo con margen, sin tocar el tamaño del volumen de Railway.
+Pillow agregado a `requirements.txt` (antes solo estaba disponible local por
+una dependencia transitiva, no garantizado en el build de Railway).
+
+**Pendiente de limpiar:** quedan 3 endpoints de diagnóstico temporales vivos
+en producción (`/api/diag/inspect-claim`, `/api/diag/claim-photos-capacity`,
+`/api/diag/fix-claims-account-id`) — se eliminarán cuando se cierre por
+completo el hilo de investigación de Retornos.
+
+---
+
 ## 2026-07-27 — FIX: Análisis de IA de retornos se truncaba y caía al fallback genérico
 
 **Archivos:** `app/main.py` (`/api/returns/ai-analysis`).
