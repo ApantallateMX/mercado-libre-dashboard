@@ -16206,10 +16206,17 @@ async def diag_inspect_sku_claims(token: str = "", sku: str = Query("")):
         return JSONResponse({"error": "token inválido"}, status_code=403)
     from app.services import token_store as _ts_isc
     rows = await _ts_isc.get_claims_history(sku=sku.strip().upper() or None, limit=200)
+    overview = []
     out = []
     clients: dict = {}
     for row in rows:
         photos = await _ts_isc.get_claim_photos(row["claim_id"])
+        overview.append({
+            "claim_id": row["claim_id"], "account_id": row["account_id"],
+            "has_comment": bool(row.get("buyer_comment")),
+            "comment_preview": (row.get("buyer_comment") or "")[:80],
+            "n_photos": len(photos), "reason_id": row.get("reason_id"), "status": row.get("status"),
+        })
         if row.get("buyer_comment") or not photos:
             continue
         acc_id = row["account_id"]
@@ -16233,7 +16240,7 @@ async def diag_inspect_sku_claims(token: str = "", sku: str = Query("")):
     for cli in clients.values():
         if cli:
             await cli.close()
-    return {"sku": sku, "inspected": len(out), "claims": out}
+    return {"sku": sku, "total_claims": len(rows), "overview": overview, "inspected": len(out), "claims": out}
 
 
 @app.get("/api/diag/reset-claim-comments")
