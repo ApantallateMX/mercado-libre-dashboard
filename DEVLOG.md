@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FIX: mensajes de compradores Amazon se quedaban truncados sin forma de ver el resto
+
+**Archivos:** `app/static/js/amazon_dashboard.js` (`threadHtml`).
+
+Jovan reportó un mensaje de solicitud de CFDI (con RFC, código postal, etc.)
+cortado a la mitad ("Código Pos...") sin poder ver el resto para responder.
+Causa: el botón "Ver conversación completa" (que revela el texto íntegro,
+sin el corte de 180 caracteres del preview) solo aparecía si el hilo tenía
+MÁS DE 1 mensaje. Un hilo nuevo con un solo mensaje largo — el caso más común,
+primer mensaje de un comprador antes de cualquier respuesta — nunca mostraba
+ese botón, dejando el texto truncado permanentemente. Revisado el lado ML
+(`health_messages.html`) y no tiene este patrón, no aplica ahí.
+
+Fix: el botón ahora también aparece cuando el preview está truncado,
+sin importar cuántos mensajes tenga el hilo ("Ver mensaje completo" para 1
+solo mensaje, "Ver conversación completa (N mensajes)" para varios).
+
+---
+
 ## 2026-07-27 — FIX: fotos de reclamo no se bajaban si el comentario ya venía del sync + DECISION: comprimir fotos y subir presupuesto de disco
 
 **Archivos:** `app/main.py` (`_compress_claim_photo`, `sku-claims-detail`,
