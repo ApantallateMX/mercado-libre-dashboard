@@ -3103,12 +3103,18 @@ function _renderAmzBuyerMessages(data) {
             (th.product_title ? '<p class="text-xs text-gray-500 truncate mt-0.5">' + _amzMsgsEscHtml(th.product_title) + '</p>' : '');
 
         var previewText = lastInbound ? lastInbound.body_text || '' : '';
-        var truncated = previewText.length > 180 ? previewText.slice(0, 180) + '…' : previewText;
+        var isPreviewTruncated = previewText.length > 180;
+        var truncated = isPreviewTruncated ? previewText.slice(0, 180) + '…' : previewText;
         var preview = lastInbound ? (
             '<blockquote class="mt-2 border-l-2 border-teal-300 pl-2.5 text-sm text-gray-700 whitespace-pre-line">' + _amzMsgsEscHtml(truncated) + '</blockquote>'
         ) : '';
-        var expandToggle = th.messages.length > 1 ? (
-            '<button id="amz-thread-toggle-' + domId + '" onclick="toggleAmzThreadExpand(\'' + domId + '\')" class="text-xs text-teal-600 hover:underline mt-1">Ver conversación completa (' + th.messages.length + ' mensajes)</button>'
+        // Antes solo aparecía este botón si había >1 mensaje — un hilo con UN
+        // solo mensaje largo (ej. solicitud de CFDI con RFC/domicilio) se quedaba
+        // truncado a 180 caracteres sin ninguna forma de ver el resto.
+        var expandToggle = (th.messages.length > 1 || isPreviewTruncated) ? (
+            '<button id="amz-thread-toggle-' + domId + '" onclick="toggleAmzThreadExpand(\'' + domId + '\')" class="text-xs text-teal-600 hover:underline mt-1">' +
+            (th.messages.length > 1 ? 'Ver conversación completa (' + th.messages.length + ' mensajes)' : 'Ver mensaje completo') +
+            '</button>'
         ) : '';
 
         var messages = '<div id="amz-thread-messages-' + domId + '" class="hidden mt-2 space-y-1.5 max-h-64 overflow-y-auto">' +
