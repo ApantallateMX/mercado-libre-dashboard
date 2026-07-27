@@ -21040,7 +21040,21 @@ async def returns_sku_claims_detail(
     # sin llamada extra) y se descargan con un tope duro (30 fotos/request) — el
     # incidente de disco lleno fue por bajar TODAS las fotos de TODOS los reclamos
     # de una vez; esto es acotado a un SKU a la vez, con límite explícito.
-    missing = [c for c in claims if not c.get("buyer_comment")][:60]
+    # OJO: no basta con "sin comentario" — _save_ml_claims_bg (sync automático de
+    # fondo) SÍ llena buyer_comment pero NUNCA baja fotos (a propósito, ver su
+    # docstring: incidente de disco lleno). Si solo miráramos buyer_comment vacío,
+    # un reclamo cuyo comentario ya llegó por ese sync jamás volvería a intentar
+    # bajar sus fotos, aunque el mensaje real sí traiga adjuntos (ver DEVLOG
+    # 2026-07-27, caso reclamo 5547962959).
+    missing = []
+    for _c in claims:
+        if len(missing) >= 60:
+            break
+        if not _c.get("buyer_comment"):
+            missing.append(_c)
+            continue
+        if not await _ts_scd.get_claim_photos(_c["claim_id"]):
+            missing.append(_c)
     if missing:
         import os as _os_bf
         from urllib.parse import quote as _quote_bf
