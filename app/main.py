@@ -19944,14 +19944,23 @@ El quality_score es 0-100 donde:
 Calcula el score basándote en: severidad de las razones, cantidad de retornos ({count}), y si las razones sugieren defectos de producto vs problemas de envío/expectativa."""
 
     try:
-        raw = await _cc.generate(prompt, max_tokens=1200)
-        # Extraer JSON de la respuesta
+        # 1200 se quedaba corto para las 8 secciones pedidas (recommendations x3,
+        # listing_improvements x2, prevention_checklist x2, etc.) — los modelos
+        # gratuitos de OpenRouter cortaban el JSON a la mitad, json.loads fallaba
+        # y el fallback mostraba el JSON crudo truncado como si fuera el análisis.
+        raw = await _cc.generate(prompt, max_tokens=2200)
+        # Extraer JSON de la respuesta — algunos modelos gratuitos agregan texto
+        # antes/después del JSON pese a la instrucción de "solo JSON"; buscar el
+        # bloque {...} más externo es más robusto que solo pelar fences ```.
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
         raw = raw.strip()
+        _m = _re.search(r"\{.*\}", raw, _re.S)
+        if _m:
+            raw = _m.group(0)
         analysis = _json.loads(raw)
         analysis["ok"] = True
         analysis["item_id"] = item_id
