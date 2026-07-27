@@ -1022,7 +1022,7 @@ function _renderTopProducts(data) {
             var _encTitle = (p.title || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
             var _encFrom = (fromA || '').replace(/'/g, "\\'");
             var _encTo   = (toA   || '').replace(/'/g, "\\'");
-            var _encReasons = JSON.stringify(p.reasons || {}).replace(/'/g, "\\'");
+            var _encReasons = JSON.stringify(p.reasons || {}).replace(/'/g, "\\'").replace(/"/g, '&quot;');
             var _encSaleAmt = (p.sale_amount_mxn || 0);
 
             html += '<div class="px-5 py-3 bg-gray-50 border-t flex flex-wrap items-center gap-2">';
@@ -1380,7 +1380,7 @@ function _renderAiAnalysis(d, p) {
             (p.sku||'').replace(/'/g,"\\'") + '\',\'' +
             (p.title||'').replace(/'/g,"\\'").replace(/"/g,'&quot;') + '\',' +
             p.count + ',\'' + (p.date_from||'') + '\',\'' + (p.date_to||'') + '\',' +
-            (p.sale_amount_mxn||0) + ',\'' + JSON.stringify(p.reasons||{}).replace(/'/g,"\\'") + '\')" ' +
+            (p.sale_amount_mxn||0) + ',\'' + JSON.stringify(p.reasons||{}).replace(/'/g,"\\'").replace(/"/g,'&quot;') + '\')" ' +
             'class="flex-1 bg-green-500 hover:bg-green-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition">📤 Compartir este análisis</button>';
     html += '<button onclick="window.closeAiModal()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition">Cerrar</button>';
     html += '</div>';
