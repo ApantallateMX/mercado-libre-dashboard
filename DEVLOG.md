@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FEAT+FIX: Comentarios/fotos por cuenta en `/returns` + bug de botones que no respondían
+
+**Archivos:** `app/main.py` (`/api/returns/sku-claims-detail` acepta `account_id`
+opcional), `app/templates/returns.html`.
+
+Jovan pidió que el "Ranking rápido" de `/returns` (por cuenta) tuviera el mismo
+análisis de comentarios/fotos/IA que ya tenía el widget Global — hoy solo
+mostraba el análisis de IA (quality score, causa raíz, etc.) pero nunca los
+comentarios ni fotos de compradores. Se extendió `/api/returns/sku-claims-detail`
+con un `account_id` opcional (sin él sigue igual — usado por el widget Global de
+`/multi-dashboard`; con él, filtra a una sola cuenta, nunca mezcla — CLAUDE.md
+regla #4) y el modal de "Analizar IA" ahora también carga esa sección debajo
+del análisis, filtrada a la cuenta activa y al mismo rango de fechas del
+período analizado.
+
+**Bug encontrado al probarlo (no relacionado con el feature de arriba):**
+ningún botón de "Ranking rápido" (Analizar IA, Compartir, etc.) respondía al
+clic, en NINGUNA fila. Causa: el JSON de `reasons` se insertaba crudo dentro
+del atributo `onclick="..."` — `JSON.stringify` siempre trae comillas dobles
+(ej. `{"Defectuoso/Diferente":3}`), y el navegador corta el atributo
+doble-comillado en la primera comilla del JSON, truncando el `onclick` →
+`SyntaxError: Invalid or unexpected token` en consola y el botón no hacía
+nada — en TODA fila, porque todo producto tiene al menos un `reason`. El
+título ya escapaba comillas dobles a `&quot;` pero se les olvidó aplicar lo
+mismo a `_encReasons`, en las dos rutas donde se genera (fila del ranking +
+botón "Compartir" del modal de IA). Reproducido con un script standalone
+(`new Function()` sobre el JS resultante) antes y después del fix — antes
+lanza el mismo SyntaxError, después parsea limpio.
+
+**Pendiente de decidir (mismo patrón, no tocado hoy):** se encontraron 2 lugares
+más con el mismo patrón de riesgo (`JSON.stringify(...)` crudo dentro de un
+`onclick="..."`, sin escapar comillas) — `stock_sync.html:2205`
+(`applyCoverageAlert`) y `planning.html:1109` (`_copyNoSkuList`). No se tocaron
+porque son páginas/features distintas a las de hoy — están fuera de alcance de
+este fix, quedan documentados para decidir si se corrigen.
+
+---
+
 ## 2026-07-27 — FIX: Retornos Global — `account_id` legacy + modal de comentarios desincronizado del conteo
 
 **Archivos:** `app/main.py` (endpoint `/api/diag/fix-claims-account-id`, reemplaza al
