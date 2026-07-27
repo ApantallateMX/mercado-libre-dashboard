@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-27 — FIX: Análisis de IA de retornos se truncaba y caía al fallback genérico
+
+**Archivos:** `app/main.py` (`/api/returns/ai-analysis`).
+
+Jovan probó el popup ya funcionando (fix de arriba) y reportó que "no trae
+toda la información" — el bloque "Patrón Detectado" mostraba JSON crudo
+cortado a la mitad, y "Recomendaciones" solo tenía el placeholder genérico
+"Revisar análisis completo". Causa: el prompt pide 8 secciones (root_cause,
+pattern, severity, quality_score, recommendations x3, listing_improvements x2,
+prevention_checklist x2, summary_whatsapp, priority_action) pero `max_tokens`
+estaba en 1200 — insuficiente, los modelos gratuitos de OpenRouter cortaban el
+JSON a la mitad, `json.loads` fallaba, y el código caía al fallback que
+muestra el texto crudo truncado como si fuera el análisis real.
+
+Subido `max_tokens` a 2200 + extracción de JSON más robusta (busca el bloque
+`{...}` más externo con regex, no solo pela fences \`\`\`json, por si el
+modelo agrega texto extra pese a la instrucción). Verificado en local con el
+SKU real del reporte (SNTV008016) — antes se truncaba, ahora regresa las 8
+secciones completas y bien formadas.
+
+**Nota aparte, no corregida:** en una de varias pruebas locales un modelo
+gratuito del cascade devolvió acentos con mojibake (`patrÃ³n` en vez
+de `patrón`) — no se repitió en 3 intentos más, parece un problema puntual de
+ese modelo específico, no sistemático. Queda documentado por si reaparece.
+
+---
+
 ## 2026-07-27 — FEAT+FIX: Comentarios/fotos por cuenta en `/returns` + bug de botones que no respondían
 
 **Archivos:** `app/main.py` (`/api/returns/sku-claims-detail` acepta `account_id`
