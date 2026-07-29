@@ -7,6 +7,68 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-29 — OPERACION: Returns Board ML vista Global — verificado sano
+
+**Archivos:** ninguno (solo verificación, sin cambios de código).
+
+Pendiente viejo (de sesiones 2026-06-10/07-13) nunca confirmado con datos
+reales tras el fix de agregación de esa época (commit 11f669e). Se golpeó
+`/api/returns/unified-top?days=30` en local: `total:950` (`ml_total:832`,
+`amz_total:118`), las 4 cuentas ML (APANTALLATEMX/AUTOBOT MEXICO/
+BLOWTECHNOLOGIES/LUTEMAMEXICO) y las 3 Amazon (VECKTOR IMPORTS/AUTOBOT
+AMZ MX/ExclusiveBulbs) aparecen agregadas por SKU sin duplicados ni
+"Sin título". Pendiente removido de CLAUDE.md y `.claude/memory/project_wip.md`.
+
+---
+
+## 2026-07-29 — FIX+FEAT: deuda de bajo impacto de auditoría responsive (hover KPI, cards mobile, paginación, 2 bugs chiquitos)
+
+**Archivos:** `app/static/js/sku_inventory.js`, `app/templates/partials/amazon_products_sin_publicar.html`,
+`app/templates/orders.html`, `app/templates/partials/amazon_products_buybox.html`,
+`app/templates/partials/amazon_products_devoluciones.html`,
+`app/templates/partials/amazon_products_inventario.html`, y ~23 templates/JS
+más con la clase `.kpi-card` (Retornos ML/Amazon, Salud, Productos, Ventas,
+Amazon Productos, Ads, Planeación, Sync Stock, dashboard de Amazon).
+
+Cierra los 4 pendientes de bajo impacto que quedaron documentados en
+`project_responsive_audit_2026-07-21` sin activar nunca:
+
+1. **Bug real:** `sku_inventory.js:297` usaba `colspan="12"` para una tabla
+   con 11 `<th>` reales.
+2. **Bug real:** `amazon_products_sin_publicar.html` tenía dos `<th>` con el
+   mismo texto "Sin venta" — la 1ª corresponde a `item.last_sale` (fecha),
+   ahora dice "Última venta"; la 2ª (`item.days_no_sale`) se queda igual.
+3. **Hover `.kpi-card`** aplicado en ~23 ubicaciones que no lo tenían
+   (investigado con agente Explore, aplicado con un agente separado en
+   paralelo — solo se agregó la clase, sin tocar onclick/lógica/texto).
+4. **Cards mobile** en 6 de 8 tablas revisadas de Amazon Productos (Buy Box,
+   Devoluciones, Suprimidos/Inactivos/Historial de Sin Publicar, Inventario
+   18 cols). **Catálogo y Candidatos a Eliminar se dejaron intactos**
+   (solo scroll horizontal, sin cards) — un agente de investigación
+   confirmó que su JS (`initBulkSelection`/`clearBulkSelection` en
+   `amazon_dashboard.js`, `_amzCandCheckAll`/`_amzBulkAction` en
+   `amazon_products.html`) usa `querySelectorAll` sin scope de visibilidad
+   sobre checkboxes de bulk-action — duplicar el markup en una card oculta
+   habría duplicado cierres/eliminaciones reales de listings en Amazon.
+5. **Paginación estandarizada** en `orders.html`: "Por SKU" pasó de
+   mostrar/ocultar filas (`classList.toggle('hidden')`) a arreglo+slice+
+   rerender (mismo patrón que `_renderPaginated()` del resto de la app,
+   capturando el HTML ya renderizado por Jinja al cargar en vez de
+   duplicar la plantilla en JS — cero riesgo de drift). "Comparativa" **no
+   tenía ninguna paginación** (renderizaba todos los SKUs filtrados de un
+   jalón) — ahora pagina 20/página igual que Por SKU.
+
+Verificado: sintaxis Jinja de los 27 templates (`jinja2.Environment.parse`)
++ `node --check` de los 2 JS tocados directamente + los 6 JS con `kpi-card`
+agregado. Los 4 endpoints de Amazon Productos (buybox/devoluciones/
+sin-publicar/inventario) y `/orders` (vistas `sku`/`compare`) responden 200
+sin traceback contra datos reales en local. **No se pudo verificar
+visualmente en browser** — la extensión de Chrome no conectó en esta
+sesión, queda pendiente una verificación visual con Playwright/Chrome la
+próxima vez que esté disponible.
+
+---
+
 ## 2026-07-27 — FEAT: plantillas de respuesta acotadas a UNA cuenta específica
 
 **Archivos:** `app/services/token_store.py` (`reply_templates` + `account_id`),
