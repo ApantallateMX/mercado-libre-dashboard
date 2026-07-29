@@ -195,7 +195,6 @@ YO configuro Railway/env vars/APIs. El usuario NO debe hacer configuraciones té
 ## PENDIENTE / WIP (al inicio de cada sesión, leer también `.claude/memory/project_wip.md`)
 
 - Probar ASIN search (buscar B0GWRX14QJ con ExclusiveBulbs)
-- Verificar Returns Board ML en vista Global
 - Verificar primera sync ExclusiveBulbs (156K+ listings vía Reports API)
 - Verificar gap scan post-sync ExclusiveBulbs
 - Probar Wizard Amazon v2 en browser
