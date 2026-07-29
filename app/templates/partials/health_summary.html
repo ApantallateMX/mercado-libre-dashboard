@@ -104,7 +104,7 @@
 <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
     <!-- Tasa Reclamos -->
     {% set m = summary.claims_margin %}
-    <div class="bg-white p-4 rounded-lg shadow">
+    <div class="bg-white p-4 rounded-lg shadow kpi-card">
         <p class="text-xs text-gray-500 mb-1">Tasa Reclamos</p>
         <p class="text-lg font-bold {% if m.status == 'green' %}text-green-600{% elif m.status == 'yellow' %}text-yellow-600{% elif m.status == 'orange' %}text-orange-500{% else %}text-red-600{% endif %}">
             {{ summary.claims_pct }}%
@@ -130,7 +130,7 @@
 
     <!-- Tasa Cancelaciones -->
     {% set m = summary.cancel_margin %}
-    <div class="bg-white p-4 rounded-lg shadow">
+    <div class="bg-white p-4 rounded-lg shadow kpi-card">
         <p class="text-xs text-gray-500 mb-1">Tasa Cancelaciones</p>
         <p class="text-lg font-bold {% if m.status == 'green' %}text-green-600{% elif m.status == 'yellow' %}text-yellow-600{% elif m.status == 'orange' %}text-orange-500{% else %}text-red-600{% endif %}">
             {{ summary.cancellation_pct }}%
@@ -150,7 +150,7 @@
 
     <!-- Tasa Demoras -->
     {% set m = summary.delay_margin %}
-    <div class="bg-white p-4 rounded-lg shadow">
+    <div class="bg-white p-4 rounded-lg shadow kpi-card">
         <p class="text-xs text-gray-500 mb-1">Tasa Demoras</p>
         <p class="text-lg font-bold {% if m.status == 'green' %}text-green-600{% elif m.status == 'yellow' %}text-yellow-600{% elif m.status == 'orange' %}text-orange-500{% else %}text-red-600{% endif %}">
             {{ summary.delayed_pct }}%
@@ -169,7 +169,7 @@
     </div>
 
     <!-- Reclamos Abiertos (clickeable) -->
-    <div class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition {% if summary.open_claims > 0 %}ring-2 ring-red-300{% endif %}"
+    <div class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition kpi-card {% if summary.open_claims > 0 %}ring-2 ring-red-300{% endif %}"
          onclick="if(window.loadTab) window.loadTab('claims')">
         <p class="text-xs text-gray-500 mb-1">Reclamos Abiertos</p>
         <p class="text-lg font-bold {% if summary.open_claims > 0 %}text-red-600{% else %}text-green-600{% endif %}">
@@ -184,7 +184,7 @@
     </div>
 
     <!-- Preguntas sin responder (clickeable) -->
-    <div class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition {% if summary.unanswered_questions > 0 %}ring-2 ring-yellow-300{% endif %}"
+    <div class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition kpi-card {% if summary.unanswered_questions > 0 %}ring-2 ring-yellow-300{% endif %}"
          onclick="if(window.loadTab) window.loadTab('questions')">
         <p class="text-xs text-gray-500 mb-1">Preguntas Pendientes</p>
         <p class="text-lg font-bold {% if summary.unanswered_questions > 0 %}text-yellow-600{% else %}text-green-600{% endif %}">
@@ -199,7 +199,7 @@
     </div>
 
     <!-- Mensajes pendientes (clickeable) -->
-    <div class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition"
+    <div class="bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-lg transition kpi-card"
          onclick="if(window.loadTab) window.loadTab('messages')">
         <p class="text-xs text-gray-500 mb-1">Mensajes</p>
         <p class="text-lg font-bold text-blue-600">

@@ -7,19 +7,19 @@
 <!-- ── STATS BANNER ───────────────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
 
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900]">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900] kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Órdenes</p>
         <p class="text-2xl font-bold text-gray-800">{{ stats.total_orders }}</p>
         <p class="text-xs text-gray-400 mt-1">{{ date_from }} → {{ date_to }}</p>
     </div>
 
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900]">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900] kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Unidades</p>
         <p class="text-2xl font-bold text-gray-800">{{ stats.total_units }}</p>
         <p class="text-xs text-gray-400 mt-1">sin canceladas</p>
     </div>
 
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500 kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Revenue Total</p>
         <p class="text-2xl font-bold text-green-700">
             ${{ "{:,.0f}".format(stats.total_revenue) }}
@@ -27,7 +27,7 @@
         <p class="text-xs text-gray-400 mt-1">MXN · sin pendientes/canceladas</p>
     </div>
 
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-red-400">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-red-400 kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Canceladas</p>
         <p class="text-2xl font-bold text-red-600">{{ stats.total_canceled }}</p>
         <p class="text-xs text-gray-400 mt-1">en el período</p>

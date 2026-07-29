@@ -149,8 +149,8 @@
 
 <!-- ─── TABLA ─────────────────────────────────────────────────────────────── -->
 {% if listings %}
-<div class="bg-white rounded-xl shadow overflow-x-auto">
-    <div>
+<div class="bg-white rounded-xl shadow">
+    <div class="hidden md:block overflow-x-auto">
         <table class="w-full text-xs" id="amz-inv-table">
             {# ─── Macro para encabezado sorteable ─────────────────────────── #}
             {%- macro sort_th(col, label, align="right", extra_class="", title="") -%}
@@ -440,6 +440,68 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+
+    <!-- Cards mobile — clases propias (no amz-col-*): inmunes al toggle de columnas del desktop -->
+    <div class="md:hidden space-y-2 p-3">
+        {% for item in listings %}
+        <div class="bg-gray-50 rounded-lg p-3">
+            <div class="flex items-start justify-between gap-2 mb-1.5">
+                <div class="flex-1 min-w-0">
+                    <p class="font-medium text-gray-800 truncate text-sm" title="{{ item.title }}">{{ item.title }}</p>
+                    <div class="flex items-center gap-1.5 mt-0.5">
+                        <span class="font-mono text-gray-400 text-[10px]">{{ item.sku }}</span>
+                        {% if item.asin %}<span class="text-[#FF9900] font-medium text-[10px]">{{ item.asin }}</span>{% endif %}
+                    </div>
+                </div>
+                {% if item.status == 'ACTIVE' %}
+                <span class="shrink-0 px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium text-[10px]">Activo</span>
+                {% elif item.status == 'DISCOVERABLE' %}
+                <span class="shrink-0 px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium text-[10px]">Visible</span>
+                {% else %}
+                <span class="shrink-0 px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[10px]">Inactivo</span>
+                {% endif %}
+            </div>
+
+            <div class="flex items-center gap-3 text-xs mb-2">
+                {% if item.price > 0 %}
+                <button onclick="window.updateAmzPrice('{{ item.sku }}', {{ item.price }})" class="font-semibold text-gray-700">
+                    ${{ "{:,.0f}".format(item.price) }}
+                </button>
+                {% else %}<span class="text-gray-300">—</span>{% endif %}
+                {% if item.is_deal %}
+                <span class="text-[11px] font-bold text-red-600" title="-{{ item.deal_pct }}% desc.">🏷️ ${{ "{:,.0f}".format(item.deal_price) }} (-{{ item.deal_pct }}%)</span>
+                {% endif %}
+            </div>
+
+            <div class="grid grid-cols-3 gap-x-2 gap-y-1 text-[11px] text-gray-600 mb-2">
+                <div>FBA: <span class="font-bold {% if item.stock_fba > 0 %}{% if item.stock_fba < 10 %}text-yellow-600{% else %}text-orange-600{% endif %}{% else %}text-gray-300{% endif %}">{{ item.stock_fba if item.stock_fba > 0 else '—' }}</span></div>
+                <div>FBM: <span class="font-bold {% if item.stock_fbm > 0 %}{% if item.stock_fbm < 10 %}text-yellow-600{% else %}text-blue-600{% endif %}{% else %}text-gray-300{% endif %}">{{ item.stock_fbm if item.stock_fbm > 0 else '—' }}</span></div>
+                <div>FLX: {% if item.fulfillment_type == 'FLX' %}<span class="font-bold {% if item.stock_flx == 0 %}text-red-500{% elif item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}">{{ item.stock_flx }}</span>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
+                <div>BM Disp: <span class="font-medium {% if item.bm_avail > 0 %}text-green-700{% else %}text-red-500{% endif %}">{{ item.bm_avail }}</span></div>
+                <div>BM Res: <span class="{% if item.bm_reserved > 0 %}text-amber-600 font-medium{% else %}text-gray-300{% endif %}">{{ item.bm_reserved }}</span></div>
+                <div>MTY/CDMX/TJ: <span class="text-gray-500">{{ item.bm_mty }}/{{ item.bm_cdmx }}/{{ item.bm_tj }}</span></div>
+                <div>Vtas 30d: <span class="font-bold {% if item.units_30d >= 5 %}text-[#FF9900]{% elif item.units_30d > 0 %}text-gray-600{% else %}text-gray-300{% endif %}">{{ item.units_30d }}</span></div>
+                <div>Revenue: {% if item.revenue_30d > 0 %}<span class="font-medium text-gray-700">${{ "{:,.0f}".format(item.revenue_30d) }}</span>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
+                <div>Supply: {% if item.dias_supply is not none %}<span class="px-1 rounded-full font-bold {% if item.supply_color == 'red' %}bg-red-100 text-red-700{% elif item.supply_color == 'yellow' %}bg-yellow-100 text-yellow-700{% else %}bg-green-100 text-green-700{% endif %}">{{ item.dias_supply }}d</span>{% else %}<span class="text-gray-300">—</span>{% endif %}</div>
+            </div>
+
+            {% if item.get('_bm_retail_ph') and item._bm_retail_ph > 0 %}
+            <p class="text-[11px] text-blue-700 font-semibold mb-2">Retail PH: ${{ "%.2f"|format(item._bm_retail_ph) }} USD</p>
+            {% endif %}
+
+            <div class="flex items-center gap-2">
+                {% if item.amazon_url %}<a href="{{ item.amazon_url }}" target="_blank" class="text-[#FF9900] font-bold text-xs" title="Ver en Amazon">↗ Amazon</a>{% endif %}
+                <button onclick="window.openFulfillmentModal('{{ item.sku | e }}', '{{ item.fulfillment_type }}', {{ item.bm_avail }}, {{ item.bm_reserved }}, {{ item.stock_fba }}, {{ item.stock_fbm }}, {{ item.stock_flx if item.stock_flx is defined else 0 }}, '{{ item.title | e | truncate(40, true, "") }}')"
+                        class="ml-auto rounded px-2 py-1 text-xs font-bold transition
+                        {% if item.bm_avail == 0 and (item.stock_fba > 0 or item.stock_fbm > 0 or (item.stock_flx is defined and item.stock_flx > 0)) %}
+                            bg-red-100 text-red-600
+                        {% else %}
+                            bg-gray-100 text-gray-500
+                        {% endif %}">⚡ Fulfillment</button>
+            </div>
+        </div>
+        {% endfor %}
     </div>
 
     <!-- ─── PAGINACIÓN ──────────────────────────────────────────────────────── -->

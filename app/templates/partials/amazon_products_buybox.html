@@ -25,7 +25,7 @@
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
 
     <!-- BB Ganados -->
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-500">
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-500 kpi-card">
         <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400 font-medium">BB Ganados</span>
             <span class="text-xl">🏆</span>
@@ -41,7 +41,7 @@
     </div>
 
     <!-- BB Perdidos -->
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-red-500' if bb_lost > 0 else 'border-gray-200' }}">
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-red-500' if bb_lost > 0 else 'border-gray-200' }} kpi-card">
         <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400 font-medium">BB Perdidos</span>
             <span class="text-xl">{{ '😰' if bb_lost > 0 else '😊' }}</span>
@@ -54,7 +54,7 @@
     </div>
 
     <!-- Vendedor Único -->
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-blue-400">
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-blue-400 kpi-card">
         <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400 font-medium">Vendedor Único</span>
             <span class="text-xl">⭐</span>
@@ -67,7 +67,7 @@
     </div>
 
     <!-- Oportunidad Total -->
-    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-orange-500' if total_opportunity > 0 else 'border-gray-200' }}">
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-orange-500' if total_opportunity > 0 else 'border-gray-200' }} kpi-card">
         <div class="flex items-center justify-between mb-2">
             <span class="text-xs text-gray-400 font-medium">Brecha Precio</span>
             <span class="text-xl">📉</span>
@@ -95,7 +95,7 @@
             Top {{ total_analyzed }} SKUs por stock FBA · Análisis en tiempo real via Product Pricing API
         </p>
     </div>
-    <div class="overflow-x-auto">
+    <div class="hidden md:block overflow-x-auto">
         <table class="w-full text-sm">
             <thead>
                 <tr class="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
@@ -180,6 +180,45 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+
+    <!-- Cards mobile -->
+    <div class="md:hidden space-y-2 p-3">
+        {% for r in buybox_results %}
+        <div class="bg-gray-50 rounded-lg p-3">
+            <div class="flex items-start justify-between gap-2 mb-1.5">
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-800 truncate">{{ r.title }}</p>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <p class="text-xs text-gray-400 font-mono">{{ r.sku }}</p>
+                        {% if r.asin %}<span class="text-xs text-orange-400">{{ r.asin }}</span>{% endif %}
+                    </div>
+                </div>
+                {% if r.bb_won %}
+                <span class="shrink-0 px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 font-bold whitespace-nowrap">🏆 Ganado</span>
+                {% elif r.bb_price %}
+                <span class="shrink-0 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium whitespace-nowrap">❌ Perdido</span>
+                {% else %}
+                <span class="shrink-0 px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 font-medium whitespace-nowrap">Sin BB</span>
+                {% endif %}
+            </div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <div>Nuestro precio: {% if r.our_price > 0 %}<strong class="text-gray-800">${{ "{:,.0f}".format(r.our_price) }}</strong>{% else %}<span class="text-gray-400">—</span>{% endif %}</div>
+                <div>Precio BB: {% if r.bb_price %}<strong class="{{ 'text-green-600' if r.bb_won else ('text-red-600' if r.bb_price < r.our_price else 'text-orange-600') }}">${{ "{:,.0f}".format(r.bb_price) }}</strong>{% else %}<span class="text-gray-400">—</span>{% endif %}</div>
+                <div>FBA Stock: <span class="{{ 'text-green-600 font-bold' if r.fba_stock >= 10 else ('text-yellow-600' if r.fba_stock > 0 else 'text-red-600') }}">{{ r.fba_stock }}</span></div>
+                <div>Competidores: {% if r.competitors == 0 %}<span class="text-blue-600 font-semibold">Solo</span>{% else %}<span class="text-gray-600">{{ r.competitors }}</span>{% endif %}</div>
+            </div>
+            {% if r.suggestion %}
+            <p class="text-xs mt-1.5
+                {% if 'Bajar' in r.suggestion %}text-red-600
+                {% elif '✅' in r.suggestion or 'Tienes' in r.suggestion %}text-green-600
+                {% elif 'único' in r.suggestion or 'sube' in r.suggestion or 'subir' in r.suggestion %}text-blue-600
+                {% else %}text-gray-500{% endif %}">
+                {{ r.suggestion }}
+            </p>
+            {% endif %}
+        </div>
+        {% endfor %}
     </div>
 
     <!-- Footer -->

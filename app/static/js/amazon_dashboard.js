@@ -192,7 +192,7 @@ function renderAmazonMetrics(m) {
     ];
     var html = '<div class="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4">';
     cards.forEach(function(c) {
-        html += '<div class="bg-white rounded-xl shadow p-4 md:p-5 border-b-4" style="border-bottom-color:'+c.color+'">' +
+        html += '<div class="bg-white rounded-xl shadow p-4 md:p-5 border-b-4 kpi-card" style="border-bottom-color:'+c.color+'">' +
             '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">'+c.label+'</span><span class="text-xl">'+c.icon+'</span></div>' +
             '<p class="text-2xl md:text-3xl font-extrabold" style="color:'+c.color+'">'+c.value+'</p>' +
             '<p class="text-xs mt-2 text-gray-400">'+c.hint+_trendArrow(c.trendPct)+'</p></div>';
@@ -798,7 +798,7 @@ async function loadAmzFinanzasTab() {
       { label: 'Reembolsos 30d', value: (ref.count||0) + ' dev.', icon: '↩️', color: refColor,
         sub: fmt(ref.total||0, ref.currency||cur) + ' · ' + (ref.rate_pct||0) + '% de ventas', extra: '' },
     ].map(function(c) {
-      return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
+      return '<div class="bg-white rounded-xl shadow p-4 border-b-4 kpi-card" style="border-bottom-color:' + c.color + '">' +
         '<div class="flex items-center justify-between mb-2">' +
           '<span class="text-xs text-gray-400 font-medium">' + c.label + '</span>' +
           '<span class="text-xl">' + c.icon + '</span>' +
@@ -1000,7 +1000,7 @@ function renderAmzHealth(d, cont) {
             { label: 'FBA no vendible', value: fba.unfulfillable+' u', threshold: 'meta: 0', color: fba.unfulfillable > 0 ? '#EF4444' : '#10B981',
               icon: '🏚️', ok: fba.unfulfillable === 0 },
         ].map(function(c) {
-            return '<div class="bg-white rounded-xl shadow p-4 border-l-4" style="border-left-color:' + c.color + '">' +
+            return '<div class="bg-white rounded-xl shadow p-4 border-l-4 kpi-card" style="border-left-color:' + c.color + '">' +
                 '<div class="flex items-center justify-between mb-1">' +
                     '<span class="text-xs text-gray-400">' + c.label + '</span>' +
                     '<span>' + (c.ok ? '✅' : '⚠️') + '</span>' +
@@ -1416,13 +1416,13 @@ async function loadFbaTab() {
         {label:'Advertencia', value: (s.warning || 0), icon:'⚠️', color:'#D97706', sub:'10-30 días stock'},
         {label:'Crítico / Sin stock', value: criticalOut, icon:'🚨', color:'#EF4444', sub:'necesitan reposición'},
       ].map(function(c) {
-        return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
+        return '<div class="bg-white rounded-xl shadow p-4 border-b-4 kpi-card" style="border-bottom-color:' + c.color + '">' +
           '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
           '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
           '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
       }).join('') +
       // IPI card
-      '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + ipiColor + '">' +
+      '<div class="bg-white rounded-xl shadow p-4 border-b-4 kpi-card" style="border-bottom-color:' + ipiColor + '">' +
         '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">IPI Estimado</span><span class="text-xl">📊</span></div>' +
         '<p class="text-2xl font-extrabold" style="color:' + ipiColor + '">' + ipiEst + '</p>' +
         '<p class="text-xs mt-1 text-gray-400">' + ipiLabel + ' · Amazon meta: ≥450</p></div>';
@@ -1531,7 +1531,7 @@ async function loadListingsTab() {
         {label:'Grado B/C', value: (s.grade_B||0)+(s.grade_C||0), icon:'🟡', color:'#D97706', sub:'mejorar'},
         {label:'Grado D (<55)', value: s.grade_D||0, icon:'🔴', color:'#EF4444', sub:'crítico'},
       ].map(function(c) {
-        return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
+        return '<div class="bg-white rounded-xl shadow p-4 border-b-4 kpi-card" style="border-bottom-color:' + c.color + '">' +
           '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
           '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
           '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
@@ -2978,22 +2978,22 @@ function _renderAmzMsgsKpis(stats) {
     var u = stats.urgency || { under24: 0, h24_72: 0, over72: 0 };
     var oldest = stats.oldest_pending;
     el.innerHTML =
-        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-red-400">' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-red-400 kpi-card">' +
             '<div class="text-xs text-gray-500 font-medium mb-1">Pendientes de responder</div>' +
             '<div class="text-2xl font-bold text-gray-800">' + stats.pending_count + '</div>' +
             '<div class="text-[11px] text-gray-400 mt-1">🔴 ' + u.over72 + ' &middot; 🟠 ' + u.h24_72 + ' &middot; 🟢 ' + u.under24 + '</div>' +
         '</div>' +
-        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-orange-400">' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-orange-400 kpi-card">' +
             '<div class="text-xs text-gray-500 font-medium mb-1">Más antiguo sin respuesta</div>' +
             '<div class="text-xl font-bold text-gray-800">' + (oldest ? _amzMsgsFmtDuration(oldest.hours) : '—') + '</div>' +
             '<div class="text-[11px] text-gray-400 mt-1 truncate">' + (oldest ? _amzMsgsEscHtml(oldest.buyer_name || 'Comprador') : 'Sin pendientes') + '</div>' +
         '</div>' +
-        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-violet-400">' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-violet-400 kpi-card">' +
             '<div class="text-xs text-gray-500 font-medium mb-1">Tiempo promedio de respuesta</div>' +
             '<div class="text-xl font-bold text-gray-800">' + (stats.avg_response_hours != null ? _amzMsgsFmtDuration(stats.avg_response_hours) : '—') + '</div>' +
             '<div class="text-[11px] text-gray-400 mt-1">' + (stats.avg_response_sample || 0) + ' respuesta(s)</div>' +
         '</div>' +
-        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-400">' +
+        '<div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-400 kpi-card">' +
             '<div class="text-xs text-gray-500 font-medium mb-1">Resueltos (últimas 24h)</div>' +
             '<div class="text-2xl font-bold text-gray-800">' + (stats.resolved_today || 0) + '</div>' +
         '</div>';

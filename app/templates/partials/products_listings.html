@@ -67,7 +67,7 @@ window.loadListings = function() {
                 {label: 'Grado B/C', value: (s.grade_B || 0) + (s.grade_C || 0), icon: '🟡', color: '#D97706', sub: 'mejorar'},
                 {label: 'Grado D (<55)', value: s.grade_D || 0, icon: '🔴', color: '#EF4444', sub: 'crítico'},
             ].map(function(c) {
-                return '<div class="bg-white p-5 rounded-lg shadow border-b-4" style="border-bottom-color:' + c.color + '">' +
+                return '<div class="bg-white p-5 rounded-lg shadow border-b-4 kpi-card" style="border-bottom-color:' + c.color + '">' +
                     '<div class="flex items-center justify-between mb-1"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
                     '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
                     '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';

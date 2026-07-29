@@ -10,19 +10,19 @@
 {% set with_action = rows | selectattr('suggested') | list | length %}
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900]">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900] kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Listings activos</p>
         <p class="text-2xl font-extrabold text-gray-800">{{ total }}</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-blue-500">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-blue-500 kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Con regla activa</p>
         <p class="text-2xl font-extrabold text-blue-700">{{ with_rule }}</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500 kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Acciones pendientes</p>
         <p class="text-2xl font-extrabold text-green-700">{{ with_action }}</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-purple-400">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-purple-400 kpi-card">
         <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Regla global</p>
         <p class="text-sm font-bold text-purple-700 truncate">
             {% if global_rule and global_rule.enabled %}

@@ -294,7 +294,7 @@
         });
 
         if (filtered.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400">No hay SKUs con este filtro</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="px-4 py-8 text-center text-gray-400">No hay SKUs con este filtro</td></tr>';
             return;
         }
 

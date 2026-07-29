@@ -1108,7 +1108,7 @@ window.loadMorningBriefing = function() {
           : '—';
         var dest = hasAlerts ? '/items#stock-section' : '/dashboard';
         var onclick = "mbSwitchAndGo('" + a.user_id + "','" + dest + "')";
-        return '<div onclick="' + onclick + '" data-uid="' + a.user_id + '" class="bg-white rounded-xl shadow border p-4 cursor-pointer hover:shadow-md transition-shadow ' +
+        return '<div onclick="' + onclick + '" data-uid="' + a.user_id + '" class="bg-white rounded-xl shadow border p-4 cursor-pointer hover:shadow-md transition-shadow kpi-card ' +
           (hasAlerts ? 'border-red-300 hover:border-red-400' : 'border-gray-100 hover:border-yellow-300') + '">' +
           '<div class="flex items-center justify-between mb-1.5">' +
             '<span class="text-xs font-bold text-gray-700 truncate max-w-[120px]">' + (a.label || a.user_id) + '</span>' +

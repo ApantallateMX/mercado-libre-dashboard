@@ -40,22 +40,22 @@
 
 <!-- ─── KPI header ──────────────────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-    <div class="bg-white rounded-xl shadow p-4">
+    <div class="bg-white rounded-xl shadow p-4 kpi-card">
         <p class="text-xs text-gray-400 mb-1">Sin publicar</p>
         <p class="text-2xl font-bold text-orange-600">{{ total }}</p>
         <p class="text-[10px] text-gray-400 mt-0.5">con retail price · stock BM ≥ 1</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-4">
+    <div class="bg-white rounded-xl shadow p-4 kpi-card">
         <p class="text-xs text-gray-400 mb-1">Activos en Amazon</p>
         <p class="text-2xl font-bold text-green-600">{{ amazon_active }}</p>
         <p class="text-[10px] text-gray-400 mt-0.5">listings detectados en el scan</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-4">
+    <div class="bg-white rounded-xl shadow p-4 kpi-card">
         <p class="text-xs text-gray-400 mb-1">SKUs en BM</p>
         <p class="text-2xl font-bold text-indigo-600">{{ bm_total }}</p>
         <p class="text-[10px] text-gray-400 mt-0.5">total con stock ≥ 1</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-4">
+    <div class="bg-white rounded-xl shadow p-4 kpi-card">
         <p class="text-xs text-gray-400 mb-1">Último scan</p>
         <p class="text-lg font-bold
             {% if scan_status == 'running' %}text-orange-500 animate-pulse

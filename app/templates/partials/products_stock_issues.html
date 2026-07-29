@@ -138,44 +138,44 @@ window._stockFilter = function(q) {
 <!-- KPIs -->
 <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 mb-6">
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Sin Stock (con BM)</p>
         <p class="text-2xl font-bold text-orange-600">{{ restock_count }}</p>
         <p class="text-[10px] text-gray-400">MeLi=0, BM tiene stock</p>
     </div>
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Revenue Perdido (30d)</p>
         <p class="text-2xl font-bold text-orange-600">${{ "{:,.0f}".format(lost_revenue) }}</p>
         <p class="text-[10px] text-gray-400">Click para ver</p>
     </div>
     <div onclick="document.getElementById('risk-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Riesgo Sobreventa</p>
         <p class="text-2xl font-bold text-yellow-600">{{ risk_count }}</p>
         <p class="text-[10px] text-gray-400">{{ risk_stock }} unidades en riesgo</p>
     </div>
     <div onclick="document.getElementById('activate-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-green-400 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-green-400 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Oportunidad Activar</p>
         <p class="text-2xl font-bold text-green-600">{{ activate_count }}</p>
         <p class="text-[10px] text-gray-400">MeLi=0, BM disponible</p>
     </div>
     <div onclick="document.getElementById('activate-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-green-400 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-green-400 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Stock BM Disponible</p>
         <p class="text-2xl font-bold text-green-600">{{ activate_stock }}</p>
         <p class="text-[10px] text-gray-400">Unidades para activar</p>
     </div>
     <div onclick="document.getElementById('critical-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-400 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-400 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Stock Crítico (&lt;{{ threshold }})</p>
         <p class="text-2xl font-bold text-red-600">{{ critical_count }}</p>
         <p class="text-[10px] text-gray-400">{{ critical_bm_total }} uds. BM disponible</p>
     </div>
     {% if full_no_stock_count %}
     <div onclick="document.getElementById('full-nostock-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-cyan-400 cursor-pointer hover:shadow-md hover:bg-cyan-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-cyan-400 cursor-pointer hover:shadow-md hover:bg-cyan-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">FULL Sin Stock</p>
         <p class="text-2xl font-bold text-cyan-600">{{ full_no_stock_count }}</p>
         <p class="text-[10px] text-gray-400">{{ full_no_stock_bm }} uds BM — cambiar a Merchant</p>
@@ -183,7 +183,7 @@ window._stockFilter = function(q) {
     {% endif %}
     {% if imbalanced_count %}
     <div onclick="document.getElementById('imbalanced-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-purple-400 cursor-pointer hover:shadow-md hover:bg-purple-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-purple-400 cursor-pointer hover:shadow-md hover:bg-purple-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Desbalance Peligroso</p>
         <p class="text-2xl font-bold text-purple-600">{{ imbalanced_count }}</p>
         <p class="text-[10px] text-gray-400">MeLi &gt; BM — gap {{ imbalanced_gap }} uds</p>
@@ -191,7 +191,7 @@ window._stockFilter = function(q) {
     {% endif %}
     {% if stagnant_count %}
     <div onclick="document.getElementById('stagnant-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-slate-400 cursor-pointer hover:shadow-md hover:bg-slate-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-slate-400 cursor-pointer hover:shadow-md hover:bg-slate-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Inventario Estancado</p>
         <p class="text-2xl font-bold text-slate-600">{{ stagnant_count }}</p>
         <p class="text-[10px] text-gray-400">{{ stagnant_bm }} uds BM — 0 ventas 30d</p>
@@ -199,7 +199,7 @@ window._stockFilter = function(q) {
     {% endif %}
     {% if price_risk_count %}
     <div onclick="document.getElementById('price-risk-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-pink-400 cursor-pointer hover:shadow-md hover:bg-pink-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-pink-400 cursor-pointer hover:shadow-md hover:bg-pink-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Precio &lt; Retail PH</p>
         <p class="text-2xl font-bold text-pink-600">{{ price_risk_count }}</p>
         <p class="text-[10px] text-gray-400">Gap prom. ${{ "{:,.0f}".format(price_risk_gap / price_risk_count) }}</p>
@@ -207,20 +207,20 @@ window._stockFilter = function(q) {
     {% endif %}
     {% if no_bm_sku_count %}
     <div onclick="document.getElementById('no-bm-sku-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-violet-500 cursor-pointer hover:shadow-md hover:bg-violet-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-violet-500 cursor-pointer hover:shadow-md hover:bg-violet-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">SKU no en catálogo BM</p>
         <p class="text-2xl font-bold text-violet-700">{{ no_bm_sku_count }}</p>
         <p class="text-[10px] text-gray-400">Requieren registro en BinManager</p>
     </div>
     {% endif %}
-    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300 kpi-card">
         <p class="text-xs text-gray-500">Total Alertas</p>
         <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
     {% if orphan_count %}
     <div onclick="document.getElementById('orphans-section').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Listings Eliminados</p>
         <p class="text-2xl font-bold text-red-600">{{ orphan_count }}</p>
         <p class="text-[10px] text-gray-400">Eliminados de MercadoLibre</p>

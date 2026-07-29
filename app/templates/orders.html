@@ -309,6 +309,7 @@
                 <tbody id="compare-tbody"></tbody>
             </table>
         </div>
+        <div id="compare-pagination"></div>
     </div>
 
     <!-- Vacio -->
@@ -1059,37 +1060,32 @@ document.addEventListener('DOMContentLoaded', function() {
 var _SKU_PER_PAGE = 20;
 var _skuPage      = 1;
 var _skuViewAll   = false;
+var _skuAllRowsHtml  = [];
+var _skuAllCardsHtml = [];
 
-function _getAllSkuRows() {
-    return Array.from(document.querySelectorAll('#sku-tbody tr.sku-data-row'));
-}
-
-function _getAllSkuCards() {
-    return Array.from(document.querySelectorAll('#sku-cards .sku-data-row'));
-}
-
+// _renderPaginated() estándar del proyecto recorta un arreglo JS y reconstruye el
+// innerHTML de la página actual. Acá el HTML ya viene renderizado por Jinja (htmx swap),
+// así que en vez de duplicar esa plantilla en JS, se captura el outerHTML de cada fila/card
+// UNA vez al cargar y de ahí en adelante se recorta igual que _renderPaginated — mismo
+// patrón de arreglo+slice+rerender, sin arriesgar drift entre Jinja y JS.
 function _applySkuPage(page) {
-    var rows = _getAllSkuRows();
-    var cards = _getAllSkuCards();
-    if (!rows.length) return;
+    var total = _skuAllRowsHtml.length;
+    if (!total) return;
 
-    var total      = rows.length;
     var totalPages = Math.ceil(total / _SKU_PER_PAGE);
     _skuPage = Math.max(1, Math.min(page, totalPages));
 
-    var applyVisibility = function(list) {
-        if (_skuViewAll) {
-            list.forEach(function(r) { r.classList.remove('hidden'); });
-        } else {
-            var start = (_skuPage - 1) * _SKU_PER_PAGE;
-            var end   = start + _SKU_PER_PAGE;
-            list.forEach(function(r, i) {
-                r.classList.toggle('hidden', i < start || i >= end);
-            });
-        }
-    };
-    applyVisibility(rows);
-    applyVisibility(cards);
+    var tbody = document.getElementById('sku-tbody');
+    var cardsEl = document.getElementById('sku-cards');
+    if (_skuViewAll) {
+        tbody.innerHTML  = _skuAllRowsHtml.join('');
+        cardsEl.innerHTML = _skuAllCardsHtml.join('');
+    } else {
+        var start = (_skuPage - 1) * _SKU_PER_PAGE;
+        var end   = start + _SKU_PER_PAGE;
+        tbody.innerHTML  = _skuAllRowsHtml.slice(start, end).join('');
+        cardsEl.innerHTML = _skuAllCardsHtml.slice(start, end).join('');
+    }
     _renderSkuPagination(total, _skuPage, totalPages);
 }
 
@@ -1151,6 +1147,10 @@ window._paginateSkus = function(page, toggle) {
 };
 
 window._initSkuPagination = function() {
+    // Captura el HTML tal cual lo renderizó Jinja (htmx acaba de hacer el swap) antes
+    // de recortarlo — de ahí en adelante _applySkuPage solo reparte este arreglo.
+    _skuAllRowsHtml  = Array.from(document.querySelectorAll('#sku-tbody tr.sku-data-row')).map(function(r) { return r.outerHTML; });
+    _skuAllCardsHtml = Array.from(document.querySelectorAll('#sku-cards .sku-data-row')).map(function(r) { return r.outerHTML; });
     _skuPage    = 1;
     _skuViewAll = false;
     _applySkuPage(1);
@@ -1255,9 +1255,11 @@ function borderColor(status) {
     return map[status] || 'border-gray-300';
 }
 
+var _COMPARE_PER_PAGE = 20;
+var _comparePage       = 1;
+var _compareFiltered   = [];
+
 function renderTable(rows) {
-    var tbody = document.getElementById('compare-tbody');
-    var cards = document.getElementById('compare-cards');
     var search = (document.getElementById('search-sku').value || '').toLowerCase();
 
     var filtered = rows.filter(function(r) {
@@ -1274,15 +1276,32 @@ function renderTable(rows) {
         return true;
     });
 
+    _compareFiltered = filtered;
+    _comparePage = 1;
+    _renderComparePage(1);
+}
+
+function _renderComparePage(page) {
+    var tbody = document.getElementById('compare-tbody');
+    var cards = document.getElementById('compare-cards');
+    var filtered = _compareFiltered;
+
     if (filtered.length === 0) {
         tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400">No hay SKUs con este filtro</td></tr>';
         cards.innerHTML = '<div class="text-center py-8 text-gray-400">No hay SKUs con este filtro</div>';
+        document.getElementById('compare-pagination').innerHTML = '';
         return;
     }
 
+    var total      = filtered.length;
+    var totalPages = Math.ceil(total / _COMPARE_PER_PAGE);
+    _comparePage   = Math.max(1, Math.min(page, totalPages));
+    var start = (_comparePage - 1) * _COMPARE_PER_PAGE;
+    var pageRows = filtered.slice(start, start + _COMPARE_PER_PAGE);
+
     var tableHtml = '';
     var cardHtml = '';
-    filtered.forEach(function(r) {
+    pageRows.forEach(function(r) {
         var rowBg = '';
         if (r.status === 'lost') rowBg = 'bg-red-50';
         else if (r.status === 'new') rowBg = 'bg-blue-50';
@@ -1328,7 +1347,51 @@ function renderTable(rows) {
     });
     tbody.innerHTML = tableHtml;
     cards.innerHTML = cardHtml;
+    _renderComparePagination(total, _comparePage, totalPages);
 }
+
+function _renderComparePagination(total, page, totalPages) {
+    var container = document.getElementById('compare-pagination');
+    if (!container) return;
+
+    if (total <= _COMPARE_PER_PAGE) {
+        container.innerHTML = '';
+        return;
+    }
+
+    var start = (page - 1) * _COMPARE_PER_PAGE + 1;
+    var end   = Math.min(page * _COMPARE_PER_PAGE, total);
+
+    var pageBtns = '';
+    var last = 0;
+    for (var p = 1; p <= totalPages; p++) {
+        var near = p >= page - 2 && p <= page + 2;
+        var edge = p === 1 || p === totalPages;
+        if (!near && !edge) continue;
+        if (last > 0 && p - last > 1) pageBtns += '<span class="px-1 text-gray-300 select-none text-xs">…</span>';
+        last = p;
+        if (p === page) {
+            pageBtns += '<button class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border bg-yellow-400 text-gray-800 border-yellow-400 cursor-default">' + p + '</button>';
+        } else {
+            pageBtns += '<button onclick="window._paginateCompare(' + p + ')" class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">' + p + '</button>';
+        }
+    }
+
+    container.innerHTML =
+        '<div class="px-4 py-3 border-t border-gray-100 bg-white flex flex-wrap items-center justify-between gap-3">' +
+        '<span class="text-xs text-gray-400">Mostrando <strong class="text-gray-600">' + start + '–' + end + '</strong> de <strong class="text-gray-600">' + total + '</strong> SKUs</span>' +
+        '<div class="flex items-center gap-1 flex-wrap">' +
+        '<button onclick="window._paginateCompare(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') +
+        ' class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+        pageBtns +
+        '<button onclick="window._paginateCompare(' + (page + 1) + ')" ' + (page >= totalPages ? 'disabled' : '') +
+        ' class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+        '</div></div>';
+}
+
+window._paginateCompare = function(page) {
+    _renderComparePage(page);
+};
 
 function renderSummary(s) {
     var el = document.getElementById('summary-cards');

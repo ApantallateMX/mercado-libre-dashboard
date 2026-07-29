@@ -82,22 +82,22 @@
     {% set total_reserved.v = total_reserved.v + i.flx_reserved %}
 {% endfor %}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-    <div class="bg-white rounded-xl shadow p-3 text-center">
+    <div class="bg-white rounded-xl shadow p-3 text-center kpi-card">
         <p class="text-2xl font-black text-purple-600">{{ total_onsite.v }}</p>
         <p class="text-xs text-gray-400 mt-0.5">Uds disponibles Amazon</p>
         {% if total_reserved.v > 0 %}
         <p class="text-xs text-orange-500 font-semibold mt-0.5">+{{ total_reserved.v }} reservadas</p>
         {% endif %}
     </div>
-    <div class="bg-white rounded-xl shadow p-3 text-center">
+    <div class="bg-white rounded-xl shadow p-3 text-center kpi-card">
         <p class="text-2xl font-black text-green-600">{{ disponibles }}</p>
         <p class="text-xs text-gray-400 mt-0.5">Activos en Amazon Onsite</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-3 text-center">
+    <div class="bg-white rounded-xl shadow p-3 text-center kpi-card">
         <p class="text-2xl font-black text-[#FF9900]">{{ con_stock_bm }}</p>
         <p class="text-xs text-gray-400 mt-0.5">Con stock en bodega (BM)</p>
     </div>
-    <div class="bg-white rounded-xl shadow p-3 text-center">
+    <div class="bg-white rounded-xl shadow p-3 text-center kpi-card">
         {% set total_bm = namespace(v=0) %}{% for i in items %}{% set total_bm.v = total_bm.v + i.bm_avail %}{% endfor %}
         <p class="text-2xl font-black text-green-700">{{ total_bm.v }}</p>
         <p class="text-xs text-gray-400 mt-0.5">Uds disponibles (BM)</p>

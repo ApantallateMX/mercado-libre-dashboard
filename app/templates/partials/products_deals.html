@@ -9,27 +9,27 @@
 
 <!-- KPIs resumen -->
 <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-    <div onclick="scrollToSection('active-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition group">
+    <div onclick="scrollToSection('active-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition group kpi-card">
         <p class="text-xs text-gray-500 group-hover:text-green-600">Deals Activos</p>
         <p class="text-2xl font-bold text-green-600">{{ active_deals|length }}</p>
         <p class="text-[10px] text-gray-400 group-hover:text-green-500 mt-0.5">Click para ver</p>
     </div>
-    <div onclick="scrollToSection('candidates-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition group">
+    <div onclick="scrollToSection('candidates-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition group kpi-card">
         <p class="text-xs text-gray-500 group-hover:text-yellow-600">Candidatos</p>
         <p class="text-2xl font-bold text-yellow-600">{{ candidates|length }}</p>
         <p class="text-[10px] text-gray-400 group-hover:text-yellow-500 mt-0.5">{{ total_no_deal_no_sales }} sin ventas</p>
     </div>
-    <div onclick="scrollToSection('candidates-section'); setTimeout(function(){sortCandidates('sales')},100)" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-blue-50/30 transition group">
+    <div onclick="scrollToSection('candidates-section'); setTimeout(function(){sortCandidates('sales')},100)" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-blue-50/30 transition group kpi-card">
         <p class="text-xs text-gray-500 group-hover:text-blue-600">Ventas Deals (30d)</p>
         <p class="text-2xl font-bold text-gray-800">{{ deals_units }} uds</p>
         <p class="text-[10px] text-gray-400">${{ "{:,.0f}".format(deals_revenue) }}</p>
     </div>
-    <div onclick="scrollToSection('recs-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-indigo-50/30 transition group">
+    <div onclick="scrollToSection('recs-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-indigo-50/30 transition group kpi-card">
         <p class="text-xs text-gray-500 group-hover:text-indigo-600">Recomendaciones</p>
         <p class="text-2xl font-bold text-indigo-600">{{ recommendations|length }}</p>
         <p class="text-[10px] text-gray-400 group-hover:text-indigo-500 mt-0.5">Oportunidades</p>
     </div>
-    <div class="bg-white rounded-lg shadow p-4">
+    <div class="bg-white rounded-lg shadow p-4 kpi-card">
         <p class="text-xs text-gray-500">TC USD/MXN</p>
         <p class="text-2xl font-bold text-blue-600">{{ usd_to_mxn }}</p>
         <button onclick="reloadDealsTab()" class="text-[10px] text-blue-500 hover:text-blue-700 hover:underline mt-0.5 block">Actualizar datos</button>

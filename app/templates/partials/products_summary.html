@@ -1,7 +1,7 @@
 <!-- KPIs principales -->
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
     <!-- Revenue 30d -->
-    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition"
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition kpi-card"
          onclick="window.switchProductTab('inventory', '/partials/products-inventory?preset=top&enrich=full')">
         <p class="text-sm text-gray-500 mb-1">Revenue 30 dias</p>
         <p class="text-2xl font-bold text-gray-800">${{ "{:,.0f}".format(revenue_30d) }}</p>
@@ -23,7 +23,7 @@
     </div>
 
     <!-- Unidades vendidas -->
-    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition"
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition kpi-card"
          onclick="window.switchProductTab('inventory', '/partials/products-inventory?preset=top&enrich=full')">
         <p class="text-sm text-gray-500 mb-1">Unidades vendidas (30d)</p>
         <p class="text-2xl font-bold text-gray-800">{{ "{:,}".format(total_units) }}</p>
@@ -31,7 +31,7 @@
     </div>
 
     <!-- Productos activos -->
-    <div class="bg-white rounded-lg shadow p-5">
+    <div class="bg-white rounded-lg shadow p-5 kpi-card">
         <p class="text-sm text-gray-500 mb-1">Productos activos</p>
         <p class="text-2xl font-bold text-gray-800">{{ total_active }}</p>
         <div class="flex items-center gap-3 mt-1">
@@ -47,7 +47,7 @@
     </div>
 
     <!-- SKUs activos -->
-    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition"
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition kpi-card"
          onclick="window.switchProductTab('inventory', '/partials/products-inventory')">
         <p class="text-sm text-gray-500 mb-1">SKUs unicos vendidos</p>
         <p class="text-2xl font-bold text-gray-800">{{ unique_skus }}</p>

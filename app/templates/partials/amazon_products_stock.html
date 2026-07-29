@@ -23,55 +23,55 @@
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
 
     <div onclick="document.getElementById('sec-reabastecer').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-500 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-500 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Reabastecer FBA</p>
         <p class="text-2xl font-bold text-orange-600">{{ reabastecer_count }}</p>
         <p class="text-[10px] text-gray-400">FBA=0, BM disponible</p>
     </div>
 
     <div onclick="document.getElementById('sec-riesgo').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Riesgo Sobreventa</p>
         <p class="text-2xl font-bold text-red-600">{{ riesgo_count }}</p>
         <p class="text-[10px] text-gray-400">FBA > BM disponible</p>
     </div>
 
     <div onclick="document.getElementById('sec-stock-bajo').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Stock Bajo FBA</p>
         <p class="text-2xl font-bold text-orange-500">{{ bajo_count }}</p>
         <p class="text-[10px] text-gray-400">1–10 uds en FBA</p>
     </div>
 
     <div onclick="document.getElementById('sec-urgente').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Restock Urgente</p>
         <p class="text-2xl font-bold text-yellow-600">{{ urgente_count }}</p>
         <p class="text-[10px] text-gray-400">&lt;14 días supply</p>
     </div>
 
     <div onclick="document.getElementById('sec-critico').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-400 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-400 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Stock Crítico BM</p>
         <p class="text-2xl font-bold text-red-500">{{ critico_count }}</p>
         <p class="text-[10px] text-gray-400">BM &lt; 10 uds</p>
     </div>
 
     <div onclick="document.getElementById('sec-estancado').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-slate-400 cursor-pointer hover:shadow-md hover:bg-slate-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-slate-400 cursor-pointer hover:shadow-md hover:bg-slate-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Estancado</p>
         <p class="text-2xl font-bold text-slate-600">{{ estancado_count }}</p>
         <p class="text-[10px] text-gray-400">BM stock, 0 ventas 30d</p>
     </div>
 
     <div onclick="document.getElementById('sec-sin-stock').scrollIntoView({behavior:'smooth'})"
-         class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-400 cursor-pointer hover:shadow-md hover:bg-gray-50/30 transition">
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-400 cursor-pointer hover:shadow-md hover:bg-gray-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Sin Stock FBA + BM</p>
         <p class="text-2xl font-bold text-gray-600">{{ sin_stock_count }}</p>
         <p class="text-[10px] text-gray-400">FBA=0 y BM=0</p>
     </div>
 
-    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300 kpi-card">
         <p class="text-xs text-gray-500">Total Alertas</p>
         <p class="text-2xl font-bold text-gray-700">{{ total_alertas }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
