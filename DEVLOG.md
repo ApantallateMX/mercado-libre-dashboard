@@ -7,6 +7,59 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-30 — FIX+FEAT: 6 hallazgos más de la auditoría (bulk Qty0 sin detalle, eliminar sin rol, puente órdenes-reclamos, alertas de stock confusas, writes sin manejo de error)
+
+**Archivos:** `app/api/amazon_products.py`, `app/main.py`, `app/services/token_store.py`,
+`app/static/js/amazon_dashboard.js`, `app/templates/health.html`,
+`app/templates/multi_dashboard.html`, `app/templates/partials/amazon_products_sin_publicar.html`,
+`app/templates/partials/orders_table.html`.
+
+Continuación del cierre de hallazgos de la auditoría de sistema (bloque "E"):
+
+1. **Bulk "Qty 0" (Amazon, tab Stock) no decía qué SKUs fallaron.** El backend
+   ya regresaba el detalle completo (`d.results`) pero el frontend lo
+   descartaba y solo mostraba un conteo genérico OK/error. Ahora se muestra
+   la lista de SKUs seleccionados en la confirmación y el detalle de fallos
+   si los hay.
+2. **Eliminar un listing de Amazon (irreversible) no tenía ningún control de
+   rol**, mientras "marcar mensajes atendidos" (reversible) sí requería
+   admin — la protección estaba al revés del riesgo real. Ahora
+   `POST /api/amazon/products/delete-listing` exige rol admin en backend, y
+   el botón se oculta para no-admins en `amazon_products_sin_publicar.html`.
+3. **Puente entre Ventas y Salud** — badge "🚩 Reclamo" en la fila de la
+   orden cuando tiene un reclamo ML abierto, con link que salta directo a
+   Salud y dispara la búsqueda por ese número de orden (antes no había forma
+   de saber desde Ventas si una orden tenía un reclamo sin cambiar de
+   pestaña y buscar a mano). Nueva query
+   `token_store.get_order_ids_with_open_claims()` + auto-búsqueda en
+   `health.html` vía `?search=`.
+4. **Las 2 fuentes de "alerta de stock" (Dashboard: top-sellers con bajo
+   stock; Morning Briefing: sobreventa ya detectada) se etiquetaban igual**
+   ("N en riesgo"), pareciendo contradictorias para la misma cuenta. Ahora
+   Morning Briefing dice explícitamente "sobreventa detectada". De paso se
+   corrigió un link roto a un ancla `#stock-section` que ya no existe desde
+   que Stock pasó a ser pestaña (`data-tab`) — ahora usa `/items?tab=stock`.
+5. **5 escrituras fire-and-forget** (`asyncio.create_task(save_item_sync)`)
+   sin ningún try/except — un fallo bajo contención (ej. "database is
+   locked") quedaba como excepción huérfana invisible en la UI. Nuevo
+   helper `_safe_bg()` que loguea el error en vez de perderlo, aplicado en
+   los 5 sitios (mark-synced, update-stock, variation-stock, y los 2 de
+   concentración de stock).
+
+Verificado en vivo: rol admin ve botón Eliminar (10 ocurrencias), rol viewer
+no lo ve (0) y el endpoint regresa 403 si lo intenta igual. Query de puente
+reclamos verificada directo contra la DB.
+
+No completado en este bloque (quedan documentados como pendientes reales,
+no forzados):
+- Bulk-edit de precio ML: no existe ni siquiera bulk de stock en
+  `items.html` hoy — sería una feature nueva, no un ajuste.
+- Bundle piloto TV+soporte: los SKUs de soporte sugeridos por la auditoría
+  ni siquiera están publicados en ML, y uno de ellos (RMTC008173) resultó
+  ser un soporte para un TV de 85" — no aplica al TV de 32" sugerido.
+  Necesita que el negocio confirme qué soporte real va con cada TV antes de
+  publicar nada.
+
 ## 2026-07-30 — FIX: 5 hallazgos de la auditoría de sistema (JOIN roto, locks SQLite, disco sin monitorear, prompt() de precio, confirmación invertida)
 
 **Archivos:** `app/services/token_store.py`, `app/main.py`, `app/services/user_store.py`,
