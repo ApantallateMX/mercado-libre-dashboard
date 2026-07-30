@@ -4,6 +4,20 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from app.services.meli_client import get_meli_client, MeliApiError
 from app.services import token_store as _ts
+from app.services import user_store as _us
+
+
+async def _log_history(request: Request, username: str, action: str, item_id: str, detail: dict, section: str = "Salud") -> None:
+    """Registro best-effort en audit_log — nunca debe tumbar la acción principal."""
+    try:
+        user = getattr(request.state, "dashboard_user", {}) or {}
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await _us.log_action(
+            username=username, user_id=user.get("id"),
+            action=action, item_id=item_id, detail=detail, ip=ip, section=section,
+        )
+    except Exception:
+        pass
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
@@ -259,6 +273,7 @@ async def take_message(pack_id: str, request: Request, account_id: str = Query("
         username = user.get("sub") or user.get("name") or "?"
         acc = account_id or str(client.user_id)
         await _ts.take_message(pack_id, acc, username)
+        await _log_history(request, username, "ml_message_take", pack_id, {"account_id": acc})
         return {"ok": True, "taken_by": username}
     finally:
         await client.close()
@@ -280,6 +295,9 @@ async def update_message_status(pack_id: str, body: MessageStatusRequest, reques
     try:
         acc = body.account_id or str(client.user_id)
         await _ts.update_message_view_status(pack_id, acc, body.status)
+        user = getattr(request.state, "dashboard_user", {}) or {}
+        username = user.get("sub") or user.get("name") or "?"
+        await _log_history(request, username, "ml_message_status", pack_id, {"account_id": acc, "status": body.status})
         return {"ok": True, "status": body.status}
     finally:
         await client.close()
@@ -296,6 +314,7 @@ async def take_claim(claim_id: str, request: Request):
         username = user.get("sub") or user.get("name") or "?"
         account_id = str(client.user_id)
         await _ts.take_claim(claim_id, account_id, username)
+        await _log_history(request, username, "ml_claim_take", f"claim:{claim_id}", {"account_id": account_id})
         return {"ok": True, "taken_by": username}
     finally:
         await client.close()
@@ -316,6 +335,9 @@ async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: 
     try:
         account_id = str(client.user_id)
         await _ts.update_claim_view_status(claim_id, account_id, body.status)
+        user = getattr(request.state, "dashboard_user", {}) or {}
+        username = user.get("sub") or user.get("name") or "?"
+        await _log_history(request, username, "ml_claim_status", f"claim:{claim_id}", {"account_id": account_id, "status": body.status})
         return {"ok": True, "status": body.status}
     finally:
         await client.close()

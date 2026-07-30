@@ -3073,9 +3073,9 @@ function _renderAmzBuyerMessages(data) {
             : (vi && status === 'resolved')
                 ? '<button onclick="setAmzThreadStatus(\'' + domId + '\', \'pending\', this)" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium transition">Reabrir</button>'
                 : '';
-        if (!takeBtn && !resolveBtn) return '';
+        var historyBtn = '<button onclick="window.showItemHistory(\'amz:' + _amzMsgsEscAttr(th.reply_to_addr) + '\')" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600 font-medium transition" title="Ver quién tomó/resolvió este hilo">🕘 Historial</button>';
         return '<div class="flex items-center gap-2 mt-2 flex-wrap">' +
-            '<span class="text-[10px] text-gray-400">Otras acciones:</span>' + takeBtn + resolveBtn + '</div>';
+            '<span class="text-[10px] text-gray-400">Otras acciones:</span>' + takeBtn + resolveBtn + historyBtn + '</div>';
     }
 
     function threadHtml(th) {

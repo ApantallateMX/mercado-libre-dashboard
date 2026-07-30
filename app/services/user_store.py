@@ -565,6 +565,7 @@ async def get_audit_log(
     action: str = None,
     date_from: str = None,
     ml_account: str = None,
+    item_id: str = None,
 ) -> list[dict]:
     conditions = []
     params = []
@@ -580,6 +581,9 @@ async def get_audit_log(
     if ml_account:
         conditions.append("ml_account = ?")
         params.append(ml_account)
+    if item_id:
+        conditions.append("item_id = ?")
+        params.append(item_id)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.extend([limit, offset])
     async with aiosqlite.connect(DATABASE_PATH) as db:

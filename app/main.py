@@ -19517,7 +19517,17 @@ async def amazon_buyer_messages_take(request: Request):
     if not seller_id or not reply_to_addr:
         return JSONResponse({"detail": "seller_id y reply_to_addr son requeridos"}, status_code=400)
     username = du["username"]
-    await token_store.take_message(_amz_thread_key(reply_to_addr), seller_id, username)
+    pack_id = _amz_thread_key(reply_to_addr)
+    await token_store.take_message(pack_id, seller_id, username)
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=username, user_id=du.get("id"),
+            action="amazon_buyer_message_take", item_id=pack_id,
+            detail={"seller_id": seller_id}, ip=ip, section="Salud",
+        )
+    except Exception:
+        pass
     return JSONResponse({"ok": True, "taken_by": username})
 
 
@@ -19538,7 +19548,18 @@ async def amazon_buyer_messages_status(request: Request):
         return JSONResponse({"detail": "Status inválido"}, status_code=400)
     if not seller_id or not reply_to_addr:
         return JSONResponse({"detail": "seller_id y reply_to_addr son requeridos"}, status_code=400)
-    await token_store.update_message_view_status(_amz_thread_key(reply_to_addr), seller_id, status)
+    pack_id = _amz_thread_key(reply_to_addr)
+    await token_store.update_message_view_status(pack_id, seller_id, status)
+    try:
+        username = du["username"]
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=username, user_id=du.get("id"),
+            action="amazon_buyer_message_status", item_id=pack_id,
+            detail={"seller_id": seller_id, "status": status}, ip=ip, section="Salud",
+        )
+    except Exception:
+        pass
     return JSONResponse({"ok": True, "status": status})
 
 

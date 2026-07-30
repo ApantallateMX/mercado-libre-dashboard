@@ -724,6 +724,18 @@ document.addEventListener('click', function(e) {
 <!-- Banner global: caché BM desactualizado (mostrado/ocultado por JS) -->
 <div id="bm-stale-banner" class="hidden px-4 py-2 text-xs bg-yellow-50 border-b border-yellow-200 text-yellow-700"></div>
 
+<!-- Modal global: historial de quién tomó/resolvió un mensaje o reclamo -->
+<div id="item-history-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+     onclick="if(event.target===this) window._closeItemHistory()">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-5">
+        <div class="flex items-start justify-between mb-3">
+            <h3 class="text-sm font-bold text-gray-800">🕘 Historial</h3>
+            <button onclick="window._closeItemHistory()" class="text-gray-300 hover:text-gray-500 text-lg leading-none">✕</button>
+        </div>
+        <div id="item-history-body" class="space-y-2 max-h-80 overflow-y-auto"></div>
+    </div>
+</div>
+
 <main class="max-w-[1920px] w-full mx-auto py-3 px-2 md:py-6 sm:px-4 lg:px-6">
     {% block content %}{% endblock %}
 </main>
@@ -732,6 +744,34 @@ document.addEventListener('click', function(e) {
 
 <script src="/static/js/notifications.js"></script>
 <script>
+// Historial de auditoría por hilo/reclamo — botón "🕘 Historial" reusado en
+// Mensajes ML, Reclamos ML y Mensajes de Compradores Amazon.
+window.showItemHistory = function(itemId) {
+    var modal = document.getElementById('item-history-modal');
+    var body  = document.getElementById('item-history-body');
+    body.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Cargando…</p>';
+    modal.classList.remove('hidden');
+    fetch('/api/users/audit/item-history?item_id=' + encodeURIComponent(itemId))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var events = d.events || [];
+            if (!events.length) {
+                body.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Sin registros todavía — nadie ha tomado/resuelto esto desde que se activó el historial.</p>';
+                return;
+            }
+            body.innerHTML = events.map(function(e) {
+                return '<div class="flex items-start gap-2 text-xs border-b border-gray-50 pb-2">' +
+                    '<span class="text-sm">' + e.icon + '</span>' +
+                    '<div class="flex-1"><p class="text-gray-700"><strong>' + e.username + '</strong> — ' + e.label + '</p>' +
+                    '<p class="text-gray-400">' + e.ts + '</p></div></div>';
+            }).join('');
+        })
+        .catch(function() { body.innerHTML = '<p class="text-xs text-red-500 text-center py-4">Error cargando historial.</p>'; });
+};
+window._closeItemHistory = function() {
+    document.getElementById('item-history-modal').classList.add('hidden');
+};
+
 window._clearBmCache = function() {
   var btn = document.getElementById('btn-bm-cache');
   if (!btn) return;

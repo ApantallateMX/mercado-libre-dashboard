@@ -209,6 +209,11 @@
                 &#128722; Tomar
             </button>
             {% endif %}
+
+            <button onclick="window.showItemHistory('claim:{{ claim.id }}')"
+                    class="text-xs bg-gray-50 text-gray-400 px-3 py-1.5 rounded-full hover:bg-gray-100 hover:text-gray-600 font-semibold transition-colors" title="Ver quién tomó/resolvió este reclamo">
+                🕘 Historial
+            </button>
         </div>
 
         <!-- AI Action Buttons -->

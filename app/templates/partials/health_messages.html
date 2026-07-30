@@ -270,6 +270,11 @@ window._setMsgStatus = function(packId, status, btn) {
                     Reabrir
                 </button>
                 {% endif %}
+
+                <button onclick="window.showItemHistory('{{ conv.pack_id }}')"
+                        class="text-xs px-3 py-1 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600 font-semibold transition" title="Ver quién tomó/resolvió este hilo">
+                    🕘 Historial
+                </button>
             </div>
 
             <!-- IA Suggest -->

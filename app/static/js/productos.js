@@ -747,10 +747,18 @@
   };
 
   // ── Toggle status ──────────────────────────────────────────────────────────
+  // "Pausar" NUNCA manda status:paused a ML (penaliza el algoritmo) — en vez de
+  // eso pone available_quantity:0, igual que items_health.html. "Activar" sí usa
+  // status:active para poder reactivar un listing que haya quedado pausado por
+  // otra vía, sin que este botón pueda crear una pausa nueva.
   window.toggleStatus = async function (itemId, newStatus) {
     if (!confirm(`¿${newStatus === 'paused' ? 'Pausar' : 'Activar'} este producto?`)) return;
     try {
-      await apiFetch(`/api/items/${itemId}/status`, { method: 'PUT', body: { status: newStatus } });
+      if (newStatus === 'paused') {
+        await apiFetch(`/api/items/${itemId}/stock`, { method: 'PUT', body: { quantity: 0 } });
+      } else {
+        await apiFetch(`/api/items/${itemId}/status`, { method: 'PUT', body: { status: 'active' } });
+      }
       toast(`Producto ${newStatus === 'paused' ? 'pausado' : 'activado'} ✓`, 'green');
       loadItems(); loadStats();
     } catch (e) { alert('Error: ' + e.message); }

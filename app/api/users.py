@@ -231,6 +231,13 @@ ACTION_META: dict = {
     "amz_price_update":   ("🏷", "bg-yellow-50 text-yellow-700", "Cambio precio Amazon"),
     "amz_listing_update": ("✏️", "bg-orange-50 text-orange-700", "Editó listing Amazon"),
     "amz_stock_update":   ("📦", "bg-blue-50 text-blue-700",     "Cambio stock Amazon"),
+    # Mensajes / reclamos (historial por hilo)
+    "ml_message_take":    ("🙋", "bg-teal-50 text-teal-700",     "Tomó mensaje ML"),
+    "ml_message_status":  ("💬", "bg-teal-50 text-teal-600",     "Cambió estado mensaje ML"),
+    "ml_claim_take":      ("🙋", "bg-red-50 text-red-700",       "Tomó reclamo ML"),
+    "ml_claim_status":    ("📋", "bg-red-50 text-red-600",       "Cambió estado reclamo ML"),
+    "amazon_buyer_message_take":   ("🙋", "bg-orange-50 text-orange-700", "Tomó mensaje Amazon"),
+    "amazon_buyer_message_status": ("💬", "bg-orange-50 text-orange-600", "Cambió estado mensaje Amazon"),
     # Sistema / usuarios
     "login":              ("🔑", "bg-blue-50 text-blue-600",     "Inicio sesión"),
     "logout":             ("🚪", "bg-gray-50 text-gray-500",     "Cerró sesión"),
@@ -334,6 +341,30 @@ async def audit_log_api(
         ml_account=ml_account or None,
     )
     return _render_timeline_rows(rows)
+
+
+@router.get("/audit/item-history")
+async def audit_item_history_api(request: Request, item_id: str, limit: int = 20):
+    """Historial de quién interactuó con un hilo/reclamo específico (mensajes ML,
+    reclamos ML, mensajes de compradores Amazon) — cualquier usuario logueado
+    puede consultarlo, no solo admin. Usado por el botón '🕘 Historial'."""
+    _get_dashboard_user(request)
+    if not item_id:
+        raise HTTPException(status_code=400, detail="item_id requerido")
+    rows = await user_store.get_audit_log(limit=limit, item_id=item_id)
+    out = []
+    for r in rows:
+        action = r["action"]
+        icon, _cls, label = ACTION_META.get(action, ("•", "", action))
+        out.append({
+            "username": r.get("username") or "?",
+            "action": action,
+            "label": label,
+            "icon": icon,
+            "ts": _fmt_ts_tj(r.get("ts") or ""),
+            "ts_raw": r.get("ts") or "",
+        })
+    return {"item_id": item_id, "events": out}
 
 
 @router.get("/audit/online", response_class=HTMLResponse)
