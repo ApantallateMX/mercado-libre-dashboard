@@ -498,7 +498,7 @@ async def backfill_order_data(request: Request):
     from app.services.meli_client import get_meli_client
 
     # 1. Solicitudes ML sin items
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, order_number, ml_user_id FROM billing_requests "

@@ -497,7 +497,7 @@ async def _run_gap_scan(user_id: str | None = None):
     async with _scan_lock:
         logger.info(f"BM gap scan iniciando... (cuenta: {user_id or 'todas'})")
         _prog(0, "starting", "Iniciando scan...", "")
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 "UPDATE bm_gap_scan_status SET status='running', started_at=?, finished_at=NULL, error=NULL WHERE id=1",
                 (datetime.utcnow().isoformat(),)
@@ -695,7 +695,7 @@ async def _run_gap_scan(user_id: str | None = None):
                 inactive_sku_map = acct["inactive_map"]
                 active_prices_map = acct["active_prices"]
 
-                async with aiosqlite.connect(DATABASE_PATH) as db:
+                async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
 
                     # Gaps para esta cuenta = BM SKUs con stock que NO están en ML de esta cuenta
                     _acct_own_skus    = account_ml_data[user_id]["meli_skus"]
@@ -888,7 +888,7 @@ async def _run_gap_scan(user_id: str | None = None):
                     await db.commit()
 
             # Update scan status
-            async with aiosqlite.connect(DATABASE_PATH) as db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                 await db.execute(
                     """UPDATE bm_gap_scan_status SET
                        status='done', finished_at=?, total_skus=?, gaps_found=?
@@ -904,7 +904,7 @@ async def _run_gap_scan(user_id: str | None = None):
             err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
             logger.error(f"BM gap scan error: {tb}")
             _prog(_scan_progress["pct"], "error", f"Error: {err_msg[:80]}", "")
-            async with aiosqlite.connect(DATABASE_PATH) as db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                 await db.execute(
                     "UPDATE bm_gap_scan_status SET status='error', finished_at=?, error=? WHERE id=1",
                     (datetime.utcnow().isoformat(), err_msg)
@@ -942,7 +942,7 @@ async def get_gap_filters(request: Request):
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         # Categories with count
         cur = await db.execute(
             """SELECT category, COUNT(*) as cnt, SUM(stock_total) as total_stock
@@ -1006,7 +1006,7 @@ async def check_sku_endpoint(sku: str = Query(...)):
     found_ids: list[str] = []
 
     # 1. Check item_sku_cache (fast — already fetched)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT item_id FROM item_sku_cache WHERE user_id=? AND (sku=? OR sku=?)",
@@ -1095,7 +1095,7 @@ async def get_gaps(
     where = " AND ".join(conditions)
     offset = (page - 1) * per_page
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
 
         total_cur = await db.execute(f"SELECT COUNT(*) FROM bm_sku_gaps WHERE {where}", params)
@@ -1171,7 +1171,7 @@ async def trigger_scan_all(request: Request):
 @router.get("/scan-status")
 async def get_scan_status():
     """Estado del último scan, incluyendo progreso en tiempo real."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
         row = await cursor.fetchone()
@@ -1193,7 +1193,7 @@ async def get_reactivations(request: Request):
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM bm_reactivations WHERE user_id=? ORDER BY stock_bm DESC",
@@ -1241,7 +1241,7 @@ async def reactivate_listing(request: Request):
             return JSONResponse({"error": err}, status_code=400)
 
         # Remove from reactivations table
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 "DELETE FROM bm_reactivations WHERE user_id=? AND item_id=?",
                 (user_id, item_id)
@@ -1279,7 +1279,7 @@ async def get_price_alerts(request: Request):
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM ml_price_alerts WHERE user_id=? ORDER BY ABS(diff_pct) DESC",
@@ -1313,7 +1313,7 @@ async def sync_price(request: Request):
     owner_id = account_from_body or user_id
     if not account_from_body:
         try:
-            async with aiosqlite.connect(DATABASE_PATH) as _db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _db:
                 _row = await (await _db.execute(
                     "SELECT account_id FROM ml_listings WHERE item_id=? LIMIT 1", (item_id,)
                 )).fetchone()
@@ -1333,7 +1333,7 @@ async def sync_price(request: Request):
         if err:
             return JSONResponse({"error": str(err)}, status_code=400)
 
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 "DELETE FROM ml_price_alerts WHERE user_id=? AND item_id=?",
                 (user_id, item_id)
@@ -1377,7 +1377,7 @@ async def get_listing_quality(request: Request):
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM ml_listing_quality WHERE user_id=? ORDER BY quality_score ASC",
@@ -1394,7 +1394,7 @@ async def get_competition_alerts(request: Request):
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM ml_competition_alerts WHERE user_id=? ORDER BY diff_pct DESC",
@@ -1411,7 +1411,7 @@ async def get_gaps_summary(request: Request):
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute(
             """SELECT COUNT(*), SUM(stock_total), SUM(suggested_price_mxn * stock_total)
                FROM bm_sku_gaps WHERE user_id=? AND status='unlaunched'""",
@@ -1469,7 +1469,7 @@ async def get_sales_velocity(request: Request, days: int = Query(30, ge=7, le=90
 
         # Cross with item_sku_cache to get SKUs
         result_rows = []
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             db.row_factory = aiosqlite.Row
             for iid, units in sorted(item_units.items(), key=lambda x: -x[1]):
                 vel = round(units / days, 2)
@@ -1579,7 +1579,7 @@ async def debug_scan(sku: str = ""):
                 await client.close()
 
     # 3. DB state
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
         row = await cursor.fetchone()
@@ -1604,7 +1604,7 @@ async def recalc_prices():
     """Recalcula suggested_price_mxn y cost_price_mxn en la DB usando fórmula actual
     (retail × 18 × 1.20) sin necesidad de hacer un nuevo scan completo."""
     updated = 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             "SELECT rowid, retail_price_usd, cost_usd FROM bm_sku_gaps"
         )).fetchall()
@@ -1627,7 +1627,7 @@ async def clear_sku_cache(request: Request):
     from app.services.meli_client import _active_user_id as _ctx
     user_id = _ctx.get()
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         if user_id:
             result = await db.execute(
                 "DELETE FROM item_sku_cache WHERE user_id=?", (user_id,)
@@ -2689,7 +2689,7 @@ async def ignore_sku(sku: str, request: Request):
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE bm_sku_gaps SET status='ignored' WHERE user_id=? AND sku=?",
             (user_id, sku.upper())
@@ -2706,7 +2706,7 @@ async def restore_sku(sku: str, request: Request):
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE bm_sku_gaps SET status='unlaunched' WHERE user_id=? AND sku=?",
             (user_id, sku.upper())
@@ -2733,7 +2733,7 @@ async def mark_launched_sku(sku: str, request: Request):
     if not item_id:
         return JSONResponse({"error": "item_id required"}, status_code=400)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """UPDATE bm_sku_gaps SET
                status='launched',
@@ -2769,7 +2769,7 @@ async def relaunch_sku(sku: str, request: Request):
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """UPDATE bm_sku_gaps SET
                status='unlaunched',
@@ -2791,7 +2791,7 @@ async def delete_launched_sku(sku: str, request: Request):
         return JSONResponse({"error": "no_account"}, status_code=401)
 
     # Obtener ml_item_id de la DB
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute(
             "SELECT ml_item_id FROM bm_sku_gaps WHERE user_id=? AND sku=?",
             (user_id, sku.upper())
@@ -2813,7 +2813,7 @@ async def delete_launched_sku(sku: str, request: Request):
             logger.warning(f"No se pudo cerrar {ml_item_id} en ML (puede ya no existir): {e}")
 
     # Resetear DB independientemente del resultado de ML
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """UPDATE bm_sku_gaps SET
                status='unlaunched',
@@ -2836,7 +2836,7 @@ async def prepare_sku(sku: str, request: Request):
         return JSONResponse({"error": "no_account"}, status_code=401)
 
     # 1. Get stored gap data
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM bm_sku_gaps WHERE user_id=? AND sku=?",
@@ -2872,7 +2872,7 @@ async def prepare_sku(sku: str, request: Request):
 
     # Update DB with competitor data
     if comp_prices:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 """UPDATE bm_sku_gaps SET
                    competitor_price=?, competitor_count=?, deal_price=?
@@ -3743,7 +3743,7 @@ async def create_listing_endpoint(request: Request):
                 logger.warning(f"Description upload failed for {item_id}: {e}")
 
         # Mark gap as launched — save all published listing data
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 """UPDATE bm_sku_gaps SET
                    status='launched',
@@ -3865,7 +3865,7 @@ async def modify_listing(request: Request):
 
         # Update DB with new values
         if sku:
-            async with aiosqlite.connect(DATABASE_PATH) as db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                 fields, vals = [], []
                 if title:
                     fields.append("ml_title=?"); vals.append(title)
@@ -3920,7 +3920,7 @@ async def register_launched(request: Request):
         ml_permalink = item.get("permalink", "")
         ml_condition = item.get("condition", "new")
 
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             # Update if row exists, insert if not
             await db.execute(
                 """UPDATE bm_sku_gaps SET

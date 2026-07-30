@@ -175,7 +175,7 @@ async def get_stats():
             paused_data.get("paging", {}).get("total", 0)
             if not isinstance(paused_data, Exception) else 0
         )
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             row = await (await db.execute(
                 "SELECT COUNT(*) FROM bm_sku_gaps WHERE status='unlaunched' AND user_id=?",
                 (user_id,)
@@ -200,7 +200,7 @@ async def get_candidates(
 ):
     """SKUs en BM con stock pero sin publicar en ML (bm_sku_gaps)."""
     user_id = _ctx.get()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         base_q = "FROM bm_sku_gaps WHERE status='unlaunched' AND user_id=?"
         params: list = [user_id]
@@ -310,7 +310,7 @@ async def list_productos(
 
             # item_sku_cache local (fallback para SKUs sincronizados)
             try:
-                async with aiosqlite.connect(DATABASE_PATH) as db:
+                async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                     cur = await db.execute(
                         "SELECT DISTINCT item_id FROM item_sku_cache "
                         "WHERE user_id=? AND sku LIKE ? LIMIT 50",
@@ -588,7 +588,7 @@ async def get_producto_detail(item_id: str):
             desc = {}
 
         # Video record
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             db.row_factory = aiosqlite.Row
             row = await (await db.execute(
                 "SELECT * FROM product_videos WHERE item_id=? AND user_id=?",

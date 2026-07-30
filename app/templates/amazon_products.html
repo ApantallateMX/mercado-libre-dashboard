@@ -1096,15 +1096,7 @@ window._amzRestoreGap = function(sku, sellerId) {
 };
 
 window._amzLanzarUpdatePrice = function(sku, currentPrice, sellerId) {
-    var newPrice = prompt('Nuevo precio para ' + sku + ' (MXN):', currentPrice || '');
-    if (!newPrice || isNaN(parseFloat(newPrice))) return;
-    fetch('/api/amazon/products/' + encodeURIComponent(sku) + '/price', {
-        method: 'PUT',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ price: parseFloat(newPrice), seller_id: sellerId || _amzSlSellerId() }),
-    }).then(function(r){ return r.json(); })
-      .then(function(d){ alert(d.ok ? '✓ Precio actualizado' : '⚠ ' + (d.error || 'Error')); })
-      .catch(function(e){ alert('Error: ' + e.message); });
+    window.showAmzPriceModal(sku, currentPrice, sellerId || _amzSlSellerId());
 };
 
 window._loadAmzLanzados = function(page) {
@@ -1473,26 +1465,11 @@ window._sfxGenerateCSV = function() {
 
 // ── Función global para actualizar precio inline ──────────────────────────
 window.updateAmzPrice = function(sku, currentPrice) {
-    var newPrice = parseFloat(prompt('Nuevo precio para ' + sku + ':\n(Precio actual: $' + currentPrice + ')', currentPrice));
-    if (!newPrice || isNaN(newPrice) || newPrice <= 0) return;
-
-    fetch('/api/amazon/products/' + encodeURIComponent(sku) + '/price', {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({price: newPrice})
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        if (data.ok) {
-            alert('Precio actualizado a $' + newPrice.toLocaleString('es-MX'));
-            _amzProdActiveTab = null;
-            var btn = document.querySelector('.amz-prod-tab[data-tab="inventario"]');
-            if (btn) loadAmzProdTab('inventario', btn.getAttribute('data-url'), btn);
-        } else {
-            alert('Error: ' + JSON.stringify(data));
-        }
-    })
-    .catch(function(e) { alert('Error: ' + e.message); });
+    window.showAmzPriceModal(sku, currentPrice, '', function() {
+        _amzProdActiveTab = null;
+        var btn = document.querySelector('.amz-prod-tab[data-tab="inventario"]');
+        if (btn) loadAmzProdTab('inventario', btn.getAttribute('data-url'), btn);
+    });
 };
 </script>
 {% endif %}

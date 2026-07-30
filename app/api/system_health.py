@@ -89,7 +89,7 @@ async def _check_db() -> dict:
     try:
         from app.config import DATABASE_PATH
         import aiosqlite
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             cursor = await db.execute("SELECT count(*) FROM tokens")
             row = await cursor.fetchone()
             count = row[0] if row else 0

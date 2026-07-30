@@ -2419,7 +2419,7 @@ async def create_suggestion(request: Request):
     reason       = (body.get("reason") or "").strip()
     if not from_account or not to_account or not action:
         return JSONResponse({"error": "Faltan campos requeridos"}, status_code=400)
-    async with _aiosqlite.connect(DATABASE_PATH) as db:
+    async with _aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute(
             """INSERT INTO suggestions (from_account, to_account, item_id, sku, item_title, action, reason, created_at, status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
@@ -2432,7 +2432,7 @@ async def create_suggestion(request: Request):
 @app.get("/api/suggestions")
 async def list_suggestions(to_account: str = Query(""), status: str = Query("pending")):
     import aiosqlite as _aiosqlite
-    async with _aiosqlite.connect(DATABASE_PATH) as db:
+    async with _aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = _aiosqlite.Row
         if to_account:
             cur = await db.execute(
@@ -2454,7 +2454,7 @@ async def update_suggestion(sid: int, request: Request):
     new_status = (body.get("status") or "").strip()
     if new_status not in ("pending", "applied", "dismissed", "in_progress"):
         return JSONResponse({"error": "Status inválido"}, status_code=400)
-    async with _aiosqlite.connect(DATABASE_PATH) as db:
+    async with _aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("UPDATE suggestions SET status=? WHERE id=?", (new_status, sid))
         await db.commit()
     return {"ok": True}
@@ -14863,6 +14863,27 @@ async def multi_sync_status():
     return status
 
 
+@app.get("/api/system/disk-usage")
+async def system_disk_usage():
+    """Espacio en disco del volumen donde vive tokens.db — sin esto, los 2
+    incidentes de disco lleno (2026-07-17, 2026-07-18) se detectaron por
+    reporte de usuario, no por alerta del sistema. Cualquier sesión con
+    login puede consultarlo (no es dato sensible, solo % de uso)."""
+    import shutil as _shutil_disk
+    try:
+        vol_path = Path(DATABASE_PATH).resolve().parent
+        usage = _shutil_disk.disk_usage(vol_path)
+        pct = round(usage.used / usage.total * 100, 1) if usage.total else 0.0
+        return {
+            "total_mb": round(usage.total / 1024 / 1024, 1),
+            "used_mb": round(usage.used / 1024 / 1024, 1),
+            "free_mb": round(usage.free / 1024 / 1024, 1),
+            "pct_used": pct,
+        }
+    except Exception as _e:
+        return JSONResponse({"error": str(_e)}, status_code=500)
+
+
 @app.get("/api/stock/prewarm-status")
 async def prewarm_status():
     """Estado del prewarm de stock issues — para polling desde loading page."""
@@ -21918,7 +21939,7 @@ async def diag_export_config(token: str = ""):  # noqa
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
 
         # Metas diarias (ML y Amazon)
@@ -21963,7 +21984,7 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
     requests = data.get("billing_requests", [])
     imported = {"goals": 0, "fiscal": 0, "requests": 0}
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for row in goals:
             await db.execute(
                 "INSERT INTO account_settings (user_id, daily_goal, updated_at) VALUES (?,?,?) "
@@ -22040,7 +22061,7 @@ async def diag_amazon_accounts(token: str = "", fix: int = 0):  # noqa
             _mname = _os.getenv(f"{_prefix}MARKETPLACE_NAME", _default_name)
             if _sid:
                 updates.append((_mid, _mname, _sid))
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             for _mid, _mname, _sid in updates:
                 await db.execute(
                     "UPDATE amazon_accounts SET marketplace_id=?, marketplace_name=? WHERE seller_id=?",
@@ -22048,7 +22069,7 @@ async def diag_amazon_accounts(token: str = "", fix: int = 0):  # noqa
                 )
             await db.commit()
     results = []
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT seller_id, nickname, client_id, refresh_token, marketplace_id, marketplace_name FROM amazon_accounts"

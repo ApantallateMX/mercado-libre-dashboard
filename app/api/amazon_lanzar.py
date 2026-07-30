@@ -70,7 +70,7 @@ async def _verify_bm_skus_individually(client, seller_id: str, bm_items: list) -
     # Cargar cache existente
     cache_found: set[str] = set()
     cache_not_found: set[str] = set()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT sku_upper, found FROM amz_catalog_cache WHERE seller_id=? AND checked_at > ?",
@@ -123,7 +123,7 @@ async def _verify_bm_skus_individually(client, seller_id: str, bm_items: list) -
             new_cache_entries.append((seller_id, sku, 1 if is_found else 0, now_iso))
 
         if new_cache_entries:
-            async with aiosqlite.connect(DATABASE_PATH) as db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                 await db.executemany(
                     """INSERT INTO amz_catalog_cache (seller_id, sku_upper, found, checked_at)
                        VALUES (?, ?, ?, ?)
@@ -146,7 +146,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
 
     async with lock:
         logger.info(f"[AMZ Gap Scan] Iniciando para seller {seller_id}")
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 """INSERT INTO amz_gap_scan_status (seller_id, status, started_at, finished_at, error)
                    VALUES (?, 'running', ?, NULL, NULL)
@@ -179,7 +179,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
             # ── Paso 1: Verificar cobertura de DB ─────────────────────────────
             _DB_MIN_COVERAGE = 500  # SKUs mínimos en DB para confiar en ella
             db_count = 0
-            async with aiosqlite.connect(DATABASE_PATH) as _dbcheck:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _dbcheck:
                 _row = await (await _dbcheck.execute(
                     "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?",
                     (seller_id,)
@@ -191,7 +191,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
             if db_first:
                 # ── DB-first: sin llamadas API para descubrimiento de SKUs ──────
                 logger.info(f"[AMZ Gap Scan] DB-first: {db_count} listings en DB para {seller_id}")
-                async with aiosqlite.connect(DATABASE_PATH) as _adb:
+                async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _adb:
                     _adb.row_factory = aiosqlite.Row
                     _cur = await _adb.execute(
                         "SELECT sku, base_sku FROM amazon_listings WHERE seller_id=?",
@@ -279,7 +279,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
             # Es lo que permite que el cleanup borre filas viejas de amz_sku_gaps.
             from datetime import timedelta
             _cache_cutoff = (datetime.utcnow() - timedelta(hours=_AMZ_CACHE_TTL_H)).isoformat()
-            async with aiosqlite.connect(DATABASE_PATH) as _caug:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _caug:
                 _caug.row_factory = aiosqlite.Row
                 _caug_cur = await _caug.execute(
                     "SELECT sku_upper FROM amz_catalog_cache WHERE seller_id=? AND found=1 AND checked_at>?",
@@ -365,7 +365,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 _gap_not_found_ttl = (datetime.utcnow() - timedelta(hours=6)).isoformat()
                 gap_cache_found: set[str] = set()
                 gap_cache_not_found: set[str] = set()
-                async with aiosqlite.connect(DATABASE_PATH) as _cdb:
+                async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _cdb:
                     _cdb.row_factory = aiosqlite.Row
                     _cur = await _cdb.execute(
                         "SELECT sku_upper, found FROM amz_catalog_cache WHERE seller_id=? AND ("
@@ -407,7 +407,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                                 amazon_base_skus.add(bm_sku_u)
                                 return None  # No confirmar como gap
                             if res is not None:
-                                async with aiosqlite.connect(DATABASE_PATH) as _db2:
+                                async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _db2:
                                     await _db2.execute(
                                         """INSERT INTO amz_catalog_cache (seller_id,sku_upper,found,checked_at)
                                            VALUES(?,?,1,?) ON CONFLICT(seller_id,sku_upper) DO UPDATE SET
@@ -419,7 +419,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                                 logger.info(f"[AMZ Gap Scan] {bm_sku_u} confirmado en Amazon via {variant}")
                                 return None
                         # Gap confirmado → cachear found=0 (TTL 6h) para no re-verificar en próximo scan
-                        async with aiosqlite.connect(DATABASE_PATH) as _db3:
+                        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _db3:
                             await _db3.execute(
                                 """INSERT INTO amz_catalog_cache (seller_id,sku_upper,found,checked_at)
                                    VALUES(?,?,0,?) ON CONFLICT(seller_id,sku_upper) DO UPDATE SET
@@ -438,7 +438,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 logger.info(f"[AMZ Gap Scan] Gaps confirmados tras verificación individual: {len(gaps)}")
 
             # ── Guardar en DB ──────────────────────────────────────────────
-            async with aiosqlite.connect(DATABASE_PATH) as db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                 # 1. Eliminar unlaunched/sin_precio que ya no tienen stock en BM
                 if current_bm_skus:
                     placeholders = ",".join("?" * len(current_bm_skus))
@@ -507,7 +507,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
 
         except Exception as exc:
             logger.exception(f"[AMZ Gap Scan] Error para seller {seller_id}")
-            async with aiosqlite.connect(DATABASE_PATH) as db:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
                 await db.execute(
                     """INSERT INTO amz_gap_scan_status (seller_id, status, finished_at, error)
                        VALUES (?, 'error', ?, ?)
@@ -567,7 +567,7 @@ async def get_amz_scan_status(
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return JSONResponse({"status": "no_account"})
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM amz_gap_scan_status WHERE seller_id=?",
@@ -583,7 +583,7 @@ async def get_amz_scan_status(
 
 async def _get_gap_status(seller_id: str) -> dict:
     """Devuelve dict sku→status para el seller."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT sku, status, asin FROM amz_sku_gaps WHERE seller_id=?",
@@ -2244,7 +2244,7 @@ async def create_listing(request: Request):
         pass
 
     # Persistir como "launched" en DB
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO amz_sku_gaps (seller_id, sku, asin, status, launched_price, launched_at)
                VALUES (?, ?, ?, 'launched', ?, CURRENT_TIMESTAMP)
@@ -3013,7 +3013,7 @@ async def ignore_gap(sku: str, request: Request):
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO amz_sku_gaps (seller_id, sku, status)
                VALUES (?, ?, 'ignored')
@@ -3037,7 +3037,7 @@ async def ignore_category(request: Request):
     client = await get_amazon_client(seller_id=sid_param)
     if not client:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute(
             """UPDATE amz_sku_gaps SET status='ignored'
                WHERE seller_id=? AND category=? AND status IN ('unlaunched','sin_precio')""",
@@ -3057,7 +3057,7 @@ async def restore_gap(sku: str, request: Request):
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return JSONResponse({"error": "no_account"}, status_code=401)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE amz_sku_gaps SET status='unlaunched' WHERE seller_id=? AND sku=?",
             (client.seller_id, sku.upper()),
@@ -3079,7 +3079,7 @@ async def get_launched(
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return HTMLResponse("<div class='p-6 text-red-500 text-center font-semibold'>Sin cuenta Amazon conectada</div>")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT g.*, l.title as live_title, l.status as live_status, l.price as live_price, l.asin as live_asin
@@ -3124,7 +3124,7 @@ async def get_ignored(
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return HTMLResponse("<div class='p-6 text-red-500 text-center font-semibold'>Sin cuenta Amazon conectada</div>")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM amz_sku_gaps WHERE seller_id=? AND status='ignored' ORDER BY created_at DESC",

@@ -955,6 +955,11 @@
         okBtn.onclick = function() {
             var val = parseInt(inp.value);
             if (isNaN(val) || val < 0) { inp.classList.add('border-red-400'); return; }
+            // Este es el camino que se usa todo el día — antes guardaba directo sin
+            // avisar, mientras el modal completo (saveField) sí confirma. Se cambia
+            // el stock real en ML/Amazon aquí, así que sí necesita un aviso, aunque
+            // sea rápido (no el modal pesado, para no volverlo tedioso de más).
+            if (val !== currentStock && !confirm('¿Cambiar stock de ' + currentStock + ' a ' + val + '?')) return;
             closeEditor();
             window.inlineStockSync(itemId, val, msgEl, function(qty) {
                 displayEl.textContent = qty;

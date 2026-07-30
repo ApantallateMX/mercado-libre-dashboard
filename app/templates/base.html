@@ -210,6 +210,27 @@
     }
     _checkCacheAge();
     setInterval(_checkCacheAge, 120000);   // cada 2 min
+
+    // Disco del volumen Railway — sin esto, un disco lleno se detecta hasta
+    // que algo truena (ya pasó 2 veces: fotos de reclamos, luego facturas).
+    function _checkDiskUsage() {
+        fetch('/api/system/disk-usage').then(function(r){ return r.json(); }).then(function(d){
+            var banner = document.getElementById('disk-stale-banner');
+            if (!banner || d.error || typeof d.pct_used !== 'number') return;
+            if (d.pct_used >= 85) {
+                var isCritical = d.pct_used >= 95;
+                banner.className = 'px-4 py-2 text-xs flex items-center justify-between gap-3 ' +
+                    (isCritical ? 'bg-red-50 border-b border-red-200 text-red-700' : 'bg-yellow-50 border-b border-yellow-200 text-yellow-700');
+                banner.innerHTML = '<span>⚠ Disco del servidor al <strong>' + d.pct_used + '%</strong> (' + d.free_mb.toLocaleString('es-MX') + ' MB libres) — contacta al administrador antes de que se llene.</span>' +
+                    '<button onclick="document.getElementById(\'disk-stale-banner\').classList.add(\'hidden\')" class="text-xs opacity-50 hover:opacity-100 flex-shrink-0">✕</button>';
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
+        }).catch(function(){});
+    }
+    _checkDiskUsage();
+    setInterval(_checkDiskUsage, 600000);   // cada 10 min — no cambia rápido
 })();
 </script>
 
@@ -724,6 +745,38 @@ document.addEventListener('click', function(e) {
 <!-- Banner global: caché BM desactualizado (mostrado/ocultado por JS) -->
 <div id="bm-stale-banner" class="hidden px-4 py-2 text-xs bg-yellow-50 border-b border-yellow-200 text-yellow-700"></div>
 
+<!-- Banner global: disco del volumen Railway cerca de llenarse -->
+<div id="disk-stale-banner" class="hidden px-4 py-2 text-xs bg-yellow-50 border-b border-yellow-200 text-yellow-700"></div>
+
+<!-- Modal global: confirmar cambio de precio Amazon (reemplaza prompt() nativo,
+     que publicaba con el primer "Aceptar" sin mostrar antes/después) -->
+<div id="amz-price-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+     onclick="if(event.target===this) window._closeAmzPriceModal()">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-5">
+        <h3 class="text-sm font-bold text-gray-800 mb-1">Cambiar precio</h3>
+        <p class="text-xs text-gray-400 font-mono mb-3" id="amz-price-modal-sku"></p>
+        <div class="flex items-center gap-3 mb-3 text-sm">
+            <div class="flex-1 bg-gray-50 rounded-lg p-2 text-center">
+                <p class="text-[10px] text-gray-400 uppercase">Actual</p>
+                <p class="font-bold text-gray-600" id="amz-price-modal-current">—</p>
+            </div>
+            <span class="text-gray-300">→</span>
+            <div class="flex-1 bg-blue-50 rounded-lg p-2 text-center">
+                <p class="text-[10px] text-blue-400 uppercase">Nuevo</p>
+                <input type="number" id="amz-price-modal-input" step="0.01" min="0.01"
+                       class="w-full text-center font-bold text-blue-700 bg-transparent outline-none"
+                       oninput="document.getElementById('amz-price-modal-preview').textContent = this.value ? '$' + parseFloat(this.value).toLocaleString('es-MX') : '—'">
+            </div>
+        </div>
+        <p class="text-xs text-gray-400 text-center mb-3">Vas a guardar: <strong id="amz-price-modal-preview" class="text-gray-600">—</strong></p>
+        <div id="amz-price-modal-status" class="hidden text-xs rounded-lg px-3 py-2 mb-3"></div>
+        <div class="flex gap-2">
+            <button onclick="window._closeAmzPriceModal()" class="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-xl text-gray-500 hover:border-gray-400 transition">Cancelar</button>
+            <button onclick="window._confirmAmzPriceModal()" class="flex-1 px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition">Guardar</button>
+        </div>
+    </div>
+</div>
+
 <!-- Modal global: historial de quién tomó/resolvió un mensaje o reclamo -->
 <div id="item-history-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
      onclick="if(event.target===this) window._closeItemHistory()">
@@ -770,6 +823,64 @@ window.showItemHistory = function(itemId) {
 };
 window._closeItemHistory = function() {
     document.getElementById('item-history-modal').classList.add('hidden');
+};
+
+// Modal compartido de cambio de precio Amazon — usado por Sin Publicar y
+// por Inventario (antes cada uno usaba su propio prompt() nativo).
+var _amzPriceModalCtx = null;
+window.showAmzPriceModal = function(sku, currentPrice, sellerId, onSaved) {
+    _amzPriceModalCtx = { sku: sku, sellerId: sellerId || '', onSaved: onSaved || null };
+    document.getElementById('amz-price-modal-sku').textContent = sku;
+    document.getElementById('amz-price-modal-current').textContent = '$' + (parseFloat(currentPrice) || 0).toLocaleString('es-MX');
+    var input = document.getElementById('amz-price-modal-input');
+    input.value = currentPrice || '';
+    document.getElementById('amz-price-modal-preview').textContent = currentPrice ? '$' + parseFloat(currentPrice).toLocaleString('es-MX') : '—';
+    document.getElementById('amz-price-modal-status').classList.add('hidden');
+    document.getElementById('amz-price-modal').classList.remove('hidden');
+    setTimeout(function(){ input.focus(); input.select(); }, 50);
+};
+window._closeAmzPriceModal = function() {
+    document.getElementById('amz-price-modal').classList.add('hidden');
+    _amzPriceModalCtx = null;
+};
+window._confirmAmzPriceModal = function() {
+    if (!_amzPriceModalCtx) return;
+    var input = document.getElementById('amz-price-modal-input');
+    var newPrice = parseFloat(input.value);
+    var statusEl = document.getElementById('amz-price-modal-status');
+    if (!newPrice || isNaN(newPrice) || newPrice <= 0) {
+        statusEl.className = 'text-xs rounded-lg px-3 py-2 mb-3 bg-red-50 text-red-600';
+        statusEl.textContent = 'Ingresa un precio válido.';
+        statusEl.classList.remove('hidden');
+        return;
+    }
+    var ctx = _amzPriceModalCtx;
+    statusEl.className = 'text-xs rounded-lg px-3 py-2 mb-3 bg-gray-50 text-gray-500';
+    statusEl.textContent = 'Guardando…';
+    statusEl.classList.remove('hidden');
+    var body = { price: newPrice };
+    if (ctx.sellerId) body.seller_id = ctx.sellerId;
+    fetch('/api/amazon/products/' + encodeURIComponent(ctx.sku) + '/price', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (d.ok) {
+            statusEl.className = 'text-xs rounded-lg px-3 py-2 mb-3 bg-green-50 text-green-700';
+            statusEl.textContent = '✓ Precio actualizado a $' + newPrice.toLocaleString('es-MX');
+            if (ctx.onSaved) ctx.onSaved(newPrice);
+            setTimeout(window._closeAmzPriceModal, 900);
+        } else {
+            statusEl.className = 'text-xs rounded-lg px-3 py-2 mb-3 bg-red-50 text-red-600';
+            statusEl.textContent = '⚠ ' + (d.error || 'Error al guardar');
+        }
+    })
+    .catch(function(e) {
+        statusEl.className = 'text-xs rounded-lg px-3 py-2 mb-3 bg-red-50 text-red-600';
+        statusEl.textContent = 'Error: ' + e.message;
+    });
 };
 
 window._clearBmCache = function() {

@@ -70,7 +70,7 @@ async def _get_ml_token(request: Request) -> str:
     if not uid:
         return ""
     try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             cur = await db.execute("SELECT access_token FROM tokens WHERE user_id=?", (uid,))
             row = await cur.fetchone()
             return (row[0] or "").strip() if row else ""
@@ -270,7 +270,7 @@ async def _get_seller_nickname(request: Request) -> str:
     if not uid:
         return ""
     try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             cur = await db.execute("SELECT nickname FROM tokens WHERE user_id=?", (uid,))
             row = await cur.fetchone()
             return (row[0] or "").strip() if row else ""

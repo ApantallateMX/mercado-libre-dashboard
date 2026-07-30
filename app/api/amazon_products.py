@@ -4599,7 +4599,7 @@ async def amazon_products_repricing(
             })
 
         # Load rules from DB
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM amz_repricing_rules WHERE seller_id = ? ORDER BY sku",
@@ -4682,7 +4682,7 @@ async def amazon_save_repricing_rule(
         body = await request.json()
         rule_in = RepricingRuleIn(**body)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO amz_repricing_rules
                (seller_id, sku, rule_type, beat_pct, min_price, max_price, enabled, updated_at)

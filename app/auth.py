@@ -746,7 +746,7 @@ async def admin_mark_launched(request: Request):
     if not all([user_id, sku, item_id]):
         return JSONResponse({"error": "user_id, sku, item_id son requeridos"}, status_code=400)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """UPDATE bm_sku_gaps SET
                status='launched',

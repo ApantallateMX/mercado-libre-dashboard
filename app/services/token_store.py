@@ -55,7 +55,7 @@ async def init_db():
     db_path = Path(DATABASE_PATH)
     if db_path.parent != Path("."):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         # ─────────────────────────────────────────────────────────────────
         # TABLA: tokens (cuentas de Mercado Libre)
         # Almacena access_token + refresh_token por user_id de MeLi.
@@ -1466,7 +1466,7 @@ async def save_item_sync(item_id: str, user_id: str, synced_qty: int, synced_by:
     TTL de supresión: 60 min — tiempo suficiente para que ML confirme el qty nuevo.
     """
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR REPLACE INTO item_sync_log (item_id, user_id, synced_qty, synced_at, synced_by)
                VALUES (?, ?, ?, ?, ?)""",
@@ -1484,7 +1484,7 @@ async def get_recently_synced_ids(user_id: str, ttl_seconds: int = 3600) -> set[
     """
     import time as _t
     cutoff = _t.time() - ttl_seconds
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             "SELECT item_id FROM item_sync_log WHERE synced_at > ?",
             (cutoff,),
@@ -1503,7 +1503,7 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     if not rows:
         return 0
     now = __import__("time").time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         skus = [r["sku"] for r in rows]
         # Chunks de 500 — evita el límite de variables SQL de SQLite en catálogos grandes
@@ -1550,7 +1550,7 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
 async def get_bm_catalog_all() -> list[dict]:
     """Lee el maestro bm_sku_master (título/retail/costo). Usado al arrancar
     para popular cache en memoria."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT sku, retail_ph, cost_usd, brand, model, title, catalog_updated_at AS updated_at FROM bm_sku_master"
@@ -1561,7 +1561,7 @@ async def get_bm_catalog_all() -> list[dict]:
 
 async def get_bm_catalog_last_sync() -> float:
     """Retorna el timestamp de la última sincronización del catálogo, o 0 si nunca."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         async with db.execute(
             "SELECT MAX(catalog_updated_at) FROM bm_sku_master"
         ) as cur:
@@ -1581,7 +1581,7 @@ async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
     if not rows:
         return 0
     now = __import__("time").time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         skus = [r["sku"] for r in rows]
         # Chunks de 500 — evita el límite de variables SQL de SQLite en catálogos grandes
@@ -1627,7 +1627,7 @@ async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
 
 async def get_bm_stock_snapshot_last_update() -> float:
     """Timestamp de la foto de stock más reciente en disco, o 0 si nunca se ha tomado."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         async with db.execute("SELECT MAX(stock_updated_at) FROM bm_sku_master") as cur:
             row = await cur.fetchone()
     val = row[0] if row else None
@@ -1649,7 +1649,7 @@ async def get_bm_sku_changes(days: int = 7, field: str = "", sku: str = "", limi
         params.append(sku)
     query += " ORDER BY changed_at DESC LIMIT ?"
     params.append(limit)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(query, params)
         rows = [dict(r) for r in await cur.fetchall()]
@@ -1665,7 +1665,7 @@ async def get_orders_without_stock(days: int = 14) -> dict:
     """
     from datetime import datetime, timedelta as _td
     cutoff = (datetime.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT
@@ -1693,7 +1693,7 @@ async def get_bm_sku_available_qty(sku: str) -> int | None:
     """Lookup puntual de stock disponible para UN sku (usado por el webhook de
     órdenes en tiempo real — volumen bajo, no necesita chunking). None = SKU
     sin dato en el maestro (no confundir con 0 confirmado)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("SELECT available_qty FROM bm_sku_master WHERE sku = ?", (sku,))
         row = await cur.fetchone()
     return row[0] if row else None
@@ -1710,7 +1710,7 @@ async def record_realtime_stock_alert(
     guarda para que el loop de reconciliación pueda revisar el estado real
     del envío sin tener que re-resolver la orden completa."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT OR IGNORE INTO realtime_stock_alerts
                 (order_id, item_id, platform, account_id, sku, quantity,
@@ -1726,7 +1726,7 @@ async def delete_realtime_stock_alerts_for_order(order_id: str, platform: str = 
     entregó, se canceló, o resultó ser FULL) — se llama cuando el webhook
     recibe una actualización posterior de esa misma orden. Retorna filas
     borradas."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute(
             "DELETE FROM realtime_stock_alerts WHERE order_id = ? AND platform = ?",
             (order_id, platform),
@@ -1739,7 +1739,7 @@ async def get_all_realtime_alerts_for_reconcile() -> list[dict]:
     """Todas las alertas activas — para el loop periódico que revisa el
     estado REAL de cada envío (no depende de que llegue una notificación
     nueva; ML no siempre reavisa en cada cambio de sub-estado)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, order_id, platform, account_id, sku, shipping_id FROM realtime_stock_alerts"
@@ -1749,7 +1749,7 @@ async def get_all_realtime_alerts_for_reconcile() -> list[dict]:
 
 async def delete_realtime_stock_alert_by_id(alert_id: int) -> None:
     """Borra una alerta puntual por su id (usado por el loop de reconciliación)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM realtime_stock_alerts WHERE id = ?", (alert_id,))
         await db.commit()
 
@@ -1758,7 +1758,7 @@ async def update_realtime_stock_alert_shipping_id(alert_id: int, shipping_id: st
     """Backfill de shipping_id para alertas creadas antes de que existiera
     la columna — el loop de reconciliación lo completa la primera vez que
     revisa una fila vieja."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE realtime_stock_alerts SET shipping_id = ? WHERE id = ?",
             (shipping_id, alert_id),
@@ -1781,7 +1781,7 @@ async def get_replacement_sku_suggestions(
     """
     if not brand or not retail_ph:
         return []
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         size_clause = "AND size = ?" if size and size > 0 else ""
         params = [retail_ph, brand, sku] + ([size] if size and size > 0 else []) + [limit]
@@ -1802,7 +1802,7 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
     detectadas sin stock al momento — reemplaza la vista agregada por SKU.
     Cada fila incluye sugerencias de reemplazo (misma marca, precio parecido,
     con stock)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT
@@ -1841,7 +1841,7 @@ async def record_stock_alert_resolution(
     producto o stock puesto en 0. resolution_type: 'substitution' |
     'zeroed_stock'."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("""
             INSERT INTO stock_alert_resolutions
                 (order_id, platform, account_id, original_sku, resolution_type,
@@ -1856,7 +1856,7 @@ async def record_stock_alert_resolution(
 async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
     """Historial de resoluciones, más reciente primero — para la pestaña
     'Historial' dentro de Alertas de Stock."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT id, order_id, platform, account_id, original_sku,
@@ -1875,7 +1875,7 @@ async def get_pending_restock_watches() -> list[dict]:
     — no es llamada en vivo a BM) — para el aviso 'Ya hay stock, reactivar'.
     Solo el evento de zeroed_stock más reciente por SKU que no se haya
     marcado como reactivado."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT sar.id, sar.original_sku, sar.order_id, sar.username, sar.ts,
@@ -1900,7 +1900,7 @@ async def mark_resolution_reactivated(resolution_id: int, username: str) -> None
     """Marca un aviso de reactivación como atendido — deja de aparecer en
     get_pending_restock_watches aunque BM siga con stock > 0."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE stock_alert_resolutions SET reactivated_at = ?, reactivated_by = ? WHERE id = ?",
             (_t.time(), username, resolution_id),
@@ -1914,7 +1914,7 @@ async def insert_buyer_message(msg: dict) -> int | None:
     """Inserta un mensaje (inbound u outbound) parseado del buzón dedicado.
     INSERT OR IGNORE por message_id — el poller puede volver a ver el mismo
     correo en cada pasada sin duplicar filas. Retorna None si ya existía."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("""
             INSERT OR IGNORE INTO amazon_buyer_messages
                 (seller_id, direction, order_id, asin, product_title, buyer_name,
@@ -1939,7 +1939,7 @@ async def get_buyer_messages(seller_id: str, days: int = 30, limit: int = 50) ->
     feature), no tiene caso cargar todo eso de una vez."""
     import time as _t
     cutoff = _t.time() - days * 86400
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT id, seller_id, direction, order_id, asin, product_title, buyer_name,
@@ -1962,7 +1962,7 @@ async def mark_buyer_messages_read(message_ids: list[int]) -> None:
     import time as _t
     now = _t.time()
     placeholders = ",".join("?" * len(message_ids))
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             f"UPDATE amazon_buyer_messages SET read_at = ? WHERE id IN ({placeholders}) AND read_at IS NULL",
             (now, *message_ids),
@@ -1971,7 +1971,7 @@ async def mark_buyer_messages_read(message_ids: list[int]) -> None:
 
 
 async def get_buyer_message(message_id: int) -> dict | None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM amazon_buyer_messages WHERE id = ?", (message_id,))
         row = await cur.fetchone()
@@ -1983,7 +1983,7 @@ async def get_buyer_message(message_id: int) -> dict | None:
 async def register_message_view(pack_id: str, account_id: str, viewed_by: str) -> None:
     """Registra quién abrió primero un mensaje (INSERT OR IGNORE — no sobreescribe)."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR IGNORE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
                VALUES (?, ?, ?, ?, 'pending')""",
@@ -1995,7 +1995,7 @@ async def register_message_view(pack_id: str, account_id: str, viewed_by: str) -
 async def take_message(pack_id: str, account_id: str, taken_by: str) -> None:
     """Asigna explícitamente un mensaje a un usuario (sobreescribe cualquier vista previa)."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR REPLACE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
                VALUES (?, ?, ?, ?, 'in_progress')""",
@@ -2009,7 +2009,7 @@ async def update_message_view_status(pack_id: str, account_id: str, status: str)
     Refresca viewed_at para que refleje el último toque (usado por KPIs de
     'resuelto en las últimas 24h'), no solo la primera vez que se tomó."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE ml_message_views SET status = ?, viewed_at = ? WHERE pack_id = ? AND account_id = ?",
             (status, _t.time(), pack_id, account_id),
@@ -2022,7 +2022,7 @@ async def get_message_views(pack_ids: list, account_id: str) -> dict:
     if not pack_ids:
         return {}
     placeholders = ",".join("?" * len(pack_ids))
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             f"SELECT pack_id, viewed_by, viewed_at, status FROM ml_message_views "
@@ -2042,7 +2042,7 @@ async def bulk_mark_resolved(pack_ids: list, account_id: str, marked_by: str) ->
         return 0
     import time as _t
     now = _t.time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
                VALUES (?, ?, ?, ?, 'resolved')""",
@@ -2058,7 +2058,7 @@ async def take_claim(claim_id: str, account_id: str, taken_by: str) -> None:
     """Asigna explícitamente un reclamo a un usuario (sobreescribe)."""
     import time as _t
     _key = f"claim:{claim_id}"
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR REPLACE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
                VALUES (?, ?, ?, ?, 'in_progress')""",
@@ -2070,7 +2070,7 @@ async def take_claim(claim_id: str, account_id: str, taken_by: str) -> None:
 async def update_claim_view_status(claim_id: str, account_id: str, status: str) -> None:
     """Actualiza el estado interno de un reclamo: pending / in_progress / resolved."""
     _key = f"claim:{claim_id}"
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE ml_message_views SET status = ? WHERE pack_id = ? AND account_id = ?",
             (status, _key, account_id),
@@ -2084,7 +2084,7 @@ async def get_claim_views(claim_ids: list, account_id: str) -> dict:
         return {}
     _keys = [f"claim:{cid}" for cid in claim_ids]
     placeholders = ",".join("?" * len(_keys))
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             f"SELECT pack_id, viewed_by, viewed_at, status FROM ml_message_views "
@@ -2096,7 +2096,7 @@ async def get_claim_views(claim_ids: list, account_id: str) -> dict:
 
 async def save_oauth_state(state: str, code_verifier: str):
     """Guarda el state OAuth en DB para sobrevivir reinicios del servidor."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "INSERT OR REPLACE INTO oauth_states (state, code_verifier) VALUES (?, ?)",
             (state, code_verifier)
@@ -2110,7 +2110,7 @@ async def save_oauth_state(state: str, code_verifier: str):
 
 async def pop_oauth_state(state: str) -> Optional[str]:
     """Obtiene y elimina el code_verifier para un state dado. Retorna None si no existe."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT code_verifier FROM oauth_states WHERE state = ?", (state,)
@@ -2127,7 +2127,7 @@ async def save_tokens(user_id: str, access_token: str, refresh_token: str, expir
     """Guarda o actualiza los tokens de un usuario."""
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO tokens (user_id, access_token, refresh_token, expires_at, nickname)
             VALUES (?, ?, ?, ?, ?)
@@ -2142,7 +2142,7 @@ async def save_tokens(user_id: str, access_token: str, refresh_token: str, expir
 
 async def get_tokens(user_id: str) -> Optional[dict]:
     """Obtiene los tokens de un usuario."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM tokens WHERE user_id = ?", (user_id,)
@@ -2155,7 +2155,7 @@ async def get_tokens(user_id: str) -> Optional[dict]:
 
 async def get_any_tokens() -> Optional[dict]:
     """Obtiene cualquier token almacenado (para app single-user)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM tokens LIMIT 1")
         row = await cursor.fetchone()
@@ -2166,7 +2166,7 @@ async def get_any_tokens() -> Optional[dict]:
 
 async def get_all_tokens() -> list:
     """Devuelve todas las cuentas almacenadas (user_id + nickname)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT user_id, nickname FROM tokens ORDER BY created_at")
         rows = await cursor.fetchall()
@@ -2175,7 +2175,7 @@ async def get_all_tokens() -> list:
 
 async def get_daily_goal(user_id: str) -> float:
     """Obtiene la meta diaria de una cuenta. Default: 500,000."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT daily_goal FROM account_settings WHERE user_id = ?", (user_id,)
@@ -2186,7 +2186,7 @@ async def get_daily_goal(user_id: str) -> float:
 
 async def set_daily_goal(user_id: str, goal: float):
     """Guarda la meta diaria de una cuenta."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO account_settings (user_id, daily_goal, updated_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -2197,7 +2197,7 @@ async def set_daily_goal(user_id: str, goal: float):
 
 async def update_nickname(user_id: str, nickname: str):
     """Actualiza el nickname de una cuenta existente."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE tokens SET nickname = ? WHERE user_id = ?",
             (nickname, user_id)
@@ -2207,7 +2207,7 @@ async def update_nickname(user_id: str, nickname: str):
 
 async def delete_tokens(user_id: str):
     """Elimina los tokens de un usuario."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
         await db.commit()
 
@@ -2219,7 +2219,7 @@ async def log_concentration(
 ):
     """Registra una concentración de stock (real o simulada)."""
     import json as _json
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO stock_concentration_log
             (base_sku, trigger, winner_user_id, winner_nickname, winner_item_id,
@@ -2237,7 +2237,7 @@ async def log_concentration(
 async def get_concentration_log(limit: int = 50) -> list:
     """Obtiene el historial de concentraciones."""
     import json as _json
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM stock_concentration_log ORDER BY executed_at DESC LIMIT ?", (limit,)
@@ -2256,7 +2256,7 @@ async def get_concentration_log(limit: int = 50) -> list:
 
 async def last_concentration_for_sku(base_sku: str, hours: int = 24) -> Optional[dict]:
     """Verifica si ya se concentró este SKU en las últimas N horas (para evitar duplicados)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
             SELECT * FROM stock_concentration_log
@@ -2270,7 +2270,7 @@ async def last_concentration_for_sku(base_sku: str, hours: int = 24) -> Optional
 
 async def get_concentrated_skus(days: int = 30) -> list:
     """Retorna lista de SKUs concentrados exitosamente en los últimos N días."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cursor = await db.execute("""
             SELECT DISTINCT base_sku
             FROM stock_concentration_log
@@ -2318,7 +2318,7 @@ async def save_amazon_account(
 
     El access_token NO se guarda aquí — se renueva en memoria por AmazonClient.
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO amazon_accounts
                 (seller_id, nickname, client_id, client_secret, refresh_token,
@@ -2342,7 +2342,7 @@ async def get_amazon_account(seller_id: str) -> Optional[dict]:
     Obtiene los datos de una cuenta Amazon por su seller_id.
     Retorna None si no existe.
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM amazon_accounts WHERE seller_id = ?", (seller_id,)
@@ -2357,7 +2357,7 @@ async def get_all_amazon_accounts() -> list:
     Cada elemento incluye: seller_id, nickname, marketplace_id, marketplace_name.
     Usado por el selector de cuentas en el header del dashboard.
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT seller_id, nickname, marketplace_id, marketplace_name FROM amazon_accounts ORDER BY created_at"
@@ -2368,7 +2368,7 @@ async def get_all_amazon_accounts() -> list:
 
 async def delete_amazon_account(seller_id: str):
     """Elimina una cuenta Amazon de la base de datos."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM amazon_accounts WHERE seller_id = ?", (seller_id,))
         await db.commit()
 
@@ -2409,7 +2409,7 @@ async def save_sync_alerts(user_id: str, alerts: list):
     """Reemplaza las alertas actuales del user_id con la nueva lista.
     alerts: lista de dicts con keys: item_id, title, sku, meli_stock, bm_avail, alert_type
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM sync_alerts WHERE user_id = ?", (user_id,))
         for a in alerts:
             await db.execute("""
@@ -2430,7 +2430,7 @@ async def save_sync_alerts(user_id: str, alerts: list):
 
 async def get_sync_alerts(user_id: str) -> list:
     """Retorna las alertas actuales para user_id."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM sync_alerts WHERE user_id = ? ORDER BY meli_stock DESC",
@@ -2442,7 +2442,7 @@ async def get_sync_alerts(user_id: str) -> list:
 
 async def get_all_sync_alerts() -> list:
     """Retorna todas las alertas de todos los usuarios."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM sync_alerts ORDER BY user_id, meli_stock DESC"
@@ -2453,7 +2453,7 @@ async def get_all_sync_alerts() -> list:
 
 async def delete_sync_alert(user_id: str, item_id: str):
     """Elimina un item específico de sync_alerts para user_id."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "DELETE FROM sync_alerts WHERE user_id = ? AND item_id = ?",
             (str(user_id), str(item_id))
@@ -2463,7 +2463,7 @@ async def delete_sync_alert(user_id: str, item_id: str):
 
 async def get_activate_suppressed(user_id: str) -> set:
     """Retorna set de item_ids suprimidos de Activar para este usuario."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS activate_suppressed
             (user_id TEXT, item_id TEXT, PRIMARY KEY (user_id, item_id))
@@ -2477,7 +2477,7 @@ async def get_activate_suppressed(user_id: str) -> set:
 
 async def add_activate_suppressed(user_id: str, item_id: str):
     """Suprime permanentemente un item de la sección Activar para este usuario."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS activate_suppressed
             (user_id TEXT, item_id TEXT, PRIMARY KEY (user_id, item_id))
@@ -2491,7 +2491,7 @@ async def add_activate_suppressed(user_id: str, item_id: str):
 
 async def remove_activate_suppressed(user_id: str, item_id: str):
     """Restaura un item suprimido para que vuelva a aparecer en Activar."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "DELETE FROM activate_suppressed WHERE user_id = ? AND item_id = ?",
             (str(user_id), str(item_id))
@@ -2501,7 +2501,7 @@ async def remove_activate_suppressed(user_id: str, item_id: str):
 
 async def save_sync_status(user_id: str, alerts_count: int, result: str = "ok"):
     """Actualiza el estado del último sync para user_id."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO sync_status (user_id, last_run, last_result, alerts_count, updated_at)
             VALUES (?, datetime('now'), ?, ?, datetime('now'))
@@ -2516,7 +2516,7 @@ async def save_sync_status(user_id: str, alerts_count: int, result: str = "ok"):
 
 async def get_sync_status(user_id: str) -> Optional[dict]:
     """Retorna el estado del último sync para user_id."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM sync_status WHERE user_id = ?", (user_id,)
@@ -2527,7 +2527,7 @@ async def get_sync_status(user_id: str) -> Optional[dict]:
 
 async def get_amazon_stock_threshold(seller_id: str) -> int:
     """Retorna el umbral de stock bajo configurado para la cuenta."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cursor = await db.execute(
             "SELECT stock_threshold FROM amazon_settings WHERE seller_id = ?",
             (seller_id,)
@@ -2544,7 +2544,7 @@ async def get_cached_skus(item_ids: list) -> dict:
     if not item_ids:
         return {}
     result: dict[str, str] = {}
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         # SQLite limit: 999 variables per query — chunk to be safe
         for i in range(0, len(item_ids), 500):
@@ -2567,7 +2567,7 @@ async def get_skus_from_listings(item_ids: list) -> dict:
     if not item_ids:
         return {}
     result: dict[str, str] = {}
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         for i in range(0, len(item_ids), 500):
             chunk = item_ids[i:i+500]
@@ -2588,7 +2588,7 @@ async def save_skus_cache(entries: list) -> None:
     valid = [e for e in entries if e.get("sku") and e.get("item_id")]
     if not valid:
         return
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for e in valid:
             await db.execute(
                 """INSERT INTO item_sku_cache (item_id, user_id, sku, synced_at)
@@ -2603,7 +2603,7 @@ async def save_skus_cache(entries: list) -> None:
 
 async def get_amazon_vel_cache(days: int, max_age_hours: int = 2) -> Optional[dict]:
     """Retorna caché de velocidad Amazon si existe y no expiró. None si no hay."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cursor = await db.execute(
             "SELECT data_json FROM amazon_vel_cache "
             "WHERE days = ? AND computed_at > datetime('now', ? || ' hours')",
@@ -2615,7 +2615,7 @@ async def get_amazon_vel_cache(days: int, max_age_hours: int = 2) -> Optional[di
 
 async def save_amazon_vel_cache(days: int, data: dict) -> None:
     """Guarda/actualiza caché de velocidad Amazon para N días."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "INSERT INTO amazon_vel_cache (days, data_json) VALUES (?, ?) "
             "ON CONFLICT(days) DO UPDATE SET "
@@ -2632,7 +2632,7 @@ async def get_amazon_velocity_from_db(days: int) -> dict:
     from datetime import datetime, timedelta
     date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     date_7d   = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
             SELECT
@@ -2666,7 +2666,7 @@ async def get_amazon_velocity_from_db(days: int) -> dict:
 
 async def set_amazon_stock_threshold(seller_id: str, threshold: int) -> None:
     """Guarda el umbral de stock bajo para la cuenta."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO amazon_settings (seller_id, stock_threshold, updated_at)
             VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -2681,7 +2681,7 @@ async def set_amazon_stock_threshold(seller_id: str, threshold: int) -> None:
 
 async def save_product_video(item_id: str, user_id: str, sku: str, video_id: str) -> None:
     """Guarda o actualiza la asociación video_id ↔ item_id para un usuario."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO product_videos (item_id, user_id, sku, video_id, clip_status)
             VALUES (?, ?, ?, ?, 'pending')
@@ -2698,7 +2698,7 @@ async def save_product_video(item_id: str, user_id: str, sku: str, video_id: str
 
 async def get_product_video(item_id: str, user_id: str) -> Optional[dict]:
     """Retorna el registro de video para un item, o None si no existe."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM product_videos WHERE item_id=? AND user_id=?",
@@ -2713,7 +2713,7 @@ async def update_clip_status(
     clip_uuid: str = None, error: str = None
 ) -> None:
     """Actualiza el estado del clip tras upload a ML."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             UPDATE product_videos
             SET clip_status=?, clip_uuid=?, clip_error=?, updated_at=CURRENT_TIMESTAMP
@@ -2726,7 +2726,7 @@ async def get_videos_for_items(item_ids: list, user_id: str) -> dict:
     """Retorna {item_id: record} para una lista de item_ids."""
     if not item_ids:
         return {}
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         placeholders = ",".join("?" * len(item_ids))
         rows = await (await db.execute(
@@ -2747,7 +2747,7 @@ async def get_all_sku_platform_rules(user_id: str = "") -> dict:
     platform_id: "ml_{user_id}" o "amz_{seller_id}"
     Para stock sync global (user_id="") retorna reglas de todos los usuarios.
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         if user_id:
             rows = await (await db.execute(
@@ -2766,7 +2766,7 @@ async def get_all_sku_platform_rules(user_id: str = "") -> dict:
 
 async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enabled: bool) -> None:
     """Habilita o deshabilita una plataforma para un SKU específico, por cuenta."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO sku_platform_rules (user_id, sku, platform_id, enabled)
                VALUES (?, ?, ?, ?)
@@ -2784,7 +2784,7 @@ async def save_multi_sync_log(
     results: list,
 ) -> None:
     """Guarda el resultado de un ciclo de sync en multi_stock_sync_log."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO multi_stock_sync_log
                (ts, skus_processed, updates, errors, results_json)
@@ -2801,7 +2801,7 @@ async def save_multi_sync_log(
 
 async def get_multi_sync_last_runs(limit: int = 10) -> list:
     """Retorna los últimos N ciclos de sync con resumen (sin results_json completo)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT id, ts, skus_processed, updates, errors, created_at
@@ -2823,7 +2823,7 @@ async def upsert_ml_listings(rows: list[dict]) -> None:
     for row in rows:
         if not row.get("base_sku"):
             row["base_sku"] = normalize_to_bm_sku(row.get("sku", "")) or ""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO ml_listings
                (item_id, account_id, title, status, price, available_qty, sold_qty,
@@ -2838,7 +2838,7 @@ async def upsert_ml_listings(rows: list[dict]) -> None:
 
 async def get_ml_listings(account_id: str, statuses: list[str] | None = None) -> list[dict]:
     """Retorna listings de una cuenta desde la DB local. statuses=None → todos."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         if statuses:
             placeholders = ",".join("?" * len(statuses))
@@ -2856,7 +2856,7 @@ async def get_ml_listings(account_id: str, statuses: list[str] | None = None) ->
 
 async def get_ml_listings_all_accounts(statuses: list[str] | None = None) -> list[dict]:
     """Retorna todos los listings de todas las cuentas."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         if statuses:
             placeholders = ",".join("?" * len(statuses))
@@ -2871,7 +2871,7 @@ async def get_ml_listings_all_accounts(statuses: list[str] | None = None) -> lis
 
 async def count_ml_listings_synced(account_id: str) -> int:
     """Retorna cuántos listings tiene la cuenta en DB (0 si nunca se ha sincronizado)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         row = await (await db.execute(
             "SELECT COUNT(*) FROM ml_listings WHERE account_id=? AND synced_at > 0",
             [account_id],
@@ -2899,7 +2899,7 @@ async def get_ml_listings_for_gap_scan(account_id: str) -> tuple[set, dict, dict
 
     _REACTIVATABLE = {"inactive", "paused", "closed"}
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT item_id, status, price, title, base_sku, data_json "
@@ -2950,7 +2950,7 @@ async def get_ml_listings_for_gap_scan(account_id: str) -> tuple[set, dict, dict
 
 async def get_ml_listings_max_synced_at(account_id: str) -> float:
     """Retorna el timestamp del item más recientemente sincronizado para la cuenta."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         row = await (await db.execute(
             "SELECT MAX(synced_at) FROM ml_listings WHERE account_id=? AND data_json != ''",
             [account_id],
@@ -2966,7 +2966,7 @@ async def bulk_update_ml_listing_qtys(updates: list[tuple[str, int]]) -> None:
     import json as _json, time as _t
     ts = _t.time()
     qty_map = {item_id: new_qty for item_id, new_qty in updates}
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         placeholders = ",".join("?" * len(qty_map))
         rows = await (await db.execute(
             f"SELECT item_id, data_json FROM ml_listings WHERE item_id IN ({placeholders})",
@@ -3002,7 +3002,7 @@ async def update_ml_listing_qty(item_id: str, new_qty: int) -> None:
     """Actualiza available_qty y data_json tras sincronizar stock a ML.
     Evita que la DB sirva datos stale (0) cuando ML ya tiene el stock nuevo."""
     import json as _json, time as _time2
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         row = await (await db.execute(
             "SELECT data_json FROM ml_listings WHERE item_id=?", [item_id]
         )).fetchone()
@@ -3031,7 +3031,7 @@ async def upsert_amazon_listings(rows: list[dict]) -> None:
     """Inserta o actualiza listings Amazon en la tabla local."""
     if not rows:
         return
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO amazon_listings
                (seller_id, sku, base_sku, asin, title, status, price,
@@ -3050,7 +3050,7 @@ async def upsert_amazon_listings_report(rows: list[dict]) -> None:
     """
     if not rows:
         return
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             """INSERT INTO amazon_listings
                (seller_id, sku, base_sku, asin, title, status, price,
@@ -3074,7 +3074,7 @@ async def upsert_amazon_listings_report(rows: list[dict]) -> None:
 
 async def count_amazon_listings(seller_id: str) -> int:
     """Retorna cuántos listings tiene la cuenta Amazon en DB."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         row = await (await db.execute(
             "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=? AND synced_at > 0",
             [seller_id],
@@ -3092,7 +3092,7 @@ async def update_ml_qty_batch(updates: list[tuple[str, int]]) -> int:
     import time as _t
     ts = _t.time()
     changed = 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for item_id, new_qty in updates:
             cur = await db.execute(
                 "UPDATE ml_listings SET available_qty=?, synced_at=? "
@@ -3106,7 +3106,7 @@ async def update_ml_qty_batch(updates: list[tuple[str, int]]) -> int:
 
 async def get_amazon_listings_for_account(seller_id: str) -> list[dict]:
     """Retorna [{sku, title, asin, available_qty}] para una cuenta Amazon."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT sku, title, asin, available_qty FROM amazon_listings WHERE seller_id=?",
@@ -3117,7 +3117,7 @@ async def get_amazon_listings_for_account(seller_id: str) -> list[dict]:
 
 async def get_amazon_skus_and_qtys(seller_id: str) -> list[tuple[str, int]]:
     """Retorna [(sku, available_qty), ...] para el qty-only sync de Amazon."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             "SELECT sku, available_qty FROM amazon_listings WHERE seller_id=?",
             [seller_id],
@@ -3135,7 +3135,7 @@ async def update_amazon_qty_batch(updates: list[tuple[str, str, int]]) -> int:
     import time as _t
     ts = _t.time()
     changed = 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for seller_id, sku, new_qty in updates:
             cur = await db.execute(
                 "UPDATE amazon_listings SET available_qty=?, synced_at=? "
@@ -3150,7 +3150,7 @@ async def update_amazon_qty_batch(updates: list[tuple[str, str, int]]) -> int:
 async def get_listings_summary() -> dict:
     """Retorna conteo de listings por cuenta — ML + Amazon — para el card de Sync Stock."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
 
         # ML: conteo + último sync por cuenta
@@ -3231,7 +3231,7 @@ async def upsert_bm_stock_batch(entries: list[tuple]) -> None:
         return
     rows = [{"sku": s.upper(), "data_json": json.dumps(d), "synced_at": t}
             for s, d, t in entries]
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             "INSERT OR REPLACE INTO bm_stock_cache (sku, data_json, synced_at) "
             "VALUES (:sku, :data_json, :synced_at)",
@@ -3244,7 +3244,7 @@ async def delete_bm_stock_skus(skus: list[str]) -> int:
     """Elimina SKUs de bm_stock_cache en DB. Retorna cuántos se borraron."""
     if not skus:
         return 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         deleted = 0
         for s in skus:
             cur = await db.execute("DELETE FROM bm_stock_cache WHERE sku = ?", [s.upper()])
@@ -3257,7 +3257,7 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
     """Carga entradas de BM stock desde DB. Solo las que tienen menos de max_age_s segundos."""
     import time as _t
     min_ts = _t.time() - max_age_s
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT sku, data_json, synced_at FROM bm_stock_cache WHERE synced_at >= ?",
@@ -3272,7 +3272,7 @@ async def snapshot_listings_count(platform: str, account_id: str, count: int) ->
     """Guarda el count actual como 'prev' ANTES de que corra el sync.
     Llamar desde run_ml_listing_sync / run_amazon_listing_sync antes del upsert."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "INSERT INTO listings_count_prev (platform, account_id, count, recorded_at) "
             "VALUES (?, ?, ?, ?) ON CONFLICT(platform, account_id) DO UPDATE SET "
@@ -3284,7 +3284,7 @@ async def snapshot_listings_count(platform: str, account_id: str, count: int) ->
 
 async def get_listings_count_prevs() -> dict:
     """Retorna {(platform, account_id): prev_count} para todos los registros."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             "SELECT platform, account_id, count FROM listings_count_prev"
         )).fetchall()
@@ -3300,7 +3300,7 @@ async def save_orphan_listings(entries: list[dict]) -> int:
         return 0
     import time as _t
     now = _t.time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             "INSERT INTO orphan_listings (platform, account_id, item_id, title, sku, detected_at) "
             "VALUES (:platform, :account_id, :item_id, :title, :sku, :detected_at) "
@@ -3316,7 +3316,7 @@ async def save_orphan_listings(entries: list[dict]) -> int:
 
 async def clear_orphans_for_account(platform: str, account_id: str) -> None:
     """Limpia los huérfanos detectados previamente para una cuenta (antes de re-detectar)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "DELETE FROM orphan_listings WHERE platform=? AND account_id=?",
             (platform, account_id),
@@ -3326,7 +3326,7 @@ async def clear_orphans_for_account(platform: str, account_id: str) -> None:
 
 async def get_orphan_listings(platform: str = None, account_id: str = None) -> list[dict]:
     """Retorna listings huérfanos. Filtra por platform y/o account_id si se especifican."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         where, params = [], []
         if platform:
@@ -3345,7 +3345,7 @@ async def delete_orphan_listings(ids: list[int]) -> int:
     """Elimina de DB local los listings huérfanos Y los registros en ml_listings/amazon_listings."""
     if not ids:
         return 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         # Leer las filas antes de borrar para saber qué limpiar en ml_listings/amazon_listings
         placeholders = ",".join("?" for _ in ids)
@@ -3380,7 +3380,7 @@ async def log_bm_sync_event(sku_count: int, elapsed_s: float, source: str = "aut
     Mantiene solo los últimos 50 registros para no crecer indefinidamente.
     """
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "INSERT INTO bm_sync_log (synced_at, sku_count, elapsed_s, source) VALUES (?, ?, ?, ?)",
             (_t.time(), sku_count, round(elapsed_s, 1), source),
@@ -3395,7 +3395,7 @@ async def log_bm_sync_event(sku_count: int, elapsed_s: float, source: str = "aut
 
 async def get_bm_sync_log(limit: int = 10) -> list[dict]:
     """Retorna los últimos `limit` eventos del historial BM, del más reciente al más antiguo."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT id, synced_at, sku_count, elapsed_s, source "
@@ -3416,7 +3416,7 @@ async def save_stock_issues_snapshot(key: str, ts: float, data: dict) -> None:
         data_str = _json.dumps(data, default=str, ensure_ascii=False)
     except Exception:
         return  # no persistir si no es serializable
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR REPLACE INTO stock_issues_cache (cache_key, ts, data_json, saved_at)
                VALUES (?, ?, ?, ?)""",
@@ -3431,7 +3431,7 @@ async def load_all_stock_issues_snapshots() -> dict:
     """
     import json as _json
     result: dict = {}
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT cache_key, ts, data_json FROM stock_issues_cache"
@@ -3449,7 +3449,7 @@ async def load_all_stock_issues_snapshots() -> dict:
 
 async def save_return_flag(user_id: str, item_id: str, flag_type: str, note: str = "") -> None:
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO return_flags (user_id, item_id, flag_type, note, created_at)
                VALUES (?, ?, ?, ?, ?)
@@ -3465,7 +3465,7 @@ async def save_return_flag(user_id: str, item_id: str, flag_type: str, note: str
 
 
 async def get_return_flags(user_id: str) -> list[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM return_flags WHERE user_id=? AND resolved=0 ORDER BY created_at DESC",
@@ -3476,7 +3476,7 @@ async def get_return_flags(user_id: str) -> list[dict]:
 
 
 async def get_flagged_item_ids(user_id: str) -> set:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         async with db.execute(
             "SELECT DISTINCT item_id FROM return_flags WHERE user_id=? AND resolved=0",
             (user_id,)
@@ -3486,7 +3486,7 @@ async def get_flagged_item_ids(user_id: str) -> set:
 
 
 async def resolve_return_flag(user_id: str, item_id: str) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE return_flags SET resolved=1 WHERE user_id=? AND item_id=?",
             (user_id, item_id)
@@ -3510,7 +3510,7 @@ async def create_billing_request(
 ) -> int:
     """Crea una nueva solicitud de facturación. Retorna el id."""
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cursor = await db.execute(
             """INSERT INTO billing_requests
                (token, ml_user_id, platform, order_number, client_ref, created_by, created_at, notes, order_data)
@@ -3522,7 +3522,7 @@ async def create_billing_request(
 
 
 async def get_billing_request_by_token(token: str) -> Optional[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM billing_requests WHERE token=?", (token,)
@@ -3532,7 +3532,7 @@ async def get_billing_request_by_token(token: str) -> Optional[dict]:
 
 
 async def get_billing_request_by_id(request_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM billing_requests WHERE id=?", (request_id,)
@@ -3559,7 +3559,7 @@ async def list_billing_requests(
         conditions.append("created_by=?"); params.append(created_by)
     where     = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     order_dir = "ASC" if sort == "date_asc" else "DESC"
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             f"SELECT * FROM billing_requests {where} ORDER BY created_at {order_dir}",
@@ -3574,7 +3574,7 @@ async def get_billing_request_by_order(platform: str, order_number: str) -> Opti
     Usado para detectar duplicados antes de crear una nueva solicitud."""
     if not order_number or not order_number.strip():
         return None
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM billing_requests WHERE platform=? AND order_number=? ORDER BY id DESC LIMIT 1",
@@ -3585,7 +3585,7 @@ async def get_billing_request_by_order(platform: str, order_number: str) -> Opti
 
 
 async def update_billing_status(request_id: int, status: str) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE billing_requests SET status=? WHERE id=?", (status, request_id)
         )
@@ -3593,7 +3593,7 @@ async def update_billing_status(request_id: int, status: str) -> None:
 
 
 async def update_billing_order_data(request_id: int, order_data_json: str) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE billing_requests SET order_data=? WHERE id=?",
             (order_data_json, request_id),
@@ -3617,7 +3617,7 @@ async def save_billing_fiscal_data(
     metodo_pago: str = "",
 ) -> None:
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO billing_fiscal_data
                (request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
@@ -3641,7 +3641,7 @@ async def save_billing_fiscal_data(
 
 
 async def get_billing_fiscal_data(request_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM billing_fiscal_data WHERE request_id=?", (request_id,)
@@ -3656,7 +3656,7 @@ async def get_billing_fiscal_data(request_id: int) -> Optional[dict]:
 
 async def get_billing_constancia(request_id: int) -> Optional[tuple]:
     """Retorna (filename, bytes) o None."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT constancia_name, constancia_data FROM billing_fiscal_data WHERE request_id=?",
@@ -3697,7 +3697,7 @@ async def save_billing_invoice(
         xml_path_rel = f"uploads/invoices/{request_id}.xml"
         (inv_dir / f"{request_id}.xml").write_bytes(xml_data)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             # file_data es NOT NULL en el schema legacy — se guarda b"" (no NULL)
             # para no violar la constraint; el lado de lectura ya trata bytes
@@ -3720,7 +3720,7 @@ async def get_billing_invoice(request_id: int) -> Optional[dict]:
     """Retorna dict con pdf y xml, o None si no existe ninguno. Lee de
     uploads/invoices/ si la fila ya está migrada (pdf_path); si no, cae al
     BLOB legacy (file_data) para filas viejas aún no migradas."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT filename, file_data, xml_filename, xml_data, pdf_path, xml_path "
@@ -3767,7 +3767,7 @@ async def delete_billing_request(request_id: int) -> None:
             fp.unlink(missing_ok=True)
         except Exception:
             pass
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM billing_fiscal_data WHERE request_id=?", (request_id,))
         await db.execute("DELETE FROM billing_invoices WHERE request_id=?", (request_id,))
         await db.execute("DELETE FROM billing_requests WHERE id=?", (request_id,))
@@ -3780,7 +3780,7 @@ async def delete_billing_request(request_id: int) -> None:
 
 async def get_distribution_rule(user_id: str) -> dict | None:
     """Retorna la regla de distribución para una cuenta, o None si no tiene."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(
             "SELECT * FROM account_stock_rules WHERE user_id = ?", (user_id,)
@@ -3790,7 +3790,7 @@ async def get_distribution_rule(user_id: str) -> dict | None:
 
 async def get_all_distribution_rules() -> list[dict]:
     """Retorna todas las reglas de distribución, ordenadas por prioridad."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT * FROM account_stock_rules ORDER BY priority ASC, nickname ASC"
@@ -3804,7 +3804,7 @@ async def upsert_distribution_rule(
 ) -> None:
     """Crea o actualiza la regla de distribución de una cuenta."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR REPLACE INTO account_stock_rules
                (user_id, nickname, priority, pct_full, pct_scarce, scarce_enabled, updated_at)
@@ -3816,7 +3816,7 @@ async def upsert_distribution_rule(
 
 async def get_distribution_settings() -> dict:
     """Retorna los umbrales globales de distribución."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(
             "SELECT * FROM stock_distribution_settings WHERE id = 1"
@@ -3831,7 +3831,7 @@ async def upsert_distribution_settings(
 ) -> None:
     """Actualiza los umbrales globales de distribución."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT OR REPLACE INTO stock_distribution_settings
                (id, scarce_threshold_units, scarce_threshold_days, safety_buffer_units, updated_at)
@@ -3843,7 +3843,7 @@ async def upsert_distribution_settings(
 
 async def get_seasonal_events() -> list:
     """Retorna todos los eventos estacionales, más recientes primero."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT * FROM seasonal_events ORDER BY start_date DESC"
@@ -3858,7 +3858,7 @@ async def upsert_seasonal_event(
 ) -> int:
     """Crea o actualiza un evento estacional. Retorna el id."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         if event_id:
             await db.execute(
                 """UPDATE seasonal_events SET name=?, start_date=?, end_date=?,
@@ -3881,7 +3881,7 @@ async def upsert_seasonal_event(
 
 
 async def delete_seasonal_event(event_id: int) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM seasonal_events WHERE id = ?", (event_id,))
         await db.commit()
 
@@ -3895,7 +3895,7 @@ async def get_reply_templates(platform: str = "", account_id: str = "") -> list:
     (account_id='') y las de esta cuenta exacta. Sin account_id (modo gestión,
     sin hilo activo) se listan TODAS las de esa plataforma sin importar a qué
     cuenta estén atadas, para no esconder nada del CRUD."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         if platform and account_id:
             rows = await (await db.execute(
@@ -3922,7 +3922,7 @@ async def upsert_reply_template(
 ) -> int:
     """Crea o actualiza una plantilla de respuesta. Retorna el id."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         if template_id:
             await db.execute(
                 "UPDATE reply_templates SET label=?, body_text=?, platform=?, account_id=? WHERE id=?",
@@ -3940,7 +3940,7 @@ async def upsert_reply_template(
 
 
 async def delete_reply_template(template_id: int) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM reply_templates WHERE id = ?", (template_id,))
         await db.commit()
 
@@ -3975,7 +3975,7 @@ async def get_all_bundles() -> dict:
     """Retorna {bundle_sku: {own_price_mxn, components: [{sku, qty}]}} para
     TODOS los bundles definidos — pensado para cargarse una vez por ciclo
     de prewarm, no por producto."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         bundles = await (await db.execute(
             "SELECT bundle_sku, own_price_mxn FROM sku_bundles"
@@ -4001,7 +4001,7 @@ async def upsert_bundle(bundle_sku: str, own_price_mxn: float | None, components
     la lista completa)."""
     import time as _t
     now = _t.time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("SELECT created_at FROM sku_bundles WHERE bundle_sku = ?", (bundle_sku,))
         existing = await cur.fetchone()
         await db.execute(
@@ -4019,7 +4019,7 @@ async def upsert_bundle(bundle_sku: str, own_price_mxn: float | None, components
 
 
 async def delete_bundle(bundle_sku: str) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM sku_bundles WHERE bundle_sku = ?", (bundle_sku,))
         await db.execute("DELETE FROM sku_bundle_components WHERE bundle_sku = ?", (bundle_sku,))
         await db.commit()
@@ -4031,7 +4031,7 @@ async def replace_coverage_price_alerts(user_id: str, alerts: list) -> None:
     stock_issues_cache — se recalcula completo, no se acumula)."""
     import time as _t
     now = _t.time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM coverage_price_alerts WHERE user_id = ?", (user_id,))
         await db.executemany(
             """INSERT INTO coverage_price_alerts
@@ -4049,7 +4049,7 @@ async def replace_coverage_price_alerts(user_id: str, alerts: list) -> None:
 
 
 async def get_coverage_price_alerts(user_id: str) -> list:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT * FROM coverage_price_alerts WHERE user_id = ? ORDER BY reason, days_supply",
@@ -4063,7 +4063,7 @@ async def get_snapshot_check_candidates(platform: str, account_id: str, all_ids:
     ciclo para Vigilancia: primero los que nunca se han revisado, luego los
     de last_checked más antiguo (rotación tipo LRU) — nunca revisa todo el
     catálogo de un jalón, mismo cuidado de rate-limit que el resto de la app."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT item_id, last_checked FROM listing_snapshots WHERE platform=? AND account_id=?",
@@ -4085,7 +4085,7 @@ async def sync_listing_snapshot(
     y lo limpia si vuelve a ganar."""
     import time as _t
     now = _t.time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         prev = await (await db.execute(
             "SELECT * FROM listing_snapshots WHERE platform=? AND account_id=? AND item_id=?",
@@ -4132,7 +4132,7 @@ async def sync_listing_snapshot(
 async def get_listing_change_log(platform: str, account_id: str, days: int = 14, limit: int = 50) -> list:
     import time as _t
     cutoff = _t.time() - days * 86400
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT * FROM listing_change_log
@@ -4148,7 +4148,7 @@ async def get_not_winning_listings(platform: str, account_id: str, min_hours: fl
     catálogo (ML) / Buy Box (Amazon)."""
     import time as _t
     cutoff = _t.time() - min_hours * 3600
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT * FROM listing_snapshots
@@ -4165,7 +4165,7 @@ async def get_not_winning_listings(platform: str, account_id: str, min_hours: fl
 
 
 async def delete_coverage_price_alert(user_id: str, item_id: str) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "DELETE FROM coverage_price_alerts WHERE user_id = ? AND item_id = ?",
             (user_id, item_id),
@@ -4182,7 +4182,7 @@ async def sync_stock_issue_streak(account_id: str, issue_type: str, current: dic
     así el llamador puede calcular cuánto tiempo lleva)."""
     import time as _t
     now = _t.time()
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         existing_rows = await (await db.execute(
             "SELECT sku FROM stock_issue_streaks WHERE account_id = ? AND issue_type = ?",
             (account_id, issue_type),
@@ -4220,7 +4220,7 @@ async def get_drift_alerts(account_id: str, issue_type: str = "imbalanced", min_
     clasificado), no un problema de venta real que cambia rápido."""
     import time as _t
     cutoff = _t.time() - min_hours * 3600
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT sku, product_title, first_seen_ts, last_seen_ts
@@ -4241,7 +4241,7 @@ async def get_account_sold_history(user_id: str) -> dict:
     Usado para la excepción histórica: cuentas sin scarce_enabled pero con historial de ventas
     siguen recibiendo stock en modo escasez.
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             """SELECT base_sku, SUM(sold_qty) as total
                FROM ml_listings
@@ -4254,7 +4254,7 @@ async def get_account_sold_history(user_id: str) -> dict:
 
 async def get_deal_config(user_id: str) -> dict:
     """Retorna la config de precios deal para una cuenta. Defaults: 15% buffer, 100% retail."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(
             "SELECT * FROM account_deal_config WHERE user_id = ?", (user_id,)
@@ -4267,7 +4267,7 @@ async def get_deal_config(user_id: str) -> dict:
 async def set_deal_config(user_id: str, deal_buffer_pct: float, retail_target_pct: float) -> None:
     """Guarda o actualiza la config de precios deal para una cuenta."""
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO account_deal_config (user_id, deal_buffer_pct, retail_target_pct, updated_at)
                VALUES (?, ?, ?, ?)
@@ -4287,7 +4287,7 @@ async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 1
     sirve para obtener el shipment_id... pero no lo tenemos guardado, así
     que este helper solo identifica QUÉ falta; el shipment_id se resuelve
     en vivo contra la orden actual en main.py."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT DISTINCT order_id FROM order_history
@@ -4301,7 +4301,7 @@ async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 1
 async def update_order_zone(order_id: str, ship_state_code: str, ship_zone: str) -> None:
     """Actualiza la zona geográfica para TODAS las filas de esta orden
     (una orden puede tener varios item_id, todas van al mismo domicilio)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE order_history SET ship_state_code = ?, ship_zone = ? WHERE order_id = ?",
             (ship_state_code, ship_zone, order_id),
@@ -4314,7 +4314,7 @@ async def get_zone_demand(account_id: str, platform: str = "ml", days: int = 60)
     insumo para cruzar demanda por zona vs. stock físico por zona."""
     from datetime import datetime as _dt, timedelta as _td
     cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             """SELECT ship_zone, SUM(quantity) FROM order_history
                WHERE account_id = ? AND platform = ? AND ship_zone != '' AND order_date >= ?
@@ -4329,7 +4329,7 @@ async def get_zone_demand_by_sku(account_id: str, platform: str = "ml", days: in
     se vende más rápido (insumo de la sugerencia de transferencia)."""
     from datetime import datetime as _dt, timedelta as _td
     cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
             """SELECT sku, ship_zone, SUM(quantity) FROM order_history
                WHERE account_id = ? AND platform = ? AND ship_zone != '' AND sku != '' AND order_date >= ?
@@ -4353,7 +4353,7 @@ async def upsert_order_history(rows: list[dict]) -> int:
     import time as _t
     if not rows:
         return 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         _rate_row = await (await db.execute("SELECT rate_tv, rate_other FROM supplier_debt_settings WHERE id = 1")).fetchone()
         _rate_tv, _rate_other = (_rate_row[0], _rate_row[1]) if _rate_row else (0.80, 0.50)
         for r in rows:
@@ -4451,7 +4451,7 @@ def _iso_week_range_label(iso_week: str) -> str:
 
 async def get_supplier_debt_summary() -> dict:
     """Total generado (ledger), total pagado, saldo, y desglose semanal."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT COALESCE(SUM(amount_mxn), 0) AS total FROM supplier_debt_ledger")
         total_generated = (await cur.fetchone())["total"]
@@ -4485,7 +4485,7 @@ async def get_supplier_debt_export_data(iso_week: str = "") -> list[dict]:
     filtra a solo esa semana — vacío = todas."""
     where_clause = "WHERE sdl.iso_week = ?" if iso_week else ""
     params = [iso_week] if iso_week else []
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(f"""
             SELECT
@@ -4505,7 +4505,7 @@ async def get_supplier_debt_export_data(iso_week: str = "") -> list[dict]:
 
 
 async def list_supplier_debt_payments() -> list[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM supplier_debt_payments ORDER BY payment_date DESC, id DESC")
         return [dict(r) for r in await cur.fetchall()]
@@ -4513,7 +4513,7 @@ async def list_supplier_debt_payments() -> list[dict]:
 
 async def add_supplier_debt_payment(payment_date: str, amount_mxn: float, reference: str, notes: str, created_by: str) -> int:
     import time as _t
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("""
             INSERT INTO supplier_debt_payments (payment_date, amount_mxn, reference, notes, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -4523,14 +4523,14 @@ async def add_supplier_debt_payment(payment_date: str, amount_mxn: float, refere
 
 
 async def delete_supplier_debt_payment(payment_id: int) -> bool:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("DELETE FROM supplier_debt_payments WHERE id = ?", (payment_id,))
         await db.commit()
         return cur.rowcount > 0
 
 
 async def get_supplier_debt_settings() -> dict:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT rate_tv, rate_other FROM supplier_debt_settings WHERE id = 1")
         row = await cur.fetchone()
@@ -4538,7 +4538,7 @@ async def get_supplier_debt_settings() -> dict:
 
 
 async def set_supplier_debt_settings(rate_tv: float, rate_other: float) -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO supplier_debt_settings (id, rate_tv, rate_other) VALUES (1, ?, ?)
             ON CONFLICT(id) DO UPDATE SET rate_tv = excluded.rate_tv, rate_other = excluded.rate_other
@@ -4552,7 +4552,7 @@ async def upsert_claims_history(rows: list[dict]) -> int:
     import time as _t
     if not rows:
         return 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for r in rows:
             await db.execute("""
                 INSERT INTO claims_history
@@ -4585,7 +4585,7 @@ async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) ->
     import time as _t
     if not photos:
         return 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for p in photos:
             await db.execute("""
                 INSERT OR IGNORE INTO claim_photos
@@ -4629,7 +4629,7 @@ async def get_claims_history(
         params.append(date_to)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             f"SELECT * FROM claims_history {where} ORDER BY date_created DESC LIMIT ?",
@@ -4640,7 +4640,7 @@ async def get_claims_history(
 
 
 async def get_claim_photos(claim_id: str) -> list[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM claim_photos WHERE claim_id = ? ORDER BY id", (claim_id,)
@@ -4655,7 +4655,7 @@ async def delete_claim_photos_by_path(local_paths: list[str]) -> int:
     físico, para que la DB no apunte a fotos que ya no existen."""
     if not local_paths:
         return 0
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         placeholders = ",".join("?" * len(local_paths))
         cur = await db.execute(
             f"DELETE FROM claim_photos WHERE local_path IN ({placeholders})", local_paths
@@ -4690,7 +4690,7 @@ async def get_sku_price_history(
         params.append(cutoff)
     params.append(limit)
     where = " AND ".join(conditions)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             f"SELECT * FROM order_history WHERE {where} ORDER BY order_date DESC LIMIT ?",
@@ -4707,7 +4707,7 @@ async def get_sku_history_summary(sku: str, platform: str = None) -> dict:
         conditions.append("platform = ?")
         params.append(platform)
     where = " AND ".join(conditions)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(f"""
             SELECT
@@ -4739,7 +4739,7 @@ async def get_sku_sales_by_account(base_sku: str) -> list[dict]:
     """Retorna ventas por cuenta para un SKU base.
     Usado en el score dinámico: {user_id, nickname, sold_qty, available_qty}.
     """
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT m.account_id as user_id,
@@ -4762,7 +4762,7 @@ async def get_sku_sales_by_account(base_sku: str) -> list[dict]:
 async def get_product_types_cache(marketplace_id: str) -> tuple:
     """Returns (types_list, cached_at_timestamp). Empty list + 0.0 if not cached."""
     import json as _j
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         row = await (await db.execute(
             "SELECT types_json, cached_at FROM amz_product_types_cache WHERE marketplace_id = ?",
             (marketplace_id,),
@@ -4778,7 +4778,7 @@ async def get_product_types_cache(marketplace_id: str) -> tuple:
 async def save_product_types_cache(marketplace_id: str, types: list) -> None:
     """Saves product types list to DB cache."""
     import time as _t, json as _j
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "INSERT OR REPLACE INTO amz_product_types_cache (marketplace_id, types_json, cached_at) VALUES (?, ?, ?)",
             (marketplace_id, _j.dumps(sorted(types)), _t.time()),
@@ -5231,8 +5231,9 @@ async def get_deletion_candidates(
             bc.brand AS bm_brand,
             COALESCE(bm_stk.bm_stock, 0) AS bm_stock
         FROM amazon_listings al
+        LEFT JOIN amazon_accounts aa ON aa.seller_id = al.seller_id
         LEFT JOIN order_history oh
-            ON oh.account_id = al.seller_id
+            ON oh.account_id = aa.nickname
             AND oh.platform IN ('amazon','amz','Amazon')
             AND (oh.sku = al.sku OR oh.sku = al.base_sku)
         LEFT JOIN bm_product_catalog bc
@@ -5382,7 +5383,7 @@ async def save_item_change(
     import time as _time
     now = _time.time()
     changed_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO item_history
                (item_id, account_id, field, old_value, new_value, changed_by, changed_at, created_at)
@@ -5394,7 +5395,7 @@ async def save_item_change(
 
 async def get_item_history(item_id: str, limit: int = 50) -> list:
     """Retorna los últimos cambios de un item, del más reciente al más antiguo."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT field, old_value, new_value, changed_by, changed_at

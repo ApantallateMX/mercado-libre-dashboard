@@ -271,7 +271,7 @@ def _parse_allowed_sections(raw) -> list:
 
 async def init_user_db(admin_password: str = "010817xD"):
     """Crea las tablas y el usuario admin inicial si no existe."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS dashboard_users (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -360,7 +360,7 @@ async def init_user_db(admin_password: str = "010817xD"):
 
 # ─── Usuarios ─────────────────────────────────────────────────────────────────
 async def get_user_by_username(username: str) -> Optional[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT * FROM dashboard_users WHERE username = ? AND active = 1", (username,)
@@ -374,7 +374,7 @@ async def get_user_by_username(username: str) -> Optional[dict]:
 
 
 async def get_user_by_id(user_id: int) -> Optional[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM dashboard_users WHERE id = ?", (user_id,))
         row = await cur.fetchone()
@@ -382,7 +382,7 @@ async def get_user_by_id(user_id: int) -> Optional[dict]:
 
 
 async def list_users() -> list[dict]:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, username, display_name, role, active, must_change_pw, created_by, created_at, last_login, allowed_sections "
@@ -398,7 +398,7 @@ async def create_user(
 ) -> int:
     """Crea usuario sin contraseña (must_change_pw=1). Retorna el nuevo user_id."""
     sections_json = json.dumps(allowed_sections) if allowed_sections else None
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("""
             INSERT INTO dashboard_users (username, display_name, role, must_change_pw, created_by, allowed_sections)
             VALUES (?, ?, ?, 1, ?, ?)
@@ -418,7 +418,7 @@ async def update_user(user_id: int, **kwargs) -> bool:
     if not fields:
         return False
     sets = ", ".join(f"{k} = ?" for k in fields)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             f"UPDATE dashboard_users SET {sets} WHERE id = ?",
             (*fields.values(), user_id)
@@ -435,7 +435,7 @@ async def update_user(user_id: int, **kwargs) -> bool:
 async def set_password(user_id: int, password: str) -> bool:
     """Guarda nueva contraseña y quita el flag must_change_pw."""
     ph, salt = hash_password(password)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             UPDATE dashboard_users SET password_hash=?, password_salt=?, must_change_pw=0
             WHERE id=?
@@ -445,7 +445,7 @@ async def set_password(user_id: int, password: str) -> bool:
 
 
 async def update_last_login(user_id: int):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             "UPDATE dashboard_users SET last_login=datetime('now') WHERE id=?", (user_id,)
         )
@@ -454,7 +454,7 @@ async def update_last_login(user_id: int):
 
 async def delete_user(user_id: int):
     """Desactiva (soft delete) un usuario."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("UPDATE dashboard_users SET active=0 WHERE id=?", (user_id,))
         await db.commit()
 
@@ -478,7 +478,7 @@ async def create_session(user_id: int, ip: str = None) -> str:
     # Persistir en DB para auditoría y soporte de logout (best-effort)
     expires = (datetime.utcnow() + timedelta(days=_SESSION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             await db.execute(
                 "INSERT INTO user_sessions (user_id, token, ip, expires_at) VALUES (?, ?, ?, ?)",
                 (user_id, token, ip, expires),
@@ -508,7 +508,7 @@ async def get_session(token: str) -> Optional[dict]:
     # Fallback DB para tokens opacos legacy
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("""
                 SELECT u.id, u.username, u.display_name, u.role, u.must_change_pw, u.allowed_sections
@@ -527,13 +527,13 @@ async def get_session(token: str) -> Optional[dict]:
 
 
 async def delete_session(token: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM user_sessions WHERE token = ?", (token,))
         await db.commit()
 
 
 async def delete_user_sessions(user_id: int):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
         await db.commit()
 
@@ -550,7 +550,7 @@ async def log_action(
     section: str = "",
 ):
     detail_str = json.dumps(detail, ensure_ascii=False) if isinstance(detail, dict) else (detail or "")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT INTO audit_log (user_id, username, action, item_id, detail, ip, ml_account, section)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -586,7 +586,7 @@ async def get_audit_log(
         params.append(item_id)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.extend([limit, offset])
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -598,7 +598,7 @@ async def get_audit_log(
 
 async def get_audit_users() -> list[str]:
     """Lista de usuarios únicos en el log."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute(
             "SELECT DISTINCT username FROM audit_log ORDER BY username"
         )
@@ -610,7 +610,7 @@ async def get_audit_users_summary(days: int = 7) -> list[dict]:
     """Estadísticas de actividad por usuario para el panel de auditoría."""
     from datetime import datetime, timedelta
     date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT
@@ -649,7 +649,7 @@ async def get_audit_user_timeline(
 
     where = "WHERE " + " AND ".join(conditions)
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(f"""
             SELECT
@@ -686,7 +686,7 @@ async def update_last_seen(
                     preserva la última página/sección conocida)
     """
     import time as _time
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         if is_page:
             await db.execute("""
                 INSERT INTO user_last_seen (username, display_name, last_seen, last_url, section, ml_account, ip)
@@ -715,7 +715,7 @@ async def get_online_users(active_minutes: int = 5) -> list:
     """Retorna todos los usuarios con last_seen, marcando quién está activo ahora."""
     import time as _time
     cutoff = _time.time() - active_minutes * 60
-    async with aiosqlite.connect(DATABASE_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             "SELECT * FROM user_last_seen ORDER BY last_seen DESC"
