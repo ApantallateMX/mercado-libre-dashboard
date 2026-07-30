@@ -7,6 +7,60 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-30 — OPERACION: Gmail de VECKTOR revocado — reautorizado + causa raíz confirmada
+
+**Archivos:** ninguno (solo Railway env var).
+
+Jovan reportó error real en producción al responder un mensaje de comprador
+Amazon: `invalid_grant: Token has been expired or revoked` sobre el Gmail
+dedicado de VECKTOR. Confirmado probando los 3 refresh tokens directo
+contra Google: solo el de VECKTOR fallaba (AUTOBOT y ExclusiveBulbs OK).
+Jovan reautorizó vía `/auth/gmail/connect`, el nuevo token se subió a
+`AMAZON_GMAIL_REFRESH_TOKEN` en Railway. Google confirmó con el propio
+token (`refresh_token_expires_in: 604690`s ≈ 7 días) que la causa raíz es
+que el proyecto de Google Cloud de VECKTOR sigue en modo **Testing** (no
+Production) — por diseño de Google, esos tokens expiran solos cada 7 días.
+**Pendiente real:** publicar ese proyecto a Production (o crear un cliente
+nuevo, mismo patrón que ya se hizo para AUTOBOT/ExclusiveBulbs) para que
+esto deje de repetirse — Jovan pidió que se le recuerde más tarde.
+
+## 2026-07-30 — FIX urgente: "Pausar" en Productos ML sí pausaba de verdad + FEAT: historial de auditoría en mensajes/reclamos
+
+**Archivos:** `app/static/js/productos.js`, `app/api/health.py`, `app/main.py`,
+`app/services/user_store.py`, `app/api/users.py`, `app/templates/base.html`,
+`app/templates/partials/health_messages.html`, `app/templates/partials/health_claims.html`,
+`app/static/js/amazon_dashboard.js`.
+
+Una auditoría completa del sistema (4 agentes en paralelo: UX, estrategia
+ML, estrategia Amazon, estabilidad técnica) encontró que el botón "⏸
+Pausar" de `/productos` mandaba `status:"paused"` REAL a Mercado Libre vía
+`PUT /api/items/{id}/status` — violación activa de la regla dura de nunca
+pausar (penaliza el algoritmo de ML). Ya existía el patrón correcto en
+`items_health.html` (pone `available_quantity:0` en vez de status) que
+nunca se replicó aquí. Corregido: "Pausar" ahora usa `PUT /stock
+{quantity:0}`; "Activar" sigue usando `status:active` (seguro — nunca crea
+una pausa nueva, solo revierte una existente).
+
+De la misma auditoría, Jovan preguntó puntualmente por la orden Amazon
+702-2485113-2487435: un mensaje se marcó "resuelto" pero no había forma de
+saber qué usuario lo hizo. Causa: `update_message_view_status()` /
+`update_claim_view_status()` nunca guardaban quién ejecutaba la acción, y
+la tabla `ml_message_views` solo guarda la ÚLTIMA vista (una fila por
+hilo, se sobreescribe) — no un historial real. Se conectaron los 6
+botones de Tomar/Resolver (mensajes ML, reclamos ML, mensajes de
+compradores Amazon) a la tabla `audit_log` ya existente (usada en otras
+partes de la app) vía `user_store.log_action()`. Nuevo endpoint `GET
+/api/users/audit/item-history?item_id=...` (cualquier usuario logueado,
+no solo admin) + botón "🕘 Historial" en las 3 vistas, con un modal
+compartido en `base.html` (`window.showItemHistory`). Es hacia adelante
+— no recupera quién hizo acciones pasadas antes de este fix.
+
+Verificado en local: los 6 endpoints escriben a `audit_log` correctamente,
+el historial regresa la lista en orden correcto (más reciente primero), y
+los 3 partials renderizan el botón sin errores de sintaxis Jinja/JS.
+
+---
+
 ## 2026-07-29 — OPERACION: Returns Board ML vista Global — verificado sano
 
 **Archivos:** ninguno (solo verificación, sin cambios de código).
