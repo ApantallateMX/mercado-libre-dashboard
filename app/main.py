@@ -4174,7 +4174,18 @@ async def _orders_search_partial(
             order_items=items_detail,
             pack_id=None,
             tags=[],
+            has_open_claim=False,
         ))
+
+    try:
+        _order_ids_search = [str(_eo.id) for _eo in enriched if _eo.id and _eo.id != "-"]
+        if _order_ids_search:
+            _open_claim_oids_s = await token_store.get_order_ids_with_open_claims(_order_ids_search)
+            for _eo in enriched:
+                if str(_eo.id) in _open_claim_oids_s:
+                    _eo.has_open_claim = True
+    except Exception as _e_bridge2:
+        logger.warning(f"[Orders search] Error consultando puente reclamos: {_e_bridge2}")
 
     if margin_band in ("alto", "medio", "bajo"):
         enriched = [o for o in enriched if o.margin_band == margin_band]
@@ -4447,7 +4458,20 @@ async def orders_table_partial(
                 order_items=items_detail,
                 pack_id=o.get("pack_id"),
                 tags=o.get("tags", []),
+                has_open_claim=False,
             ))
+
+        # Puente órdenes↔reclamos: badge "reclamo abierto" en la fila de la orden
+        # sin tener que cambiar de pestaña y buscar manualmente por order_id.
+        try:
+            _order_ids_page = [str(_eo.id) for _eo in enriched if _eo.id and _eo.id != "-"]
+            if _order_ids_page:
+                _open_claim_oids = await token_store.get_order_ids_with_open_claims(_order_ids_page)
+                for _eo in enriched:
+                    if str(_eo.id) in _open_claim_oids:
+                        _eo.has_open_claim = True
+        except Exception as _e_bridge:
+            logger.warning(f"[Orders] Error consultando puente reclamos: {_e_bridge}")
 
         # Persistir netos reales a order_history en background (no bloquea la respuesta)
         _oh_real_batch: list[dict] = []
@@ -8091,6 +8115,18 @@ async def products_inventory_partial(
         await client.close()
 
 
+async def _safe_bg(coro, label: str) -> None:
+    """Envuelve un asyncio.create_task fire-and-forget para que un fallo (ej.
+    'database is locked' bajo contención) quede logueado en vez de perderse
+    como excepción huérfana invisible en la UI — mismo patrón que
+    _run_stock_sync_for_user ya usaba, generalizado a los demás sitios que
+    disparaban save_item_sync sin ningún try/except."""
+    try:
+        await coro
+    except Exception as _e:
+        logger.warning(f"[BG-TASK] Error en {label}: {_e}")
+
+
 # --- Mark alert item as synced (evita duplicar trabajo entre usuarios) ---
 
 @app.post("/partials/mark-synced/{item_id}")
@@ -8101,7 +8137,7 @@ async def mark_alert_synced(item_id: str, request: Request):
     if client: await client.close()
     _du = getattr(request.state, "dashboard_user", None) or {}
     synced_by = _du.get("username") or _du.get("email") or "unknown"
-    asyncio.create_task(token_store.save_item_sync(item_id, uid, 0, synced_by))
+    asyncio.create_task(_safe_bg(token_store.save_item_sync(item_id, uid, 0, synced_by), "save_item_sync/mark-synced"))
     return Response(status_code=204)
 
 
@@ -12119,7 +12155,7 @@ async def update_item_stock_api(item_id: str, request: Request):
             del _products_cache[k]
         from app.services.token_store import update_ml_listing_qty as _update_qty
         asyncio.create_task(_update_qty(item_id, quantity))
-        asyncio.create_task(token_store.save_item_sync(item_id, uid, quantity))
+        asyncio.create_task(_safe_bg(token_store.save_item_sync(item_id, uid, quantity), "save_item_sync/update_stock"))
         # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
         asyncio.create_task(_reactivate_if_oos_bg(item_id, uid))
         _evict_item_from_alerts(uid, item_id)
@@ -12416,7 +12452,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                         r["updated"] = True
                 # Invalidar cache de stock issues y productos para reflejar cambio
                 _new_total_qty = sum(u["available_quantity"] for u in var_updates)
-                asyncio.create_task(token_store.save_item_sync(item_id, str(client.user_id), _new_total_qty))
+                asyncio.create_task(_safe_bg(token_store.save_item_sync(item_id, str(client.user_id), _new_total_qty), "save_item_sync/variation_stock"))
                 _stock_issues_cache.clear()
                 uid = str(client.user_id)
                 for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
@@ -13337,13 +13373,13 @@ async def stock_concentration_execute_api(request: Request):
         for _loser in result.get("losers", []):
             if _loser.get("ok") and _loser.get("item_id"):
                 _conc_tasks.append(asyncio.create_task(_upd_qty(_loser["item_id"], 0)))
-                asyncio.create_task(token_store.save_item_sync(_loser["item_id"], _conc_uid, 0))
+                asyncio.create_task(_safe_bg(token_store.save_item_sync(_loser["item_id"], _conc_uid, 0), "save_item_sync/concentration_loser"))
 
         # 2. Actualizar ml_listings para winner (qty → total_stock)
         _winner = result.get("winner") or {}
         if _winner.get("ok") and _winner.get("item_id"):
             _conc_tasks.append(asyncio.create_task(_upd_qty(_winner["item_id"], total_stock)))
-            asyncio.create_task(token_store.save_item_sync(_winner["item_id"], _conc_uid, total_stock))
+            asyncio.create_task(_safe_bg(token_store.save_item_sync(_winner["item_id"], _conc_uid, total_stock), "save_item_sync/concentration_winner"))
 
         # 3. Limpiar cache de stock issues para todos los usuarios
         _stock_issues_cache.clear()

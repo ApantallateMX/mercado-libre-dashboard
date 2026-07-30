@@ -453,11 +453,13 @@
             <div class="flex items-center justify-center gap-1">
               <button class="amz-close-btn px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-[10px] rounded transition"
                       data-sku="{{ item.sku }}" data-asin="{{ item.asin or '' }}"
-                      data-seller="{{ seller_id }}" title="Cerrar qty=0">&#x25FE;</button>
-              <button class="amz-delete-btn px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 text-[10px] rounded transition"
+                      data-seller="{{ seller_id }}" title="Cerrar qty=0 (reversible)">&#x25FE;</button>
+              {% if is_admin %}
+              <button class="amz-delete-btn px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 text-[10px] rounded transition border border-red-200"
                       data-sku="{{ item.sku }}" data-asin="{{ item.asin or '' }}"
                       data-seller="{{ seller_id }}" data-title="{{ (item.title or item.sku)[:40] }}"
-                      title="Eliminar permanentemente">🗑</button>
+                      title="Eliminar permanentemente — sin vuelta atrás, solo Administrador">🗑</button>
+              {% endif %}
             </div>
           </td>
         </tr>

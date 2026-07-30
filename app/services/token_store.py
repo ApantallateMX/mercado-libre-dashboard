@@ -4580,6 +4580,22 @@ async def upsert_claims_history(rows: list[dict]) -> int:
     return len(rows)
 
 
+async def get_order_ids_with_open_claims(order_ids: list) -> set:
+    """De una lista de order_id, retorna el subconjunto que tiene al menos un
+    reclamo con status='opened' en claims_history — usado para el badge
+    '🚩 reclamo abierto' en la tabla de órdenes (antes no había ningún puente
+    entre Ventas y Salud, había que buscar el order_id a mano)."""
+    if not order_ids:
+        return set()
+    placeholders = ",".join("?" * len(order_ids))
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        rows = await (await db.execute(
+            f"SELECT DISTINCT order_id FROM claims_history WHERE status='opened' AND order_id IN ({placeholders})",
+            list(order_ids),
+        )).fetchall()
+    return {r[0] for r in rows}
+
+
 async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) -> int:
     """Registra fotos ya descargadas a disco (local_path bajo /app/data/claim_photos/)."""
     import time as _t

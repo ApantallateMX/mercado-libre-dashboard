@@ -1106,18 +1106,26 @@ window.loadMorningBriefing = function() {
         var goalFmt = a.daily_goal > 0
           ? '$' + Math.round(a.daily_goal).toLocaleString('es-MX')
           : '—';
-        var dest = hasAlerts ? '/items#stock-section' : '/dashboard';
+        // El ancla #stock-section ya no existe desde que Stock pasó a ser una
+        // pestaña (data-tab="stock") en vez de una sección scrolleable — el
+        // link llevaba a la cuenta correcta pero nunca a la pestaña correcta.
+        var dest = hasAlerts ? '/items?tab=stock' : '/dashboard';
         var onclick = "mbSwitchAndGo('" + a.user_id + "','" + dest + "')";
         return '<div onclick="' + onclick + '" data-uid="' + a.user_id + '" class="bg-white rounded-xl shadow border p-4 cursor-pointer hover:shadow-md transition-shadow kpi-card ' +
           (hasAlerts ? 'border-red-300 hover:border-red-400' : 'border-gray-100 hover:border-yellow-300') + '">' +
           '<div class="flex items-center justify-between mb-1.5">' +
             '<span class="text-xs font-bold text-gray-700 truncate max-w-[120px]">' + (a.label || a.user_id) + '</span>' +
             (hasAlerts
-              ? '<span class="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">' + a.alert_count + ' ⚠</span>'
+              ? '<span class="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">' + a.alert_count + ' sobreventa</span>'
               : '<span class="bg-green-100 text-green-700 text-[10px] font-bold px-2 py-0.5 rounded-full">OK ✓</span>') +
           '</div>' +
           '<div class="flex items-center justify-between mb-1.5">' +
-            '<span class="text-[11px] text-gray-400">' + (hasAlerts ? a.alert_count + ' item(s) en riesgo' : 'Sin alertas activas') + '</span>' +
+            // Distinto de "Alertas de Stock" del Dashboard (top-sellers por bajo
+            // stock, revisión manual) — esto es sobreventa YA detectada (vendiste
+            // más de lo que había). Antes decían lo mismo ("N en riesgo") y un
+            // operador podía ver "todo bien" en un lado y una alerta en el otro
+            // para la misma cuenta sin saber cuál creer.
+            '<span class="text-[11px] text-gray-400">' + (hasAlerts ? a.alert_count + ' con sobreventa detectada' : 'Sin sobreventa detectada') + '</span>' +
             '<span id="mb-rev-' + a.user_id + '" class="text-xs font-bold text-gray-500">—</span>' +
           '</div>' +
           '<div class="flex items-center justify-between">' +

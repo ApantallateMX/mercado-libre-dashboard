@@ -2790,6 +2790,7 @@ async def amazon_products_sin_publicar(
             "seller_id":     client.seller_id,
             "show_parents":  show_parents,
             "parents_count": parents_count,
+            "is_admin":      bool((getattr(request.state, "dashboard_user", None) or {}).get("role") == "admin"),
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_sin_publicar.html", ctx)
 
@@ -2889,8 +2890,14 @@ async def close_listing_endpoint(request: Request):
 
 @router.post("/products/delete-listing")
 async def delete_listing_endpoint(request: Request):
-    """Permanently delete a listing from Amazon."""
+    """Permanently delete a listing from Amazon. Requiere admin — a diferencia
+    de "Cerrar" (reversible, qty=0), esto borra el listing sin vuelta atrás y
+    no tenía ningún control de rol pese a ser la acción más irreversible de
+    toda esta vista."""
     from app.services.token_store import save_listing_action
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "Se requiere rol Administrador para eliminar permanentemente"}, status_code=403)
     body = await request.json()
     sku       = (body.get("sku") or "").strip()
     seller_id = (body.get("seller_id") or "").strip()

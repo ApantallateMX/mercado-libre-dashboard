@@ -698,7 +698,9 @@ async function executeBulkAction(action) {
   if (amzSelectedSkus.size === 0) return;
   var skuList = Array.from(amzSelectedSkus);
   var label = action === 'set_qty_zero' ? 'Qty 0' : 'Activar FBA';
-  if (!confirm('¿' + label + ' ' + skuList.length + ' listing(s) seleccionados?')) return;
+  // Lista completa de SKUs afectados en la confirmación — antes solo decía
+  // el conteo, igual que ya se hacía bien en Sin Publicar.
+  if (!confirm('¿' + label + ' ' + skuList.length + ' listing(s) seleccionados?\n\n' + skuList.join(', '))) return;
 
   var bar = document.getElementById('amz-bulk-bar');
   bar.innerHTML = '<span class="text-sm">Procesando...</span>';
@@ -715,7 +717,17 @@ async function executeBulkAction(action) {
     _opsLoaded = false;
     loadOpsListing();
     loadAmzAlerts();
-    alert('✓ ' + d.succeeded + ' OK' + (d.failed > 0 ? ', ' + d.failed + ' con error' : ''));
+    // El backend ya regresaba el detalle por SKU (d.results) pero antes se
+    // descartaba — con fallos parciales no había forma de saber CUÁLES SKUs
+    // quedaron con stock fantasma vendible sin querer.
+    var msg = '✓ ' + d.succeeded + ' OK' + (d.failed > 0 ? ', ' + d.failed + ' con error' : '');
+    if (d.failed > 0 && d.results) {
+      var failedLines = Object.keys(d.results)
+        .filter(function(sku) { return d.results[sku] !== 'ok'; })
+        .map(function(sku) { return sku + ': ' + d.results[sku]; });
+      msg += '\n\nFallaron:\n' + failedLines.join('\n');
+    }
+    alert(msg);
   } catch(e) {
     alert('Error al ejecutar la acción');
     clearBulkSelection();

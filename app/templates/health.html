@@ -783,5 +783,16 @@ loadSummary();
 loadTab(healthFilters.currentTab);
 _updateTimestamp();
 _startAutoRefresh();
+
+// Puente órdenes↔reclamos: llega desde el badge "🚩 Reclamo" en Ventas
+// (/health?search=<order_id>) — antes no había forma de saltar directo,
+// había que copiar el número de orden y buscarlo a mano.
+(function() {
+    var _searchParam = new URLSearchParams(window.location.search).get('search');
+    if (_searchParam) {
+        document.getElementById('health-search-input').value = _searchParam;
+        window.healthSearch();
+    }
+})();
 </script>
 {% endblock %}

@@ -141,6 +141,9 @@
             {% else %}
                 <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800 flex-shrink-0">{{ {'pending':'Pendiente','confirmed':'Confirmado','payment_required':'Pago pendiente','payment_in_process':'Procesando pago','partially_refunded':'Dev. parcial','refunded':'Devuelto','in_mediation':'En mediación','charged_back':'Contracargo'}.get(order.status, order.status) }}</span>
             {% endif %}
+            {% if order.has_open_claim %}
+                <a href="/health?search={{ order.id }}" class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold flex-shrink-0" title="Esta orden tiene un reclamo abierto">🚩 Reclamo</a>
+            {% endif %}
         </div>
         <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
             <span class="text-gray-600">
@@ -278,6 +281,11 @@
                     <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800">Cancelado</span>
                 {% else %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ {'pending':'Pendiente','confirmed':'Confirmado','payment_required':'Pago pendiente','payment_in_process':'Procesando pago','partially_refunded':'Dev. parcial','refunded':'Devuelto','in_mediation':'En mediación','charged_back':'Contracargo'}.get(order.status, order.status) }}</span>
+                {% endif %}
+                {% if order.has_open_claim %}
+                <a href="/health?search={{ order.id }}" class="block mt-1">
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold" title="Esta orden tiene un reclamo abierto">🚩 Reclamo</span>
+                </a>
                 {% endif %}
             </td>
             <td class="px-4 py-3 text-center">
