@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-30 — FIX: 5 hallazgos de la auditoría de sistema (JOIN roto, locks SQLite, disco sin monitorear, prompt() de precio, confirmación invertida)
+
+**Archivos:** `app/services/token_store.py`, `app/main.py`, `app/services/user_store.py`,
+`app/api/amazon_products.py`, `app/auth.py`, `app/api/lanzar.py`, `app/api/health_ai.py`,
+`app/api/productos.py`, `app/api/facturacion.py`, `app/api/system_health.py`,
+`app/api/amazon_lanzar.py`, `app/templates/base.html`, `app/templates/amazon_products.html`,
+`app/templates/items.html`.
+
+Continuación de la auditoría de sistema (4 agentes en paralelo). 5 fixes de código:
+
+1. **"Candidatos a Eliminar" (Amazon) marcaba el 100% del catálogo.** El JOIN
+   comparaba `order_history.account_id` (nickname) contra
+   `amazon_listings.seller_id` (ID real) — nunca coincidían, así que la fecha
+   de última venta siempre salía NULL. Se agregó JOIN con `amazon_accounts`
+   para resolver nickname→seller_id antes de comparar. Verificado en vivo:
+   3,400 candidatos reales (antes 3,866 = catálogo completo).
+2. **261 conexiones SQLite sin timeout explícito** (default 5s de Python) en
+   11 archivos, bajo contención de varios loops de fondo escribiendo a la
+   vez tras cada deploy. Subido a `timeout=15` — mismo cambio mecánico en
+   los 261 sitios.
+3. **Cero monitoreo de espacio en disco.** Los 2 incidentes de disco lleno
+   (fotos, luego facturas) se detectaron por reporte de Jovan, nunca por
+   alerta del sistema. Nuevo `GET /api/system/disk-usage` + banner global
+   si el volumen pasa 85%. Importante: `uploads/invoices/` NO se toca con
+   eviction — son facturas fiscales reales (CFDI), no caché; aquí el fix es
+   solo monitoreo/alerta, nunca borrado automático.
+4. **Precio de Amazon con `prompt()` nativo** — publicaba con el primer
+   "Aceptar" sin mostrar antes/después. Modal compartido nuevo
+   (`window.showAmzPriceModal`) en los 2 sitios que lo usaban.
+5. **Fricción de confirmación invertida** — la edición inline de stock en
+   Productos ML (el camino que se usa todo el día) guardaba directo sin
+   avisar, mientras el modal completo sí confirmaba. Se agregó un `confirm()`
+   ligero, solo cuando el valor realmente cambia.
+
+Verificado en vivo: `disk-usage` devuelve datos reales del volumen, y
+Sin Publicar/Amazon confirma 3,400 candidatos (no 3,866).
+
 ## 2026-07-30 — OPERACION: Gmail de VECKTOR revocado — reautorizado + causa raíz confirmada
 
 **Archivos:** ninguno (solo Railway env var).
