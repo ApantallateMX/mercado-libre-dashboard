@@ -16467,6 +16467,52 @@ async def diag_reset_claim_comments(token: str = ""):
     return {"ok": True, "rows_reset": rows_reset}
 
 
+@app.get("/api/diag/audit-log-export")
+async def diag_audit_log_export(before_days: int = 30, token: str = ""):
+    """Exporta (sin borrar) las filas de audit_log más viejas que before_days
+    — para que un job externo (corriendo en el servidor dedicado de Jovan,
+    siempre encendido) las respalde ANTES de purgarlas con
+    /api/diag/audit-log-purge. audit_log no tiene retención hoy (crece para
+    siempre) y es la causa de que el disco de Railway esté casi lleno
+    (92.8%, confirmado 2026-07-31) — ver project_ultimo_movimiento.
+    ts se guarda como TEXT 'YYYY-MM-DD HH:MM:SS' (datetime('now')), por eso
+    la comparación de fecha es string, no epoch."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_al
+    cutoff = (datetime.utcnow() - timedelta(days=before_days)).strftime("%Y-%m-%d %H:%M:%S")
+    async with _aio_al.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_al.Row
+        rows = await (await db.execute(
+            "SELECT * FROM audit_log WHERE ts < ? ORDER BY ts ASC", (cutoff,)
+        )).fetchall()
+    return JSONResponse({"cutoff": cutoff, "count": len(rows), "rows": [dict(r) for r in rows]})
+
+
+@app.post("/api/diag/audit-log-purge")
+async def diag_audit_log_purge(before_days: int = 30, expected_count: int = -1, token: str = ""):
+    """Borra de audit_log lo más viejo que before_days — SOLO llamar después
+    de haber guardado el export de /api/diag/audit-log-export. expected_count
+    (opcional pero recomendado) debe ser el mismo 'count' que devolvió el
+    export — si no coincide, no borra nada (evita perder filas nuevas que
+    hayan entrado justo entre el export y el purge)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_al
+    cutoff = (datetime.utcnow() - timedelta(days=before_days)).strftime("%Y-%m-%d %H:%M:%S")
+    async with _aio_al.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM audit_log WHERE ts < ?", (cutoff,))
+        current_count = (await cur.fetchone())[0]
+        if expected_count >= 0 and current_count != expected_count:
+            return JSONResponse({
+                "ok": False,
+                "error": f"count actual ({current_count}) != expected_count ({expected_count}) — no se borró nada, re-exporta primero",
+            }, status_code=409)
+        await db.execute("DELETE FROM audit_log WHERE ts < ?", (cutoff,))
+        await db.commit()
+    return JSONResponse({"ok": True, "deleted": current_count, "cutoff": cutoff})
+
+
 @app.get("/api/diag/feedback-status")
 async def diag_feedback_status(token: str = ""):
     """Estado del monitoreo de Feedback (Amazon seller feedback + reseñas ML)
