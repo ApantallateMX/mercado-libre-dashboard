@@ -16467,6 +16467,39 @@ async def diag_reset_claim_comments(token: str = ""):
     return {"ok": True, "rows_reset": rows_reset}
 
 
+@app.get("/api/diag/feedback-status")
+async def diag_feedback_status(token: str = ""):
+    """Estado del monitoreo de Feedback (Amazon seller feedback + reseñas ML)
+    sin necesitar sesión — para verificar en producción si el sync ya corrió
+    y qué encontró, sin tener que fabricar un JWT ni depender de que alguien
+    entre a la UI. Ver token_store.feedback_sync_loop / project_feedback_monitoring."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_fb
+    async with _aio_fb.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_fb.Row
+        amz_rows = await (await db.execute(
+            "SELECT account_id, status, COUNT(*) as n FROM amazon_seller_feedback GROUP BY account_id, status"
+        )).fetchall()
+        ml_rows = await (await db.execute(
+            "SELECT account_id, status, COUNT(*) as n FROM ml_item_reviews GROUP BY account_id, status"
+        )).fetchall()
+    return JSONResponse({
+        "amazon_seller_feedback": [dict(r) for r in amz_rows],
+        "ml_item_reviews": [dict(r) for r in ml_rows],
+    })
+
+
+@app.get("/api/diag/trigger-feedback-sync")
+async def diag_trigger_feedback_sync(token: str = ""):
+    """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al
+    loop de 4h ni al delay de arranque — útil justo después de un deploy."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    asyncio.create_task(token_store._run_feedback_sync_once())
+    return JSONResponse({"ok": True, "message": "Sync de feedback iniciado en background"})
+
+
 @app.get("/api/diag/cache-health")
 async def diag_cache_health(token: str = ""):
     """Diagnóstico: salud general del caché BM.
