@@ -890,6 +890,9 @@ window.switchAmzSaludSubtab = function(subtab) {
     document.getElementById('amz-salud-subtab-resumen').classList.toggle('hidden', subtab !== 'resumen');
     document.getElementById('amz-salud-subtab-mensajes').classList.toggle('hidden', subtab !== 'mensajes');
     document.getElementById('amz-salud-subtab-vigilancia').classList.toggle('hidden', subtab !== 'vigilancia');
+    var _fbTab = document.getElementById('amz-salud-subtab-feedback');
+    if (_fbTab) _fbTab.classList.toggle('hidden', subtab !== 'feedback');
+    if (subtab === 'feedback') loadAmzFeedback();
     document.querySelectorAll('.amz-salud-subtab-btn').forEach(function(btn) {
         var isActive = btn.id === 'amz-salud-subtab-btn-' + subtab;
         btn.className = 'amz-salud-subtab-btn flex-shrink-0 whitespace-nowrap px-5 py-3 text-sm font-medium border-b-2 flex items-center gap-1.5 ' +
@@ -935,6 +938,55 @@ function loadAmzVigilancia() {
         .catch(function(e) { cont.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
 }
 
+function loadAmzFeedback() {
+    var cont = document.getElementById('amz-feedback-content');
+    var badge = document.getElementById('amz-feedback-unread');
+    var sellerParam = window.amzActiveSellerId ? '?seller_id=' + encodeURIComponent(window.amzActiveSellerId) : '';
+    fetch('/api/amazon/products/feedback' + sellerParam)
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.error) { if (cont) cont.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">' + d.error + '</p>'; return; }
+            var items = d.items || [];
+            if (badge) {
+                if (items.length > 0) { badge.textContent = items.length; badge.classList.remove('hidden'); }
+                else { badge.classList.add('hidden'); }
+            }
+            if (!cont) return;
+            if (!items.length) {
+                cont.innerHTML = '<p class="text-sm text-gray-400 py-6 text-center">Sin feedback negativo/neutro pendiente. 🎉</p>';
+                return;
+            }
+            cont.innerHTML = '<div class="space-y-2">' + items.map(function(f) {
+                var ratingBad = String(f.rating || '').toLowerCase().indexOf('neg') >= 0;
+                var badgeClass = ratingBad ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700';
+                return '<div class="bg-white border border-gray-100 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">' +
+                    '<div class="min-w-0">' +
+                    '<div class="flex items-center gap-2 mb-1">' +
+                    '<span class="text-xs font-semibold px-2 py-0.5 rounded-full ' + badgeClass + '">' + _amzMsgsEscHtml(f.rating || '?') + '</span>' +
+                    '<span class="text-[11px] text-gray-400 font-mono">' + _amzMsgsEscHtml(f.sku || '(sin SKU)') + '</span>' +
+                    '<span class="text-[11px] text-gray-300">·</span>' +
+                    '<span class="text-[11px] text-gray-400">Orden ' + _amzMsgsEscHtml(f.order_id || '') + '</span>' +
+                    '</div>' +
+                    '<p class="text-sm text-gray-700">' + (_amzMsgsEscHtml(f.comment || '(sin comentario)')) + '</p>' +
+                    '<p class="text-[10px] text-gray-400 mt-1">' + _amzMsgsEscHtml(f.date_created || '') + '</p>' +
+                    '</div>' +
+                    '<button onclick="markAmzFeedbackHandled(' + f.id + ', this)" class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold transition flex-shrink-0">Marcar atendido</button>' +
+                    '</div>';
+            }).join('') + '</div>';
+        })
+        .catch(function(e) { if (cont) cont.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
+}
+
+window.markAmzFeedbackHandled = function(id, btn) {
+    fetch('/api/health/feedback/' + id + '/status', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform: 'amazon', status: 'handled'})
+    })
+        .then(function(r) { return r.json(); })
+        .then(function() { loadAmzFeedback(); })
+        .catch(function(e) { alert('Error: ' + e.message); });
+};
+
 function loadAmzSaludTab() {
     var allowed = window.amzSaludAllowedSubtabs || ['resumen', 'mensajes', 'vigilancia'];
     if (allowed.indexOf('resumen') >= 0) {
@@ -948,6 +1000,7 @@ function loadAmzSaludTab() {
     }
     if (allowed.indexOf('mensajes') >= 0) loadAmzBuyerMessages();
     if (allowed.indexOf('vigilancia') >= 0) loadAmzVigilancia();
+    if (allowed.indexOf('feedback') >= 0) loadAmzFeedback();
     switchAmzSaludSubtab(amzSaludSubtab);
 }
 

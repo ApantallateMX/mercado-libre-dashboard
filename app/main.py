@@ -683,6 +683,7 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     from app.services import buyer_messages_client as _bmc
     asyncio.create_task(_bmc.poll_loop())
+    asyncio.create_task(token_store.feedback_sync_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
@@ -8990,13 +8991,21 @@ async def health_summary_partial(
             except Exception:
                 return 0
 
+        async def _fetch_pending_feedback():
+            try:
+                rows = await token_store.get_ml_feedback_tab(str(client.user_id), "pending")
+                return len(rows)
+            except Exception:
+                return 0
+
         user_task = asyncio.ensure_future(client.get_user_info())
         q_task = asyncio.ensure_future(_fetch_questions())
         c_task = asyncio.ensure_future(_fetch_claims())
         m_task = asyncio.ensure_future(_fetch_messages())
+        f_task = asyncio.ensure_future(_fetch_pending_feedback())
 
-        user, unanswered_questions, open_claims, unread_messages = await asyncio.gather(
-            user_task, q_task, c_task, m_task
+        user, unanswered_questions, open_claims, unread_messages, pending_feedback = await asyncio.gather(
+            user_task, q_task, c_task, m_task, f_task
         )
 
         reputation = user.get("seller_reputation", {})
@@ -9030,6 +9039,7 @@ async def health_summary_partial(
             open_claims=open_claims,
             unanswered_questions=unanswered_questions,
             unread_messages=unread_messages,
+            pending_feedback=pending_feedback,
             urgent_count=urgent_count,
             health_score=health_score,
             sales_period=sales_period,
@@ -10233,6 +10243,20 @@ async def health_vigilancia_partial(request: Request):
     return templates.TemplateResponse(request, "partials/health_vigilancia.html", {
         "not_winning": not_winning, "changes": changes,
     })
+
+
+@app.get("/partials/health-feedback", response_class=HTMLResponse)
+async def health_feedback_partial(request: Request, status: str = Query("pending")):
+    """Reseñas ML negativas/neutras de la cuenta ACTIVA (rate<=3), sync 1x/24h
+    en fondo — ver token_store.sync_ml_item_reviews."""
+    _require_subtab(request, "ml", "salud", "feedback")
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    uid = str(client.user_id)
+    await client.close()
+    items = await token_store.get_ml_feedback_tab(uid, status if status in ("pending", "handled") else "pending")
+    return templates.TemplateResponse(request, "partials/health_feedback.html", {"items": items})
 
 
 @app.get("/partials/item-edit/{item_id}", response_class=HTMLResponse)

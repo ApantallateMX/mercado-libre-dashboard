@@ -1,10 +1,14 @@
+import asyncio
 import json
+import logging
 import os
 import aiosqlite
 from datetime import datetime, timedelta, date
 from typing import Optional
 from pathlib import Path
 from app.config import DATABASE_PATH
+
+logger = logging.getLogger(__name__)
 
 # Nicknames conocidos de cuentas propias — fallback cuando la ML API rate-limita
 # durante el arranque (o cualquier otra falla) y una cuenta queda con nickname
@@ -1457,6 +1461,52 @@ async def init_db():
                 UNIQUE(seller_id, sku)
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: amazon_seller_feedback — calificación del comprador AL VENDEDOR
+        # (GET_SELLER_FEEDBACK_DATA). NO trae SKU directo de Amazon — order_sku
+        # se llena cruzando order_id contra order_history al sincronizar.
+        # feedback_key es el dedupe (Amazon no da un id único de feedback).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_seller_feedback (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id    TEXT NOT NULL DEFAULT '',
+                seller_id     TEXT NOT NULL DEFAULT '',
+                order_id      TEXT NOT NULL DEFAULT '',
+                order_sku     TEXT NOT NULL DEFAULT '',
+                rating        TEXT NOT NULL DEFAULT '',
+                comment       TEXT NOT NULL DEFAULT '',
+                rater_email   TEXT NOT NULL DEFAULT '',
+                date_created  TEXT NOT NULL DEFAULT '',
+                status        TEXT NOT NULL DEFAULT 'pending',
+                feedback_key  TEXT NOT NULL DEFAULT '',
+                synced_at     REAL NOT NULL DEFAULT 0,
+                UNIQUE(feedback_key)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_asf_account ON amazon_seller_feedback(account_id, status)")
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: ml_item_reviews — reseñas de producto (rate 1-5 + comentario)
+        # via GET /reviews/item/{id}. Ligado a item_id (no a order_id como
+        # Amazon) — el SKU sale directo de ml_listings.base_sku por item_id.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_item_reviews (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id    TEXT NOT NULL DEFAULT '',
+                item_id       TEXT NOT NULL DEFAULT '',
+                sku           TEXT NOT NULL DEFAULT '',
+                review_id     TEXT NOT NULL DEFAULT '',
+                rate          INTEGER NOT NULL DEFAULT 0,
+                title         TEXT NOT NULL DEFAULT '',
+                comment       TEXT NOT NULL DEFAULT '',
+                date_created  TEXT NOT NULL DEFAULT '',
+                status        TEXT NOT NULL DEFAULT 'pending',
+                synced_at     REAL NOT NULL DEFAULT 0,
+                UNIQUE(review_id)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_mir_account ON ml_item_reviews(account_id, status)")
         await db.commit()
 
 
@@ -4594,6 +4644,280 @@ async def get_order_ids_with_open_claims(order_ids: list) -> set:
             list(order_ids),
         )).fetchall()
     return {r[0] for r in rows}
+
+
+async def sync_amazon_seller_feedback(seller_id: str, days: int = 60) -> list[dict]:
+    """Jala GET_SELLER_FEEDBACK_DATA para una cuenta Amazon, cruza order_id
+    contra order_history para sacar el SKU, guarda solo Negative/Neutral
+    (Positive no aporta nada accionable) y devuelve las filas REALMENTE
+    nuevas (para disparar la alerta por correo — ver buyer_messages_client.
+    send_notification). No toca nada de ML/Amazon, solo lectura."""
+    import hashlib
+    import time as _t
+    from datetime import datetime as _dt, timedelta as _td
+    from app.services.amazon_client import get_amazon_client
+
+    account = await get_amazon_account(seller_id)
+    if not account:
+        return []
+    nick = account.get("nickname") or seller_id
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return []
+    try:
+        date_to = _dt.utcnow().strftime("%Y-%m-%d")
+        date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+        raw_items = await client.get_seller_feedback_report(date_from, date_to)
+    except Exception as e:
+        logger.warning(f"[Feedback] Error jalando seller feedback de {nick}: {e}")
+        return []
+
+    # Solo Negative/Neutral — Positive no requiere acción de nadie
+    negative_neutral = [
+        it for it in raw_items
+        if it.get("rating", "").strip().lower() not in ("positive", "positivo", "")
+    ]
+    if not negative_neutral:
+        return []
+
+    order_ids = [it["order_id"] for it in negative_neutral if it.get("order_id")]
+    sku_by_order = {}
+    if order_ids:
+        placeholders = ",".join("?" * len(order_ids))
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            rows = await (await db.execute(
+                f"""SELECT order_id, sku FROM order_history
+                    WHERE platform='amazon' AND order_id IN ({placeholders}) AND sku != ''""",
+                order_ids,
+            )).fetchall()
+        sku_by_order = {r[0]: r[1] for r in rows}
+
+    new_rows = []
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        for it in negative_neutral:
+            key_raw = f"{seller_id}|{it.get('order_id','')}|{it.get('date','')}|{it.get('comment','')}"
+            feedback_key = hashlib.sha256(key_raw.encode("utf-8")).hexdigest()[:32]
+            cur = await db.execute(
+                "SELECT id FROM amazon_seller_feedback WHERE feedback_key = ?", (feedback_key,)
+            )
+            if await cur.fetchone():
+                continue  # ya lo teníamos, no es nuevo
+            await db.execute("""
+                INSERT INTO amazon_seller_feedback
+                    (account_id, seller_id, order_id, order_sku, rating, comment,
+                     rater_email, date_created, status, feedback_key, synced_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                nick, seller_id, it.get("order_id", ""),
+                sku_by_order.get(it.get("order_id", ""), ""),
+                it.get("rating", ""), it.get("comment", ""), it.get("rater_email", ""),
+                it.get("date", ""), "pending", feedback_key, _t.time(),
+            ))
+            new_rows.append({**it, "account_id": nick, "sku": sku_by_order.get(it.get("order_id", ""), "")})
+        await db.commit()
+
+    if new_rows:
+        logger.info(f"[Feedback] {nick}: {len(new_rows)} feedback negativo/neutral nuevo")
+    return new_rows
+
+
+async def sync_ml_item_reviews(user_id: str, top_n_items: int = 50) -> list[dict]:
+    """Jala reseñas (GET /reviews/item/{id}) solo de los top_n_items más
+    vendidos activos de la cuenta — NO de todo el catálogo. La API de ML no
+    da forma de filtrar por rating ni de pedir 'solo las nuevas' (no hay
+    parámetro de orden documentado, confirmado 2026-07-31), así que se pide
+    un límite razonable por item (20) y se deduplica por review_id — con el
+    tiempo esto va cubriendo el universo real de reseñas negativas de los
+    productos que más importan, sin generar cientos de llamadas por cuenta.
+    Guarda solo rate<=3 (negativo/neutral). Devuelve las filas nuevas."""
+    import time as _t
+    from app.services.meli_client import MeliClient
+
+    tok = await get_tokens(user_id)
+    if not tok:
+        return []
+    nick = tok.get("nickname") or user_id
+
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT item_id, base_sku, sku FROM ml_listings
+               WHERE account_id = ? AND status = 'active' AND sold_qty > 0
+               ORDER BY sold_qty DESC LIMIT ?""",
+            (user_id, top_n_items),
+        )).fetchall()
+    if not rows:
+        return []
+
+    client = MeliClient(tok["access_token"], tok["refresh_token"], user_id)
+    new_rows = []
+    sem = asyncio.Semaphore(5)
+
+    async def _process_item(item_id: str, sku: str):
+        async with sem:
+            rv = await client.get_item_reviews(item_id, limit=20)
+        reviews = rv.get("reviews", []) if isinstance(rv, dict) else []
+        for rev in reviews:
+            rate = rev.get("rate", 0)
+            if rate == 0 or rate > 3:
+                continue  # solo negativo/neutral
+            review_id = str(rev.get("id", ""))
+            if not review_id:
+                continue
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+                cur = await db.execute(
+                    "SELECT id FROM ml_item_reviews WHERE review_id = ?", (review_id,)
+                )
+                if await cur.fetchone():
+                    continue  # ya lo teníamos
+                await db.execute("""
+                    INSERT INTO ml_item_reviews
+                        (account_id, item_id, sku, review_id, rate, title, comment,
+                         date_created, status, synced_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    user_id, item_id, sku, review_id, rate,
+                    rev.get("title", ""), rev.get("content", ""),
+                    (rev.get("date_created") or "")[:10], "pending", _t.time(),
+                ))
+                await db.commit()
+            new_rows.append({
+                "account_id": user_id, "nickname": nick, "item_id": item_id, "sku": sku,
+                "review_id": review_id, "rate": rate,
+                "title": rev.get("title", ""), "comment": rev.get("content", ""),
+            })
+
+    try:
+        await asyncio.gather(*[
+            _process_item(r["item_id"], r["base_sku"] or r["sku"]) for r in rows
+        ], return_exceptions=True)
+    finally:
+        await client.close()
+
+    if new_rows:
+        logger.info(f"[Feedback] {nick}: {len(new_rows)} reseñas negativas/neutras nuevas")
+    return new_rows
+
+
+_FEEDBACK_SYNC_INTERVAL_SECONDS = 24 * 3600
+_FEEDBACK_NOTIFY_TO = "jovan.rodriguez@miglobal.com.mx"
+
+
+async def _run_feedback_sync_once() -> None:
+    """Corre los 2 syncs (Amazon seller feedback + reseñas ML) para todas las
+    cuentas configuradas, y si hay algo genuinamente nuevo manda UN correo
+    resumen (no uno por cada item — se agrupan) via Gmail API. Todo de
+    lectura, cero riesgo de tocar listings."""
+    all_new_amz: list = []
+    all_new_ml: list = []
+
+    try:
+        accounts = await get_all_amazon_accounts()
+        for acc in accounts:
+            try:
+                rows = await sync_amazon_seller_feedback(acc["seller_id"])
+                all_new_amz.extend(rows)
+            except Exception as e:
+                logger.warning(f"[Feedback] Error sync Amazon {acc.get('nickname','?')}: {e}")
+    except Exception as e:
+        logger.warning(f"[Feedback] Error listando cuentas Amazon: {e}")
+
+    try:
+        tokens = await get_all_tokens()
+        for tok in tokens:
+            try:
+                rows = await sync_ml_item_reviews(tok["user_id"])
+                all_new_ml.extend(rows)
+            except Exception as e:
+                logger.warning(f"[Feedback] Error sync ML {tok.get('nickname','?')}: {e}")
+    except Exception as e:
+        logger.warning(f"[Feedback] Error listando cuentas ML: {e}")
+
+    total_new = len(all_new_amz) + len(all_new_ml)
+    if total_new == 0:
+        return
+
+    try:
+        from app.services import buyer_messages_client as _bmc
+        lines = [f"Nuevo feedback/reseñas negativas o neutras detectadas ({total_new} en total):", ""]
+        if all_new_amz:
+            lines.append(f"AMAZON ({len(all_new_amz)}):")
+            for r in all_new_amz[:20]:
+                lines.append(f"  - [{r.get('account_id','')}] SKU {r.get('sku') or '(sin SKU)'} | rating={r.get('rating','')} | \"{r.get('comment','')[:150]}\"")
+            lines.append("")
+        if all_new_ml:
+            lines.append(f"MERCADO LIBRE ({len(all_new_ml)}):")
+            for r in all_new_ml[:20]:
+                lines.append(f"  - [{r.get('nickname') or r.get('account_id','')}] SKU {r.get('sku') or '(sin SKU)'} | {r.get('rate','')}★ | \"{r.get('title','')}\": \"{r.get('comment','')[:150]}\"")
+            lines.append("")
+        lines.append("Revisa el detalle completo en Salud > Feedback.")
+        await _bmc.send_notification(
+            _FEEDBACK_NOTIFY_TO,
+            f"[Apantallate MX] {total_new} feedback/reseña nueva por revisar",
+            "\n".join(lines),
+        )
+        logger.info(f"[Feedback] Correo de alerta enviado ({total_new} items nuevos)")
+    except Exception as e:
+        logger.warning(f"[Feedback] No se pudo enviar el correo de alerta: {e}")
+
+
+async def feedback_sync_loop() -> None:
+    """Loop de fondo — se lanza una vez al arrancar la app (main.py startup).
+    Corre 1x/24h: el feedback/reseñas no cambian con más frecuencia que eso.
+    Espera 10 min antes de la PRIMERA corrida (igual patrón que
+    _startup_prewarm en main.py) — createReport de Amazon Reports API tiene
+    quota muy baja y ya compite con otros reportes (inventory, financial) al
+    arrancar; sin este delay, cada restart/deploy dispara el sync de
+    inmediato — confirmado en vivo 2026-07-31 al probar localmente: cada
+    reinicio de uvicorn re-consultaba el reporte de feedback de VECKTOR."""
+    await asyncio.sleep(600)
+    while True:
+        try:
+            await _run_feedback_sync_once()
+        except Exception as e:
+            logger.warning(f"[Feedback] Error en feedback_sync_loop: {e}")
+        await asyncio.sleep(_FEEDBACK_SYNC_INTERVAL_SECONDS)
+
+
+async def get_amazon_feedback_tab(seller_id: str, status: str = "pending") -> list:
+    """Feedback de vendedor (GET_SELLER_FEEDBACK_DATA) de UNA cuenta Amazon —
+    acotado por seller_id (misma convención que get_amazon_client), nunca
+    mezclado con otras cuentas (regla del proyecto)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT id, account_id, order_id, order_sku AS sku, rating, comment,
+                      date_created, status
+               FROM amazon_seller_feedback WHERE seller_id = ? AND status = ?
+               ORDER BY date_created DESC""",
+            (seller_id, status),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_ml_feedback_tab(user_id: str, status: str = "pending") -> list:
+    """Reseñas negativas/neutras de UNA cuenta ML — acotado por user_id
+    (misma convención que get_not_winning_listings/vigilancia)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT id, account_id, item_id, sku, rate, title, comment,
+                      date_created, status
+               FROM ml_item_reviews WHERE account_id = ? AND status = ?
+               ORDER BY date_created DESC""",
+            (user_id, status),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def set_feedback_status(platform: str, feedback_id: int, status: str) -> bool:
+    """Marca un feedback (Amazon) o reseña (ML) como atendido/pendiente."""
+    table = "amazon_seller_feedback" if platform == "amazon" else "ml_item_reviews"
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(f"UPDATE {table} SET status = ? WHERE id = ?", (status, feedback_id))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) -> int:

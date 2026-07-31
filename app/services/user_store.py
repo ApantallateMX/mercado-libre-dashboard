@@ -104,6 +104,7 @@ PERMISSION_TREE = {
         "salud":        {"label": "Salud",        "subtabs": {
             "claims": "Reclamos", "questions": "Preguntas", "messages": "Mensajes",
             "reputation": "Reputación", "vigilancia": "Vigilancia", "scores": "Score",
+            "feedback": "Feedback",
         }},
         "devoluciones": {"label": "Devoluciones",  "subtabs": None},
         "planning":     {"label": "Planning",      "subtabs": None},
@@ -122,6 +123,7 @@ PERMISSION_TREE = {
         }},
         "salud":        {"label": "Salud",        "subtabs": {
             "resumen": "Resumen", "mensajes": "Mensajes de Compradores", "vigilancia": "Vigilancia",
+            "feedback": "Feedback",
         }},
         "fba":          {"label": "FBA & Stock",  "subtabs": {
             "reabastecimiento": "Reabastecimiento", "catalogo": "Catálogo",

@@ -246,6 +246,17 @@
             </div>
             {% endif %}
 
+            {% if summary.pending_feedback and summary.pending_feedback > 0 %}
+            <div class="flex items-start gap-2 p-2 bg-yellow-50 rounded text-xs cursor-pointer hover:bg-yellow-100"
+                 onclick="if(window.loadTab) window.loadTab('feedback')">
+                <span class="w-2 h-2 rounded-full bg-yellow-500 mt-1 flex-shrink-0"></span>
+                <div>
+                    <span class="font-semibold text-yellow-700">{{ summary.pending_feedback }} reseña{{ 's' if summary.pending_feedback != 1 else '' }} negativa{{ 's' if summary.pending_feedback != 1 else '' }}/neutra{{ 's' if summary.pending_feedback != 1 else '' }} sin revisar</span>
+                    <p class="text-yellow-600 text-[10px]">Se sincroniza 1x/día — sync 1x/24h</p>
+                </div>
+            </div>
+            {% endif %}
+
             {% if summary.claims_margin.status in ['orange', 'red'] %}
             <div class="flex items-start gap-2 p-2 bg-orange-50 rounded text-xs">
                 <span class="w-2 h-2 rounded-full bg-orange-500 mt-1 flex-shrink-0"></span>
@@ -278,7 +289,7 @@
             </div>
             {% endif %}
 
-            {% if summary.open_claims == 0 and summary.unanswered_questions == 0 and summary.claims_margin.status == 'green' and summary.cancel_margin.status == 'green' and summary.delay_margin.status == 'green' %}
+            {% if summary.open_claims == 0 and summary.unanswered_questions == 0 and (not summary.pending_feedback) and summary.claims_margin.status == 'green' and summary.cancel_margin.status == 'green' and summary.delay_margin.status == 'green' %}
             <div class="flex items-start gap-2 p-2 bg-green-50 rounded text-xs">
                 <svg class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 <span class="font-semibold text-green-700">Todo en orden — sin alertas activas</span>
@@ -302,4 +313,5 @@
 <div id="health-counts-data" class="hidden"
      data-claims="{{ summary.open_claims }}"
      data-questions="{{ summary.unanswered_questions }}"
-     data-messages="{{ summary.unread_messages }}"></div>
+     data-messages="{{ summary.unread_messages }}"
+     data-feedback="{{ summary.pending_feedback }}"></div>

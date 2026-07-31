@@ -359,3 +359,39 @@ async def send_message(pack_id: str, body: MessageRequest):
         raise HTTPException(status_code=e.status_code or 400, detail=str(e))
     finally:
         await client.close()
+
+
+@router.get("/feedback")
+async def get_feedback(request: Request, status: str = Query("pending")):
+    """Reseñas ML negativas/neutras de la cuenta ML ACTIVA — nunca mezcladas
+    con otras cuentas (regla del proyecto). El feedback de Amazon vive en su
+    propio endpoint (ver amazon_products.py), acotado por seller_id."""
+    if status not in ("pending", "handled"):
+        raise HTTPException(status_code=400, detail="status inválido")
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    uid = str(client.user_id)
+    await client.close()
+    return {"items": await _ts.get_ml_feedback_tab(uid, status)}
+
+
+class FeedbackStatusRequest(BaseModel):
+    platform: str  # amazon | ml
+    status: str    # pending | handled
+
+
+@router.post("/feedback/{feedback_id}/status")
+async def update_feedback_status(feedback_id: int, body: FeedbackStatusRequest, request: Request):
+    """Marca un feedback/reseña como atendido (o lo regresa a pendiente)."""
+    if body.platform not in ("amazon", "ml"):
+        raise HTTPException(status_code=400, detail="platform inválido")
+    if body.status not in ("pending", "handled"):
+        raise HTTPException(status_code=400, detail="status inválido")
+    ok = await _ts.set_feedback_status(body.platform, feedback_id, body.status)
+    if not ok:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    user = getattr(request.state, "dashboard_user", {}) or {}
+    username = user.get("sub") or user.get("name") or "?"
+    await _log_history(request, username, f"{body.platform}_feedback_status", f"feedback:{feedback_id}", {"status": body.status})
+    return {"ok": True, "status": body.status}

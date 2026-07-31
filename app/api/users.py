@@ -238,6 +238,8 @@ ACTION_META: dict = {
     "ml_claim_status":    ("📋", "bg-red-50 text-red-600",       "Cambió estado reclamo ML"),
     "amazon_buyer_message_take":   ("🙋", "bg-orange-50 text-orange-700", "Tomó mensaje Amazon"),
     "amazon_buyer_message_status": ("💬", "bg-orange-50 text-orange-600", "Cambió estado mensaje Amazon"),
+    "amazon_feedback_status": ("⭐", "bg-yellow-50 text-yellow-700", "Marcó feedback Amazon"),
+    "ml_feedback_status":     ("⭐", "bg-yellow-50 text-yellow-700", "Marcó reseña ML"),
     # Sistema / usuarios
     "login":              ("🔑", "bg-blue-50 text-blue-600",     "Inicio sesión"),
     "logout":             ("🚪", "bg-gray-50 text-gray-500",     "Cerró sesión"),

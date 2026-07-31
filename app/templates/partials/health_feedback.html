@@ -1,0 +1,43 @@
+<div>
+    <div class="flex items-center gap-2 mb-3">
+        <h3 class="text-sm font-bold text-gray-800">Reseñas negativas/neutras</h3>
+        <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">rate &le;3 &middot; sync 1x/día</span>
+    </div>
+    {% if not items %}
+    <p class="text-sm text-gray-400">Sin reseñas negativas/neutras pendientes por revisar. 🎉</p>
+    {% else %}
+    <div class="space-y-2">
+        {% for f in items %}
+        <div class="bg-white border border-gray-100 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap" id="feedback-row-{{ f.id }}">
+            <div class="min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                    <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">{{ f.rate }}★</span>
+                    <span class="text-[11px] text-gray-400 font-mono">{{ f.sku or '(sin SKU)' }}</span>
+                </div>
+                <p class="text-sm font-medium text-gray-800">{{ f.title }}</p>
+                <p class="text-sm text-gray-600">{{ f.comment }}</p>
+                <p class="text-[10px] text-gray-400 mt-1">{{ f.date_created }} &middot; {{ f.item_id }}</p>
+            </div>
+            <button onclick="markMlFeedbackHandled({{ f.id }})"
+                    class="text-xs px-3 py-1.5 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 font-semibold transition flex-shrink-0">
+                Marcar atendido
+            </button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+<script>
+window.markMlFeedbackHandled = function(id) {
+    fetch('/api/health/feedback/' + id + '/status', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform: 'ml', status: 'handled'})
+    })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            var row = document.getElementById('feedback-row-' + id);
+            if (row) row.remove();
+        })
+        .catch(function(e) { alert('Error: ' + e.message); });
+};
+</script>

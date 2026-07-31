@@ -994,14 +994,27 @@ class AmazonClient:
         """
         Descarga el contenido del reporte desde la URL pre-signed de S3.
         IMPORTANTE: No usar headers de auth SP-API — la URL ya tiene auth embebida.
+
+        Algunos reportes (ej. GET_SELLER_FEEDBACK_DATA en marketplace MX) vienen
+        en cp1252/latin-1, no utf-8 — confirmado en vivo 2026-07-31: columnas y
+        comentarios con acentos ("Número", "electrónico") salían con �
+        (replacement char) al forzar utf-8. Se intenta utf-8 estricto primero
+        (no cambia nada para reportes en inglés/ASCII, que son la mayoría) y
+        solo si falla se reintenta con cp1252.
         """
         import gzip as _gzip
+
+        def _decode(raw: bytes) -> str:
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw.decode("cp1252", errors="replace")
+
         async with httpx.AsyncClient(follow_redirects=True, timeout=120) as http:
             resp = await http.get(url)
             resp.raise_for_status()
-            if compressed:
-                return _gzip.decompress(resp.content).decode("utf-8", errors="replace")
-            return resp.text
+            raw = _gzip.decompress(resp.content) if compressed else resp.content
+            return _decode(raw)
 
     async def get_onsite_inventory_report(self, max_wait_secs: int = 120) -> dict:
         """
@@ -1286,6 +1299,84 @@ class AmazonClient:
                 raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
 
         logger.warning(f"[Amazon Reports] Timeout esperando reporte de reembolsos {report_id} ({max_wait_secs}s)")
+        return []
+
+    async def get_seller_feedback_report(self, date_from: str, date_to: str, max_wait_secs: int = 180) -> list:
+        """
+        Reporte GET_SELLER_FEEDBACK_DATA — calificación del comprador AL VENDEDOR
+        (envío, comunicación, condición del producto), NO reseñas de producto.
+        Amazon no expone esto con SKU/ASIN directo — solo trae Order ID; el
+        cruce a SKU se hace después contra order_history (ver
+        token_store.sync_amazon_seller_feedback).
+
+        NOTA (confirmado en vivo 2026-07-31, VECKTOR): las columnas de este
+        reporte vienen LOCALIZADAS al idioma del marketplace, a diferencia de
+        los demás reportes flat-file de este archivo (que usan headers fijos
+        en inglés tipo "order-id"). En MX llegan en español: Fecha, Rating,
+        Comentarios, Tu respuesta, Número de pedido, Correo electrónico del
+        evaluador. Se dejan también las variantes en inglés por si el
+        marketplace USA (ExclusiveBulbs) las trae distinto.
+
+        Args:
+            date_from, date_to: "YYYY-MM-DD". Amazon limita el rango del reporte.
+
+        Returns:
+            Lista de dicts: {order_id, rating, comment, date, rater_email}
+        """
+        import csv, io as _io
+
+        created_after = f"{date_from}T00:00:00Z"
+        created_before = f"{date_to}T23:59:59Z"
+        logger.info(f"[Amazon Reports] Creando reporte de seller feedback {date_from}→{date_to}…")
+        body = {
+            "reportType": "GET_SELLER_FEEDBACK_DATA",
+            "marketplaceIds": [self.marketplace_id],
+            "dataStartTime": created_after,
+            "dataEndTime": created_before,
+        }
+        result = await self._request("POST", "/reports/2021-06-30/reports", json_body=body)
+        report_id = result.get("reportId", "")
+        if not report_id:
+            raise ValueError(f"Amazon no devolvió reportId: {result}")
+
+        wait_interval = 15
+        attempts = max(4, max_wait_secs // wait_interval)
+
+        for attempt in range(attempts):
+            await asyncio.sleep(wait_interval)
+            status_data = await self.get_report_status(report_id)
+            proc_status = status_data.get("processingStatus", "")
+            logger.debug(f"[Amazon Reports] seller-feedback {report_id} → {proc_status} (intento {attempt+1}/{attempts})")
+
+            if proc_status == "DONE":
+                doc_id = status_data.get("reportDocumentId", "")
+                if not doc_id:
+                    raise ValueError("DONE pero sin reportDocumentId")
+                doc_info = await self.get_report_document_url(doc_id)
+                url = doc_info.get("url", "")
+                compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
+                content = await self.download_report_document(url, compressed)
+
+                items = []
+                reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                logger.info(f"[Amazon Reports] Columnas seller-feedback TSV: {reader.fieldnames}")
+                for row in reader:
+                    order_id = (row.get("Número de pedido") or row.get("Order ID") or row.get("order-id") or "").strip()
+                    rating = (row.get("Rating") or row.get("rating") or "").strip()
+                    items.append({
+                        "order_id": order_id,
+                        "rating": rating,
+                        "comment": (row.get("Comentarios") or row.get("Comments") or row.get("comments") or "").strip(),
+                        "date": (row.get("Fecha") or row.get("Date") or row.get("date") or "")[:10],
+                        "rater_email": (row.get("Correo electrónico del evaluador") or row.get("Rater Email") or row.get("rater-email") or "").strip(),
+                    })
+                logger.info(f"[Amazon Reports] {len(items)} feedback entries para {self.seller_id}")
+                return items
+
+            elif proc_status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
+
+        logger.warning(f"[Amazon Reports] Timeout esperando reporte de seller feedback {report_id} ({max_wait_secs}s)")
         return []
 
     async def get_merchant_listings_report(self, max_wait_secs: int = 300) -> list:

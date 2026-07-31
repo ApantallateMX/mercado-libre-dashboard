@@ -4541,6 +4541,24 @@ class RepricingApplyIn(BaseModel):
     updates: list[dict]  # [{sku, new_price}]
 
 
+@router.get("/products/feedback", response_class=JSONResponse)
+async def amazon_products_feedback(
+    seller_id: Optional[str] = Query(None),
+    status: str = Query("pending"),
+):
+    """Feedback de vendedor (GET_SELLER_FEEDBACK_DATA) de la cuenta Amazon
+    ACTIVA — acotado por seller_id, nunca mezclado con otras cuentas."""
+    if status not in ("pending", "handled"):
+        return JSONResponse({"error": "status inválido"}, status_code=400)
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "No hay cuenta Amazon configurada"}, status_code=401)
+    sid = client.seller_id
+    from app.services import token_store
+    items = await token_store.get_amazon_feedback_tab(sid, status)
+    return {"items": items}
+
+
 @router.get("/products/repricing", response_class=HTMLResponse)
 async def amazon_products_repricing(
     request:   Request,

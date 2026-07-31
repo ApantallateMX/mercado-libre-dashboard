@@ -337,6 +337,39 @@ async def send_reply(
     return msg["Message-ID"] or ""
 
 
+async def send_notification(to_addr: str, subject: str, body: str) -> str:
+    """Envía un correo interno (alertas del sistema, no respuesta a comprador)
+    usando cualquier cuenta Amazon ya autorizada en Gmail — a diferencia de
+    send_reply(), NO fuerza el prefijo "Re:" (no tiene sentido en un correo
+    nuevo) y prueba las cuentas configuradas en orden hasta que una logre
+    enviar, para no depender de que una cuenta específica siga en modo
+    OAuth "Testing" (refresh_token expira cada 7 días — ver incidente
+    VECKTOR 2026-07-29)."""
+    last_err = None
+    for cfg in AMAZON_BUYER_INBOX_ACCOUNTS:
+        if not cfg.get("gmail_refresh_token"):
+            continue
+        try:
+            msg = _build_mime_message(cfg["email"], to_addr, subject, body, in_reply_to="")
+            msg.replace_header("Subject", re.sub(r"\s+", " ", subject or "").strip())
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
+            access_token = await _gmail_access_token(
+                cfg["gmail_refresh_token"], cfg["gmail_client_id"], cfg["gmail_client_secret"]
+            )
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    GMAIL_SEND_URL,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json={"raw": raw},
+                )
+            if resp.status_code in (200, 202):
+                return msg["Message-ID"] or ""
+            last_err = f"{cfg['email']}: {resp.status_code} {resp.text[:200]}"
+        except Exception as e:
+            last_err = f"{cfg['email']}: {e}"
+    raise RuntimeError(f"No se pudo enviar la notificación con ninguna cuenta configurada. Último error: {last_err}")
+
+
 async def setup_organization_filter(seller_id: str, from_domain: str, label_name: str) -> dict:
     """Crea (o reusa) una etiqueta y un filtro que la aplica automáticamente
     a todo correo entrante de from_domain, y lo saca del inbox (Skip Inbox/
