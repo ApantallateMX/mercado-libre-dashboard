@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-31 — OPERACION: disco de Railway al 92.8% — retención automática de audit_log (18,337 filas archivadas)
+
+**Archivos:** `app/main.py` (2 endpoints diag nuevos), `scripts/archive_audit_log.py`,
+tarea programada de Windows `ApantallateMX-ArchiveAuditLog`.
+
+Jovan vio el banner de disco (92.8%, 21.7MB libres) en una captura mientras
+revisaba otra cosa. Investigado: el volumen de Railway (~430MB) está casi
+lleno — la DB sola pesa 309MB (78%), fotos+facturas otros 88MB. `audit_log`
+(21,638 filas) no tenía **ningún límite de retención** — crece para
+siempre. No es la tabla más grande (`amazon_listings`/`order_history` son
+mayores, pero esas SÍ hacen falta completas para cálculos de negocio
+reales) pero sí la más segura de podar porque nadie depende del dato viejo.
+
+Jovan no quiere pagar más Railway; ya mandó correo a MI2 pidiendo storage
+MinIO hace 2 semanas, sin respuesta aún. Como solución inmediata sin costo
+y sin esperar a MI2: usar el servidor dedicado (siempre encendido, no la
+laptop personal) como respaldo local antes de purgar.
+
+- `GET /api/diag/audit-log-export?before_days=N&token=...` — exporta (sin
+  borrar) filas más viejas que N días.
+- `POST /api/diag/audit-log-purge?before_days=N&expected_count=X&token=...`
+  — borra esas mismas filas, solo si el count actual coincide con
+  expected_count (evita perder filas nuevas que hayan entrado justo entre
+  el export y el purge).
+- `scripts/archive_audit_log.py` — exporta a `backups/audit_log/` (gitignored),
+  verifica releyendo el archivo, y solo entonces purga. Nunca borra sin
+  haber guardado primero.
+- Tarea programada de Windows, diaria 3am, en este mismo servidor.
+
+Corrida real ya ejecutada: 18,337 de 21,638 filas archivadas y purgadas
+(quedan 3,305 recientes en producción). **Importante:** esto NO reduce el
+tamaño del archivo `.db` hoy — VACUUM necesitaría ~2x espacio libre que no
+tenemos — solo detiene el crecimiento futuro de esta tabla específica. La
+crisis de disco de fondo sigue sin resolverse del todo; sigue pendiente la
+respuesta de MI2 para MinIO (fotos+facturas, 88MB reales que sí se
+liberarían del volumen).
+
 ## 2026-07-31 — TUNE: sync de Feedback más frecuente (24h→4h Amazon, 50→150 top-sellers ML)
 
 Jovan preguntó qué se podía hacer de verdad ante los límites reales de
