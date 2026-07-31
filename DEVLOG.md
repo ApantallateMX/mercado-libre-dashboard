@@ -7,6 +7,63 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-31 — FEAT: Monitoreo de feedback (Amazon seller feedback + reseñas ML negativas) con alerta por correo
+
+**Archivos:** `app/services/amazon_client.py`, `app/services/token_store.py`,
+`app/services/buyer_messages_client.py`, `app/api/health.py`,
+`app/api/amazon_products.py`, `app/api/users.py`, `app/services/user_store.py`,
+`app/main.py`, `app/templates/health.html`, `app/templates/amazon_dashboard.html`,
+`app/templates/partials/health_feedback.html`, `app/templates/partials/health_summary.html`,
+`app/static/js/amazon_dashboard.js`.
+
+Jovan pidió poder monitorear feedback nuevo (Amazon y ML) día a día sin
+entrar a cada plataforma a revisar a mano, con alerta cuando entra algo
+nuevo. Feature nueva completa, en las 2 plataformas:
+
+- **Amazon**: `GET_SELLER_FEEDBACK_DATA` vía Reports API — calificación del
+  comprador al vendedor (envío/comunicación/condición), cruzada con SKU vía
+  `order_history` (Amazon solo da Order ID, no SKU directo). Confirmado en
+  vivo contra VECKTOR: las columnas de este reporte vienen **localizadas al
+  idioma del marketplace** (español: Fecha/Rating/Comentarios/Número de
+  pedido/Correo del evaluador) — a diferencia de los demás reportes
+  flat-file de este archivo, que usan headers fijos en inglés. De paso se
+  encontró y corrigió un bug de encoding en `download_report_document`:
+  probaba UTF-8 a secas y los acentos salían como carácter de reemplazo (```
+  Número``` → ```N�mero```) — ahora intenta UTF-8 estricto primero (no
+  cambia nada para reportes en inglés) y cae a cp1252 solo si falla.
+- **ML**: reseñas de producto negativas/neutras (rate≤3) vía
+  `GET /reviews/item/{id}`, acotado a los top-N más vendidos activos por
+  cuenta — NO todo el catálogo. La API de ML no tiene forma de filtrar por
+  rating ni de pedir "solo las nuevas" (confirmado: sin parámetro de orden
+  documentado), así que se dedupe por `review_id` y con el tiempo cubre el
+  universo real de reseñas de los productos que más importan.
+- Sync 1x/24h en background (`token_store.feedback_sync_loop`, con delay de
+  10 min al arrancar — el createReport de Amazon tiene quota muy baja y ya
+  compite con otros reportes al deploy; sin este delay cada restart
+  disparaba el sync de inmediato, confirmado al probar localmente) + correo
+  de alerta agrupado vía Gmail API (`buyer_messages_client.send_notification`,
+  nuevo helper que prueba las cuentas Amazon configuradas en orden, sin
+  forzar "Re:" como `send_reply`).
+- Tab "Feedback" nuevo en Salud: ML dentro de `health.html` (mismo patrón
+  que Vigilancia/Reclamos, con badge), Amazon dentro de la Salud de
+  `amazon_dashboard.html` (mismo patrón client-rendered que Mensajes de
+  Compradores). Ambos con botón "Marcar atendido", logueado en audit_log.
+- 2 tablas nuevas: `amazon_seller_feedback`, `ml_item_reviews`.
+
+Verificado en vivo contra las 3 cuentas Amazon reales y las 4 cuentas ML
+reales: encontró 6 feedbacks negativos/neutros reales sin atender en
+VECKTOR/ExclusiveBulbs (AUTOBOT AMZ MX falló con reporte CANCELLED, no
+fatal, ya manejado con warning). 0 reseñas ML negativas en los top-sellers
+muestreados de esta corrida — resultado válido, no error. **Nota:** esa
+primera corrida de prueba probablemente ya disparó el correo real con esos
+6 casos antes de agregar el delay de arranque — se le avisó a Jovan.
+
+No completado (pendiente real, no forzado): Amazon no tiene forma de saber
+"solo lo nuevo" vía webhook — la vía robusta sería el topic
+`orders_feedback` de notificaciones, que depende de la misma configuración
+de Notifications URL en DevCenter ML que ya estaba pendiente para el
+webhook de órdenes en tiempo real.
+
 ## 2026-07-30 — FIX+FEAT: 6 hallazgos más de la auditoría (bulk Qty0 sin detalle, eliminar sin rol, puente órdenes-reclamos, alertas de stock confusas, writes sin manejo de error)
 
 **Archivos:** `app/api/amazon_products.py`, `app/main.py`, `app/services/token_store.py`,
