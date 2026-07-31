@@ -7,6 +7,14 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-31 — TUNE: sync de Feedback más frecuente (24h→4h Amazon, 50→150 top-sellers ML)
+
+Jovan preguntó qué se podía hacer de verdad ante los límites reales de
+webhook (Amazon no tiene, ML necesita config de DevCenter). El intervalo
+de 24h no tenía justificación técnica real — la quota de `createReport` de
+Amazon aguanta 4h sin riesgo. Sube también `top_n_items` de ML (50→150)
+para cubrir más catálogo por corrida.
+
 ## 2026-07-31 — FEAT: Monitoreo de feedback (Amazon seller feedback + reseñas ML negativas) con alerta por correo
 
 **Archivos:** `app/services/amazon_client.py`, `app/services/token_store.py`,
