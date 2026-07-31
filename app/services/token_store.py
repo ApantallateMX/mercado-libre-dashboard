@@ -4722,7 +4722,7 @@ async def sync_amazon_seller_feedback(seller_id: str, days: int = 60) -> list[di
     return new_rows
 
 
-async def sync_ml_item_reviews(user_id: str, top_n_items: int = 50) -> list[dict]:
+async def sync_ml_item_reviews(user_id: str, top_n_items: int = 150) -> list[dict]:
     """Jala reseñas (GET /reviews/item/{id}) solo de los top_n_items más
     vendidos activos de la cuenta — NO de todo el catálogo. La API de ML no
     da forma de filtrar por rating ni de pedir 'solo las nuevas' (no hay
@@ -4800,7 +4800,7 @@ async def sync_ml_item_reviews(user_id: str, top_n_items: int = 50) -> list[dict
     return new_rows
 
 
-_FEEDBACK_SYNC_INTERVAL_SECONDS = 24 * 3600
+_FEEDBACK_SYNC_INTERVAL_SECONDS = 4 * 3600  # 4h — Amazon Reports API aguanta este ritmo sin quota (createReport es ~1/45seg sostenido, 4h da margen de sobra)
 _FEEDBACK_NOTIFY_TO = "jovan.rodriguez@miglobal.com.mx"
 
 
