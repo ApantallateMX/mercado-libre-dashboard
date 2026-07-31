@@ -1485,6 +1485,21 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_asf_account ON amazon_seller_feedback(account_id, status)")
+        # Migración: ASIN + título + link directo — antes el tab de Feedback
+        # solo mostraba "(sin SKU)" sin decir a qué producto pertenecía ni dar
+        # forma de verlo en Amazon (Jovan lo reportó como "mocho" 2026-07-31).
+        try:
+            await db.execute("ALTER TABLE amazon_seller_feedback ADD COLUMN order_asin TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE amazon_seller_feedback ADD COLUMN order_title TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE amazon_seller_feedback ADD COLUMN asin_url TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: ml_item_reviews — reseñas de producto (rate 1-5 + comentario)
         # via GET /reviews/item/{id}. Ligado a item_id (no a order_id como
@@ -1507,6 +1522,17 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_mir_account ON ml_item_reviews(account_id, status)")
+        # Migración: título del PRODUCTO (distinto de `title`, que es el
+        # encabezado de la reseña, ej. "Excelente") + link directo a la
+        # publicación — mismo motivo que amazon_seller_feedback arriba.
+        try:
+            await db.execute("ALTER TABLE ml_item_reviews ADD COLUMN product_title TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE ml_item_reviews ADD COLUMN permalink TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -4648,10 +4674,16 @@ async def get_order_ids_with_open_claims(order_ids: list) -> set:
 
 async def sync_amazon_seller_feedback(seller_id: str, days: int = 60) -> list[dict]:
     """Jala GET_SELLER_FEEDBACK_DATA para una cuenta Amazon, cruza order_id
-    contra order_history para sacar el SKU, guarda solo Negative/Neutral
-    (Positive no aporta nada accionable) y devuelve las filas REALMENTE
-    nuevas (para disparar la alerta por correo — ver buyer_messages_client.
-    send_notification). No toca nada de ML/Amazon, solo lectura."""
+    contra order_history para sacar SKU/ASIN (y de ahí el título, vía
+    amazon_listings/bm_sku_master), guarda solo Negative/Neutral (Positive
+    no aporta nada accionable) y devuelve las filas REALMENTE nuevas (para
+    disparar la alerta por correo). Si el order_id no está en order_history
+    (cuenta con backfill incompleto, ej. ExclusiveBulbs), cae a un llamado
+    en vivo a la Orders API (getOrderItems) para no dejar el feedback sin
+    SKU/título/link — confirmado 2026-07-31 que ExclusiveBulbs mostraba
+    todo "(sin SKU)" por esto. También reintenta enriquecer filas VIEJAS que
+    quedaron sin esos datos en un sync anterior (ON CONFLICT UPDATE), no
+    solo las nuevas."""
     import hashlib
     import time as _t
     from datetime import datetime as _dt, timedelta as _td
@@ -4661,6 +4693,10 @@ async def sync_amazon_seller_feedback(seller_id: str, days: int = 60) -> list[di
     if not account:
         return []
     nick = account.get("nickname") or seller_id
+    # Por marketplace_id, no marketplace_name (varía "US"/"USA" según de dónde
+    # se sembró la cuenta — confirmado en vivo que ExclusiveBulbs guarda "US",
+    # no "USA", y con el check viejo el link salía apuntando a amazon.com.mx)
+    domain = "amazon.com" if account.get("marketplace_id") == "ATVPDKIKX0DER" else "amazon.com.mx"
 
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
@@ -4682,39 +4718,89 @@ async def sync_amazon_seller_feedback(seller_id: str, days: int = 60) -> list[di
         return []
 
     order_ids = [it["order_id"] for it in negative_neutral if it.get("order_id")]
-    sku_by_order = {}
+    info_by_order = {}  # order_id -> {sku, asin, title}
     if order_ids:
         placeholders = ",".join("?" * len(order_ids))
         async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
             rows = await (await db.execute(
-                f"""SELECT order_id, sku FROM order_history
+                f"""SELECT order_id, sku, item_id FROM order_history
                     WHERE platform='amazon' AND order_id IN ({placeholders}) AND sku != ''""",
                 order_ids,
             )).fetchall()
-        sku_by_order = {r[0]: r[1] for r in rows}
+        for r in rows:
+            info_by_order[r[0]] = {"sku": r[1], "asin": r[2] or "", "title": ""}
+        # Título: buscar por SKU en amazon_listings (título tal como está
+        # publicado) y si no, en bm_sku_master (título del catálogo BM)
+        skus_found = [v["sku"] for v in info_by_order.values() if v["sku"]]
+        if skus_found:
+            placeholders2 = ",".join("?" * len(skus_found))
+            async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+                al_rows = await (await db.execute(
+                    f"SELECT sku, title FROM amazon_listings WHERE seller_id=? AND sku IN ({placeholders2})",
+                    [seller_id] + skus_found,
+                )).fetchall()
+                title_by_sku = {r[0]: r[1] for r in al_rows if r[1]}
+                missing_skus = [s for s in skus_found if s not in title_by_sku]
+                if missing_skus:
+                    placeholders3 = ",".join("?" * len(missing_skus))
+                    bm_rows = await (await db.execute(
+                        f"SELECT sku, title FROM bm_sku_master WHERE sku IN ({placeholders3})",
+                        missing_skus,
+                    )).fetchall()
+                    title_by_sku.update({r[0]: r[1] for r in bm_rows if r[1]})
+            for v in info_by_order.values():
+                if v["sku"] in title_by_sku:
+                    v["title"] = title_by_sku[v["sku"]]
+
+    # Fallback en vivo — solo para los order_id que NO tenían nada en
+    # order_history (cuentas con backfill incompleto). Acotado a la Orders
+    # API (rate limit separado de Reports API), y solo para negativo/neutral
+    # de esta corrida — nunca todo el histórico de un jalón.
+    missing_order_ids = [oid for oid in order_ids if oid not in info_by_order]
+    for oid in missing_order_ids:
+        try:
+            items = await client.get_order_items(oid)
+        except Exception as e:
+            logger.warning(f"[Feedback] No se pudo obtener order_items en vivo para {oid} ({nick}): {e}")
+            continue
+        if items:
+            first = items[0]
+            info_by_order[oid] = {
+                "sku": first.get("SellerSKU", "") or "",
+                "asin": first.get("ASIN", "") or "",
+                "title": first.get("Title", "") or "",
+            }
 
     new_rows = []
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for it in negative_neutral:
-            key_raw = f"{seller_id}|{it.get('order_id','')}|{it.get('date','')}|{it.get('comment','')}"
+            oid = it.get("order_id", "")
+            info = info_by_order.get(oid, {"sku": "", "asin": "", "title": ""})
+            asin_url = f"https://www.{domain}/dp/{info['asin']}" if info["asin"] else ""
+            key_raw = f"{seller_id}|{oid}|{it.get('date','')}|{it.get('comment','')}"
             feedback_key = hashlib.sha256(key_raw.encode("utf-8")).hexdigest()[:32]
             cur = await db.execute(
                 "SELECT id FROM amazon_seller_feedback WHERE feedback_key = ?", (feedback_key,)
             )
-            if await cur.fetchone():
-                continue  # ya lo teníamos, no es nuevo
+            existing = await cur.fetchone()
             await db.execute("""
                 INSERT INTO amazon_seller_feedback
-                    (account_id, seller_id, order_id, order_sku, rating, comment,
-                     rater_email, date_created, status, feedback_key, synced_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    (account_id, seller_id, order_id, order_sku, order_asin, order_title,
+                     asin_url, rating, comment, rater_email, date_created, status,
+                     feedback_key, synced_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(feedback_key) DO UPDATE SET
+                    order_sku   = CASE WHEN excluded.order_sku   != '' THEN excluded.order_sku   ELSE amazon_seller_feedback.order_sku   END,
+                    order_asin  = CASE WHEN excluded.order_asin  != '' THEN excluded.order_asin  ELSE amazon_seller_feedback.order_asin  END,
+                    order_title = CASE WHEN excluded.order_title != '' THEN excluded.order_title ELSE amazon_seller_feedback.order_title END,
+                    asin_url    = CASE WHEN excluded.asin_url    != '' THEN excluded.asin_url    ELSE amazon_seller_feedback.asin_url    END
             """, (
-                nick, seller_id, it.get("order_id", ""),
-                sku_by_order.get(it.get("order_id", ""), ""),
-                it.get("rating", ""), it.get("comment", ""), it.get("rater_email", ""),
+                nick, seller_id, oid, info["sku"], info["asin"], info["title"],
+                asin_url, it.get("rating", ""), it.get("comment", ""), it.get("rater_email", ""),
                 it.get("date", ""), "pending", feedback_key, _t.time(),
             ))
-            new_rows.append({**it, "account_id": nick, "sku": sku_by_order.get(it.get("order_id", ""), "")})
+            if not existing:
+                new_rows.append({**it, "account_id": nick, "sku": info["sku"]})
         await db.commit()
 
     if new_rows:
@@ -4742,7 +4828,7 @@ async def sync_ml_item_reviews(user_id: str, top_n_items: int = 150) -> list[dic
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            """SELECT item_id, base_sku, sku FROM ml_listings
+            """SELECT item_id, base_sku, sku, title, data_json FROM ml_listings
                WHERE account_id = ? AND status = 'active' AND sold_qty > 0
                ORDER BY sold_qty DESC LIMIT ?""",
             (user_id, top_n_items),
@@ -4754,7 +4840,7 @@ async def sync_ml_item_reviews(user_id: str, top_n_items: int = 150) -> list[dic
     new_rows = []
     sem = asyncio.Semaphore(5)
 
-    async def _process_item(item_id: str, sku: str):
+    async def _process_item(item_id: str, sku: str, product_title: str, permalink: str):
         async with sem:
             rv = await client.get_item_reviews(item_id, limit=20)
         reviews = rv.get("reviews", []) if isinstance(rv, dict) else []
@@ -4769,28 +4855,45 @@ async def sync_ml_item_reviews(user_id: str, top_n_items: int = 150) -> list[dic
                 cur = await db.execute(
                     "SELECT id FROM ml_item_reviews WHERE review_id = ?", (review_id,)
                 )
-                if await cur.fetchone():
-                    continue  # ya lo teníamos
+                existing = await cur.fetchone()
                 await db.execute("""
                     INSERT INTO ml_item_reviews
                         (account_id, item_id, sku, review_id, rate, title, comment,
-                         date_created, status, synced_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                         product_title, permalink, date_created, status, synced_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(review_id) DO UPDATE SET
+                        product_title = CASE WHEN excluded.product_title != '' THEN excluded.product_title ELSE ml_item_reviews.product_title END,
+                        permalink     = CASE WHEN excluded.permalink     != '' THEN excluded.permalink     ELSE ml_item_reviews.permalink     END,
+                        sku           = CASE WHEN excluded.sku           != '' THEN excluded.sku           ELSE ml_item_reviews.sku           END
                 """, (
                     user_id, item_id, sku, review_id, rate,
                     rev.get("title", ""), rev.get("content", ""),
+                    product_title, permalink,
                     (rev.get("date_created") or "")[:10], "pending", _t.time(),
                 ))
                 await db.commit()
-            new_rows.append({
-                "account_id": user_id, "nickname": nick, "item_id": item_id, "sku": sku,
-                "review_id": review_id, "rate": rate,
-                "title": rev.get("title", ""), "comment": rev.get("content", ""),
-            })
+            if not existing:
+                new_rows.append({
+                    "account_id": user_id, "nickname": nick, "item_id": item_id, "sku": sku,
+                    "review_id": review_id, "rate": rate,
+                    "title": rev.get("title", ""), "comment": rev.get("content", ""),
+                    "product_title": product_title,
+                })
+
+    def _extract_permalink(data_json_raw: str) -> str:
+        if not data_json_raw:
+            return ""
+        try:
+            return json.loads(data_json_raw).get("permalink", "") or ""
+        except Exception:
+            return ""
 
     try:
         await asyncio.gather(*[
-            _process_item(r["item_id"], r["base_sku"] or r["sku"]) for r in rows
+            _process_item(
+                r["item_id"], r["base_sku"] or r["sku"],
+                r["title"] or "", _extract_permalink(r["data_json"]),
+            ) for r in rows
         ], return_exceptions=True)
     finally:
         await client.close()
@@ -4887,7 +4990,8 @@ async def get_amazon_feedback_tab(seller_id: str, status: str = "pending") -> li
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            """SELECT id, account_id, order_id, order_sku AS sku, rating, comment,
+            """SELECT id, account_id, order_id, order_sku AS sku, order_asin AS asin,
+                      order_title AS product_title, asin_url, rating, comment,
                       date_created, status
                FROM amazon_seller_feedback WHERE seller_id = ? AND status = ?
                ORDER BY date_created DESC""",
@@ -4903,6 +5007,7 @@ async def get_ml_feedback_tab(user_id: str, status: str = "pending") -> list:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT id, account_id, item_id, sku, rate, title, comment,
+                      product_title, permalink,
                       date_created, status
                FROM ml_item_reviews WHERE account_id = ? AND status = ?
                ORDER BY date_created DESC""",

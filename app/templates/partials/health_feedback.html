@@ -10,11 +10,20 @@
         {% for f in items %}
         <div class="bg-white border border-gray-100 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap" id="feedback-row-{{ f.id }}">
             <div class="min-w-0">
-                <div class="flex items-center gap-2 mb-1">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
                     <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">{{ f.rate }}★</span>
-                    <span class="text-[11px] text-gray-400 font-mono">{{ f.sku or '(sin SKU)' }}</span>
+                    {% if f.sku %}
+                    <span class="text-[11px] text-gray-400 font-mono">{{ f.sku }}</span>
+                    {% else %}
+                    <span class="text-[11px] text-gray-300 italic">SKU no encontrado</span>
+                    {% endif %}
                 </div>
-                <p class="text-sm font-medium text-gray-800">{{ f.title }}</p>
+                {% if f.product_title %}
+                <p class="text-xs font-medium text-gray-600 mb-1">
+                    {% if f.permalink %}<a href="{{ f.permalink }}" target="_blank" rel="noopener" class="hover:underline text-gray-700">{{ f.product_title }} ↗</a>{% else %}{{ f.product_title }}{% endif %}
+                </p>
+                {% endif %}
+                <p class="text-sm font-medium text-gray-800">"{{ f.title }}"</p>
                 <p class="text-sm text-gray-600">{{ f.comment }}</p>
                 <p class="text-[10px] text-gray-400 mt-1">{{ f.date_created }} &middot; {{ f.item_id }}</p>
             </div>

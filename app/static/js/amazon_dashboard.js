@@ -959,14 +959,22 @@ function loadAmzFeedback() {
             cont.innerHTML = '<div class="space-y-2">' + items.map(function(f) {
                 var ratingBad = String(f.rating || '').toLowerCase().indexOf('neg') >= 0;
                 var badgeClass = ratingBad ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700';
+                var skuHtml = f.sku
+                    ? '<span class="text-[11px] text-gray-400 font-mono">' + _amzMsgsEscHtml(f.sku) + '</span>'
+                    : '<span class="text-[11px] text-gray-300 italic">SKU no encontrado</span>';
+                var asinHtml = f.asin_url
+                    ? '<a href="' + f.asin_url + '" target="_blank" rel="noopener" class="text-[11px] text-blue-500 hover:underline">ASIN ' + _amzMsgsEscHtml(f.asin || '') + ' ↗</a>'
+                    : (f.asin ? '<span class="text-[11px] text-gray-400">ASIN ' + _amzMsgsEscHtml(f.asin) + '</span>' : '');
                 return '<div class="bg-white border border-gray-100 rounded-lg p-3 flex items-start justify-between gap-3 flex-wrap">' +
                     '<div class="min-w-0">' +
-                    '<div class="flex items-center gap-2 mb-1">' +
+                    '<div class="flex items-center gap-2 mb-1 flex-wrap">' +
                     '<span class="text-xs font-semibold px-2 py-0.5 rounded-full ' + badgeClass + '">' + _amzMsgsEscHtml(f.rating || '?') + '</span>' +
-                    '<span class="text-[11px] text-gray-400 font-mono">' + _amzMsgsEscHtml(f.sku || '(sin SKU)') + '</span>' +
-                    '<span class="text-[11px] text-gray-300">·</span>' +
+                    skuHtml +
+                    (asinHtml ? '<span class="text-[11px] text-gray-300">&middot;</span>' + asinHtml : '') +
+                    '<span class="text-[11px] text-gray-300">&middot;</span>' +
                     '<span class="text-[11px] text-gray-400">Orden ' + _amzMsgsEscHtml(f.order_id || '') + '</span>' +
                     '</div>' +
+                    (f.product_title ? '<p class="text-xs font-medium text-gray-600 mb-1">' + _amzMsgsEscHtml(f.product_title) + '</p>' : '') +
                     '<p class="text-sm text-gray-700">' + (_amzMsgsEscHtml(f.comment || '(sin comentario)')) + '</p>' +
                     '<p class="text-[10px] text-gray-400 mt-1">' + _amzMsgsEscHtml(f.date_created || '') + '</p>' +
                     '</div>' +
