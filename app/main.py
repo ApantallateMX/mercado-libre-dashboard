@@ -19989,7 +19989,7 @@ async def returns_claim_photos(claim_id: str, account_id: str = Query("")):
         return {
             "ok": True, "claim_id": claim_id, "total": len(local_photos),
             "photos": [{
-                "url": f"/api/returns/claim-photo-file?path={quote(p['local_path'])}",
+                "url": f"/api/returns/claim-photo-file?path={quote(p['local_path'])}&storage={p.get('storage', 'local')}",
                 "filename": _os.path.basename(p["local_path"]),
                 "from_role": p.get("from_role", ""),
             } for p in local_photos],
@@ -20032,10 +20032,20 @@ async def returns_claim_photos(claim_id: str, account_id: str = Query("")):
 
 
 @app.get("/api/returns/claim-photo-file")
-async def returns_claim_photo_file(path: str = Query(...)):
-    """Sirve una foto ya persistida en /app/data/claim_photos/. `path` es relativo
-    a la carpeta de datos (Railway Volume) — se valida que no escape el directorio."""
+async def returns_claim_photo_file(path: str = Query(...), storage: str = Query("local")):
+    """Sirve una foto de reclamo. storage='local' (default, histórico): disco de
+    Railway, `path` relativo a /app/data/claim_photos/, valida que no escape el
+    directorio. storage='s3': MinIO de MI2 — `path` es la key del objeto; lectura
+    autenticada porque el bucket es privado (no hay URL pública usable, ver
+    app/services/s3_storage.py)."""
     import mimetypes
+    if storage == "s3":
+        from app.services import s3_storage as _s3_serve
+        content = _s3_serve.get_object_bytes(path)
+        if content is None:
+            return Response(status_code=404)
+        mime, _ = mimetypes.guess_type(path)
+        return Response(content=content, media_type=mime or "application/octet-stream")
     photos_root = Path(DATABASE_PATH).resolve().parent / "claim_photos"
     full_path = (photos_root.parent / path).resolve()
     if photos_root not in full_path.parents or not full_path.is_file():
@@ -20191,20 +20201,37 @@ async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = 
 
         content = _compress_claim_photo(content)
 
-        photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
-        claim_dir = photos_dir / claim_id
-        claim_dir.mkdir(parents=True, exist_ok=True)
         # .jpg forzado — _compress_claim_photo recodifica todo a JPEG.
         _stem = _os.path.splitext(_os.path.basename(filename))[0]
-        local_path = claim_dir / f"0_{_stem}.jpg"
-        if not local_path.exists():
-            local_path.write_bytes(content)
-            await _ts_ph.save_claim_photos(claim_id, "ml", [{
-                "local_path": str(local_path.relative_to(photos_dir.parent)),
-                "original_url": dl_path,
-                "from_role": "",
-            }])
-            asyncio.create_task(_enforce_claim_photos_budget())
+        from app.services import s3_storage as _s3_proxy
+        if _s3_proxy.is_configured():
+            # Fotos nuevas van a MinIO (MI2), no al disco de Railway — ver
+            # project_disk_crisis_2026-07-31. Histórico en disco sigue intacto.
+            s3_key = f"claim_photos/{claim_id}/0_{_stem}.jpg"
+            existing = await _ts_ph.get_claim_photos(claim_id)
+            if not any(p["local_path"] == s3_key for p in existing):
+                try:
+                    _s3_proxy.upload_bytes(s3_key, content, "image/jpeg")
+                    await _ts_ph.save_claim_photos(claim_id, "ml", [{
+                        "local_path": s3_key, "original_url": dl_path,
+                        "from_role": "", "storage": "s3",
+                    }])
+                except Exception:
+                    logger.warning(f"[S3] fallo al subir foto de reclamo {claim_id} (MinIO caído?)")
+        else:
+            # Fallback: MinIO no configurado — comportamiento histórico (disco local).
+            photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+            claim_dir = photos_dir / claim_id
+            claim_dir.mkdir(parents=True, exist_ok=True)
+            local_path = claim_dir / f"0_{_stem}.jpg"
+            if not local_path.exists():
+                local_path.write_bytes(content)
+                await _ts_ph.save_claim_photos(claim_id, "ml", [{
+                    "local_path": str(local_path.relative_to(photos_dir.parent)),
+                    "original_url": dl_path,
+                    "from_role": "",
+                }])
+                asyncio.create_task(_enforce_claim_photos_budget())
 
         return Response(content=content, media_type="image/jpeg")
     except Exception:
@@ -21272,18 +21299,25 @@ async def returns_supplier_package(
     xlsx_buf.seek(0)
 
     zip_buf = io.BytesIO()
+    from app.services import s3_storage as _s3_zip
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("resumen.xlsx", xlsx_buf.read())
         seen_photos = set()
         for row in claims:
             photos = await _ts_pkg.get_claim_photos(row["claim_id"])
             for p in photos:
-                local_path = Path(DATABASE_PATH).resolve().parent / p["local_path"]
-                if not local_path.is_file() or p["local_path"] in seen_photos:
+                if p["local_path"] in seen_photos:
                     continue
                 seen_photos.add(p["local_path"])
-                arc_name = f"fotos/{row['claim_id']}_{local_path.name}"
-                zf.write(local_path, arc_name)
+                arc_name = f"fotos/{row['claim_id']}_{Path(p['local_path']).name}"
+                if p.get("storage") == "s3":
+                    content = _s3_zip.get_object_bytes(p["local_path"])
+                    if content is not None:
+                        zf.writestr(arc_name, content)
+                else:
+                    local_path = Path(DATABASE_PATH).resolve().parent / p["local_path"]
+                    if local_path.is_file():
+                        zf.write(local_path, arc_name)
     zip_buf.seek(0)
 
     fname = f"reclamos_{sku}_{date_from or 'inicio'}_{date_to or 'hoy'}.zip"
@@ -21389,6 +21423,8 @@ async def returns_sku_claims_detail(
 
                     already = await _ts_scd.get_claim_photos(row["claim_id"])
                     seen_files = {p["local_path"] for p in already}
+                    from app.services import s3_storage as _s3_bf
+                    _use_s3 = _s3_bf.is_configured()
                     for msg in (msgs if isinstance(msgs, list) else []):
                         if photos_downloaded[0] >= _MAX_PHOTOS_PER_REQUEST:
                             break
@@ -21401,14 +21437,18 @@ async def returns_sku_claims_detail(
                             )
                             if not (is_img and fname) or photos_downloaded[0] >= _MAX_PHOTOS_PER_REQUEST:
                                 continue
-                            photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
-                            claim_dir = photos_dir / row["claim_id"]
                             # Siempre .jpg — _compress_claim_photo recodifica todo a JPEG,
                             # así que el nombre guardado debe reflejar eso (el original
                             # puede venir .png/.webp, no queremos esa extensión con bytes JPEG).
                             _stem = _os_bf.path.splitext(_os_bf.path.basename(fname))[0]
-                            local_path = claim_dir / f"0_{_stem}.jpg"
-                            rel_path = str(local_path.relative_to(photos_dir.parent))
+                            claim_dir = None
+                            if _use_s3:
+                                rel_path = f"claim_photos/{row['claim_id']}/0_{_stem}.jpg"
+                            else:
+                                photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+                                claim_dir = photos_dir / row["claim_id"]
+                                local_path = claim_dir / f"0_{_stem}.jpg"
+                                rel_path = str(local_path.relative_to(photos_dir.parent))
                             if rel_path in seen_files:
                                 continue
                             try:
@@ -21417,12 +21457,19 @@ async def returns_sku_claims_detail(
                                 if not content:
                                     continue
                                 content = _compress_claim_photo(content)
-                                claim_dir.mkdir(parents=True, exist_ok=True)
-                                local_path.write_bytes(content)
-                                await _ts_scd.save_claim_photos(row["claim_id"], "ml", [{
-                                    "local_path": rel_path, "original_url": dl_path,
-                                    "from_role": msg.get("sender_role", ""),
-                                }])
+                                if _use_s3:
+                                    _s3_bf.upload_bytes(rel_path, content, "image/jpeg")
+                                    await _ts_scd.save_claim_photos(row["claim_id"], "ml", [{
+                                        "local_path": rel_path, "original_url": dl_path,
+                                        "from_role": msg.get("sender_role", ""), "storage": "s3",
+                                    }])
+                                else:
+                                    claim_dir.mkdir(parents=True, exist_ok=True)
+                                    local_path.write_bytes(content)
+                                    await _ts_scd.save_claim_photos(row["claim_id"], "ml", [{
+                                        "local_path": rel_path, "original_url": dl_path,
+                                        "from_role": msg.get("sender_role", ""),
+                                    }])
                                 photos_downloaded[0] += 1
                             except Exception:
                                 continue
@@ -21443,7 +21490,7 @@ async def returns_sku_claims_detail(
     for row in claims:
         photos_raw = await _ts_scd.get_claim_photos(row["claim_id"])
         photos = [{
-            "url": f"/api/returns/claim-photo-file?path={quote(p['local_path'])}",
+            "url": f"/api/returns/claim-photo-file?path={quote(p['local_path'])}&storage={p.get('storage', 'local')}",
             "filename": _os_scd.path.basename(p["local_path"]),
         } for p in photos_raw if p.get("local_path")]
         out.append({

@@ -1230,6 +1230,14 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_cp_claim ON claim_photos(claim_id)")
+        # Migración: fotos nuevas van a MinIO/S3 (MI2) en vez del disco de Railway
+        # (crisis de disco 2026-07-31, ver project_disk_crisis). storage='local'
+        # para todo lo histórico ya en disco; 'local_path' sigue siendo la key S3
+        # cuando storage='s3' (evita duplicar columna).
+        try:
+            await db.execute("ALTER TABLE claim_photos ADD COLUMN storage TEXT NOT NULL DEFAULT 'local'")
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: item_history — auditoría de cambios por listing
         # field: price | title | description | stock | status | shipping | pictures | attributes
@@ -5026,7 +5034,8 @@ async def set_feedback_status(platform: str, feedback_id: int, status: str) -> b
 
 
 async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) -> int:
-    """Registra fotos ya descargadas a disco (local_path bajo /app/data/claim_photos/)."""
+    """Registra fotos. `local_path` es la ruta en disco (storage='local') o la
+    key S3 (storage='s3') — mismo campo, distinto significado según `storage`."""
     import time as _t
     if not photos:
         return 0
@@ -5034,11 +5043,11 @@ async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) ->
         for p in photos:
             await db.execute("""
                 INSERT OR IGNORE INTO claim_photos
-                    (claim_id, platform, local_path, original_url, from_role, downloaded_at)
-                VALUES (?,?,?,?,?,?)
+                    (claim_id, platform, local_path, original_url, from_role, downloaded_at, storage)
+                VALUES (?,?,?,?,?,?,?)
             """, (
                 claim_id, platform, p.get("local_path", ""), p.get("original_url", ""),
-                p.get("from_role", ""), _t.time(),
+                p.get("from_role", ""), _t.time(), p.get("storage", "local"),
             ))
         await db.commit()
     return len(photos)

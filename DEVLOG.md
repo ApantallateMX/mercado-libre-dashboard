@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-01 — FEAT: fotos nuevas de reclamos ML se guardan en MinIO/S3 (MI2), no en disco de Railway
+
+**Archivos:** `app/services/s3_storage.py` (nuevo), `app/services/token_store.py`
+(migración `claim_photos.storage`, `save_claim_photos` acepta el campo),
+`app/main.py` (`returns_claim_photo_proxy`, backfill de `returns_sku_claims_detail`,
+`returns_claim_photo_file`, `returns_claims_zip`/export ZIP), `requirements.txt`
+(`boto3`).
+
+Consecuencia directa de la crisis de disco de Railway (ver DEVLOG 2026-07-31):
+Jovan ya no quiere pagar más volumen y MI2 finalmente entregó las credenciales
+MinIO (`s3.mi2.com.mx`, bucket `coolify-ecomops`) que llevaban semanas
+pendientes. Las 6 env vars ya estaban en Railway desde antes de este cambio
+(confirmado vía API de Railway) — este commit es el que las empieza a usar.
+
+Hallazgo importante que cambió el diseño original: el bucket es **privado**
+(GET anónimo → 403) y `MINIO_PUBLIC_URL` no tiene listener en :443 (timeout).
+No existe una URL pública usable — toda lectura tiene que pasar por
+`get_object_bytes()` con las credenciales de la app (`s3_storage.py`), nunca
+por un link directo en el `<img src>`.
+
+- Fotos nuevas de reclamos (proxy en vivo + backfill batch por SKU) se suben a
+  `claim_photos/{claim_id}/0_{stem}.jpg` en el bucket, con fallback automático
+  a disco local si `AWS_ENDPOINT_URL_S3` no está configurado (dev sin S3) o si
+  la subida falla (ej. `SlowDownWrite` transitorio de MinIO, confirmado en
+  pruebas locales — reintenta bien la próxima vez).
+- Tabla `claim_photos` tiene columna nueva `storage` ('local'|'s3', default
+  'local' — todo lo histórico se sirve exactamente igual que antes).
+- `GET /api/returns/claim-photo-file` ahora acepta `?storage=s3` y lee vía
+  `get_object_bytes()`; 404 limpio si MinIO no responde o el objeto no existe
+  (no tumba la vista de reclamos).
+- ZIP-export de reclamos por SKU también sabe leer de S3 cuando aplica.
+- Fotos ya existentes en disco de Railway: **no se migran** en esta ronda,
+  siguen sirviéndose local. Facturas (`uploads/invoices/`) quedan para una
+  ronda separada.
+- Verificado localmente: subida/lectura/borrado real contra `s3.mi2.com.mx`,
+  servido HTTP real (200 + bytes idénticos), 404 limpio para key inexistente,
+  y regresión confirmada en una foto local histórica real.
+
+---
+
 ## 2026-07-31 — OPERACION: disco de Railway al 92.8% — retención automática de audit_log (18,337 filas archivadas)
 
 **Archivos:** `app/main.py` (2 endpoints diag nuevos), `scripts/archive_audit_log.py`,
