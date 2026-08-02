@@ -738,6 +738,12 @@ async def init_db():
             await db.execute("ALTER TABLE billing_invoices ADD COLUMN xml_path TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Migración: facturas nuevas van a MinIO/S3 (MI2) en vez de uploads/invoices/
+        # en disco — mismo motivo que claim_photos (crisis de disco Railway).
+        try:
+            await db.execute("ALTER TABLE billing_invoices ADD COLUMN storage TEXT NOT NULL DEFAULT 'local'")
+        except Exception:
+            pass
         # Migration: add metodo_pago to billing_fiscal_data
         try:
             await db.execute("ALTER TABLE billing_fiscal_data ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT ''")
@@ -3764,22 +3770,40 @@ async def save_billing_invoice(
     request_id: int, filename: str, file_data: bytes, uploaded_by: str,
     xml_filename: str = "", xml_data: Optional[bytes] = None,
 ) -> None:
-    """Escribe el PDF/XML a uploads/invoices/ (no a BLOB en SQLite — cada
-    factura nueva reescribía el archivo completo de la DB, causa directa del
-    incidente de disk-full de 2026-07-18). Firma y comportamiento externo
-    sin cambios — ningún caller necesita tocarse."""
+    """Escribe el PDF/XML a MinIO/S3 (MI2) si está configurado; si no, cae a
+    uploads/invoices/ en disco (comportamiento histórico, o fallback si la
+    subida a S3 falla — mismo patrón que claim_photos, ver s3_storage.py).
+    Firma y comportamiento externo sin cambios — ningún caller necesita tocarse."""
+    from app.services import s3_storage as _s3_inv
+
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    inv_dir = _invoices_dir()
+    storage = "local"
 
     pdf_path_rel = ""
-    if file_data:
-        pdf_path_rel = f"uploads/invoices/{request_id}.pdf"
-        (inv_dir / f"{request_id}.pdf").write_bytes(file_data)
-
     xml_path_rel = ""
-    if xml_data:
-        xml_path_rel = f"uploads/invoices/{request_id}.xml"
-        (inv_dir / f"{request_id}.xml").write_bytes(xml_data)
+    if _s3_inv.is_configured():
+        try:
+            if file_data:
+                pdf_path_rel = f"invoices/{request_id}.pdf"
+                _s3_inv.upload_bytes(pdf_path_rel, file_data, "application/pdf")
+            if xml_data:
+                xml_path_rel = f"invoices/{request_id}.xml"
+                _s3_inv.upload_bytes(xml_path_rel, xml_data, "application/xml")
+            storage = "s3"
+        except Exception:
+            logger.warning(f"[S3] fallo al subir factura {request_id} (MinIO caído?), cae a disco local")
+            pdf_path_rel = ""
+            xml_path_rel = ""
+            storage = "local"
+
+    if storage == "local":
+        inv_dir = _invoices_dir()
+        if file_data:
+            pdf_path_rel = f"uploads/invoices/{request_id}.pdf"
+            (inv_dir / f"{request_id}.pdf").write_bytes(file_data)
+        if xml_data:
+            xml_path_rel = f"uploads/invoices/{request_id}.xml"
+            (inv_dir / f"{request_id}.xml").write_bytes(xml_data)
 
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
@@ -3788,26 +3812,29 @@ async def save_billing_invoice(
             # vacíos igual que NULL (falsy) así que no cae al BLOB legacy.
             """INSERT INTO billing_invoices
                  (request_id, filename, file_data, xml_filename, xml_data,
-                  pdf_path, xml_path, uploaded_by, uploaded_at)
-               VALUES (?,?,?,?,NULL,?,?,?,?)
+                  pdf_path, xml_path, uploaded_by, uploaded_at, storage)
+               VALUES (?,?,?,?,NULL,?,?,?,?,?)
                ON CONFLICT(request_id) DO UPDATE SET
                  filename=excluded.filename, file_data=?,
                  xml_filename=excluded.xml_filename, xml_data=NULL,
                  pdf_path=excluded.pdf_path, xml_path=excluded.xml_path,
-                 uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at""",
-            (request_id, filename, b"", xml_filename or "", pdf_path_rel, xml_path_rel, uploaded_by, now, b""),
+                 uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at,
+                 storage=excluded.storage""",
+            (request_id, filename, b"", xml_filename or "", pdf_path_rel, xml_path_rel, uploaded_by, now, storage, b""),
         )
         await db.commit()
 
 
 async def get_billing_invoice(request_id: int) -> Optional[dict]:
-    """Retorna dict con pdf y xml, o None si no existe ninguno. Lee de
-    uploads/invoices/ si la fila ya está migrada (pdf_path); si no, cae al
-    BLOB legacy (file_data) para filas viejas aún no migradas."""
+    """Retorna dict con pdf y xml, o None si no existe ninguno. Lee de MinIO/S3
+    o de uploads/invoices/ según la columna storage; para filas viejas sin
+    pdf_path cae al BLOB legacy (file_data)."""
+    from app.services import s3_storage as _s3_inv
+
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT filename, file_data, xml_filename, xml_data, pdf_path, xml_path "
+            "SELECT filename, file_data, xml_filename, xml_data, pdf_path, xml_path, storage "
             "FROM billing_invoices WHERE request_id=?",
             (request_id,),
         )
@@ -3815,12 +3842,16 @@ async def get_billing_invoice(request_id: int) -> Optional[dict]:
         if not row:
             return None
 
+        is_s3 = row["storage"] == "s3"
         base_dir = Path(DATABASE_PATH).resolve().parent
         pdf_data = None
         if row["pdf_path"]:
-            fp = base_dir / row["pdf_path"]
-            if fp.is_file():
-                pdf_data = fp.read_bytes()
+            if is_s3:
+                pdf_data = _s3_inv.get_object_bytes(row["pdf_path"])
+            else:
+                fp = base_dir / row["pdf_path"]
+                if fp.is_file():
+                    pdf_data = fp.read_bytes()
         elif row["file_data"]:
             pdf_data = bytes(row["file_data"])
 
@@ -3829,9 +3860,12 @@ async def get_billing_invoice(request_id: int) -> Optional[dict]:
 
         xml_data = None
         if row["xml_path"]:
-            fp = base_dir / row["xml_path"]
-            if fp.is_file():
-                xml_data = fp.read_bytes()
+            if is_s3:
+                xml_data = _s3_inv.get_object_bytes(row["xml_path"])
+            else:
+                fp = base_dir / row["xml_path"]
+                if fp.is_file():
+                    xml_data = fp.read_bytes()
         elif row["xml_data"]:
             xml_data = bytes(row["xml_data"])
 
@@ -3844,13 +3878,28 @@ async def get_billing_invoice(request_id: int) -> Optional[dict]:
 
 
 async def delete_billing_request(request_id: int) -> None:
-    inv_dir = _invoices_dir()
-    for ext in ("pdf", "xml"):
-        fp = inv_dir / f"{request_id}.{ext}"
-        try:
-            fp.unlink(missing_ok=True)
-        except Exception:
-            pass
+    from app.services import s3_storage as _s3_inv
+
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT pdf_path, xml_path, storage FROM billing_invoices WHERE request_id=?", (request_id,)
+        )
+        row = await cursor.fetchone()
+
+    if row and row["storage"] == "s3":
+        for path in (row["pdf_path"], row["xml_path"]):
+            if path:
+                _s3_inv.delete_object(path)
+    else:
+        inv_dir = _invoices_dir()
+        for ext in ("pdf", "xml"):
+            fp = inv_dir / f"{request_id}.{ext}"
+            try:
+                fp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM billing_fiscal_data WHERE request_id=?", (request_id,))
         await db.execute("DELETE FROM billing_invoices WHERE request_id=?", (request_id,))

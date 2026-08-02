@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-02 — FEAT: facturas nuevas (PDF/XML) también se guardan en MinIO/S3 (MI2)
+
+**Archivos:** `app/services/token_store.py` únicamente (`save_billing_invoice`,
+`get_billing_invoice`, `delete_billing_request`, migración columna `storage`
+en `billing_invoices`). `main.py` y `app/api/facturacion.py` no se tocaron —
+ya estaban desacoplados, solo llaman a estas 3 funciones.
+
+Segunda ronda de la migración a S3 (ver DEVLOG 2026-08-01, fotos de reclamos)
+— mismo patrón exacto aplicado a `uploads/invoices/` (34.95MB). Diferencia
+relevante: son documentos fiscales reales, no solo fotos de referencia — si
+sube a S3 falla (ej. `SlowDownWrite` transitorio de MinIO, ya visto en
+pruebas), cae a disco local automáticamente en vez de perder el archivo.
+
+- Columna `storage` ('local'|'s3') en `billing_invoices`, default 'local'
+  para todo lo histórico (se sigue sirviendo exactamente igual).
+- Verificado end-to-end con un request_id de prueba: subida real a S3,
+  lectura con bytes idénticos, y borrado confirmado directamente contra el
+  bucket (`get_object_bytes` devuelve None tras `delete_billing_request`).
+- Facturas ya existentes en disco: no se migran en esta ronda.
+
+---
+
 ## 2026-08-01 — FEAT: fotos nuevas de reclamos ML se guardan en MinIO/S3 (MI2), no en disco de Railway
 
 **Archivos:** `app/services/s3_storage.py` (nuevo), `app/services/token_store.py`
