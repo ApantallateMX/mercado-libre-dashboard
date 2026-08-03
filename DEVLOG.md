@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FIX: "Gral" habilitado en el nav de Amazon (estaba mal bloqueado)
+
+Jovan cuestionó mi explicación anterior de por qué "Gral" aparecía
+deshabilitado en Amazon — con razón. Revisando el código real,
+`multi_dashboard.html` YA renderiza una sección completa "Amazon —
+Comparativa de Cuentas" (título de página: "Vista General — X Cuentas
+MeLi + Y Amazon") desde antes — no era una diferencia real de plataforma,
+era un error de configuración del nav (`amz_href=None` cuando debía tener
+la misma URL que ML). `_accounts_ctx()` ya carga `amazon_accounts` sin
+condicionarlo a la plataforma activa, así que no hizo falta tocar el
+backend — solo `amz_href="/multi-dashboard"` en `_NAV_TAB_DEFS`
+(`app/main.py`). Verificado local: el link aparece activo en el nav de
+Amazon y la página carga (200).
+
+"Inv.Global" (BM × 4 cuentas MeLi, cero Amazon en el código) y "Sync Stock"
+(su función central es exclusiva de ML, Amazon ahí es solo monitoreo
+FBA/FLX informativo) sí quedan confirmados como diferencias reales de
+plataforma — Jovan decidió dejarlos como están.
+
+---
+
 ## 2026-08-03 — FIX: tab "Distribución" muerto eliminado del nav
 
 Jovan preguntó por qué "Gral", "Inv.Global", "Sync Stock" y "Distribución"

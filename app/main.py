@@ -1253,8 +1253,12 @@ _AMZ_ONLY_PATHS = {"/amazon"}  # prefix — startswith check below
 # solo para pestañas nuevas que no existían antes ahí; las que ya existían
 # en Amazon sin gating lo mantienen así para no quitarle acceso a nadie).
 _NAV_TAB_DEFS = [
+    # amz_href habilitado 2026-08-03 — la página YA renderiza una sección
+    # completa "Amazon — Comparativa de Cuentas" (multi_dashboard.html) desde
+    # antes; estaba deshabilitada en Amazon por un error de configuración del
+    # nav, no por falta de contenido real. Jovan lo notó viendo el nav.
     dict(id="gral", label="Gral", icon="⊕",
-         ml_href="/multi-dashboard", amz_href=None,
+         ml_href="/multi-dashboard", amz_href="/multi-dashboard",
          ml_active=["multi_dashboard"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab="dashboard", amz_tab=None, admin_only=False, badge=None),
     dict(id="inventory_global", label="Inv.Global", icon="▦",
