@@ -1575,17 +1575,25 @@ function _renderClaimCards(claims) {
         const photosHtml = (c.photos || []).map(ph =>
             `<a href="${ph.url}" target="_blank"><img src="${ph.url}" class="w-14 h-14 object-cover rounded-lg border hover:opacity-80 transition" loading="lazy"></a>`
         ).join('');
+        // Sin comentario del comprador, el motivo (reason_label) es la ÚNICA info real
+        // de la tarjeta — se muestra como badge prominente en vez de perderse como un
+        // pill gris más entre metadata. Con comentario, el motivo queda secundario
+        // (el texto real manda) y se quita el mensaje "Sin comentario" (ya no aplica).
+        const hasComment = !!c.buyer_comment;
         html += `<div class="bg-gray-50 rounded-lg p-3 border border-gray-100">
             <div class="flex flex-wrap items-center gap-2 mb-1.5 text-[10px]">
                 <span class="font-semibold text-gray-700">${escapeHtml(c.account)}</span>
                 <span class="text-gray-400">${c.date_created}</span>
                 ${c.order_id ? `<span class="font-mono text-gray-500" title="Número de orden ML">Orden ${escapeHtml(c.order_id)}</span>` : ''}
                 ${c.claim_id ? `<span class="font-mono text-gray-400" title="ID del reclamo ML">Reclamo ${escapeHtml(c.claim_id)}</span>` : ''}
-                <span class="px-1.5 py-0.5 bg-gray-200 rounded text-gray-600">${escapeHtml(c.reason_label)}</span>
                 ${c.status === 'opened' ? '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-semibold">Abierto</span>' : ''}
                 ${c.amount_mxn > 0 ? `<span class="text-gray-400 ml-auto">$${c.amount_mxn.toLocaleString('es-MX')} MXN</span>` : ''}
             </div>
-            ${c.buyer_comment ? `<p class="text-xs text-gray-700">${escapeHtml(c.buyer_comment)}</p>` : '<p class="text-xs text-gray-400 italic">Sin comentario del comprador</p>'}
+            <div class="mb-1.5 flex items-center gap-1.5">
+                <span class="px-2 py-0.5 rounded text-xs font-semibold ${hasComment ? 'bg-gray-200 text-gray-600' : 'bg-amber-100 text-amber-800 border border-amber-200'}">${escapeHtml(c.reason_label)}</span>
+                ${!hasComment ? '<span class="text-[10px] text-gray-400">— motivo elegido por el comprador al abrir el reclamo, sin mensaje adicional</span>' : ''}
+            </div>
+            ${hasComment ? `<p class="text-xs text-gray-700">${escapeHtml(c.buyer_comment)}</p>` : ''}
             ${photosHtml ? `<div class="flex flex-wrap gap-1.5 mt-2">${photosHtml}</div>` : ''}
         </div>`;
     });

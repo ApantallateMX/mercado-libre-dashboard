@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FEAT: reclamos sin comentario del comprador muestran el motivo prominente (Top Retornos Global)
+
+Jovan reportó (con captura) que la tarjeta de detalle de un SKU en "Top
+Retornos Global" (`/multi-dashboard`) mostraba varios reclamos con "Sin
+comentario del comprador" y preguntó cuál era el motivo real detrás de eso.
+
+Investigación en producción con `/api/diag/inspect-claim` y
+`/api/diag/claims-raw`: el `reason_id` crudo que manda ML para estos
+reclamos es tipo `PDD9949`/`PNR9513` (no los códigos limpios `PDD1`-`PDD6`
+que `CLAIM_REASON_MAP` tiene mapeados) — son IDs internos del proceso de
+mediación de ML, no un catálogo de tipo de defecto. Confirmado cruzando el
+mismo código contra comentarios reales: `PDD9947` apareció tanto en un
+reclamo real de pantalla ("no está bien sellada... manchas") como en un
+mensaje que solo traía una dirección de envío — mismo código, problemas
+distintos. Conclusión: no hay un motivo más granular escondido que
+podamos extraer; lo más específico y confiable que tenemos es el pill de
+`reason_label` que ya se mostraba (ej. "Defectuoso/Diferente").
+
+Fix aplicado (`multi_dashboard.html`, `_renderClaimCards`): cuando no hay
+`buyer_comment`, el pill de motivo ahora se muestra prominente (ámbar,
+más grande, con nota explicando que es lo que el comprador eligió al
+abrir el reclamo) en vez de perderse como un pill gris chico entre
+metadata, seguido de un texto muerto "Sin comentario del comprador". Con
+comentario real, el motivo queda secundario (gris, chico) y el comentario
+manda. Verificado con Playwright local (screenshot + 0 errores de
+consola) llamando `_renderClaimCards` directo con datos sintéticos
+representando ambos casos.
+
+---
+
 ## 2026-08-03 — FIX: "Gral" habilitado en el nav de Amazon (estaba mal bloqueado)
 
 Jovan cuestionó mi explicación anterior de por qué "Gral" aparecía
