@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-02 — FIX: `order_history` no tenía backfill inicial — 3 de 4 cuentas ML y 2 de 3 Amazon sin historial antes de mediados de julio
+
+**Archivos:** `app/services/token_store.py` (`has_deep_order_history`, nueva),
+`app/main.py` (`_supplier_debt_sync_loop`).
+
+Encontrado mientras se armaba un reporte real de impacto de calidad para
+directivos: la comparación "junio vs julio" salía con un falso "+126% de
+crecimiento" que resultó ser un artefacto de datos, no un hecho de negocio.
+
+**Causa raíz:** `_supplier_debt_sync_loop` (agregado ~2026-07-19 para el
+ledger de deuda) es el único mecanismo que llena `order_history` sin
+depender de que alguien visite Deals (ML) o Planeación→Velocidad (Amazon) —
+pero solo trae una ventana de **3 días hacia atrás**, sin backfill. Cuentas
+que nadie había visitado nunca en esas pestañas (AUTOBOT, LUTEMAMEXICO,
+BLOWTECHNOLOGIES en ML; AUTOBOT y ExclusiveBulbs en Amazon) se quedaron sin
+ningún historial anterior a cuando ese loop empezó a correr para ellas.
+
+- `has_deep_order_history(account_id, platform, min_days=20)` — chequea si
+  ya existe al menos una fila de hace >=20 días.
+- El loop ahora pide 90 días (en vez de 3) la primera vez que detecta que a
+  una cuenta le falta historial profundo — deja de aplicar automáticamente
+  en cuanto esa cuenta ya tiene el backfill.
+- Se corrió el backfill real una vez para las 3 cuentas ML afectadas
+  (mayo–agosto, vía `client.fetch_all_orders` + `_save_ml_orders_history_bg`)
+  antes de recalcular cualquier número del reporte.
+
+**Impacto real revelado por el backfill:** BLOWTECHNOLOGIES pasó de vender
+$300-668K/día (mayo) a ~$119K/día (promedio últimos 10 días) — caída real
+de -82%. Es la única de las 4 cuentas ML en nivel de reputación **amarillo**
+en Mercado Libre (las otras 3 están en verde), con tasa de reclamos más del
+doble que cualquier otra cuenta y activamente en el programa de
+"Recuperación de reputación" de ML (confirmado vía `get_seller_reputation()`
+y `get_reputation_recovery_status()` en vivo). Afecta también Finanzas y
+cualquier reporte futuro que dependa de `order_history` — no solo este
+reporte puntual.
+
+---
+
 ## 2026-08-02 — FEAT: facturas nuevas (PDF/XML) también se guardan en MinIO/S3 (MI2)
 
 **Archivos:** `app/services/token_store.py` únicamente (`save_billing_invoice`,

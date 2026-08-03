@@ -14289,7 +14289,16 @@ async def _supplier_debt_sync_loop():
     """Recorre las 4 cuentas ML (ventana corta, upsert es idempotente) y
     dispara _save_amazon_orders_bg (ya cubre las 3 cuentas Amazon con su
     propio guard de 2h) — mantiene order_history y el ledger de deuda al
-    día sin depender de que alguien visite Deals/Planeación."""
+    día sin depender de que alguien visite Deals/Planeación.
+
+    Backfill inicial (2026-08-02): antes esta ventana de 3 días era la ÚNICA
+    fuente de order_history para cuentas que nadie visitaba en Deals/Planeación
+    — AUTOBOT/LUTEMAMEXICO/BLOWTECHNOLOGIES (ML) y AUTOBOT/ExclusiveBulbs
+    (Amazon) se quedaron sin historial antes de mediados de julio, lo que
+    invalidó comparativas mes-a-mes en un reporte real. Ahora, si una cuenta
+    no tiene ninguna fila de hace >=20 días, se trae una ventana de 90 días
+    UNA sola vez (has_deep_order_history detecta esto automáticamente en
+    cada corrida — deja de aplicar en cuanto la cuenta ya tiene historial)."""
     await asyncio.sleep(90)  # dejar que los tokens se siembren al arranque
     while True:
         try:
@@ -14302,8 +14311,12 @@ async def _supplier_debt_sync_loop():
                     client = await get_meli_client(user_id=uid)
                     if not client:
                         continue
+                    has_history = await token_store.has_deep_order_history(uid, "ml")
+                    days_back = 3 if has_history else 90
+                    if not has_history:
+                        logger.info(f"[SUPPLIER-DEBT-SYNC] Backfill histórico ML uid={uid} (sin historial >=20d, trayendo {days_back}d)")
                     now = datetime.utcnow()
-                    date_from = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+                    date_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
                     date_to = now.strftime("%Y-%m-%d")
                     orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
                     usd_to_mxn = await _get_usd_to_mxn(client)
@@ -14312,7 +14325,20 @@ async def _supplier_debt_sync_loop():
                     logger.warning(f"[SUPPLIER-DEBT-SYNC] Error ML uid={uid}: {e}")
                 await asyncio.sleep(5)  # separar llamadas entre cuentas
 
-            asyncio.create_task(_save_amazon_orders_bg(days=3))
+            try:
+                amz_accounts = await token_store.get_all_amazon_accounts()
+                amz_needs_backfill = False
+                for a in amz_accounts:
+                    nick = a.get("nickname", "")
+                    if nick and not await token_store.has_deep_order_history(nick, "amazon"):
+                        amz_needs_backfill = True
+                        break
+                if amz_needs_backfill:
+                    logger.info("[SUPPLIER-DEBT-SYNC] Backfill histórico Amazon (>=1 cuenta sin historial >=20d, trayendo 90d)")
+                asyncio.create_task(_save_amazon_orders_bg(days=90 if amz_needs_backfill else 3))
+            except Exception as e:
+                logger.warning(f"[SUPPLIER-DEBT-SYNC] Error chequeo historial Amazon: {e}")
+                asyncio.create_task(_save_amazon_orders_bg(days=3))
         except Exception as e:
             logger.warning(f"[SUPPLIER-DEBT-SYNC] Error: {e}")
         await asyncio.sleep(_SUPPLIER_DEBT_SYNC_INTERVAL)

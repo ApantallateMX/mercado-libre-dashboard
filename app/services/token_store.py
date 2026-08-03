@@ -4562,6 +4562,19 @@ async def upsert_order_history(rows: list[dict]) -> int:
     return len(rows)
 
 
+async def has_deep_order_history(account_id: str, platform: str, min_days: int = 20) -> bool:
+    """True si order_history ya tiene al menos una fila de hace min_days días o más
+    para esta cuenta — señal de que ya se hizo un backfill inicial y el loop de
+    mantenimiento (ventana corta) puede seguir sin volver a traer historia completa."""
+    cutoff = (datetime.utcnow() - timedelta(days=min_days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM order_history WHERE account_id=? AND platform=? AND order_date <= ? LIMIT 1",
+            (account_id, platform, cutoff),
+        )
+        return (await cur.fetchone()) is not None
+
+
 _MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 
 
