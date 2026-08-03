@@ -16539,6 +16539,131 @@ async def diag_audit_log_purge(before_days: int = 30, expected_count: int = -1, 
     return JSONResponse({"ok": True, "deleted": current_count, "cutoff": cutoff})
 
 
+@app.post("/api/diag/migrate-historical-to-s3")
+async def diag_migrate_historical_to_s3(kind: str = "photos", limit: int = 50, token: str = ""):
+    """Migra archivos HISTÓRICOS (storage='local') de claim_photos o billing_invoices
+    a MinIO/S3 — sube, VERIFICA releyendo de S3 byte-a-byte, y SOLO ENTONCES borra el
+    archivo local y actualiza la fila. Nunca borra sin confirmar la subida. Para
+    facturas (pdf+xml), no borra NADA si cualquiera de las dos partes falla — evita
+    dejar la fila apuntando a un archivo ya borrado. Procesa en lotes (limit) para no
+    toparse con el timeout de Railway (~30s/request) — llamar repetidamente hasta que
+    'remaining' sea 0. Ver DEVLOG 2026-08-03 (crisis de disco, 3er acercamiento)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import s3_storage as _s3_mig
+    if not _s3_mig.is_configured():
+        return JSONResponse({"error": "S3 no configurado"}, status_code=500)
+
+    import aiosqlite as _aio_mig
+    base_dir = Path(token_store.DATABASE_PATH).resolve().parent
+    migrated, failed, freed_bytes = 0, [], 0
+
+    async with _aio_mig.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_mig.Row
+
+        if kind == "photos":
+            rows = await (await db.execute(
+                "SELECT id, claim_id, local_path FROM claim_photos WHERE storage='local' OR storage IS NULL LIMIT ?", (limit,)
+            )).fetchall()
+            total_remaining = (await (await db.execute(
+                "SELECT COUNT(*) FROM claim_photos WHERE storage='local' OR storage IS NULL"
+            )).fetchone())[0]
+
+            for row in rows:
+                full_path = (base_dir / row["local_path"]).resolve()
+                if base_dir not in full_path.parents or not full_path.is_file():
+                    failed.append({"id": row["id"], "error": "archivo no existe"})
+                    continue
+                try:
+                    content = full_path.read_bytes()
+                    s3_key = f"claim_photos/{row['claim_id']}/{full_path.name}"
+                    _s3_mig.upload_bytes(s3_key, content, "image/jpeg")
+                    verify = _s3_mig.get_object_bytes(s3_key)
+                    if verify is None or len(verify) != len(content):
+                        failed.append({"id": row["id"], "error": "verificación falló tras subir"})
+                        continue
+                    size = full_path.stat().st_size
+                    full_path.unlink()
+                    freed_bytes += size
+                    await db.execute(
+                        "UPDATE claim_photos SET local_path=?, storage='s3' WHERE id=?",
+                        (s3_key, row["id"]),
+                    )
+                    migrated += 1
+                except Exception as _e:
+                    failed.append({"id": row["id"], "error": str(_e)[:200]})
+            await db.commit()
+            remaining = total_remaining - migrated
+
+        elif kind == "invoices":
+            rows = await (await db.execute(
+                "SELECT id, request_id, pdf_path, xml_path FROM billing_invoices WHERE storage='local' OR storage IS NULL LIMIT ?", (limit,)
+            )).fetchall()
+            total_remaining = (await (await db.execute(
+                "SELECT COUNT(*) FROM billing_invoices WHERE storage='local' OR storage IS NULL"
+            )).fetchone())[0]
+
+            for row in rows:
+                try:
+                    pending_deletes = []
+                    new_pdf_path, new_xml_path = row["pdf_path"], row["xml_path"]
+                    freed_this = 0
+                    ok = True
+
+                    if row["pdf_path"]:
+                        full_path = (base_dir / row["pdf_path"]).resolve()
+                        if base_dir in full_path.parents and full_path.is_file():
+                            content = full_path.read_bytes()
+                            s3_key = f"invoices/{row['request_id']}.pdf"
+                            _s3_mig.upload_bytes(s3_key, content, "application/pdf")
+                            verify = _s3_mig.get_object_bytes(s3_key)
+                            if verify is None or len(verify) != len(content):
+                                ok = False
+                            else:
+                                pending_deletes.append(full_path)
+                                freed_this += full_path.stat().st_size
+                                new_pdf_path = s3_key
+
+                    if ok and row["xml_path"]:
+                        full_path = (base_dir / row["xml_path"]).resolve()
+                        if base_dir in full_path.parents and full_path.is_file():
+                            content = full_path.read_bytes()
+                            s3_key = f"invoices/{row['request_id']}.xml"
+                            _s3_mig.upload_bytes(s3_key, content, "application/xml")
+                            verify = _s3_mig.get_object_bytes(s3_key)
+                            if verify is None or len(verify) != len(content):
+                                ok = False
+                            else:
+                                pending_deletes.append(full_path)
+                                freed_this += full_path.stat().st_size
+                                new_xml_path = s3_key
+
+                    if not ok:
+                        failed.append({"id": row["id"], "error": "verificación falló tras subir (no se borró nada de este registro)"})
+                        continue
+
+                    for fp in pending_deletes:
+                        fp.unlink()
+                    freed_bytes += freed_this
+                    await db.execute(
+                        "UPDATE billing_invoices SET pdf_path=?, xml_path=?, storage='s3' WHERE id=?",
+                        (new_pdf_path, new_xml_path, row["id"]),
+                    )
+                    migrated += 1
+                except Exception as _e:
+                    failed.append({"id": row["id"], "error": str(_e)[:200]})
+            await db.commit()
+            remaining = total_remaining - migrated
+
+        else:
+            return JSONResponse({"error": "kind debe ser 'photos' o 'invoices'"}, status_code=400)
+
+    return JSONResponse({
+        "ok": True, "kind": kind, "migrated": migrated, "failed": failed,
+        "freed_mb": round(freed_bytes / 1024 / 1024, 2), "remaining": remaining,
+    })
+
+
 @app.get("/api/diag/feedback-status")
 async def diag_feedback_status(token: str = ""):
     """Estado del monitoreo de Feedback (Amazon seller feedback + reseñas ML)

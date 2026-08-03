@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — OPERACION: disco al 92.9% (3er acercamiento) — migración de fotos/facturas HISTÓRICAS a S3
+
+**Archivo:** `app/main.py` (`POST /api/diag/migrate-historical-to-s3`, nuevo).
+
+La migración a S3 del 2026-08-01/02 solo cubría fotos/facturas NUEVAS —
+las 231 fotos (52.75MB) y 1,062 facturas (35.47MB) que ya estaban en disco
+nunca se movieron (a propósito, quedó documentado así). El disco volvió a
+92.9% (21.1MB libres) y Jovan lo reportó de nuevo.
+
+Endpoint nuevo, por lotes (`limit`, default llamar repetido hasta
+`remaining=0` — evita el timeout de ~30s de Railway): sube cada archivo a
+S3, **verifica byte-a-byte releyendo de S3**, y solo entonces borra el
+archivo local y actualiza la fila (`storage='s3'`). Para facturas (pdf+xml),
+si cualquiera de las dos partes falla la verificación, no borra nada de ese
+registro — evita dejar una fila apuntando a un archivo ya borrado.
+Verificado localmente con un lote de prueba antes de correr contra
+producción (foto migrada, archivo local confirmado borrado, servido
+correcto desde S3 vía `storage=s3`).
+
+---
+
 ## 2026-08-02 — FIX: `order_history` no tenía backfill inicial — 3 de 4 cuentas ML y 2 de 3 Amazon sin historial antes de mediados de julio
 
 **Archivos:** `app/services/token_store.py` (`has_deep_order_history`, nueva),
