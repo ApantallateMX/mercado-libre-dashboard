@@ -18825,8 +18825,12 @@ _amz_returns_report_cache: dict = {}   # {(seller_id, days): (ts, [returns])}
 _AMZ_RETURNS_REPORT_TTL = 3600 * 6    # 6 horas
 
 async def _fetch_amazon_returns_report_cached(seller_id: str, days: int) -> list:
-    """get_returns_report() con cache de 6h. Amazon limita el reporte a 60 días —
-    si days > 60 se acota (el reporte cubre solo la ventana más reciente)."""
+    """get_returns_report() con cache de 6h. Amazon limita CADA reporte a 60 días —
+    antes, si days>60 se acotaba en silencio a los últimos 60 (sin avisar en la UI),
+    subcontando devoluciones reales para cualquier ventana >60d (encontrado 2026-08-03,
+    Jovan reportó B0G4B9MNCQ/SNTV001764 con muchas más devoluciones reales que las 7 que
+    mostraba el widget a 90 días). Fix: pedir tantos reportes de 60 días como haga falta
+    para cubrir la ventana completa, y combinar deduplicando por (order_id, sku)."""
     import time as _trr
     from datetime import datetime as _dtr, timedelta as _tdr
     key = (seller_id, days)
@@ -18838,11 +18842,27 @@ async def _fetch_amazon_returns_report_cached(seller_id: str, days: int) -> list
         client = await _get_amz_rr(seller_id)
         if not client:
             return []
-        capped_days = min(days, 60)
         _now = _dtr.utcnow()
-        date_from = (_now - _tdr(days=capped_days)).strftime("%Y-%m-%d")
-        date_to = _now.strftime("%Y-%m-%d")
-        items = await client.get_returns_report(date_from, date_to)
+        window_start = _now - _tdr(days=days)
+
+        seen: set = set()
+        items: list = []
+        chunk_end = _now
+        while chunk_end > window_start:
+            chunk_start = max(window_start, chunk_end - _tdr(days=60))
+            date_from = chunk_start.strftime("%Y-%m-%d")
+            date_to = chunk_end.strftime("%Y-%m-%d")
+            chunk_items = await client.get_returns_report(date_from, date_to)
+            for it in chunk_items:
+                dedup_key = (it.get("order_id", ""), it.get("sku", ""), it.get("return_date", ""))
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                items.append(it)
+            chunk_end = chunk_start
+            if chunk_end > window_start:
+                await asyncio.sleep(1)  # espaciar llamadas — Reports API es estricta con rate limits
+
         _amz_returns_report_cache[key] = (_trr.time(), items)
         return items
     except Exception as _exc:
@@ -18994,53 +19014,59 @@ _AMZ_REASON_SEVERITY_DEFAULT = 10  # código no mapeado pero SÍ conocido
 
 
 async def _aggregate_amazon_returns_by_sku(seller_id: str, days: int, nickname: str = "") -> dict:
-    """Agrega refunds Amazon por SKU para UNA cuenta — combina _fetch_amazon_refunds_cached
-    (todas las órdenes, sin razón) + _fetch_amazon_returns_report_cached (razón real,
-    solo FBA) por order_id. Refund sin match en el reporte (típicamente FBM) cae al
-    fallback "Devolución Amazon", igual que antes — no se inventa una razón.
+    """Agrega devoluciones Amazon por SKU para UNA cuenta.
+
+    REDISEÑADO 2026-08-03 — bug grave encontrado por Jovan: la versión anterior
+    usaba los refunds financieros (Financial Events) como fuente PRINCIPAL de
+    conteo, y el reporte de devoluciones FBA solo para la razón. Eso subcontaba
+    severamente porque no toda devolución física genera un refund financiero
+    en la misma ventana (reembolso pendiente, cambio en vez de devolución,
+    etc.) — confirmado en vivo: SNTV001764/B0G4B9MNCQ (ExclusiveBulbs) mostraba
+    6-7 "retornos" cuando el reporte FBA real tenía 127 en la misma ventana de
+    90 días.
+
+    Ahora el reporte de devoluciones FBA (GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA,
+    una fila = una devolución física real) es la fuente PRINCIPAL de conteo.
+    Los refunds financieros que NO tengan fila correspondiente en el reporte
+    (típicamente MFN/envío propio, que el reporte FBA no cubre en absoluto) se
+    agregan aparte para no perder esas devoluciones — sin duplicar las que ya
+    vienen del reporte. El monto en USD se toma del refund financiero cuando
+    hay match por order_id (se consume 1 refund por línea, nunca se reusa el
+    mismo monto para 2 devoluciones distintas de la misma orden).
 
     Usado tanto por el endpoint de una sola cuenta (/amazon/returns) como por
-    _compute_unified_returns (cross-cuenta) — antes esa función duplicaba esta misma
-    lógica inline por cuenta.
+    _compute_unified_returns (cross-cuenta).
     """
-    refunds = await _fetch_amazon_refunds_cached(seller_id, days)
     try:
         reasons_report = await _fetch_amazon_returns_report_cached(seller_id, days)
     except Exception:
         reasons_report = []
-    reason_by_order = {
-        r["order_id"]: r["reason"] for r in reasons_report
-        if r.get("order_id") and r.get("reason")
-    }
-    # product_name viene directo del reporte de devoluciones (más preciso que
-    # cruzar por SKU, porque es el título exacto de ESE listing/orden). Como
-    # respaldo para refunds sin match en el reporte (típicamente FBM), se usa
-    # el catálogo de listings de la cuenta — antes ninguna de las dos existía
-    # y el título caía siempre al SKU crudo (Jovan lo reportó como "una jalada"
-    # tras ver Quality Score/Top SKUs sin nombre de producto).
-    title_by_order = {
-        r["order_id"]: r["product_name"] for r in reasons_report
-        if r.get("order_id") and r.get("product_name")
-    }
+    refunds = await _fetch_amazon_refunds_cached(seller_id, days)
+
     try:
         _listings = await token_store.get_amazon_listings_for_account(seller_id)
         title_by_sku = {l["sku"]: l["title"] for l in _listings if l.get("title")}
     except Exception:
         title_by_sku = {}
 
-    counts: dict = {}
+    # Monto de refund disponible por order_id — se va consumiendo (pop) conforme
+    # se usa, para no aplicar el mismo monto financiero a 2 líneas distintas.
+    refund_pool_by_order: dict = {}
     for ref in refunds:
-        sku_raw = (ref.get("sku") or "").strip()
-        sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
-        key = sku if sku else f"amz_{ref.get('order_id', '')}"
-        order_id = ref.get("order_id", "")
-        reason_code = reason_by_order.get(order_id, "")
-        reason_lbl = _amz_reason_label(reason_code) if reason_code else "Devolución Amazon"
-        refund_amt = float(ref.get("amount", 0) or 0)
+        oid = ref.get("order_id", "")
+        if not oid:
+            continue
+        amt = float(ref.get("amount", 0) or 0)
         currency = ref.get("currency", "USD")
-        refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
-        real_title = title_by_order.get(order_id) or title_by_sku.get(sku_raw) or title_by_sku.get(sku)
+        refund_usd = amt if currency == "USD" else amt / 18.0
+        refund_pool_by_order.setdefault(oid, []).append(refund_usd)
 
+    counts: dict = {}
+
+    def _bump(sku_raw: str, order_id: str, reason_code: str, real_title: str, refund_usd: float):
+        sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
+        key = sku if sku else f"amz_{order_id}"
+        reason_lbl = _amz_reason_label(reason_code) if reason_code else "Devolución Amazon"
         if key not in counts:
             counts[key] = {
                 "title": real_title or sku or sku_raw or key, "sku": sku,
@@ -19058,7 +19084,7 @@ async def _aggregate_amazon_returns_by_sku(seller_id: str, days: int, nickname: 
         counts[key]["count"] += 1
         counts[key]["platforms"]["amazon"] += 1
         counts[key]["refund_usd"] = round(counts[key]["refund_usd"] + refund_usd, 2)
-        counts[key]["closed"] += 1  # un refund es un evento financiero ya completado
+        counts[key]["closed"] += 1  # un refund/devolución es un evento ya completado
         counts[key]["reasons"][reason_lbl] = counts[key]["reasons"].get(reason_lbl, 0) + 1
         if reason_code:  # solo se penaliza cuando la razón real SÍ se conoce (FBA)
             counts[key]["severity_sum"] += _AMZ_REASON_SEVERITY.get(
@@ -19066,6 +19092,32 @@ async def _aggregate_amazon_returns_by_sku(seller_id: str, days: int, nickname: 
             )
         if nickname:
             counts[key]["accounts"][nickname] = counts[key]["accounts"].get(nickname, 0) + 1
+
+    # 1. Reporte de devoluciones FBA — fuente principal, una fila = una devolución real.
+    seen_orders: set = set()
+    for it in reasons_report:
+        sku_raw = (it.get("sku") or "").strip()
+        order_id = it.get("order_id", "")
+        seen_orders.add((order_id, sku_raw))
+        refund_usd = 0.0
+        pool = refund_pool_by_order.get(order_id)
+        if pool:
+            refund_usd = pool.pop(0)
+        _bump(sku_raw, order_id, it.get("reason", ""), it.get("product_name", ""), refund_usd)
+
+    # 2. Refunds financieros SIN fila correspondiente en el reporte — típicamente
+    #    MFN (envío propio), que el reporte FBA no cubre en absoluto. Sin esto se
+    #    perderían por completo las devoluciones de cuentas/SKUs con venta MFN.
+    for ref in refunds:
+        sku_raw = (ref.get("sku") or "").strip()
+        order_id = ref.get("order_id", "")
+        if (order_id, sku_raw) in seen_orders:
+            continue
+        amt = float(ref.get("amount", 0) or 0)
+        currency = ref.get("currency", "USD")
+        refund_usd = amt if currency == "USD" else amt / 18.0
+        _bump(sku_raw, order_id, "", title_by_sku.get(sku_raw, ""), refund_usd)
+
     return counts
 
 
@@ -19491,21 +19543,39 @@ async def amazon_returns_quality_scores(
 @app.get("/api/amazon/returns/top-skus")
 async def amazon_returns_top_skus(
     days: int = Query(30, ge=1, le=365),
-    limit: int = Query(10, ge=1, le=50),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    q: str = Query("", description="Filtro por SKU o título (substring, case-insensitive)"),
     seller_id: str = Query(""),
 ):
-    """Top SKUs por retornos Amazon de UNA cuenta — mismo shape que
-    /api/returns/unified-top?platform=amazon pero scoped a un solo seller_id."""
+    """Top SKUs por retornos Amazon de UNA cuenta, paginado + filtro por texto.
+    Antes devolvía hasta 50 filas de un jalón sin paginación (Jovan lo reportó
+    como scroll absurdo, 2026-08-03) — ahora pagina server-side igual que el
+    resto de tablas del proyecto (10/página)."""
     sid = seller_id.strip()
     if not sid:
-        return {"error": "No hay cuenta Amazon activa", "products": [], "total": 0}
+        return {"error": "No hay cuenta Amazon activa", "products": [], "total": 0, "total_skus": 0, "page": 1, "pages": 1}
     try:
         agg = await _aggregate_amazon_returns_by_sku(sid, days)
         total = sum(v["count"] for v in agg.values())
         retail_map = _get_retail_ph_map()
-        top = sorted(agg.values(), key=lambda x: x["count"], reverse=True)[:limit]
+        all_rows = sorted(agg.values(), key=lambda x: x["count"], reverse=True)
+
+        q_norm = q.strip().lower()
+        if q_norm:
+            all_rows = [
+                p for p in all_rows
+                if q_norm in (p.get("sku", "") or "").lower() or q_norm in (p.get("title", "") or "").lower()
+            ]
+
+        total_skus = len(all_rows)
+        pages = max(1, (total_skus + page_size - 1) // page_size)
+        page = min(page, pages)
+        start = (page - 1) * page_size
+        page_rows = all_rows[start:start + page_size]
+
         products = []
-        for p in top:
+        for p in page_rows:
             sku = p.get("sku", "")
             products.append({
                 "sku": sku, "title": p.get("title", "") or sku,
@@ -19514,9 +19584,13 @@ async def amazon_returns_top_skus(
                 "retail_ph_unit": retail_map.get(sku, 0.0) if sku else 0.0,
                 "pct_of_total": round(p["count"] / total * 100, 1) if total > 0 else 0,
             })
-        return {"total": total, "days": days, "products": products}
+        return {
+            "total": total, "days": days, "products": products,
+            "total_skus": total_skus, "page": page, "pages": pages, "page_size": page_size,
+            "fba_only_note": "Solo devoluciones FBA — Amazon no expone razón/comentario para envío propio (MFN).",
+        }
     except Exception as e:
-        return {"error": str(e), "products": [], "total": 0}
+        return {"error": str(e), "products": [], "total": 0, "total_skus": 0, "page": 1, "pages": 1}
 
 
 @app.get("/api/amazon/returns/customer-comments")

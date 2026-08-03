@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FIX: subconteo grave de devoluciones Amazon (7 en vez de 113+ reales)
+
+**Archivos:** `app/main.py` (`_fetch_amazon_returns_report_cached`,
+`_aggregate_amazon_returns_by_sku`, `/api/amazon/returns/top-skus`),
+`app/templates/amazon_returns.html`.
+
+Jovan reportó (con captura) que "Top SKUs por Retornos" mostraba 7
+devoluciones para SNTV001764/B0G4B9MNCQ (ExclusiveBulbs, 90 días) cuando en
+Seller Central hay muchas más. Dos bugs reales combinados:
+
+1. `_fetch_amazon_returns_report_cached` recortaba en silencio cualquier
+   ventana >60 días a los últimos 60 (`capped_days = min(days, 60)`) — Amazon
+   limita cada reporte a 60 días, pero nunca se implementó pedir varios
+   reportes para cubrir más. Fix: pide tantos reportes de 60 días como haga
+   falta y combina deduplicando por (order_id, sku, return_date).
+2. **El bug grande de verdad:** `_aggregate_amazon_returns_by_sku` usaba los
+   refunds financieros (Financial Events) como fuente PRINCIPAL de conteo —
+   pero no toda devolución física genera un refund financiero en la misma
+   ventana (reembolso pendiente, cambio en vez de devolución, etc). Verificado
+   en vivo: el reporte real de devoluciones FBA tenía **127** filas para ese
+   SKU en la misma ventana, contra 6-7 vía refunds. Rediseñado: el reporte de
+   devoluciones FBA (una fila = una devolución física real) es ahora la
+   fuente principal; los refunds financieros sin fila correspondiente
+   (típicamente MFN, que el reporte FBA no cubre) se agregan aparte para no
+   perder esas devoluciones, sin duplicar las que ya vienen del reporte.
+   Resultado verificado: 113 devoluciones reales para SNTV001764 (antes 6-7).
+
+**De paso:** paginación real (10/página) + buscador por SKU/título + aviso
+visible "solo FBA" en la tabla — antes eran hasta 50 filas de un jalón sin
+paginar (Jovan lo reportó como "absurdo estar hasta abajo con scroll").
+
+---
+
 ## 2026-08-03 — OPERACION: disco al 92.9% (3er acercamiento) — migración de fotos/facturas HISTÓRICAS a S3
 
 **Archivo:** `app/main.py` (`POST /api/diag/migrate-historical-to-s3`, nuevo).
