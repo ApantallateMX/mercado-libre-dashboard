@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FIX: tab "Distribución" muerto eliminado del nav
+
+Jovan preguntó por qué "Gral", "Inv.Global", "Sync Stock" y "Distribución"
+aparecían deshabilitados en el nav de Amazon. Los primeros 3 son diferencias
+reales de plataforma (`amz_href=None` explícito — conceptos que no aplican
+a Amazon tal cual: Gral es un tablero multi-cuenta ML, Sync Stock reparte
+stock proporcionalmente entre las 4 cuentas ML). "Distribución" era distinto:
+desde la fusión del 2026-07-18 ya no tenía `href` en NINGUNA plataforma
+(`ml_href=None` y `amz_href=None`) — su funcionalidad real vive fusionada
+dentro de Sync Stock (subvista "Configurar"). Se quitó el `dict` del tab de
+`_NAV_TAB_DEFS` en `app/main.py` — la ruta `/distribucion` (redirect) sigue
+viva, solo se quitó el tab que no iba a ningún lado.
+
+Pendiente abierto (no implementado, solo anotado): Jovan preguntó si "Gral"
+podría tener sentido para Amazon (tablero consolidado de sus 3 cuentas,
+igual que ML tiene para sus 4) — decidió no priorizarlo por ahora.
+
+---
+
 ## 2026-08-03 — FIX: batería de hallazgos de la auditoría de 4 agentes (fallas silenciosas + endpoints destructivos)
 
 Jovan pidió una auditoría general ("que todo esté funcionando bien... dejarla

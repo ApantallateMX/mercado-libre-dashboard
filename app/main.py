@@ -1309,11 +1309,13 @@ _NAV_TAB_DEFS = [
          ml_href="/stock-sync", amz_href=None,
          ml_active=["stock_sync"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab="sync", amz_tab=None, admin_only=True, badge="bm_sync"),
-    dict(id="distribucion", label="Distribución", icon="⊞",
-         ml_href=None, amz_href=None,
-         ml_active=None, amz_active=None, amz_uses_dispatcher=False,
-         ml_tab="sync", amz_tab=None, admin_only=True, badge=None,
-         ml_hidden=True),
+    # "Distribución" como tab de nivel superior se eliminó 2026-08-03 — desde
+    # 2026-07-18 ya no tenía href en NINGUNA plataforma (ml_href=None,
+    # amz_href=None): su funcionalidad real vive fusionada dentro de Sync
+    # Stock (subvista "Configurar"). Se quedó mostrándose gris sin ir a
+    # ningún lado — Jovan lo reportó al ver el nav de Amazon. La ruta
+    # `/distribucion` (redirect a `/stock-sync?view=config`) sigue viva en
+    # `_ML_ONLY_EXTRA_PATHS`, solo se quitó el tab del nav.
 ]
 
 # Rutas ML-only reales (para el guard de /auth/switch-amazon). Se derivan del
