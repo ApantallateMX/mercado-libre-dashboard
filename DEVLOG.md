@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FEAT: pestañas visuales en "Gral" (Ventas / Rendimiento / Retornos)
+
+Continuación directa del permiso por sección de arriba — Jovan probó como
+admin y no vio ninguna pestaña (esperado, ya que con acceso completo la
+página se veía igual que siempre) y pidió que sí fueran pestañas reales
+arriba para "tener más limpio y poder mejorar" en vez de todo junto en un
+solo scroll.
+
+Se agregó una barra de pestañas (`Ventas | Rendimiento | Retornos`) justo
+debajo del header — cada panel ya vivía separado en el HTML por los mismos
+bloques `{% if %}` del permiso, solo hubo que envolverlos en `<div id="gral-
+panel-X">` y agregar `setGralTab()` (toggle de `.hidden` + `history.
+replaceState('?gtab=X')`, mismo patrón que el merge de Sync Stock/
+Distribución). Los datos se siguen cargando todos de una vez al entrar (no
+lazy-load por pestaña) — cambiar de pestaña es instantáneo, sin spinner.
+
+La barra de pestañas solo aparece si el usuario tiene más de un panel
+disponible — alguien con acceso solo a "Retornos" ve directo el widget sin
+pestañas (nada que alternar), exactamente el caso que motivó todo esto.
+Verificado con Playwright las 3 combinaciones de permiso (admin: 3 pestañas
++ toggle funcional; solo-ventas: 2 pestañas sin "Retornos"; solo-retornos: 0
+pestañas, vista directa) — 0 errores de consola en las 3.
+
 ## 2026-08-03 — FEAT: permisos por sección en "Gral" — "Retornos" se puede dar sin exponer ventas
 
 Jovan pidió poder dar acceso a "Top Retornos Global" a ciertos usuarios sin

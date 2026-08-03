@@ -48,7 +48,25 @@
     </div>
 </div>
 
+{% set _gral_n_panels = (2 if 'ventas' in multidash_allowed_subtabs else 0) + (1 if 'retornos' in multidash_allowed_subtabs else 0) %}
+{% if _gral_n_panels > 1 %}
+<!-- ═══ PESTAÑAS DE GRAL — Ventas / Rendimiento / Retornos ═══ -->
+<div class="bg-white rounded-xl shadow mb-5 p-1.5 inline-flex gap-1">
+    {% if 'ventas' in multidash_allowed_subtabs %}
+    <button onclick="setGralTab('ventas')" id="gral-tab-btn-ventas"
+            class="gral-tab-btn px-4 py-2 rounded-lg text-sm font-semibold transition">Ventas</button>
+    <button onclick="setGralTab('rendimiento')" id="gral-tab-btn-rendimiento"
+            class="gral-tab-btn px-4 py-2 rounded-lg text-sm font-semibold transition">Rendimiento</button>
+    {% endif %}
+    {% if 'retornos' in multidash_allowed_subtabs %}
+    <button onclick="setGralTab('retornos')" id="gral-tab-btn-retornos"
+            class="gral-tab-btn px-4 py-2 rounded-lg text-sm font-semibold transition">Retornos</button>
+    {% endif %}
+</div>
+{% endif %}
+
 {% if 'ventas' in multidash_allowed_subtabs %}
+<div id="gral-panel-ventas">
 <!-- ═══ MORNING BRIEFING ═══ -->
 <div class="mb-5" id="morning-briefing-section">
   <div class="flex items-center gap-2 mb-3">
@@ -145,9 +163,11 @@
     </div>
 </div>
 {% endif %}
+</div>{# cierra #gral-panel-ventas #}
 {% endif %}{# fin bloque 'ventas' (Morning Briefing / Filtro Fechas / Líderes / Cards) #}
 
 {% if 'retornos' in multidash_allowed_subtabs %}
+<div id="gral-panel-retornos">
 <!-- ═══ TOP RETORNOS GLOBAL — única vista cross-cuenta de retornos (ver CLAUDE.md regla #4) ═══ -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-red-300">
     <div class="px-4 md:px-5 py-3 flex items-center justify-between border-b border-gray-100 cursor-pointer select-none"
@@ -197,9 +217,11 @@
         </div>
     </div>
 </div>
+</div>{# cierra #gral-panel-retornos #}
 {% endif %}{# fin bloque 'retornos' (Top Retornos Global) #}
 
 {% if 'ventas' in multidash_allowed_subtabs %}
+<div id="gral-panel-rendimiento">
 <!-- ═══ RENDIMIENTO POR CUENTA ═══ -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -293,6 +315,7 @@
         </div>
     </div>
 </div>
+</div>{# cierra #gral-panel-rendimiento #}
 {% endif %}{# fin bloque 'ventas' (Rendimiento / Comparativa / Top Productos) #}
 
 <!-- Concentración de stock movida a Inventario Global (/inventory-global) -->
@@ -327,6 +350,31 @@
 // que no existen en el DOM para un usuario restringido.
 const MULTIDASH_ALLOWED_SUBTABS = {{ multidash_allowed_subtabs | tojson }};
 function _hasMdSub(s) { return MULTIDASH_ALLOWED_SUBTABS.includes(s); }
+
+// ─── Pestañas visuales de Gral (Ventas / Rendimiento / Retornos) ───────────
+// Los 3 paneles ya viven todos en el DOM (o no, según permiso) — esto solo
+// alterna cuál se ve, no vuelve a pedir datos (todo se cargó de una vez).
+const GRAL_PANELS = ['ventas', 'rendimiento', 'retornos'];
+function setGralTab(name) {
+    GRAL_PANELS.forEach(p => {
+        const panel = document.getElementById('gral-panel-' + p);
+        if (panel) panel.classList.toggle('hidden', p !== name);
+        const btn = document.getElementById('gral-tab-btn-' + p);
+        if (!btn) return;
+        btn.classList.toggle('bg-yellow-400', p === name);
+        btn.classList.toggle('text-gray-800', p === name);
+        btn.classList.toggle('text-gray-500', p !== name);
+        btn.classList.toggle('hover:bg-gray-50', p !== name);
+    });
+    try { history.replaceState(null, '', location.pathname + '?gtab=' + name); } catch(_) {}
+}
+function _gralInitialTab() {
+    const allowed = [];
+    if (_hasMdSub('ventas')) { allowed.push('ventas', 'rendimiento'); }
+    if (_hasMdSub('retornos')) { allowed.push('retornos'); }
+    const requested = new URLSearchParams(location.search).get('gtab');
+    return allowed.includes(requested) ? requested : (allowed[0] || null);
+}
 
 // ─── Colores por cuenta ────────────────────────────────────────────────────
 const ACC_COLORS = {
@@ -1795,6 +1843,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (_hasMdSub('retornos')) {
         loadReturnsWidget();
     }
+    const _initialGralTab = _gralInitialTab();
+    if (_initialGralTab) setGralTab(_initialGralTab);
 });
 </script>
 {% endblock %}
