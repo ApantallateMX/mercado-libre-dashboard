@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import time
 import httpx
 from contextvars import ContextVar
 from typing import Optional
 from app.config import MELI_API_URL, MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI
 from app.services import token_store
+
+logger = logging.getLogger(__name__)
 
 # ContextVar para la cuenta activa — lo setea AccountMiddleware por request
 _active_user_id: ContextVar[str | None] = ContextVar('active_user_id', default=None)
@@ -558,14 +561,17 @@ class MeliClient:
 
     async def get_shipment_costs(self, shipment_id: str) -> float:
         """Obtiene el costo de envio para el vendedor desde /shipments/{id}/costs.
-        Retorna senders[0].cost o 0 si no se puede obtener."""
+        Retorna senders[0].cost o 0 si no se puede obtener. El 0 silencioso
+        alimenta cálculos de rentabilidad (neto/utilidad) sin avisar cuando en
+        realidad es un fallo de API, no un envío gratis real — logueado para
+        poder distinguir ambos casos en logs."""
         try:
             data = await self.get(f"/shipments/{shipment_id}/costs")
             senders = data.get("senders", [])
             if senders:
                 return float(senders[0].get("cost", 0) or 0)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.warning(f"[ML] get_shipment_costs falló para shipment={shipment_id}, usando $0 (subestima costo real): {_e}")
         return 0.0
 
     async def enrich_orders_with_shipping(self, orders: list) -> list:

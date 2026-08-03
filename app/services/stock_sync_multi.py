@@ -1042,8 +1042,8 @@ async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
             if _ml_db_updates:
                 try:
                     await token_store.bulk_update_ml_listing_qtys(_ml_db_updates)
-                except Exception:
-                    pass
+                except Exception as _e_bulk:
+                    logger.warning(f"[STOCK-SYNC] bulk_update_ml_listing_qtys falló tras sync exitoso en ML: {_e_bulk}")
 
         summary["elapsed_s"] = round(_time.time() - t0, 1)
         logger.info(

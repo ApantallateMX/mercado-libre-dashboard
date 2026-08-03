@@ -1262,8 +1262,8 @@ async def reactivate_listing(request: Request):
                     detail={"qty": stock_bm},
                     ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
                 )
-        except Exception:
-            pass
+        except Exception as _e_log:
+            logger.warning(f"[AUDIT] log_action falló para ml_item_reactivated item_id={item_id}: {_e_log}")
         return {"ok": True, "item_id": item_id, "new_status": "active", "permalink": permalink}
     except Exception as e:
         logger.error(f"reactivate error {item_id}: {e}")
@@ -1359,8 +1359,8 @@ async def sync_price(request: Request):
                     detail={"price": float(price)},
                     ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
                 )
-        except Exception:
-            pass
+        except Exception as _e_log:
+            logger.warning(f"[AUDIT] log_action falló para ml_price_synced item_id={item_id}: {_e_log}")
         return {"ok": True, "item_id": item_id, "new_price": float(price)}
     except Exception as e:
         err_str = str(e) or repr(e) or f"{type(e).__name__}"
@@ -2756,8 +2756,8 @@ async def mark_launched_sku(sku: str, request: Request):
                 detail={"sku": sku, "title": ml_title[:80] if ml_title else "", "price": ml_price},
                 ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
             )
-    except Exception:
-        pass
+    except Exception as _e_log:
+        logger.warning(f"[AUDIT] log_action falló para ml_mark_launched item_id={item_id}: {_e_log}")
     return {"ok": True}
 
 
@@ -3802,8 +3802,8 @@ async def create_listing_endpoint(request: Request):
                     detail={"sku": sku, "title": (ml_actual_title or title or "")[:80], "price": float(price)},
                     ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
                 )
-        except Exception:
-            pass
+        except Exception as _e_log:
+            logger.warning(f"[AUDIT] log_action falló para ml_item_created item_id={item_id}: {_e_log}")
 
         # title_warning solo si ML aplicó un título COMPLETAMENTE diferente al wizard
         # (no por normalización de capitalización — ML siempre convierte a Title Case)

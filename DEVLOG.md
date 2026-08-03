@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FIX: batería de hallazgos de la auditoría de 4 agentes (fallas silenciosas + endpoints destructivos)
+
+Jovan pidió una auditoría general ("que todo esté funcionando bien... dejarla
+muy profesional"). 4 agentes en paralelo revisaron loops de background,
+frescura de caches, y manejo de errores. **Importante:** 2 de los hallazgos
+iniciales (catálogo BM "14 días stale", `bm_stock_snapshot` "13 días stale")
+resultaron ser falsas alarmas — los agentes consultaron la copia LOCAL de
+`tokens.db`, no producción. Verificado en vivo contra Railway: catálogo
+corrió hace 9h (exitoso), `bm_sku_master` actualizado hace 23min. Ambos
+sanos — lección para no repetir: siempre verificar contra producción antes
+de "arreglar" algo basado en un query a la DB local.
+
+**Arreglado de verdad (`app/main.py`, `app/services/token_store.py`,
+`app/services/stock_sync_multi.py`, `app/services/buyer_messages_client.py`,
+`app/services/meli_client.py`, `app/api/lanzar.py`, `app/api/amazon_lanzar.py`):**
+
+- **Fotos huérfanas en `claim_photos`** — causa raíz confirmada: el `DELETE`
+  tras evict comparaba `local_path` como string exacto, y filas escritas en
+  Windows (`\`) vs Railway/Coolify Linux (`/`) conviven en la misma DB sin
+  normalizar. Fix: `REPLACE(local_path,'\','/')` en ambos lados del DELETE +
+  log si `rowcount` no coincide con lo esperado (antes silencioso).
+- **Poller de mensajes Amazon** (`buyer_messages_client.py`) — fallaba
+  totalmente silencioso si IMAP se rompía. Ahora loguea errores por cuenta.
+- **`bulk_update_ml_listing_qtys`** — silencioso tras sync exitoso con
+  ML/BM; ahora logueado (stock podía quedar desactualizado sin aviso).
+- **`save_launched_listing`** — silencioso DESPUÉS de crear un listing real
+  en Amazon; riesgo de relanzarlo duplicado sin este log.
+- **`get_shipment_costs`** — caía a $0 silenciosamente, subestimando costo de
+  envío en cálculos de rentabilidad; ahora logueado.
+- **4 llamadas a `log_action`** (auditoría de precio/listing en `lanzar.py`)
+  con `except: pass` — la escritura real en ML sí ocurría pero el rastro de
+  auditoría se perdía sin dejar log.
+- **VECKTOR (Amazon) unos días atrás en `order_history`** — `get_order_items`
+  por orden fallaba silencioso (rate-limited, 429 frecuente); ahora logueado
+  con el order_id específico para poder diagnosticar de qué órdenes falta.
+- **2 endpoints destructivos por GET → POST**: `/api/diag/clear-realtime-alerts`
+  y `/api/diag/emergency-clear-claim-photos` — un GET destructivo puede
+  dispararse por accidente (link preview, crawler, precarga del navegador).
+
+---
+
 ## 2026-08-03 — FIX: subconteo grave de devoluciones Amazon (7 en vez de 113+ reales)
 
 **Archivos:** `app/main.py` (`_fetch_amazon_returns_report_cached`,

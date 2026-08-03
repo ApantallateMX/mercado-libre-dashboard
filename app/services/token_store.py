@@ -5168,15 +5168,29 @@ async def get_claim_photos(claim_id: str) -> list[dict]:
 async def delete_claim_photos_by_path(local_paths: list[str]) -> int:
     """Borra filas de claim_photos por local_path — usado por el evictor de presupuesto
     de disco (ver _enforce_claim_photos_budget en main.py) después de borrar el archivo
-    físico, para que la DB no apunte a fotos que ya no existen."""
+    físico, para que la DB no apunte a fotos que ya no existen.
+
+    Compara normalizando `\\`→`/` en ambos lados (SQL REPLACE) — filas escritas en
+    Windows (local_path con backslash) y en Railway/Coolify (Linux, forward slash)
+    conviven en la misma DB; sin normalizar, el DELETE no hacía match contra filas
+    del otro SO y quedaban huérfanas (archivo borrado, fila viva) sin ningún error
+    visible (encontrado 2026-08-03, auditoría de sistema)."""
     if not local_paths:
         return 0
+    norm_paths = [p.replace("\\", "/") for p in local_paths]
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        placeholders = ",".join("?" * len(local_paths))
+        placeholders = ",".join("?" * len(norm_paths))
         cur = await db.execute(
-            f"DELETE FROM claim_photos WHERE local_path IN ({placeholders})", local_paths
+            f"DELETE FROM claim_photos WHERE REPLACE(local_path, '\\', '/') IN ({placeholders})",
+            norm_paths,
         )
         await db.commit()
+        if cur.rowcount != len(local_paths):
+            logger.warning(
+                f"[CLAIM-PHOTOS-BUDGET] delete_claim_photos_by_path: se intentó borrar "
+                f"{len(local_paths)} filas, solo {cur.rowcount} hicieron match — posibles "
+                f"filas huérfanas restantes (archivo ya borrado, fila viva en DB)"
+            )
         return cur.rowcount
 
 

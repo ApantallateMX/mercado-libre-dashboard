@@ -2202,8 +2202,12 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                                 "status":         status,
                                 "data_source":    "estimated",
                             })
-                    except Exception:
-                        pass
+                    except Exception as _e_item:
+                        # get_order_items es rate-limited (429 frecuente bajo carga) — si
+                        # falla aquí, esa orden se queda sin sus items en order_history
+                        # hasta el próximo ciclo. Antes silencioso (encontrado 2026-08-03,
+                        # auditoría de sistema — VECKTOR quedó unos días atrás por esto).
+                        logger.warning(f"[AMZ-BG] {nick}: error obteniendo items de orden {order_id}: {_e_item}")
             except Exception as _amz_err:
                 logger.warning(f"[AMZ-BG] Error cuenta {nick}: {_amz_err}")
             finally:
@@ -15934,11 +15938,13 @@ async def diag_reconcile_realtime_alerts(token: str = ""):
     return result
 
 
-@app.get("/api/diag/clear-realtime-alerts")
+@app.post("/api/diag/clear-realtime-alerts")
 async def diag_clear_realtime_alerts(token: str = ""):
     """Limpia realtime_stock_alerts — usado una vez para borrar datos
     contaminados por el bug de FULL/ya-enviado (corregido en commit
-    6250d9a). Las alertas se regeneran solas con el webhook ya corregido."""
+    6250d9a). Las alertas se regeneran solas con el webhook ya corregido.
+    POST (no GET) desde 2026-08-03 — un GET destructivo puede dispararse por
+    accidente (link preview, crawler, precarga del navegador), auditoría."""
     _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DT:
         return JSONResponse({"error": "token inválido"}, status_code=403)
@@ -16209,10 +16215,12 @@ async def diag_db_size(token: str = ""):
     return result
 
 
-@app.get("/api/diag/emergency-clear-claim-photos")
+@app.post("/api/diag/emergency-clear-claim-photos")
 async def diag_emergency_clear_claim_photos(token: str = ""):
     """URGENTE: borra TODAS las fotos de reclamos ya descargadas a disco (y su registro
-    en claim_photos) para liberar espacio cuando el Railway Volume se llena. Los
+    en claim_photos) para liberar espacio cuando el Railway Volume se llena.
+    POST (no GET) desde 2026-08-03 — un GET destructivo puede dispararse por
+    accidente (link preview, crawler, precarga del navegador), auditoría. Los
     reclamos en sí (claims_history) NO se tocan — solo las fotos, que se recachean
     solas la próxima vez que alguien abra la galería de un reclamo (lazy, 1 a la vez).
     """
@@ -20396,8 +20404,8 @@ async def _enforce_claim_photos_budget() -> dict:
         try:
             from app.services import token_store as _ts_evict
             await _ts_evict.delete_claim_photos_by_path(deleted_rel_paths)
-        except Exception:
-            pass
+        except Exception as _e_del:
+            logger.warning(f"[CLAIM-PHOTOS-BUDGET] Error borrando filas de DB tras evict: {_e_del}")
 
     if evicted:
         logger.warning(

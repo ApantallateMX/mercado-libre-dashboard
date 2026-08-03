@@ -243,9 +243,12 @@ async def poll_loop() -> None:
     while True:
         if AMAZON_BUYER_INBOX_ACCOUNTS:
             try:
-                await poll_all_accounts()
-            except Exception:
-                pass
+                results = await poll_all_accounts()
+                errors = {k: v for k, v in results.items() if isinstance(v, str) and v.startswith("error:")}
+                if errors:
+                    logger.warning(f"[BUYER-MSG-POLL] Error en {len(errors)} cuenta(s): {errors}")
+            except Exception as _e:
+                logger.warning(f"[BUYER-MSG-POLL] Error en poll_all_accounts: {_e}")
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 

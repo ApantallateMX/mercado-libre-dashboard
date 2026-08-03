@@ -2271,8 +2271,11 @@ async def create_listing(request: Request):
             seller_id=client.seller_id, sku=sku, product_type=product_type,
             title=title, price=price, currency=currency, asin=new_asin,
         )
-    except Exception:
-        pass
+    except Exception as _e_sll:
+        # El listing YA se creó en Amazon (llamada SP-API real ya ejecutada arriba) —
+        # si esto falla, el dashboard no se entera de que existe, riesgo de relanzarlo
+        # duplicado en el siguiente scan de gaps. Nunca debe quedar silencioso.
+        logger.warning(f"[AMZ-LANZAR] save_launched_listing falló tras crear listing real ASIN={new_asin} SKU={sku}: {_e_sll}")
 
     return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku, "product_type": product_type}
 
