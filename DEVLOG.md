@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-03 — FEAT: permisos por sección en "Gral" — "Retornos" se puede dar sin exponer ventas
+
+Jovan pidió poder dar acceso a "Top Retornos Global" a ciertos usuarios sin
+que vean el dinero/ventas de "Gral" (`/multi-dashboard`). Propuso reorganizar
+la página en tabs (Ventas, Retornos, Rendimiento) — se implementó con el
+mecanismo de permisos jerárquico tab→subtab ya usado por Salud/Productos/Ads.
+
+**Hallazgo importante antes de tocar código:** "Gral" compartía la misma
+clave de permiso (`ml.dashboard`) que el Dashboard normal de una cuenta E
+Inventario Global — dar un subtab de "Gral" habría regalado también acceso
+completo a esas otras 2 páginas (que sí muestran ventas). Se le dio a "Gral"
+su propia clave `ml.multidashboard`, con migración automática que preserva el
+acceso completo a quien ya tenía "Gral" antes (jorge, sergiom en producción).
+
+**Segundo hallazgo:** "Ventas" y "Rendimiento" del frontend de Gral se
+alimentan de LA MISMA llamada `/api/dashboard/multi-account` (un solo fetch
+trae ranking + gráfica + top productos + cards) — separarlos como permisos
+independientes hubiera sido falsa granularidad. Quedaron 2 subtabs reales:
+"Ventas y Rendimiento" y "Retornos" — la UI conserva las 3 secciones visuales
+de siempre para quien tiene acceso completo, nada cambió para ellos.
+
+Gating real en 2 capas (no solo ocultar HTML): el bloque no permitido ni se
+renderiza server-side, Y los 5 endpoints que alimentan esos bloques
+(`/api/dashboard/multi-account[-amazon|-launches]`, `/api/dashboard/
+morning-briefing`, `/api/returns/unified-top`) ahora exigen el subtab
+correspondiente vía `_require_subtab()` — antes ninguno validaba permisos,
+solo pedían sesión válida.
+
+Verificado local con 3 tokens JWT sintéticos (admin sin restricción, solo
+"ventas", solo "retornos"): cada endpoint responde 200/403 exactamente como
+se espera, el HTML de cada usuario solo contiene los bloques permitidos (0
+fugas de datos reales, solo comentarios de JS muertos con el mismo texto),
+y el panel de Usuarios ya muestra "Gral" con sus 2 checkboxes nuevos
+("Retornos" / "Ventas y Rendimiento") separado del "Dashboard" normal, sin
+tocar la plantilla de ese panel (ya renderiza el árbol de permisos
+dinámicamente).
+
 ## 2026-08-03 — FEAT: reclamos sin comentario del comprador muestran el motivo prominente (Top Retornos Global)
 
 Jovan reportó (con captura) que la tarjeta de detalle de un SKU en "Top

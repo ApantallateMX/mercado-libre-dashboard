@@ -91,6 +91,16 @@ ALL_SECTIONS = [
 PERMISSION_TREE = {
     "ml": {
         "dashboard":    {"label": "Dashboard",    "subtabs": None},
+        # "Gral" (/multi-dashboard) tenía la MISMA clave que "Dashboard" (arriba) e
+        # "Inv.Global" — compartían "ml.dashboard", así que no había forma de dar
+        # acceso a Retornos de Gral sin dar también el Dashboard de una cuenta.
+        # Clave propia desde 2026-08-03. Solo 2 subtabs reales (no 3): "Ventas" y
+        # "Rendimiento" comparten la misma llamada /api/dashboard/multi-account en
+        # el frontend — separarlos como permisos distintos sería falsa granularidad,
+        # quien ve uno inevitablemente recibe los datos del otro en la misma respuesta.
+        "multidashboard": {"label": "Gral", "subtabs": {
+            "ventas": "Ventas y Rendimiento", "retornos": "Retornos",
+        }},
         "ventas":       {"label": "Ventas",       "subtabs": None},
         "productos":    {"label": "Productos",    "subtabs": {
             "summary": "Resumen", "inventory": "Inventario", "stock": "Stock",
@@ -353,6 +363,23 @@ async def init_user_db(admin_password: str = "010817xD"):
             sections = _parse_allowed_sections(raw_sections)
             if "sku" in sections and "ventas" not in sections:
                 sections.append("ventas")
+                await db.execute(
+                    "UPDATE dashboard_users SET allowed_sections = ? WHERE id = ?",
+                    (json.dumps(sections), uid),
+                )
+        # Migración: "Gral" (multi-dashboard) gana su propia clave "ml.multidashboard"
+        # (antes compartía "ml.dashboard"/"dashboard" con el Dashboard de una cuenta e
+        # Inv.Global). Cualquiera que ya tuviera acceso a "dashboard" (flat, esquema
+        # viejo) o "ml.dashboard" (ya expandido) conserva Gral completo — no se le
+        # quita nada a nadie que ya lo veía.
+        cur = await db.execute("SELECT id, allowed_sections FROM dashboard_users")
+        for uid, raw_sections in await cur.fetchall():
+            sections = _parse_allowed_sections(raw_sections)
+            if not sections:
+                continue  # lista vacía = sin restricción, no aplica
+            had_dashboard = "dashboard" in sections or "ml.dashboard" in sections
+            if had_dashboard and "ml.multidashboard" not in sections:
+                sections.append("ml.multidashboard")
                 await db.execute(
                     "UPDATE dashboard_users SET allowed_sections = ? WHERE id = ?",
                     (json.dumps(sections), uid),

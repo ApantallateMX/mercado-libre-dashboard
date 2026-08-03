@@ -853,7 +853,7 @@ _AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", 
 # Mapeo de rutas de página a sección (para control de acceso por sección)
 _PATH_TO_SECTION: dict[str, str] = {
     "/dashboard":        "dashboard",
-    "/multi-dashboard":  "dashboard",
+    "/multi-dashboard":  "multidashboard",
     "/inventory-global": "dashboard",
     "/orders":           "ventas",
     "/items":            "productos",
@@ -891,7 +891,7 @@ _SECTION_FIRST_URL: dict[str, str] = {
 # en AuthMiddleware (multi-tab por query param / sección especial admin_only).
 _PATH_TO_TAB: dict[str, tuple[str, str]] = {
     "/dashboard":        ("ml", "dashboard"),
-    "/multi-dashboard":  ("ml", "dashboard"),
+    "/multi-dashboard":  ("ml", "multidashboard"),
     "/inventory-global": ("ml", "dashboard"),
     "/orders":           ("ml", "ventas"),
     "/sku-sales":        ("ml", "ventas"),
@@ -912,7 +912,8 @@ _PATH_TO_TAB: dict[str, tuple[str, str]] = {
 }
 
 _ML_TAB_URL = {
-    "dashboard": "/dashboard", "ventas": "/orders", "productos": "/items",
+    "dashboard": "/dashboard", "multidashboard": "/multi-dashboard",
+    "ventas": "/orders", "productos": "/items",
     "ads": "/ads", "salud": "/health", "devoluciones": "/returns",
     "planning": "/planning", "facturacion": "/facturacion", "sync": "/stock-sync",
     "deuda": "/deuda-empresa",
@@ -1260,7 +1261,7 @@ _NAV_TAB_DEFS = [
     dict(id="gral", label="Gral", icon="⊕",
          ml_href="/multi-dashboard", amz_href="/multi-dashboard",
          ml_active=["multi_dashboard"], amz_active=None, amz_uses_dispatcher=False,
-         ml_tab="dashboard", amz_tab=None, admin_only=False, badge=None),
+         ml_tab="multidashboard", amz_tab=None, admin_only=False, badge=None),
     dict(id="inventory_global", label="Inv.Global", icon="▦",
          ml_href="/inventory-global", amz_href=None,
          ml_active=["inventory_global"], amz_active=None, amz_uses_dispatcher=False,
@@ -12851,17 +12852,25 @@ async def multi_dashboard_page(request: Request):
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
+    du = ctx.get("dashboard_user") or {}
+    sections = du.get("allowed_sections") or []
+    all_subtabs = list(user_store.PERMISSION_TREE["ml"]["multidashboard"]["subtabs"].keys())
+    allowed_subtabs = all_subtabs if (not sections or du.get("role") == "admin") \
+        else user_store.get_allowed_subtabs(sections, "ml", "multidashboard")
     return templates.TemplateResponse(request, "multi_dashboard.html", {        "user": user,
         "active": "multi_dashboard",
+        "multidash_allowed_subtabs": allowed_subtabs,
         **ctx
     })
 
 
 @app.get("/api/dashboard/multi-account")
 async def get_multi_account_dashboard(
+    request: Request,
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
+    _require_subtab(request, "ml", "multidashboard", "ventas")
     """Dashboard consolidado: métricas de todas las cuentas en una sola respuesta.
     Cache de 5 minutos cross-account (independiente de la cuenta activa).
     """
@@ -13077,9 +13086,11 @@ async def get_multi_account_dashboard(
 
 @app.get("/api/dashboard/multi-account-launches")
 async def get_multi_account_launches(
+    request: Request,
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
+    _require_subtab(request, "ml", "multidashboard", "ventas")
     """Cuenta cuántos items publicó cada cuenta en el período dado.
     Usa /users/{uid}/items/search con filtro de fechas (sólo paging.total, sin paginar).
     """
@@ -13134,8 +13145,9 @@ async def get_multi_account_launches(
 
 
 @app.get("/api/dashboard/morning-briefing")
-async def morning_briefing():
+async def morning_briefing(request: Request):
     """Resumen matutino de todas las cuentas: ventas hoy, alertas, estado."""
+    _require_subtab(request, "ml", "multidashboard", "ventas")
     # Usar hora México (CST UTC-6) para que la fecha del resumen sea correcta en el servidor UTC
     today = (datetime.utcnow() - timedelta(hours=6)).strftime("%Y-%m-%d")
     accounts_list = await token_store.get_all_tokens()
@@ -13177,9 +13189,11 @@ async def morning_briefing():
 
 @app.get("/api/dashboard/multi-account-amazon")
 async def get_multi_account_amazon_dashboard(
+    request: Request,
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
+    _require_subtab(request, "ml", "multidashboard", "ventas")
     """Dashboard consolidado de todas las cuentas Amazon configuradas."""
     from app.services.amazon_client import get_amazon_client as _get_amz_client
 
@@ -20108,10 +20122,12 @@ def _merge_return_counts(ml_counts: dict, amz_counts: dict) -> dict:
 
 @app.get("/api/returns/unified-top")
 async def returns_unified_top(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(10, ge=1, le=20),
     platform: str = Query("all", description="all | ml | amazon"),
 ):
+    _require_subtab(request, "ml", "multidashboard", "retornos")
     """Top N SKUs más retornados/reembolsados sumando ML + Amazon. Lee de
     _fetch_unified_returns_cached (3h TTL) — ver comentario ahí."""
     data = await _fetch_unified_returns_cached(days)

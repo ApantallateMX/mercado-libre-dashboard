@@ -15,6 +15,7 @@
                 <p class="text-xs text-gray-400">Comparativa consolidada de todas las cuentas · <span id="md-period-lbl">este mes</span></p>
             </div>
         </div>
+        {% if 'ventas' in multidash_allowed_subtabs %}
         <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
             <div class="pr-5 text-center">
                 <p class="text-xs text-gray-400">MeLi hoy <span class="text-[10px] text-gray-300">(neto)</span></p>
@@ -43,9 +44,11 @@
             </div>
             {% endif %}
         </div>
+        {% endif %}
     </div>
 </div>
 
+{% if 'ventas' in multidash_allowed_subtabs %}
 <!-- ═══ MORNING BRIEFING ═══ -->
 <div class="mb-5" id="morning-briefing-section">
   <div class="flex items-center gap-2 mb-3">
@@ -142,7 +145,9 @@
     </div>
 </div>
 {% endif %}
+{% endif %}{# fin bloque 'ventas' (Morning Briefing / Filtro Fechas / Líderes / Cards) #}
 
+{% if 'retornos' in multidash_allowed_subtabs %}
 <!-- ═══ TOP RETORNOS GLOBAL — única vista cross-cuenta de retornos (ver CLAUDE.md regla #4) ═══ -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-red-300">
     <div class="px-4 md:px-5 py-3 flex items-center justify-between border-b border-gray-100 cursor-pointer select-none"
@@ -192,7 +197,9 @@
         </div>
     </div>
 </div>
+{% endif %}{# fin bloque 'retornos' (Top Retornos Global) #}
 
+{% if 'ventas' in multidash_allowed_subtabs %}
 <!-- ═══ RENDIMIENTO POR CUENTA ═══ -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -286,6 +293,7 @@
         </div>
     </div>
 </div>
+{% endif %}{# fin bloque 'ventas' (Rendimiento / Comparativa / Top Productos) #}
 
 <!-- Concentración de stock movida a Inventario Global (/inventory-global) -->
 
@@ -312,6 +320,14 @@
 
 {% block scripts %}
 <script>
+// Subtabs de "Gral" permitidos para este usuario (["ventas","retornos"] sin
+// restricción) — controla qué llamadas de init se disparan. El HTML de los
+// bloques no permitidos ni siquiera se renderiza (ver multi_dashboard.html
+// server-side), esto solo evita errores de JS al intentar poblar elementos
+// que no existen en el DOM para un usuario restringido.
+const MULTIDASH_ALLOWED_SUBTABS = {{ multidash_allowed_subtabs | tojson }};
+function _hasMdSub(s) { return MULTIDASH_ALLOWED_SUBTABS.includes(s); }
+
 // ─── Colores por cuenta ────────────────────────────────────────────────────
 const ACC_COLORS = {
     "523916436": "#3B82F6",  // APANTALLATEMX - azul
@@ -1767,14 +1783,18 @@ function analyzeRetDetailAI() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-    // Set default dates: current month
-    document.getElementById('md-date-from').value = monthStart();
-    document.getElementById('md-date-to').value = today();
-    document.getElementById('md-period-lbl').textContent = 'este mes';
-    loadMultiDashboard();
-    loadAmazonSection();  // Load Amazon in parallel
-    loadMorningBriefing();
-    loadReturnsWidget();
+    if (_hasMdSub('ventas')) {
+        // Set default dates: current month
+        document.getElementById('md-date-from').value = monthStart();
+        document.getElementById('md-date-to').value = today();
+        document.getElementById('md-period-lbl').textContent = 'este mes';
+        loadMultiDashboard();
+        loadAmazonSection();  // Load Amazon in parallel
+        loadMorningBriefing();
+    }
+    if (_hasMdSub('retornos')) {
+        loadReturnsWidget();
+    }
 });
 </script>
 {% endblock %}
