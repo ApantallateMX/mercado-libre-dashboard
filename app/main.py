@@ -16830,7 +16830,7 @@ async def diag_buyer_messages_status(token: str = "", live_poll: bool = False):
 
 
 @app.get("/api/diag/buyer-messages-inspect")
-async def diag_buyer_messages_inspect(token: str = "", seller_id: str = ""):
+async def diag_buyer_messages_inspect(token: str = "", seller_id: str = "", sample_n: int = 5):
     """DIAGNÓSTICO — para UNA cuenta, reporta cuántos correos de Amazon
     matchean el filtro FROM crudo, cuántos parsean como mensaje real de
     comprador y una muestra de los que NO parsean (asunto+cuerpo) — para ver
@@ -16845,7 +16845,7 @@ async def diag_buyer_messages_inspect(token: str = "", seller_id: str = ""):
     if not cfg:
         return JSONResponse({"error": "cuenta no configurada"}, status_code=404)
     try:
-        result = await asyncio.to_thread(_bmc._inspect_account_sync, cfg)
+        result = await asyncio.to_thread(_bmc._inspect_account_sync, cfg, sample_n)
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
