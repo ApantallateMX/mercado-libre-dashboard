@@ -16038,6 +16038,85 @@ async def diag_clear_realtime_alerts(token: str = ""):
     return {"rows_deleted": before}
 
 
+@app.get("/api/diag/tv-stock-vs-sales")
+async def diag_tv_stock_vs_sales(token: str = "", days: int = 60, weeks: int = 10):
+    """DIAGNÓSTICO — Jovan reportó baja de ventas ligada a que muchos de los
+    TVs más vendidos están fuera de stock. Cruza los SKUs de TV (prefijo
+    SNTV) con más ingreso reciente (order_history, ML+Amazon) contra su
+    available_qty ACTUAL en bm_sku_master (ya es el vendible real: suma de
+    los locations 47,62,68,45,69,43,42, ver CLAUDE.md) — para confirmar con
+    datos si el patrón es real y qué tan grave es, y una tendencia semanal de
+    ingresos para dimensionar la baja."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_tv
+    from datetime import datetime as _dt_tv, timedelta as _td_tv
+
+    date_from = (_dt_tv.utcnow() - _td_tv(days=days)).strftime("%Y-%m-%d")
+
+    async with _aio_tv.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_tv.Row
+
+        # Stock TV total vendible (ya es available_qty real, no bruto)
+        cur = await db.execute("""
+            SELECT COUNT(*) AS n_skus, SUM(available_qty) AS total_units,
+                   SUM(CASE WHEN available_qty = 0 THEN 1 ELSE 0 END) AS skus_en_cero
+            FROM bm_sku_master WHERE sku LIKE 'SNTV%'
+        """)
+        tv_stock_summary = dict(await cur.fetchone())
+
+        # Top 30 SKUs de TV por ingreso reciente, con su stock actual
+        cur = await db.execute("""
+            SELECT oh.sku,
+                   SUM(oh.unit_price * oh.quantity) AS revenue,
+                   SUM(oh.quantity) AS units_sold,
+                   COALESCE(bm.available_qty, -1) AS available_qty,
+                   COALESCE(bm.title, '') AS title
+            FROM order_history oh
+            LEFT JOIN bm_sku_master bm ON bm.sku = oh.sku
+            WHERE oh.sku LIKE 'SNTV%' AND oh.order_date >= ?
+            GROUP BY oh.sku
+            ORDER BY revenue DESC
+            LIMIT 30
+        """, (date_from,))
+        top_tv_skus = [dict(r) for r in await cur.fetchall()]
+
+        # Tendencia semanal de ingresos — TODAS las plataformas/cuentas, últimas N semanas
+        weeks_from = (_dt_tv.utcnow() - _td_tv(weeks=weeks)).strftime("%Y-%m-%d")
+        cur = await db.execute("""
+            SELECT strftime('%Y-W%W', order_date) AS iso_week,
+                   SUM(unit_price * quantity) AS revenue,
+                   COUNT(DISTINCT order_id) AS orders
+            FROM order_history
+            WHERE order_date >= ?
+            GROUP BY iso_week ORDER BY iso_week
+        """, (weeks_from,))
+        weekly_revenue = [dict(r) for r in await cur.fetchall()]
+
+        # Mismo corte pero solo TVs — para ver si el TV específicamente cae más que el total
+        cur = await db.execute("""
+            SELECT strftime('%Y-W%W', order_date) AS iso_week,
+                   SUM(unit_price * quantity) AS revenue,
+                   SUM(quantity) AS units
+            FROM order_history
+            WHERE order_date >= ? AND sku LIKE 'SNTV%'
+            GROUP BY iso_week ORDER BY iso_week
+        """, (weeks_from,))
+        weekly_tv_revenue = [dict(r) for r in await cur.fetchall()]
+
+    n_top_out_of_stock = sum(1 for s in top_tv_skus if s["available_qty"] <= 0)
+    top_tv_revenue_at_risk = sum(s["revenue"] for s in top_tv_skus if s["available_qty"] <= 0)
+
+    return JSONResponse({
+        "tv_stock_summary": tv_stock_summary,
+        "top_30_tv_skus_by_revenue": top_tv_skus,
+        "top_30_out_of_stock_count": n_top_out_of_stock,
+        "top_30_revenue_at_risk_mxn": round(top_tv_revenue_at_risk, 2),
+        "weekly_revenue_all": weekly_revenue,
+        "weekly_revenue_tv_only": weekly_tv_revenue,
+    })
+
+
 @app.get("/api/diag/order-lookup")
 async def diag_order_lookup(order_id: str = "", token: str = ""):
     """Diagnóstico: investiga una orden específica — ¿llegó a order_history?
