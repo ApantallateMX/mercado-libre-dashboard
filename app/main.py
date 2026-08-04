@@ -16776,6 +16776,59 @@ async def diag_feedback_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/buyer-messages-status")
+async def diag_buyer_messages_status(token: str = "", live_poll: bool = False):
+    """DIAGNÓSTICO — Jovan reportó que mensajes de compradores Amazon "no
+    sincronizan a tiempo". Muestra: qué cuentas tienen buzón configurado
+    (AMAZON_BUYER_INBOX_ACCOUNTS), cuántos mensajes hay indexados y cuándo
+    llegó el más reciente por cuenta, y opcionalmente (live_poll=true) corre
+    un poll EN VIVO ahora mismo para ver cuántos mensajes nuevos trae de
+    verdad — para distinguir "el poller no corre"/"credenciales rotas" de
+    "sí corre pero hay lag real"."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import buyer_messages_client as _bmc
+    import aiosqlite as _aio_bm
+
+    configured = [
+        {"seller_id": c["seller_id"], "nickname": c["nickname"], "email": c["email"],
+         "has_app_password": bool(c["app_password"])}
+        for c in _bmc.AMAZON_BUYER_INBOX_ACCOUNTS
+    ]
+
+    async with _aio_bm.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_bm.Row
+        rows = await (await db.execute("""
+            SELECT seller_id, COUNT(*) AS n, MAX(ts) AS last_ts
+            FROM amazon_buyer_messages WHERE direction = 'inbound'
+            GROUP BY seller_id
+        """)).fetchall()
+    now = _time.time()
+    indexed = [{
+        "seller_id": r["seller_id"], "total_inbound": r["n"],
+        "last_message_ts": r["last_ts"],
+        "last_message_age_minutes": round((now - r["last_ts"]) / 60, 1) if r["last_ts"] else None,
+    } for r in rows]
+
+    live_results = None
+    if live_poll:
+        live_results = {}
+        for cfg in _bmc.AMAZON_BUYER_INBOX_ACCOUNTS:
+            t0 = _time.time()
+            try:
+                inserted = await _bmc.poll_account_inbox(cfg)
+                live_results[cfg["seller_id"]] = {"new_inserted": inserted, "seconds": round(_time.time() - t0, 1)}
+            except Exception as e:
+                live_results[cfg["seller_id"]] = {"error": str(e), "seconds": round(_time.time() - t0, 1)}
+
+    return JSONResponse({
+        "configured_accounts": configured,
+        "indexed": indexed,
+        "poll_interval_seconds": _bmc._POLL_INTERVAL_SECONDS,
+        "live_poll_result": live_results,
+    })
+
+
 @app.get("/api/diag/trigger-feedback-sync")
 async def diag_trigger_feedback_sync(token: str = ""):
     """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al
