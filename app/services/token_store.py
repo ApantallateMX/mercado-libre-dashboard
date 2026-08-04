@@ -223,6 +223,29 @@ async def init_db():
                 PRIMARY KEY (pack_id, account_id)
             )
         """)
+        # Índice local de conversaciones ML (2026-08-04) — reemplaza el escaneo en
+        # vivo de "50 órdenes más recientes" de get_messages() (meli_client.py),
+        # que perdía prácticamente todas las conversaciones reales con cualquier
+        # volumen de órdenes decente (ver DEVLOG). Se llena por webhook (topic
+        # "messages") + backfill inicial — la pestaña Mensajes ahora LEE de aquí
+        # en vez de escanear órdenes cada vez que se abre.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_messages_index (
+                pack_id           TEXT NOT NULL,
+                account_id        TEXT NOT NULL,
+                order_id          TEXT NOT NULL DEFAULT '',
+                last_message_from TEXT NOT NULL DEFAULT '',
+                last_message_text TEXT NOT NULL DEFAULT '',
+                last_message_date TEXT NOT NULL DEFAULT '',
+                total_messages    INTEGER NOT NULL DEFAULT 0,
+                updated_at        REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (pack_id, account_id)
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ml_messages_index_account
+            ON ml_messages_index (account_id, last_message_date)
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bm_gap_scan_status (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -2140,6 +2163,81 @@ async def bulk_mark_resolved(pack_ids: list, account_id: str, marked_by: str) ->
         )
         await db.commit()
     return len(pack_ids)
+
+
+# ─── ml_messages_index helpers — índice local, no escanea ML en vivo ─────────
+
+async def upsert_message_index(pack_id: str, account_id: str, order_id: str,
+                                last_message_from: str, last_message_text: str,
+                                last_message_date: str, total_messages: int) -> None:
+    """Actualiza (o crea) el índice local de una conversación — llamado por el
+    webhook de topic 'messages' y por el backfill inicial."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            """INSERT INTO ml_messages_index
+               (pack_id, account_id, order_id, last_message_from, last_message_text, last_message_date, total_messages, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(pack_id, account_id) DO UPDATE SET
+                   order_id=excluded.order_id, last_message_from=excluded.last_message_from,
+                   last_message_text=excluded.last_message_text, last_message_date=excluded.last_message_date,
+                   total_messages=excluded.total_messages, updated_at=excluded.updated_at""",
+            (pack_id, account_id, order_id, last_message_from, last_message_text,
+             last_message_date, total_messages, _t.time()),
+        )
+        await db.commit()
+
+
+async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
+                             date_from: str = "", date_to: str = "") -> tuple:
+    """Lista conversaciones indexadas de UNA cuenta, más recientes primero.
+    Retorna (rows, total) — total antes de paginar, para 'X de Y'."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        where = "WHERE account_id = ?"
+        params: list = [account_id]
+        if date_from:
+            where += " AND last_message_date >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND last_message_date <= ?"
+            params.append(date_to + "T23:59:59")
+        cur = await db.execute(f"SELECT COUNT(*) AS n FROM ml_messages_index {where}", params)
+        total = (await cur.fetchone())["n"]
+        rows = await (await db.execute(
+            f"""SELECT pack_id, order_id, last_message_from, last_message_text,
+                       last_message_date, total_messages
+                FROM ml_messages_index {where}
+                ORDER BY last_message_date DESC LIMIT ? OFFSET ?""",
+            params + [limit, offset],
+        )).fetchall()
+    return [dict(r) for r in rows], total
+
+
+async def get_message_index_all_accounts(account_ids: list, date_from: str = "", date_to: str = "") -> list:
+    """Todas las conversaciones indexadas de varias cuentas (bandeja unificada
+    'Todas las cuentas') — una sola query, sin N llamadas a ML."""
+    if not account_ids:
+        return []
+    placeholders = ",".join("?" * len(account_ids))
+    where = f"WHERE account_id IN ({placeholders})"
+    params: list = list(account_ids)
+    if date_from:
+        where += " AND last_message_date >= ?"
+        params.append(date_from)
+    if date_to:
+        where += " AND last_message_date <= ?"
+        params.append(date_to + "T23:59:59")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"""SELECT pack_id, account_id, order_id, last_message_from, last_message_text,
+                       last_message_date, total_messages
+                FROM ml_messages_index {where}
+                ORDER BY last_message_date DESC""",
+            params,
+        )).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ─── ml_claim_views helpers (reusa ml_message_views con prefijo "claim:") ─────

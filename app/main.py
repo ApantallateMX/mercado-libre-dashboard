@@ -2090,11 +2090,12 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
 async def ml_order_webhook(request: Request):
     """Notificaciones de ML — configurar en el DevCenter de cada app:
     Notifications URL = https://apantallatemx.up.railway.app/webhooks/ml/orders
-    Topics: orders_v2 Y shipments (ambos necesarios — orders_v2 a veces
-    llega antes de que el envío quede asignado; shipments cubre ese caso
-    avisando cuando el envío pasa a ready_to_ship). Responde 200 de
-    inmediato (ML exige ack rápido); el procesamiento real corre en
-    background."""
+    Topics: orders_v2, shipments Y messages (los 3 necesarios — orders_v2 a
+    veces llega antes de que el envío quede asignado; shipments cubre ese caso
+    avisando cuando el envío pasa a ready_to_ship; messages reemplaza el
+    escaneo de "50 órdenes más recientes" que perdía casi todas las
+    conversaciones reales, ver DEVLOG 2026-08-04). Responde 200 de inmediato
+    (ML exige ack rápido); el procesamiento real corre en background."""
     try:
         body = await request.json()
     except Exception:
@@ -2103,7 +2104,7 @@ async def ml_order_webhook(request: Request):
     user_id = str(body.get("user_id", "") or "")
     topic = body.get("topic", "")
     resource = body.get("resource", "")
-    if not user_id or not resource or topic not in ("orders_v2", "orders", "shipments"):
+    if not user_id or not resource or topic not in ("orders_v2", "orders", "shipments", "messages"):
         return JSONResponse({"status": "ignored"}, status_code=200)
 
     known_accounts = await token_store.get_all_tokens()
@@ -2111,8 +2112,59 @@ async def ml_order_webhook(request: Request):
     if user_id not in known_ids:
         return JSONResponse({"status": "ignored"}, status_code=200)
 
-    asyncio.create_task(_process_ml_order_webhook(resource, user_id))
+    if topic == "messages":
+        asyncio.create_task(_process_ml_message_webhook(resource, user_id))
+    else:
+        asyncio.create_task(_process_ml_order_webhook(resource, user_id))
     return JSONResponse({"status": "ok"}, status_code=200)
+
+
+def _ml_msg_date(msg: dict) -> str:
+    """Fecha real de un mensaje ML — viene anidada en message_date.created
+    (verificado en vivo, 2026-08-04), NO en date_created/date de nivel
+    superior como asumía el código viejo de get_messages()."""
+    md = msg.get("message_date") or {}
+    if isinstance(md, dict):
+        return md.get("created") or md.get("available") or md.get("received") or ""
+    return msg.get("date_created", msg.get("date", ""))
+
+
+async def _process_ml_message_webhook(resource: str, user_id: str) -> None:
+    """Topic 'messages' — resource viene como '/messages/packs/{pack_id}/
+    sellers/{user_id}'. Trae SOLO ese pack (1 llamada, no un escaneo de
+    órdenes) y actualiza ml_messages_index."""
+    import re as _re_mw
+    m = _re_mw.search(r"/messages/packs/([^/]+)/sellers/", resource)
+    if not m:
+        logger.warning(f"[ML-MSG-WEBHOOK] resource sin pack_id reconocible: {resource}")
+        return
+    pack_id = m.group(1)
+    client = await get_meli_client(user_id=user_id)
+    if not client:
+        return
+    try:
+        r = await client.get_message_thread(pack_id)
+        msgs = r.get("messages", [])
+        total = r.get("paging", {}).get("total", len(msgs))
+        if not msgs:
+            return
+        last = msgs[-1]
+        from_id = str(last.get("from", {}).get("user_id", ""))
+        last_from = "seller" if from_id == user_id else "buyer"
+        text_raw = last.get("text", "")
+        text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
+        last_date = _ml_msg_date(last)
+        # El pack_id de mensajería a veces ES el order_id (mismo patrón que
+        # get_messages() en meli_client.py), no siempre viene separado.
+        await token_store.upsert_message_index(
+            pack_id=pack_id, account_id=user_id, order_id=pack_id,
+            last_message_from=last_from, last_message_text=text[:500],
+            last_message_date=last_date, total_messages=total,
+        )
+    except Exception as _e_mw:
+        logger.warning(f"[ML-MSG-WEBHOOK] error procesando pack={pack_id} cuenta={user_id}: {_e_mw}")
+    finally:
+        await client.close()
 
 
 # ── Amazon orders background save ────────────────────────────────────────────
@@ -9852,21 +9904,33 @@ async def health_search_partial(
 async def _fetch_enriched_ml_conversations(
     client, seller_id: str, offset: int, limit: int, date_from: str, date_to: str,
     account_id: str = "", account_nickname: str = "",
-) -> list:
-    """Trae y enriquece conversaciones de UNA cuenta ML (pedidos + mensajes +
-    contexto de orden). Extraído de health_messages_partial para poder
-    reusarlo tanto para la vista de una sola cuenta como para el fan-out de
-    la bandeja unificada (Todas las cuentas) — misma lógica, sin duplicar."""
-    data = await client.get_messages(offset=offset, limit=limit, date_from=date_from, date_to=date_to)
-    raw_messages = data.get("results", data if isinstance(data, list) else [])
+) -> tuple:
+    """Trae y enriquece conversaciones de UNA cuenta ML. Reescrito 2026-08-04:
+    la LISTA de conversaciones ahora viene de ml_messages_index (índice local
+    llenado por el webhook topic 'messages' + backfill) en vez de escanear las
+    "50 órdenes más recientes" — ese escaneo perdía prácticamente todas las
+    conversaciones reales con cualquier volumen de órdenes decente (ver
+    DEVLOG). El detalle (últimos 5 mensajes + contexto de la orden) se sigue
+    pidiendo en vivo, pero solo para las conversaciones de la página actual
+    (barato — acotado a `limit`, no a cientos de órdenes).
+    Retorna (enriched, total) — total real para pagination correcta."""
+    index_rows, total = await token_store.get_message_index(
+        seller_id, offset=offset, limit=limit, date_from=date_from, date_to=date_to,
+    )
+
+    sem_th = asyncio.Semaphore(10)
+    async def _fetch_thread(row):
+        async with sem_th:
+            try:
+                r = await client.get_message_thread(row["pack_id"])
+                return row["pack_id"], r.get("messages", [])
+            except Exception:
+                return row["pack_id"], []
+    thread_pairs = await asyncio.gather(*[_fetch_thread(r) for r in index_rows])
+    threads_by_pack = dict(thread_pairs)
 
     order_context_map = {}
-    order_ids_for_context = []
-    for msg in raw_messages:
-        oid = msg.get("order_id", msg.get("resource_id", ""))
-        if oid:
-            order_ids_for_context.append(str(oid))
-
+    order_ids_for_context = list({r["order_id"] for r in index_rows if r["order_id"]})
     if order_ids_for_context:
         sem_oc = asyncio.Semaphore(5)
         async def _fetch_order_ctx(oid):
@@ -9884,30 +9948,22 @@ async def _fetch_enriched_ml_conversations(
                     }
                 except Exception:
                     return oid, {}
-        oc_tasks = [_fetch_order_ctx(oid) for oid in list(set(order_ids_for_context))[:20]]
-        oc_results = await asyncio.gather(*oc_tasks, return_exceptions=True)
+        oc_results = await asyncio.gather(
+            *[_fetch_order_ctx(oid) for oid in order_ids_for_context[:20]], return_exceptions=True,
+        )
         for r in oc_results:
             if isinstance(r, tuple):
                 order_context_map[r[0]] = r[1]
 
     enriched = []
-    for msg in raw_messages:
-        messages_list = msg.get("messages", [])
+    for row in index_rows:
+        messages_list = threads_by_pack.get(row["pack_id"], [])
         last_5 = messages_list[-5:] if messages_list else []
-
-        last_msg = messages_list[-1] if messages_list else None
-        last_from_buyer = False
+        last_from_buyer = row["last_message_from"] == "buyer"
+        needs_response = last_from_buyer
         last_elapsed = "-"
-        needs_response = False
-        if last_msg:
-            from_id = str(last_msg.get("from", {}).get("user_id", ""))
-            last_from_buyer = from_id != seller_id
-            needs_response = last_from_buyer
-            ts = last_msg.get("date_created", last_msg.get("date", ""))
-            if ts:
-                last_elapsed, _ = _elapsed_str(ts)
-
-        conv_date = msg.get("date_created", msg.get("date", ""))
+        if row["last_message_date"]:
+            last_elapsed, _ = _elapsed_str(row["last_message_date"])
 
         enriched_msgs = []
         for m in last_5:
@@ -9918,19 +9974,23 @@ async def _fetch_enriched_ml_conversations(
                 text = text_raw.get("plain", str(text_raw))
             else:
                 text = str(text_raw) if text_raw else "-"
-            msg_date = m.get("date_created", m.get("date", ""))
+            msg_date = _ml_msg_date(m)
             msg_time = msg_date[11:16] if msg_date and len(msg_date) > 16 else ""
             enriched_msgs.append(SimpleNamespace(text=text, is_seller=is_seller, time=msg_time))
+        # El thread en vivo puede fallar (rate limit, pack viejo) — usar el
+        # resumen ya indexado como respaldo en vez de mostrar la tarjeta vacía.
+        if not enriched_msgs and row["last_message_text"]:
+            enriched_msgs = [SimpleNamespace(
+                text=row["last_message_text"], is_seller=not last_from_buyer, time="",
+            )]
 
-        pack_id = msg.get("id", msg.get("pack_id", ""))
-        oid = str(msg.get("order_id", msg.get("resource_id", "")))
-        order_ctx = order_context_map.get(oid, {})
+        order_ctx = order_context_map.get(row["order_id"], {})
 
         enriched.append(SimpleNamespace(
-            pack_id=pack_id,
-            order_id=oid,
-            date=conv_date[:10] if conv_date else "-",
-            _sort_date=conv_date or "",
+            pack_id=row["pack_id"],
+            order_id=row["order_id"],
+            date=row["last_message_date"][:10] if row["last_message_date"] else "-",
+            _sort_date=row["last_message_date"] or "",
             last_from_buyer=last_from_buyer,
             last_elapsed=last_elapsed,
             needs_response=needs_response,
@@ -9943,7 +10003,7 @@ async def _fetch_enriched_ml_conversations(
             account_id=account_id or seller_id,
             account_nickname=account_nickname,
         ))
-    return enriched
+    return enriched, total
 
 
 def _sort_ml_conversations(enriched: list) -> list:
@@ -9975,8 +10035,8 @@ async def health_messages_partial(
         dt = date_to or None
         seller_id = str(client.user_id)
         try:
-            enriched = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
-            paging = {"total": len(enriched), "offset": offset, "limit": limit}
+            enriched, real_total = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
+            paging = {"total": real_total, "offset": offset, "limit": limit}
         except Exception:
             enriched = []
             paging = {"total": 0, "offset": 0, "limit": limit}
@@ -10047,7 +10107,8 @@ async def health_messages_unified_partial(
             if not cli:
                 return []
             try:
-                return await _fetch_enriched_ml_conversations(cli, uid, 0, 30, df, dt, account_id=uid, account_nickname=nick)
+                convs, _t = await _fetch_enriched_ml_conversations(cli, uid, 0, 30, df, dt, account_id=uid, account_nickname=nick)
+                return convs
             except Exception:
                 return []
             finally:
@@ -22841,6 +22902,175 @@ async def diag_find_item_by_model(q: str = "", token: str = ""):
         return JSONResponse({"query": q, "found": len(matches), "items": matches})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/diag/ml-messages-audit")
+async def diag_ml_messages_audit(token: str = "", account_id: str = "", days: int = 7):
+    """DIAGNÓSTICO TEMPORAL — Jovan reportó que mensajes ML "no están entrando".
+    get_messages() (meli_client.py) solo escanea las 50 órdenes MÁS RECIENTES
+    (order_params fijo limit=50/offset=0, sin paginar) y revisa cuáles tienen
+    pack de mensajes — cualquier mensaje en una orden fuera de esas 50 es
+    invisible sin importar el rango de fechas pedido. Este diag pagina TODAS
+    las órdenes reales del rango (sin el tope de 50) y compara cuántas
+    conversaciones reales existen vs. cuántas ve el código actual."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    from datetime import datetime as _dt_ma, timedelta as _td_ma
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        date_from = (_dt_ma.utcnow() - _td_ma(days=days)).strftime("%Y-%m-%d")
+        date_to = _dt_ma.utcnow().strftime("%Y-%m-%d")
+
+        # 1) Paginar TODAS las órdenes del rango (sin tope de 50)
+        all_orders = []
+        offset = 0
+        while True:
+            page = await client.get("/orders/search/recent", params={
+                "seller": client.user_id, "limit": 50, "offset": offset,
+                "sort": "date_desc",
+                "order.date_created.from": f"{date_from}T00:00:00.000-00:00",
+                "order.date_created.to": f"{date_to}T23:59:59.000-00:00",
+            })
+            results = page.get("results", [])
+            all_orders.extend(results)
+            total = page.get("paging", {}).get("total", 0)
+            offset += 50
+            if offset >= total or not results or offset > 1000:
+                break
+
+        # 2) De esas, cuáles caerían dentro del tope actual (50 más recientes)
+        current_scope_ids = {str(o.get("pack_id") or o.get("id", "")) for o in all_orders[:50]}
+
+        # 3) Revisar pack de mensajes para TODAS (no solo las 50) — acotado con semáforo
+        sem = asyncio.Semaphore(10)
+        async def _check(order):
+            pack_id = str(order.get("pack_id") or order.get("id", ""))
+            if not pack_id:
+                return None
+            async with sem:
+                try:
+                    r = await client.get(f"/messages/packs/{pack_id}/sellers/{client.user_id}",
+                                          params={"tag": "post_sale", "mark_as_read": "false"})
+                    total_msgs = r.get("paging", {}).get("total", 0)
+                    if total_msgs <= 0:
+                        return None
+                    msgs = r.get("messages", [])
+                    last = msgs[-1] if msgs else None
+                    from_id = str((last or {}).get("from", {}).get("user_id", ""))
+                    needs_response = bool(last) and from_id != client.user_id
+                    return {
+                        "pack_id": pack_id, "order_id": order.get("id", ""),
+                        "order_date": order.get("date_created", ""),
+                        "total_messages": total_msgs, "needs_response": needs_response,
+                        "in_current_50_scope": pack_id in current_scope_ids,
+                    }
+                except Exception:
+                    return None
+
+        raw = await asyncio.gather(*[_check(o) for o in all_orders], return_exceptions=True)
+        conversations = [r for r in raw if isinstance(r, dict)]
+        missed = [c for c in conversations if not c["in_current_50_scope"]]
+        missed_needing_response = [c for c in missed if c["needs_response"]]
+
+        return {
+            "account_id": account_id, "date_from": date_from, "date_to": date_to,
+            "total_orders_in_range": len(all_orders),
+            "total_conversations_real": len(conversations),
+            "conversations_visible_today_max": min(len(conversations), 50),
+            "conversations_missed_by_current_code": len(missed),
+            "missed_needing_response": len(missed_needing_response),
+            "sample_missed_needing_response": missed_needing_response[:10],
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/api/diag/backfill-ml-messages-index")
+async def diag_backfill_ml_messages_index(
+    token: str = "", account_id: str = "", days: int = 14,
+    max_orders: int = 300, start_offset: int = 0,
+):
+    """Backfill único de ml_messages_index — llena el índice local con
+    conversaciones que ya existen hoy (antes del webhook topic 'messages')
+    para no perder pendientes reales al hacer el switch. Acotado por
+    max_orders/start_offset para llamarse repetidas veces sin pasar el
+    timeout de Railway (~30s), mismo patrón que la migración de fotos a S3."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    from datetime import datetime as _dt_bf, timedelta as _td_bf
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        date_from = (_dt_bf.utcnow() - _td_bf(days=days)).strftime("%Y-%m-%d")
+        date_to = _dt_bf.utcnow().strftime("%Y-%m-%d")
+
+        orders_batch = []
+        offset = start_offset
+        total_available = 0
+        while len(orders_batch) < max_orders:
+            page = await client.get("/orders/search/recent", params={
+                "seller": client.user_id, "limit": 50, "offset": offset,
+                "sort": "date_desc",
+                "order.date_created.from": f"{date_from}T00:00:00.000-00:00",
+                "order.date_created.to": f"{date_to}T23:59:59.000-00:00",
+            })
+            results = page.get("results", [])
+            total_available = page.get("paging", {}).get("total", 0)
+            orders_batch.extend(results)
+            offset += 50
+            if not results or offset >= total_available:
+                break
+
+        sem = asyncio.Semaphore(10)
+        indexed = [0]
+        async def _check_and_save(order):
+            pack_id = str(order.get("pack_id") or order.get("id", ""))
+            if not pack_id:
+                return
+            async with sem:
+                try:
+                    r = await client.get(f"/messages/packs/{pack_id}/sellers/{client.user_id}",
+                                          params={"tag": "post_sale", "mark_as_read": "false"})
+                    total_msgs = r.get("paging", {}).get("total", 0)
+                    if total_msgs <= 0:
+                        return
+                    msgs = r.get("messages", [])
+                    last = msgs[-1] if msgs else None
+                    if not last:
+                        return
+                    from_id = str(last.get("from", {}).get("user_id", ""))
+                    last_from = "seller" if from_id == client.user_id else "buyer"
+                    text_raw = last.get("text", "")
+                    text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
+                    last_date = _ml_msg_date(last)
+                    await token_store.upsert_message_index(
+                        pack_id=pack_id, account_id=client.user_id, order_id=str(order.get("id", "")),
+                        last_message_from=last_from, last_message_text=text[:500],
+                        last_message_date=last_date, total_messages=total_msgs,
+                    )
+                    indexed[0] += 1
+                except Exception:
+                    pass
+
+        await asyncio.gather(*[_check_and_save(o) for o in orders_batch], return_exceptions=True)
+        remaining = max(0, total_available - offset)
+        return {
+            "account_id": account_id, "orders_scanned": len(orders_batch),
+            "conversations_indexed": indexed[0], "next_offset": offset, "remaining": remaining,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
 
 
 @app.get("/api/diag/order-sample")

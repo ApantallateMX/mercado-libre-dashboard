@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-04 — FIX CRÍTICO: mensajes ML "no entraban" — causa raíz y reescritura completa
+
+Jovan reportó que le avisaron que los mensajes de Mercado Libre "no están
+entrando" y que la forma en que los manejamos "no es la correcta". Investigué
+con un diag temporal (`/api/diag/ml-messages-audit`) antes de tocar nada.
+
+**Causa raíz confirmada con datos reales de producción:** `get_messages()`
+(`meli_client.py`) no tiene forma de listar mensajes directamente — ML no
+expone ese endpoint — así que el código escaneaba las **50 órdenes más
+recientes** (fijo, sin paginar, sin importar el rango de fechas pedido) y
+revisaba cuáles tenían un pack de mensajes. Con el volumen real de órdenes
+(APANTALLATEMX: ~540 órdenes/7 días), esas 50 órdenes más recientes cubren
+apenas medio día. Resultado medido: de 17 conversaciones reales en 7 días
+para APANTALLATEMX, **0 se mostraban** (16 necesitando respuesta, algunas de
+hace 5 días). Para LUTEMAMEXICO (mucho menos volumen), 6 de 7 se perdían.
+
+**Fix — reemplazo completo del mecanismo, no un parche:**
+1. Tabla nueva `ml_messages_index` (`token_store.py`) — índice local de
+   conversaciones (pack_id, último mensaje, quién escribió, fecha, total).
+2. El webhook `/webhooks/ml/orders` (Fase 1, hasta hoy solo `orders_v2`/
+   `shipments`) ahora acepta también el topic **`messages`** de ML — al
+   llegar, trae SOLO ese pack (1 llamada) y actualiza el índice. Reemplaza
+   por completo el escaneo de órdenes.
+3. `/partials/health-messages` y `/partials/health-messages-unified` ahora
+   LEEN del índice local (rápido, correcto, con total real para paginación)
+   en vez de escanear en vivo — el detalle de cada conversación (últimos 5
+   mensajes) se sigue pidiendo en vivo pero solo para la página actual (~20
+   conversaciones), no para cientos de órdenes.
+4. Backfill único (`/api/diag/backfill-ml-messages-index`, acotado/paginable
+   igual que la migración de fotos a S3) para no perder pendientes ya
+   existentes — corrido contra producción para las 4 cuentas ML, 30 días.
+
+**Bug propio encontrado en el camino:** la fecha real de un mensaje ML viene
+anidada en `message_date.created` (verificado en vivo con un pack real) —
+NO en `date_created`/`date` de nivel superior como asumía el código viejo
+(y como asumí yo mismo al escribir el fix inicial). Corregido con un helper
+compartido `_ml_msg_date()` antes de correr el backfill en serio — el primer
+intento de backfill guardó fechas vacías, se limpió y se corrió de nuevo.
+
+Verificado local con Playwright (clic real en el tab "Mensajes", no solo el
+partial por curl): conversación real renderizada, "hace 17h" calculado
+correctamente, botones Tomar/Historial/Sugerir con IA intactos, 0 errores
+de consola atribuibles al cambio.
+
+**Pendiente real — requiere acción de Jovan:** agregar el topic `messages`
+en el Notifications URL del DevCenter de ML (mismo lugar donde ya están
+`orders_v2`/`shipments`) — sin eso, el índice solo se actualiza con el
+backfill manual, no en tiempo real.
+
 ## 2026-08-03 — FEAT: pestañas visuales en "Gral" (Ventas / Rendimiento / Retornos)
 
 Continuación directa del permiso por sección de arriba — Jovan probó como
