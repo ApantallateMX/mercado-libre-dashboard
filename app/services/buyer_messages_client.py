@@ -176,28 +176,43 @@ def _find_all_mail_folder(M: imaplib.IMAP4_SSL) -> str:
     return "INBOX"
 
 
-def _poll_account_sync(cfg: dict) -> list[dict]:
+def _poll_account_sync(cfg: dict, last_uid: int = 0) -> tuple[list[dict], int]:
     """Bloqueante — se llama envuelta en asyncio.to_thread. Busca correos
     entrantes del dominio de Amazon buyer-messaging y parsea los nuevos.
     Busca en "Todos los correos" (no solo INBOX) porque Jovan usa un filtro
     de Gmail que etiqueta y archiva (Skip Inbox) los correos de Amazon para
     mantener su bandeja limpia — un mensaje archivado ya no aparece en INBOX
-    pero sigue existiendo ahí sin importar la etiqueta."""
+    pero sigue existiendo ahí sin importar la etiqueta.
+
+    Usa UID de IMAP (M.uid(...), no M.search()/M.fetch() de sequence number)
+    porque el UID es estable entre sesiones — permite guardar un watermark
+    real (2026-08-04: antes se re-descargaban los mismos 200 correos en CADA
+    pasada, 60-80s por cuenta, sin importar si ya se habían visto).
+    Retorna (mensajes_parseados, uid_mas_alto_visto) — el caller persiste el
+    watermark aunque un UID no haya parseado como mensaje de comprador real,
+    para no volver a revisarlo nunca."""
     found: list[dict] = []
+    max_uid_seen = last_uid
     M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=20)
     try:
         M.login(cfg["email"], cfg["app_password"])
         all_mail_folder = _find_all_mail_folder(M)
         M.select(f'"{all_mail_folder}"', readonly=True)
-        typ, data = M.search(None, 'FROM "marketplace.amazon.com"')
+        if last_uid:
+            criteria = f'(FROM "marketplace.amazon.com" UID {last_uid + 1}:*)'
+        else:
+            criteria = 'FROM "marketplace.amazon.com"'
+        typ, data = M.uid("search", None, criteria)
         if typ != "OK":
-            return found
+            return found, max_uid_seen
         uids = data[0].split()
-        # Solo los últimos 200 en cada pasada — el backlog histórico se
-        # importa una sola vez manualmente, el poller normal solo necesita
-        # ver los mensajes nuevos desde la última pasada.
-        for uid in uids[-200:]:
-            typ, msg_data = M.fetch(uid, "(RFC822)")
+        # Primer poll de una cuenta (sin watermark todavía): acotar a los
+        # últimos 200 como antes, para no descargar el historial completo de
+        # un buzón reusado (puede tener miles de correos viejos). Con
+        # watermark ya puesto, "uids" son solo los nuevos — normalmente 0-5.
+        scan_uids = uids if last_uid else uids[-200:]
+        for uid in scan_uids:
+            typ, msg_data = M.uid("fetch", uid, "(RFC822)")
             if typ != "OK" or not msg_data or not msg_data[0]:
                 continue
             raw = msg_data[0][1]
@@ -205,12 +220,15 @@ def _poll_account_sync(cfg: dict) -> list[dict]:
             if parsed:
                 parsed["seller_id"] = cfg["seller_id"]
                 found.append(parsed)
+            uid_int = int(uid)
+            if uid_int > max_uid_seen:
+                max_uid_seen = uid_int
     finally:
         try:
             M.logout()
         except Exception:
             pass
-    return found
+    return found, max_uid_seen
 
 
 def _inspect_account_sync(cfg: dict, sample_n: int = 5) -> dict:
@@ -287,26 +305,34 @@ def _inspect_account_sync(cfg: dict, sample_n: int = 5) -> dict:
 
 
 async def poll_account_inbox(cfg: dict) -> int:
-    """Poll de una cuenta — retorna cuántos mensajes nuevos se insertaron."""
-    messages = await asyncio.to_thread(_poll_account_sync, cfg)
+    """Poll de una cuenta — retorna cuántos mensajes nuevos se insertaron.
+    Usa el watermark de UID persistido (token_store) para no re-descargar
+    correos ya vistos en pasadas anteriores."""
+    last_uid = await token_store.get_buyer_inbox_watermark(cfg["seller_id"])
+    messages, max_uid = await asyncio.to_thread(_poll_account_sync, cfg, last_uid)
     inserted = 0
     for m in messages:
         row_id = await token_store.insert_buyer_message(m)
         if row_id:
             inserted += 1
+    if max_uid > last_uid:
+        await token_store.set_buyer_inbox_watermark(cfg["seller_id"], max_uid)
     return inserted
 
 
 async def poll_all_accounts() -> dict:
-    """Poll de todas las cuentas con buzón configurado. No falla si una
-    cuenta individual da error (credenciales revocadas, red, etc.) — se
-    salta y sigue con las demás."""
-    results = {}
-    for cfg in AMAZON_BUYER_INBOX_ACCOUNTS:
+    """Poll de todas las cuentas con buzón configurado, EN PARALELO (antes
+    secuencial — una cuenta lenta ya no retrasa a las demás dentro del mismo
+    ciclo). No falla si una cuenta individual da error (credenciales
+    revocadas, red, etc.) — se salta y sigue con las demás."""
+    async def _one(cfg):
         try:
-            results[cfg["seller_id"]] = await poll_account_inbox(cfg)
+            return cfg["seller_id"], await poll_account_inbox(cfg)
         except Exception as e:
-            results[cfg["seller_id"]] = f"error: {e}"
+            return cfg["seller_id"], f"error: {e}"
+
+    pairs = await asyncio.gather(*[_one(cfg) for cfg in AMAZON_BUYER_INBOX_ACCOUNTS])
+    results = dict(pairs)
     return results
 
 

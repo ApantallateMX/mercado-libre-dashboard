@@ -1212,6 +1212,19 @@ async def init_db():
         await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_abm_message_id ON amazon_buyer_messages(message_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_seller_ts ON amazon_buyer_messages(seller_id, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_order ON amazon_buyer_messages(order_id)")
+        # Watermark de IMAP UID por cuenta (2026-08-04) — antes cada ciclo de poll
+        # (5 min) volvía a descargar por completo los últimos 200 correos de cada
+        # buzón, sin importar si ya se habían visto — 60-80s por cuenta, secuencial
+        # entre cuentas (ciclo real ~8-9 min, no 5). Con el watermark, cada poll
+        # después del primero solo trae UIDs nuevos (típicamente 0-5), casi
+        # instantáneo. UID de IMAP (no sequence number) — estable entre sesiones.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_buyer_inbox_state (
+                seller_id   TEXT PRIMARY KEY,
+                last_uid    INTEGER NOT NULL DEFAULT 0,
+                last_poll_ts REAL NOT NULL DEFAULT 0
+            )
+        """)
         # ─────────────────────────────────────────────────────────────────
         # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
         # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
@@ -2022,6 +2035,30 @@ async def mark_resolution_reactivated(resolution_id: int, username: str) -> None
 
 
 # ─── amazon_buyer_messages helpers ───────────────────────────────────────────
+
+async def get_buyer_inbox_watermark(seller_id: str) -> int:
+    """Último UID de IMAP ya procesado para esta cuenta — 0 si nunca se ha
+    corrido (primer poll real, cae al comportamiento viejo de escanear los
+    últimos 200 por UID)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "SELECT last_uid FROM amazon_buyer_inbox_state WHERE seller_id = ?", (seller_id,),
+        )
+        row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+async def set_buyer_inbox_watermark(seller_id: str, last_uid: int) -> None:
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            """INSERT INTO amazon_buyer_inbox_state (seller_id, last_uid, last_poll_ts)
+               VALUES (?, ?, ?)
+               ON CONFLICT(seller_id) DO UPDATE SET last_uid=excluded.last_uid, last_poll_ts=excluded.last_poll_ts""",
+            (seller_id, last_uid, _t.time()),
+        )
+        await db.commit()
+
 
 async def insert_buyer_message(msg: dict) -> int | None:
     """Inserta un mensaje (inbound u outbound) parseado del buzón dedicado.
