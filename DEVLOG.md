@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-04 — PERF: mensajes de compradores Amazon — verificado sin pérdida real + poller optimizado
+
+Jovan reportó que mensajes de Amazon "no sincronizan a tiempo". A diferencia
+del caso de ML (mismo día, ver entrada siguiente), aquí la investigación
+descartó pérdida real de datos:
+
+- **VECKTOR y AUTOBOT AMZ MX**: sincronizando normal (41 y 85 min de lag,
+  esperado con poll de 5 min).
+- **ExclusiveBulbs**: parecía roto (68h sin mensaje nuevo) pero no lo estaba
+  — verificado con un diag que compara la ventana de 200 correos más
+  recientes por UID contra una búsqueda real por fecha (`SINCE`): los 13
+  correos reales de los últimos 7 días SÍ caían dentro de lo que el poller
+  revisa, y los 7 que fallan al parsear son todos de 2019-2020 (buzón
+  reusado con historial viejo, irrelevante). Conclusión real: esta cuenta
+  (la más chica, marketplace USA) simplemente recibe pocos mensajes.
+
+**Ineficiencia real sí encontrada y corregida** (no pérdida de datos, pero sí
+diseño incorrecto — Jovan lo pidió arreglar igual): cada ciclo de 5 min
+volvía a descargar por completo los mismos ~200 correos de cada cuenta
+(60-80s/cuenta) y las 3 cuentas se procesaban una tras otra (secuencial) —
+ciclo real ~8-9 min en vez de 5, y una cuenta lenta retrasaba a las demás.
+
+Fix: tabla `amazon_buyer_inbox_state` guarda el último UID de IMAP visto por
+cuenta (UID de verdad vía `M.uid(...)`, no sequence number — estable entre
+sesiones, a diferencia de lo que usaba el código viejo). Cada poll después
+del primero solo trae UIDs nuevos. `poll_all_accounts()` corre las 3 cuentas
+con `asyncio.gather` en vez de un for secuencial.
+
+Verificado en producción con 2 pases seguidos del poll en vivo: VECKTOR pasó
+de 105.6s (primer poll, sin watermark aún) a **1.9s** (segundo poll, con
+watermark) — las 3 cuentas juntas bajaron de ~110s a ~5s totales.
+
 ## 2026-08-04 — FIX CRÍTICO: mensajes ML "no entraban" — causa raíz y reescritura completa
 
 Jovan reportó que le avisaron que los mensajes de Mercado Libre "no están
