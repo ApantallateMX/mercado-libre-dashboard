@@ -229,6 +229,19 @@ def _inspect_account_sync(cfg: dict, sample_n: int = 5) -> dict:
             return {"folder": all_mail_folder, "error": f"search failed: {typ}"}
         uids = data[0].split()
         recent = uids[-200:]
+
+        # DIAGNÓSTICO: comparar contra un SINCE real (por fecha IMAP, no por
+        # posición en la lista de UIDs) — si aparecen UIDs por-fecha que NO
+        # están en los últimos 200 por-UID, el orden de UID de este buzón no
+        # refleja orden cronológico real (ej. import histórico masivo con
+        # UIDs altos pero Date viejo) y la ventana "últimos 200 por UID" puede
+        # estar dejando fuera mensajes genuinamente nuevos.
+        from datetime import datetime as _dt_since, timedelta as _td_since
+        since_imap = (_dt_since.utcnow() - _td_since(days=7)).strftime("%d-%b-%Y")
+        typ2, data2 = M.search(None, f'(FROM "marketplace.amazon.com" SINCE {since_imap})')
+        since_uids = data2[0].split() if typ2 == "OK" else []
+        recent_set = set(recent)
+        uids_not_in_recent_window = [u for u in since_uids if u not in recent_set]
         parsed_ok = 0
         failures = []
         for uid in recent:
@@ -245,11 +258,26 @@ def _inspect_account_sync(cfg: dict, sample_n: int = 5) -> dict:
                 date_hdr = msg.get("Date", "")
                 body = _get_text_body(msg) or ""
                 failures.append({"subject": subj, "date": date_hdr, "body_snippet": body[:300]})
+
+        missed_samples = []
+        for uid in uids_not_in_recent_window[:sample_n]:
+            typ, msg_data = M.fetch(uid, "(RFC822)")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                continue
+            msg = email.message_from_bytes(msg_data[0][1])
+            missed_samples.append({
+                "subject": _decode_header_value(msg.get("Subject", "")),
+                "date": msg.get("Date", ""),
+            })
+
         return {
             "folder": all_mail_folder, "total_matched_from_filter": len(uids),
             "scanned_most_recent": len(recent), "parsed_ok": parsed_ok,
             "failed_to_parse": len(recent) - parsed_ok,
             "sample_failures": failures,
+            "since_7d_search_total": len(since_uids),
+            "since_7d_outside_uid_window": len(uids_not_in_recent_window),
+            "sample_missed_by_uid_window": missed_samples,
         }
     finally:
         try:
