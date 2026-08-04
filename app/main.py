@@ -16829,6 +16829,28 @@ async def diag_buyer_messages_status(token: str = "", live_poll: bool = False):
     })
 
 
+@app.get("/api/diag/buyer-messages-inspect")
+async def diag_buyer_messages_inspect(token: str = "", seller_id: str = ""):
+    """DIAGNÓSTICO — para UNA cuenta, reporta cuántos correos de Amazon
+    matchean el filtro FROM crudo, cuántos parsean como mensaje real de
+    comprador y una muestra de los que NO parsean (asunto+cuerpo) — para ver
+    si es una plantilla de Amazon que la regex no cubre en vez de asumir que
+    'no hay mensajes nuevos'."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id requerido"}, status_code=400)
+    from app.services import buyer_messages_client as _bmc
+    cfg = next((c for c in _bmc.AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == seller_id), None)
+    if not cfg:
+        return JSONResponse({"error": "cuenta no configurada"}, status_code=404)
+    try:
+        result = await asyncio.to_thread(_bmc._inspect_account_sync, cfg)
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/trigger-feedback-sync")
 async def diag_trigger_feedback_sync(token: str = ""):
     """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al

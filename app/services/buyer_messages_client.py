@@ -213,6 +213,51 @@ def _poll_account_sync(cfg: dict) -> list[dict]:
     return found
 
 
+def _inspect_account_sync(cfg: dict, sample_n: int = 5) -> dict:
+    """DIAGNÓSTICO — variante no destructiva de _poll_account_sync que reporta
+    conteos crudos (cuántos correos matchean el FROM, cuántos parsean vs no)
+    y una muestra de los que NO parsean (asunto + primeros 300 chars del
+    cuerpo) para ver si es una plantilla de Amazon distinta que la regex no
+    cubre, en vez de asumir 'no hay mensajes nuevos'."""
+    M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=20)
+    try:
+        M.login(cfg["email"], cfg["app_password"])
+        all_mail_folder = _find_all_mail_folder(M)
+        M.select(f'"{all_mail_folder}"', readonly=True)
+        typ, data = M.search(None, 'FROM "marketplace.amazon.com"')
+        if typ != "OK":
+            return {"folder": all_mail_folder, "error": f"search failed: {typ}"}
+        uids = data[0].split()
+        recent = uids[-200:]
+        parsed_ok = 0
+        failures = []
+        for uid in recent:
+            typ, msg_data = M.fetch(uid, "(RFC822)")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                continue
+            raw = msg_data[0][1]
+            parsed = parse_buyer_message_email(raw)
+            if parsed:
+                parsed_ok += 1
+            elif len(failures) < sample_n:
+                msg = email.message_from_bytes(raw)
+                subj = _decode_header_value(msg.get("Subject", ""))
+                date_hdr = msg.get("Date", "")
+                body = _get_text_body(msg) or ""
+                failures.append({"subject": subj, "date": date_hdr, "body_snippet": body[:300]})
+        return {
+            "folder": all_mail_folder, "total_matched_from_filter": len(uids),
+            "scanned_most_recent": len(recent), "parsed_ok": parsed_ok,
+            "failed_to_parse": len(recent) - parsed_ok,
+            "sample_failures": failures,
+        }
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
 async def poll_account_inbox(cfg: dict) -> int:
     """Poll de una cuenta — retorna cuántos mensajes nuevos se insertaron."""
     messages = await asyncio.to_thread(_poll_account_sync, cfg)
