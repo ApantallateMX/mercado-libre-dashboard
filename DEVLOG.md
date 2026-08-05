@@ -7,6 +7,52 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-05 — FIX: mensajes ML y Amazon seguían sin sincronizar pese a webhook/loop activos (mecanismo de respaldo)
+
+Jovan mostró Posventa de ML con 2 mensajes sin responder (uno de hace 30 min,
+Rafael Ascencion Torres, orden #2000014335644753) mientras el dashboard
+mostraba 0 para esa cuenta. Y de nuevo la queja de Amazon "sin sincronizar",
+pese al fix del día anterior.
+
+**ML**: se confirmó con `/api/diag/backfill-ml-messages-index?account_id=...`
+(búsqueda por `q=` en `/partials/health-messages`) que esa conversación —
+12 mensajes reales — estaba completamente ausente de `ml_messages_index`.
+El backfill del 2026-08-04 la había cubierto en su momento, pero el diseño
+dependía 100% de que el webhook del topic `messages` mantuviera el índice
+al día después — y ML simplemente no entrega esa notificación de forma
+confiable (limitación conocida de la plataforma, no bug de nuestro código:
+el handler `_process_ml_message_webhook` está correcto).
+
+**Amazon**: `/api/diag/buyer-messages-status?live_poll=true` mostró mensajes
+de hasta 4 días de antigüedad sin indexar en las 3 cuentas — y al forzar un
+poll manual, `poll_account_inbox()` los encontró e insertó al instante (11,
+2 y 1 nuevos). El `poll_loop()` de 5 min corre desde el fix de ayer y su
+código se ve correcto (try/except bien puesto), pero en producción claramente
+no se estaba ejecutando de forma confiable — sin ningún error visible en
+logs porque no había heartbeat, solo logging en error.
+
+**Fix — mismo patrón en ambas plataformas: no confiar solo en el mecanismo
+"push" (webhook/loop), agregar un mecanismo de respaldo que se auto-repara:**
+
+- ML: nueva función compartida `_ml_messages_scan_and_index()` (extraída del
+  backfill manual, mismo código) + `_ml_messages_refresh_loop()` — corre cada
+  10 min, re-escanea los últimos 4 días de órdenes de las 4 cuentas y
+  re-sincroniza `ml_messages_index`. El backfill manual (`/api/diag/backfill-
+  ml-messages-index`) sigue existiendo para historial más viejo.
+- Amazon: heartbeat `logger.info` en cada ciclo de `poll_loop()` (antes solo
+  logueaba en error — ahora se puede confirmar desde Railway logs que sigue
+  vivo) + `trigger_opportunistic_poll()`: dispara un poll en background
+  (cooldown 60s) cuando alguien abre la pestaña de Mensajes Amazon (ambas
+  vistas, por cuenta y unificada) — red de seguridad que no depende de que
+  el loop de fondo esté sano.
+
+Verificado en producción post-deploy: el backfill de 4 días para APANTALLATEMX
+indexó 7 conversaciones nuevas y la de Rafael Ascencion Torres ya aparece en
+`/partials/health-messages`. Amazon: sin backlog nuevo acumulado tras el
+deploy (edades de mensaje consistentes con antes de este fix).
+
+---
+
 ## 2026-08-04 — PERF: mensajes de compradores Amazon — verificado sin pérdida real + poller optimizado
 
 Jovan reportó que mensajes de Amazon "no sincronizan a tiempo". A diferencia
