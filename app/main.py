@@ -23176,42 +23176,59 @@ async def diag_ml_order_message_truth(token: str = "", account_id: str = "", ord
     if not client:
         return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
     try:
-        order = await client.get(f"/orders/{order_id}")
-        real_pack_id = order.get("pack_id") or ""
-        index_row, _total = await token_store.get_message_index(account_id, offset=0, limit=1, date_from="", date_to="")
-        thread_by_order_id = {}
-        thread_by_real_pack = {}
+        order_lookup_error = ""
+        order = {}
         try:
-            thread_by_order_id = await client.get_message_thread(str(order_id))
+            order = await client.get(f"/orders/{order_id}")
+        except Exception as _e0:
+            order_lookup_error = str(_e0)
+        real_pack_id = order.get("pack_id") or ""
+
+        # Siempre se intenta el thread tratando el valor dado como pack_id —
+        # el número que ML muestra en Posventa > Mensajes es el pack_id, NO
+        # necesariamente un order_id válido (por eso /orders/{id} puede dar
+        # 404 aunque el número sea correcto y real).
+        thread_as_pack = {}
+        try:
+            thread_as_pack = await client.get_message_thread(str(order_id))
         except Exception as _e1:
-            thread_by_order_id = {"error": str(_e1)}
+            thread_as_pack = {"error": str(_e1)}
+
+        thread_by_real_pack = {}
         if real_pack_id and str(real_pack_id) != str(order_id):
             try:
                 thread_by_real_pack = await client.get_message_thread(str(real_pack_id))
             except Exception as _e2:
                 thread_by_real_pack = {"error": str(_e2)}
-        # buscar la fila de índice que el dashboard usaría para este order_id
+
         our_index_rows, _ = await token_store.get_message_index(account_id, offset=0, limit=1000, date_from="", date_to="")
         matching_index_row = next((r for r in our_index_rows if str(r.get("order_id")) == str(order_id)
                                     or str(r.get("pack_id")) == str(order_id)), None)
+
+        def _msg_brief(m):
+            text_raw = m.get("text", "")
+            text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
+            return {"from_user_id": m.get("from", {}).get("user_id"), "text": text[:200], "date": _ml_msg_date(m)}
+
         return {
             "order_id_buscado": order_id,
+            "orders_endpoint_error": order_lookup_error or None,
             "order_real": {
                 "id": order.get("id"), "pack_id": order.get("pack_id"),
                 "status": order.get("status"), "date_created": order.get("date_created"),
                 "buyer_nickname": order.get("buyer", {}).get("nickname", ""),
+            } if order else None,
+            "thread_tratando_el_numero_como_pack_id": {
+                "total": thread_as_pack.get("paging", {}).get("total") if isinstance(thread_as_pack, dict) else None,
+                "todos_los_mensajes": [_msg_brief(m) for m in thread_as_pack.get("messages", [])] if isinstance(thread_as_pack, dict) and thread_as_pack.get("messages") else None,
+                "error": thread_as_pack.get("error") if isinstance(thread_as_pack, dict) else None,
             },
-            "thread_usando_order_id_como_pack": {
-                "total": thread_by_order_id.get("paging", {}).get("total") if isinstance(thread_by_order_id, dict) else None,
-                "last_message": (thread_by_order_id.get("messages", [])[-1] if isinstance(thread_by_order_id, dict) and thread_by_order_id.get("messages") else None),
-                "error": thread_by_order_id.get("error") if isinstance(thread_by_order_id, dict) else None,
-            },
-            "thread_usando_pack_id_real": {
+            "thread_usando_pack_id_real_de_la_orden": {
                 "total": thread_by_real_pack.get("paging", {}).get("total") if isinstance(thread_by_real_pack, dict) else None,
-                "last_message": (thread_by_real_pack.get("messages", [])[-1] if isinstance(thread_by_real_pack, dict) and thread_by_real_pack.get("messages") else None),
+                "todos_los_mensajes": [_msg_brief(m) for m in thread_by_real_pack.get("messages", [])] if isinstance(thread_by_real_pack, dict) and thread_by_real_pack.get("messages") else None,
                 "error": thread_by_real_pack.get("error") if isinstance(thread_by_real_pack, dict) else None,
-            } if real_pack_id and str(real_pack_id) != str(order_id) else "pack_id == order_id, no aplica",
-            "fila_en_nuestro_indice_que_matchea_ese_order_id": matching_index_row,
+            } if real_pack_id and str(real_pack_id) != str(order_id) else "no aplica (order no encontrada o pack_id == order_id)",
+            "fila_en_nuestro_indice_que_matchea_ese_numero": matching_index_row,
         }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
