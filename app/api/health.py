@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from app.services.meli_client import get_meli_client, MeliApiError
 from app.services import token_store as _ts
@@ -357,6 +357,34 @@ async def send_message(pack_id: str, body: MessageRequest):
         return result
     except MeliApiError as e:
         raise HTTPException(status_code=e.status_code or 400, detail=str(e))
+    finally:
+        await client.close()
+
+
+@router.get("/messages/attachment/{filename}")
+async def get_message_attachment(filename: str, account_id: str = Query("")):
+    """Proxy de un adjunto de mensaje (foto que manda el comprador) -- el
+    navegador no puede pedirle esto directo a ML (requiere Bearer token de
+    la cuenta), así que lo bajamos nosotros y lo servimos. Encontrado
+    2026-08-06: Jovan reportó que las fotos que manda el comprador (ej.
+    screenshot de un error) no se veían en el hilo -- solo mostrábamos
+    text.plain, y un mensaje que es solo una imagen no trae texto. El campo
+    real es message_attachments[].filename (no "attachments")."""
+    client = await get_meli_client(user_id=account_id or None)
+    if not client:
+        return Response(status_code=401)
+    try:
+        content = await client.download_binary(
+            f"/messages/attachments/{filename}?tag=post_sale&site_id=MLM"
+        )
+        if not content:
+            return Response(status_code=404)
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        content_type = {
+            "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+            "pdf": "application/pdf", "txt": "text/plain",
+        }.get(ext, "application/octet-stream")
+        return Response(content=content, media_type=content_type)
     finally:
         await client.close()
 

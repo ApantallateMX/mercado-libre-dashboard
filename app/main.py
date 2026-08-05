@@ -10001,15 +10001,25 @@ async def _fetch_enriched_ml_conversations(
             if isinstance(text_raw, dict):
                 text = text_raw.get("plain", str(text_raw))
             else:
-                text = str(text_raw) if text_raw else "-"
+                text = str(text_raw) if text_raw else ""
             msg_date = _ml_msg_date(m)
             msg_time = msg_date[11:16] if msg_date and len(msg_date) > 16 else ""
-            enriched_msgs.append(SimpleNamespace(text=text, is_seller=is_seller, time=msg_time))
+            # message_attachments (NO "attachments") -- un mensaje que es solo
+            # una imagen no trae texto, así que sin esto se veía vacío/con "-"
+            # aunque el comprador sí hubiera mandado algo (ej. un screenshot).
+            raw_attachments = m.get("message_attachments") or []
+            attachments = [
+                {"filename": a.get("filename", ""), "is_image": (a.get("type") or "").startswith("image/")}
+                for a in raw_attachments if a.get("filename")
+            ]
+            if not text and not attachments:
+                text = "-"
+            enriched_msgs.append(SimpleNamespace(text=text, is_seller=is_seller, time=msg_time, attachments=attachments))
         # El thread en vivo puede fallar (rate limit, pack viejo) — usar el
         # resumen ya indexado como respaldo en vez de mostrar la tarjeta vacía.
         if not enriched_msgs and row["last_message_text"]:
             enriched_msgs = [SimpleNamespace(
-                text=row["last_message_text"], is_seller=not last_from_buyer, time="",
+                text=row["last_message_text"], is_seller=not last_from_buyer, time="", attachments=[],
             )]
 
         order_ctx = order_context_map.get(row["order_id"], {})

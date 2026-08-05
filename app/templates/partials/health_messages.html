@@ -111,7 +111,10 @@ window._takeMsgConv = function(packId, btn) {
     fetch('/api/health/messages/' + packId + '/take' + qs, {
         method: 'POST', headers: {'Content-Type': 'application/json'}
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
+        return r.json();
+    })
     .then(function(d) {
         var badge = document.getElementById('msg-view-badge-' + packId);
         if (badge) {
@@ -121,7 +124,10 @@ window._takeMsgConv = function(packId, btn) {
         btn.textContent = 'Tomado ✓'; btn.disabled = true;
         btn.className = btn.className.replace('bg-violet-100 text-violet-700 hover:bg-violet-200', 'bg-gray-100 text-gray-400 cursor-default');
     })
-    .catch(function() { btn.disabled = false; btn.textContent = 'Tomar'; });
+    .catch(function(e) {
+        btn.disabled = false; btn.textContent = 'Tomar';
+        alert('No se pudo tomar la conversación: ' + e.message);
+    });
 };
 
 window._setMsgStatus = function(packId, status, btn) {
@@ -133,18 +139,39 @@ window._setMsgStatus = function(packId, status, btn) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({status: status, account_id: accountId || ''})
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
+        return r.json();
+    })
     .then(function() {
+        var cardEl = document.getElementById('msg-card-' + packId);
+        if (status === 'resolved') {
+            // Antes solo bajaba la opacidad y quedaba visible en Pendientes --
+            // Jovan pidio explicitamente que al resolver desaparezca de la
+            // vista, no solo que se vea "apagada".
+            if (cardEl) {
+                cardEl.style.transition = 'opacity 0.3s, max-height 0.3s';
+                cardEl.style.opacity = '0';
+                cardEl.style.maxHeight = cardEl.scrollHeight + 'px';
+                setTimeout(function() {
+                    cardEl.style.maxHeight = '0'; cardEl.style.overflow = 'hidden';
+                    cardEl.style.padding = '0'; cardEl.style.margin = '0'; cardEl.style.border = 'none';
+                }, 300);
+                setTimeout(function() { cardEl.remove(); }, 600);
+            }
+            return;
+        }
         var badge = document.getElementById('msg-view-badge-' + packId);
-        if (status === 'resolved' && badge) {
-            badge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700';
-            badge.textContent = '✓ Resuelto';
-            var cardEl = document.getElementById('msg-card-' + packId);
-            if (cardEl) { setTimeout(function() { cardEl.style.opacity = '0.45'; }, 300); }
+        if (badge) {
+            badge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-600';
+            badge.textContent = 'Reabierto';
         }
         btn.disabled = false;
     })
-    .catch(function() { btn.disabled = false; });
+    .catch(function(e) {
+        btn.disabled = false;
+        alert('No se pudo actualizar: ' + e.message);
+    });
 };
 </script>
 
@@ -162,7 +189,12 @@ window._setMsgStatus = function(packId, status, btn) {
         <div class="p-4 pb-2">
             <div class="flex justify-between items-start mb-2 flex-wrap gap-y-1">
                 <div class="flex items-center gap-2 flex-wrap">
-                    <span class="text-sm font-semibold text-gray-800">Conversación #{{ conv.pack_id }}</span>
+                    <a href="https://vendedores.mercadolibre.com.mx/ventas/nueva/mensajeria/{{ conv.pack_id }}?source=inbox"
+                       target="_blank" rel="noopener"
+                       class="text-sm font-semibold text-gray-800 hover:text-blue-600 hover:underline"
+                       title="Abrir esta conversación directo en Mercado Libre">
+                        Conversación #{{ conv.pack_id }} ↗
+                    </a>
                     {% if conv.account_nickname %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-700 font-semibold">{{ conv.account_nickname }}</span>
                     {% endif %}
@@ -245,7 +277,19 @@ window._setMsgStatus = function(packId, status, btn) {
                     <p class="text-xs font-medium {{ 'text-blue-100' if m.is_seller else 'text-gray-500' }} mb-0.5">
                         {{ 'Tu' if m.is_seller else 'Comprador' }}{{ ' ' + m.time if m.time else '' }}
                     </p>
-                    {{ m.text }}
+                    {% if m.text and m.text != '-' %}{{ m.text }}{% endif %}
+                    {% for att in (m.attachments or []) %}
+                        {% set att_url = '/api/health/messages/attachment/' + att.filename + '?account_id=' + conv.account_id %}
+                        {% if att.is_image %}
+                        <a href="{{ att_url }}" target="_blank" rel="noopener" class="block mt-1">
+                            <img src="{{ att_url }}" loading="lazy" class="max-w-full max-h-40 rounded border border-black/10" alt="Imagen adjunta">
+                        </a>
+                        {% else %}
+                        <a href="{{ att_url }}" target="_blank" rel="noopener" class="flex items-center gap-1 mt-1 underline {{ 'text-blue-100' if m.is_seller else 'text-blue-600' }}">
+                            📎 Ver adjunto
+                        </a>
+                        {% endif %}
+                    {% endfor %}
                 </div>
             </div>
             {% endfor %}
