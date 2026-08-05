@@ -1202,28 +1202,29 @@ class MeliClient:
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
         "resource not found" en el POST (encontrado 2026-08-05).
 
-        CAUSA RAÍZ REAL (2026-08-05, confirmada con dump crudo del thread,
-        campo conversation_status): "Unexpected exception parsing json
-        string" NO tiene nada que ver con el contenido del mensaje -- se
-        probaron 3 hipótesis de contenido (saltos de línea, acentos/UTF-8,
-        ASCII puro) y las 3 fallaron idéntico, incluso un mensaje 100% ASCII
-        plano. El thread real trae conversation_status.status_update_allowed
-        = False y claim_ids no vacío: la conversación tiene un RECLAMO
-        FORMAL abierto en ML, y una vez que existe un reclamo, ML bloquea el
-        canal de mensajería post-sale por diseño -- hay que responder desde
-        Reclamos (marketplace/v2/claims/{claim_id}/actions/send-message,
-        ver respond_claim()), no desde este endpoint. El error "parsing
-        json string" es un mensaje genérico y engañoso que ML usa para
-        rechazar escrituras a un canal cerrado, no un problema real de JSON.
+        "Unexpected exception parsing json string" NO depende del contenido
+        del mensaje -- se probaron y descartaron 3 hipótesis de contenido
+        (saltos de línea, acentos/UTF-8, ASCII puro) con evidencia real,
+        incluso un mensaje 100% ASCII plano falló idéntico.
 
-        Se verifica esto ANTES de intentar el POST para dar un error claro
-        y accionable en vez del mensaje críptico de ML."""
+        conversation_status.status_update_allowed=False resultó ser un
+        falso indicador -- aparece en la MAYORÍA de las conversaciones
+        (incluso sanas), no solo las bloqueadas, así que NO se usa para
+        detectar el bloqueo (se probó y daba falsos positivos). El único
+        estado inequívoco visto hasta ahora es status="blocked" +
+        substatus="blocked_by_mediation" + claim_ids no vacío -- ese caso SÍ
+        se detecta y se avisa claro. Hay al menos un caso confirmado
+        (pack 2000014248759857, sin reclamo ni bloqueo aparente) donde el
+        envío también falla y la causa real sigue sin confirmarse -- para
+        ese caso el error de ML se deja pasar tal cual, sin inventar una
+        explicación que no está confirmada."""
         try:
             thread_check = await self.get_message_thread(pack_id)
             conv_status = thread_check.get("conversation_status") or {}
-            if conv_status.get("status_update_allowed") is False:
+            if conv_status.get("status") == "blocked":
                 claim_ids = conv_status.get("claim_ids") or []
                 claim_txt = f" (reclamo #{claim_ids[0]})" if claim_ids else ""
+                substatus_txt = f" [{conv_status.get('substatus')}]" if conv_status.get("substatus") else ""
                 raise MeliApiError(
                     status_code=409,
                     endpoint=f"/messages/packs/{pack_id}/sellers/{self.user_id}",
@@ -1231,8 +1232,8 @@ class MeliClient:
                         # "error" (no "message") -- MeliApiError.__init__ usa error_detail
                         # antes que message_code, así que el texto legible va en "error".
                         "error": (
-                            f"Esta conversación tiene un reclamo abierto en Mercado Libre{claim_txt}. "
-                            "El canal de Mensajes queda bloqueado mientras el reclamo esté activo -- "
+                            f"Esta conversación está bloqueada en Mercado Libre{substatus_txt}{claim_txt}. "
+                            "El canal de Mensajes queda cerrado mientras dure el bloqueo -- "
                             "responde desde la sección de Reclamos, no desde aquí."
                         ),
                     },
