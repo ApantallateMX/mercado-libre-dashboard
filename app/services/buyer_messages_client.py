@@ -32,6 +32,7 @@ import asyncio
 import base64
 import email
 import imaplib
+import logging
 import re
 import time
 import httpx
@@ -40,6 +41,8 @@ from email.message import EmailMessage
 
 from app.config import AMAZON_BUYER_INBOX_ACCOUNTS
 from app.services import token_store
+
+logger = logging.getLogger(__name__)
 
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993

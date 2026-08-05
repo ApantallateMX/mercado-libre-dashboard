@@ -1203,23 +1203,30 @@ class MeliClient:
         "resource not found" en el POST (encontrado 2026-08-05, Jovan
         reportó el error al intentar responder una conversación real).
 
-        Con el tag corregido, un mensaje de un solo párrafo se envió bien
-        (aparece en el thread real), pero uno con párrafos separados por
-        línea en blanco (típico de una sugerencia de IA de varias oraciones)
-        le da a ML "Unexpected exception parsing json string" -- su backend
-        de mensajería no tolera saltos de línea dobles. Se normalizan antes
-        de enviar (colapsa 2+ saltos a 1) en vez de exigirle al usuario que
-        edite el texto a mano cada vez."""
+        El colapso de saltos de línea dobles (fix anterior) NO resolvió el
+        error siguiente: "Unexpected exception parsing json string". Patrón
+        real encontrado comparando mensajes que sí se enviaron vs los que
+        fallan: TODOS los que fallan son sugerencias de IA con acentos y "¡"
+        (día, comprensión, ¡Que tenga...!); todos los que Jorge escribió a
+        mano y sí se enviaron NO tienen ni un solo acento ni "¡". httpx por
+        defecto serializa json= con ensure_ascii=True (escapa á/í/¡ como
+        \\uXXXX) -- el backend de mensajería de ML no parsea bien esos
+        escapes. Se fuerza UTF-8 crudo (ensure_ascii=False) en vez de
+        \\uXXXX, más normalización NFC por si el texto viene descompuesto."""
+        import json as _json_sm
         import re as _re_sm
-        clean_text = text.replace("\r\n", "\n")
+        import unicodedata as _ud_sm
+        clean_text = _ud_sm.normalize("NFC", text.replace("\r\n", "\n"))
         clean_text = _re_sm.sub(r"\n{2,}", "\n", clean_text).strip()
+        payload = _json_sm.dumps(
+            {"from": {"user_id": self.user_id}, "text": {"plain": clean_text}},
+            ensure_ascii=False,
+        ).encode("utf-8")
         return await self.post(
             f"/messages/packs/{pack_id}/sellers/{self.user_id}",
             params={"tag": "post_sale"},
-            json={
-                "from": {"user_id": self.user_id},
-                "text": {"plain": clean_text},
-            },
+            content=payload,
+            headers={"Content-Type": "application/json; charset=utf-8"},
         )
 
     # === Questions (gestionar) ===
