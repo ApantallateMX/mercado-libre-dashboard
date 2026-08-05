@@ -9067,10 +9067,17 @@ async def health_summary_partial(
             return 0
 
         async def _fetch_messages():
-            # Cuenta conversaciones con mensajes en ordenes recientes
+            # Cuenta conversaciones pendientes (último mensaje del comprador)
+            # desde ml_messages_index — el mismo índice que usa la vista de
+            # detalle (/partials/health-messages). Antes llamaba a
+            # client.get_messages(), el escaneo viejo de "50 órdenes más
+            # recientes" que se reemplazó por el índice el 2026-08-04 pero
+            # se quedó sin actualizar aquí — el card de resumen seguía
+            # mostrando 0 aunque la vista de detalle ya mostrara pendientes
+            # reales (encontrado 2026-08-05, ver DEVLOG).
             try:
-                r = await client.get_messages(limit=0)
-                return r.get("paging", {}).get("total", 0)
+                rows, _total = await token_store.get_message_index(str(client.user_id), offset=0, limit=2000)
+                return sum(1 for r in rows if r.get("last_message_from") == "buyer")
             except Exception:
                 return 0
 
