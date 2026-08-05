@@ -1200,19 +1200,16 @@ class MeliClient:
     async def send_message(self, pack_id: str, text: str) -> dict:
         """Envia un mensaje en una conversacion. Requiere el mismo query param
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
-        "resource not found" en el POST (encontrado 2026-08-05, Jovan
-        reportó el error al intentar responder una conversación real).
+        "resource not found" en el POST (encontrado 2026-08-05).
 
-        El colapso de saltos de línea dobles (fix anterior) NO resolvió el
-        error siguiente: "Unexpected exception parsing json string". Patrón
-        real encontrado comparando mensajes que sí se enviaron vs los que
-        fallan: TODOS los que fallan son sugerencias de IA con acentos y "¡"
-        (día, comprensión, ¡Que tenga...!); todos los que Jorge escribió a
-        mano y sí se enviaron NO tienen ni un solo acento ni "¡". httpx por
-        defecto serializa json= con ensure_ascii=True (escapa á/í/¡ como
-        \\uXXXX) -- el backend de mensajería de ML no parsea bien esos
-        escapes. Se fuerza UTF-8 crudo (ensure_ascii=False) en vez de
-        \\uXXXX, más normalización NFC por si el texto viene descompuesto."""
+        El colapso de saltos de línea dobles NI la normalización NFC +
+        UTF-8 crudo (dos intentos previos, ambos desplegados y probados en
+        vivo por Jovan) resolvieron "Unexpected exception parsing json
+        string" -- sigue fallando exactamente igual. Ambas hipótesis (saltos
+        de línea, escape de acentos) quedan DESCARTADAS por evidencia real,
+        no solo sin confirmar. Se agrega logging del payload y de la
+        respuesta cruda de ML en el próximo intento para dejar de adivinar y
+        ver exactamente qué está rechazando."""
         import json as _json_sm
         import re as _re_sm
         import unicodedata as _ud_sm
@@ -1222,12 +1219,19 @@ class MeliClient:
             {"from": {"user_id": self.user_id}, "text": {"plain": clean_text}},
             ensure_ascii=False,
         ).encode("utf-8")
-        return await self.post(
-            f"/messages/packs/{pack_id}/sellers/{self.user_id}",
-            params={"tag": "post_sale"},
-            content=payload,
-            headers={"Content-Type": "application/json; charset=utf-8"},
-        )
+        try:
+            return await self.post(
+                f"/messages/packs/{pack_id}/sellers/{self.user_id}",
+                params={"tag": "post_sale"},
+                content=payload,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+        except MeliApiError as _e_sm:
+            logger.error(
+                f"[ML-SEND-MSG] FALLO pack={pack_id} status={_e_sm.status_code} "
+                f"body_ml={_e_sm.body!r} payload_enviado={payload!r}"
+            )
+            raise
 
     # === Questions (gestionar) ===
 
