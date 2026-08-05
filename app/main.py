@@ -23187,6 +23187,54 @@ async def diag_ml_messages_audit(token: str = "", account_id: str = "", days: in
         await client.close()
 
 
+@app.get("/api/diag/sku-stock-truth")
+async def diag_sku_stock_truth(sku: str = "", token: str = ""):
+    """Ground truth de stock ML para un SKU — compara lo que tenemos guardado
+    en ml_listings contra lo que la API de ML dice AHORA MISMO en vivo, para
+    diagnosticar 'sync dice OK pero ML no queda actualizado' (ej. logistic_type
+    FULL no modificable via API, o el warning lost_me1_by_user donde ML acepta
+    el PUT pero lo revierte solo)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    import aiosqlite as _aio_sk
+    from app.config import DATABASE_PATH as _DB_SK
+    async with _aio_sk.connect(_DB_SK) as db:
+        db.row_factory = _aio_sk.Row
+        rows = await (await db.execute(
+            "SELECT item_id, account_id, title, status, price, available_qty, sold_qty, "
+            "sku, logistic_type, catalog_listing, is_full, last_updated, synced_at "
+            "FROM ml_listings WHERE sku = ?", (sku,)
+        )).fetchall()
+    our_rows = [dict(r) for r in rows]
+    live_results = []
+    for r in our_rows:
+        client = await get_meli_client(user_id=r["account_id"])
+        if not client:
+            live_results.append({"item_id": r["item_id"], "error": "cuenta no encontrada"})
+            continue
+        try:
+            item = await client.get(f"/items/{r['item_id']}")
+            live_results.append({
+                "item_id": r["item_id"],
+                "live_available_quantity": item.get("available_quantity"),
+                "live_status": item.get("status"),
+                "live_logistic_type": item.get("shipping", {}).get("logistic_type", ""),
+                "live_sub_status": item.get("sub_status", []),
+                "live_has_variations": bool(item.get("variations")),
+                "live_variations_count": len(item.get("variations", [])),
+                "live_health": item.get("health"),
+                "live_last_updated": item.get("last_updated"),
+                "live_warnings": item.get("warnings", []),
+            })
+        except Exception as e:
+            live_results.append({"item_id": r["item_id"], "error": str(e)})
+        finally:
+            await client.close()
+    return {"sku": sku, "nuestro_cache_ml_listings": our_rows, "estado_real_en_ml": live_results}
+
+
 @app.get("/api/diag/ml-order-message-truth")
 async def diag_ml_order_message_truth(token: str = "", account_id: str = "", order_id: str = ""):
     """Ground truth SIN CACHÉ NI ÍNDICE — pide a la API de ML, EN VIVO, la orden
@@ -23255,6 +23303,39 @@ async def diag_ml_order_message_truth(token: str = "", account_id: str = "", ord
                 "error": thread_by_real_pack.get("error") if isinstance(thread_by_real_pack, dict) else None,
             } if real_pack_id and str(real_pack_id) != str(order_id) else "no aplica (order no encontrada o pack_id == order_id)",
             "fila_en_nuestro_indice_que_matchea_ese_numero": matching_index_row,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/api/diag/ml-message-raw-dump")
+async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_id: str = ""):
+    """Dump SIN filtrar de los últimos mensajes de un pack -- todos los campos
+    que ML realmente manda, no solo from/text/date. Objetivo: encontrar la
+    diferencia real entre mensajes que sí se enviaron (via nuestro sistema o
+    directo en ML) y los que send_message() no logra mandar pese a probar ya
+    3 hipótesis de contenido (saltos de línea, acentos/UTF-8, ASCII puro) --
+    las 3 fallaron con el MISMO error incluso con un mensaje 100% ASCII plano
+    sin ningún carácter especial, así que el contenido queda descartado como
+    causa. Busca algo estructural: IDs de mensaje, campo de origen/canal,
+    moderación, etc."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id:
+        return JSONResponse({"error": "account_id y pack_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        thread = await client.get_message_thread(pack_id)
+        return {
+            "pack_id": pack_id,
+            "paging": thread.get("paging"),
+            "conversation_status": thread.get("conversation_status"),
+            "top_level_keys": list(thread.keys()),
+            "mensajes_completos": thread.get("messages", []),
         }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
