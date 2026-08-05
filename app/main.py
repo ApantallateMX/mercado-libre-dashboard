@@ -2131,6 +2131,19 @@ def _ml_msg_date(msg: dict) -> str:
     return msg.get("date_created", msg.get("date", ""))
 
 
+def _ml_sort_messages_asc(msgs: list) -> list:
+    """Ordena mensajes de un thread ML por fecha real, ascendente (más viejo
+    primero). Encontrado 2026-08-05: get_message_thread() de ML devuelve los
+    mensajes en orden DESCENDENTE (más nuevo primero) — todo el código que
+    asumía `messages[-1]` = mensaje más reciente en realidad tomaba el MÁS
+    VIEJO de la página devuelta, con fecha y remitente incorrectos. Bug real
+    detectado con un comprador que sí había respondido (extensión de
+    garantía) pero el dashboard seguía mostrando el mensaje del vendedor de
+    2 días antes como "el último". Usar esta función en vez de indexar
+    directo — nunca asumir el orden del array."""
+    return sorted(msgs, key=_ml_msg_date)
+
+
 async def _process_ml_message_webhook(resource: str, user_id: str) -> None:
     """Topic 'messages' — resource viene como '/messages/packs/{pack_id}/
     sellers/{user_id}'. Trae SOLO ese pack (1 llamada, no un escaneo de
@@ -2150,7 +2163,7 @@ async def _process_ml_message_webhook(resource: str, user_id: str) -> None:
         total = r.get("paging", {}).get("total", len(msgs))
         if not msgs:
             return
-        last = msgs[-1]
+        last = _ml_sort_messages_asc(msgs)[-1]
         from_id = str(last.get("from", {}).get("user_id", ""))
         last_from = "seller" if from_id == user_id else "buyer"
         text_raw = last.get("text", "")
@@ -9964,7 +9977,7 @@ async def _fetch_enriched_ml_conversations(
 
     enriched = []
     for row in index_rows:
-        messages_list = threads_by_pack.get(row["pack_id"], [])
+        messages_list = _ml_sort_messages_asc(threads_by_pack.get(row["pack_id"], []))
         last_5 = messages_list[-5:] if messages_list else []
         last_from_buyer = row["last_message_from"] == "buyer"
         needs_response = last_from_buyer
@@ -23135,7 +23148,7 @@ async def diag_ml_messages_audit(token: str = "", account_id: str = "", days: in
                     if total_msgs <= 0:
                         return None
                     msgs = r.get("messages", [])
-                    last = msgs[-1] if msgs else None
+                    last = _ml_sort_messages_asc(msgs)[-1] if msgs else None
                     from_id = str((last or {}).get("from", {}).get("user_id", ""))
                     needs_response = bool(last) and from_id != client.user_id
                     return {
@@ -23280,7 +23293,7 @@ async def _ml_messages_scan_and_index(client, date_from: str, date_to: str,
                 if total_msgs <= 0:
                     return
                 msgs = r.get("messages", [])
-                last = msgs[-1] if msgs else None
+                last = _ml_sort_messages_asc(msgs)[-1] if msgs else None
                 if not last:
                     return
                 from_id = str(last.get("from", {}).get("user_id", ""))
@@ -23352,7 +23365,7 @@ async def _ml_refresh_indexed_pack(client, account_id: str, pack_id: str) -> boo
                               params={"tag": "post_sale", "mark_as_read": "false"})
         total_msgs = r.get("paging", {}).get("total", 0)
         msgs = r.get("messages", [])
-        last = msgs[-1] if msgs else None
+        last = _ml_sort_messages_asc(msgs)[-1] if msgs else None
         if not last:
             return False
         from_id = str(last.get("from", {}).get("user_id", ""))
