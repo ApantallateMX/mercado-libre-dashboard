@@ -1202,22 +1202,27 @@ class MeliClient:
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
         "resource not found" en el POST (encontrado 2026-08-05).
 
-        El colapso de saltos de línea dobles NI la normalización NFC +
-        UTF-8 crudo (dos intentos previos, ambos desplegados y probados en
-        vivo por Jovan) resolvieron "Unexpected exception parsing json
-        string" -- sigue fallando exactamente igual. Ambas hipótesis (saltos
-        de línea, escape de acentos) quedan DESCARTADAS por evidencia real,
-        no solo sin confirmar. Se agrega logging del payload y de la
-        respuesta cruda de ML en el próximo intento para dejar de adivinar y
-        ver exactamente qué está rechazando."""
+        Causa raíz real, confirmada con logging del payload+respuesta cruda
+        (2026-08-05): ML devuelve {"code":"bad_request","message":"Unexpected
+        exception parsing json string"} para CUALQUIER mensaje con acentos o
+        "¡"/"¿" en el campo text.plain -- confirmado con el payload en UTF-8
+        crudo bien formado (bytes correctos, JSON válido) y AUN ASÍ falla
+        idéntico. No es un problema de escaping de nuestro lado (dos intentos
+        previos con distinta codificación fallaron igual) -- es un bug real
+        del backend de mensajería de ML con esos caracteres específicos.
+        Patrón 100% consistente: los 3 mensajes que fallaron tenían "¡"; los
+        que Jorge escribió a mano (sin acentos ni "¡") sí se enviaron.
+        Workaround: transliterar a ASCII (quita acentos y ¡/¿) antes de
+        enviar -- pierde los signos de apertura y las tildes, pero el
+        mensaje SÍ llega, que es la prioridad."""
         import json as _json_sm
         import re as _re_sm
         import unicodedata as _ud_sm
         clean_text = _ud_sm.normalize("NFC", text.replace("\r\n", "\n"))
         clean_text = _re_sm.sub(r"\n{2,}", "\n", clean_text).strip()
+        ascii_text = _ud_sm.normalize("NFKD", clean_text).encode("ascii", "ignore").decode("ascii")
         payload = _json_sm.dumps(
-            {"from": {"user_id": self.user_id}, "text": {"plain": clean_text}},
-            ensure_ascii=False,
+            {"from": {"user_id": self.user_id}, "text": {"plain": ascii_text}},
         ).encode("utf-8")
         try:
             return await self.post(
