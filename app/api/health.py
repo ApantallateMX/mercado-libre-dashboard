@@ -294,9 +294,9 @@ async def update_message_status(pack_id: str, body: MessageStatusRequest, reques
         raise HTTPException(status_code=400, detail="Status inválido")
     try:
         acc = body.account_id or str(client.user_id)
-        await _ts.update_message_view_status(pack_id, acc, body.status)
         user = getattr(request.state, "dashboard_user", {}) or {}
         username = user.get("sub") or user.get("name") or "?"
+        await _ts.update_message_view_status(pack_id, acc, body.status, viewed_by=username)
         await _log_history(request, username, "ml_message_status", pack_id, {"account_id": acc, "status": body.status})
         return {"ok": True, "status": body.status}
     finally:

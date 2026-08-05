@@ -2154,15 +2154,26 @@ async def take_message(pack_id: str, account_id: str, taken_by: str) -> None:
         await db.commit()
 
 
-async def update_message_view_status(pack_id: str, account_id: str, status: str) -> None:
-    """Actualiza el estado de un mensaje: pending / in_progress / resolved.
+async def update_message_view_status(pack_id: str, account_id: str, status: str, viewed_by: str = "") -> None:
+    """Actualiza (o crea) el estado de un mensaje: pending / in_progress / resolved.
     Refresca viewed_at para que refleje el último toque (usado por KPIs de
-    'resuelto en las últimas 24h'), no solo la primera vez que se tomó."""
+    'resuelto en las últimas 24h'), no solo la primera vez que se tomó.
+
+    Antes era un UPDATE plano -- si nadie había 'tomado' la conversación
+    todavía (sin fila en ml_message_views), marcar 'resuelto' no hacía NADA
+    en silencio (0 filas afectadas, sin error). Encontrado 2026-08-06: Jovan
+    pidió poder marcar como resuelta una conversación bloqueada por ML
+    (mediación/orden cancelada) sin tener que tomarla primero. Ahora hace
+    upsert -- crea la fila si no existía."""
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
-            "UPDATE ml_message_views SET status = ?, viewed_at = ? WHERE pack_id = ? AND account_id = ?",
-            (status, _t.time(), pack_id, account_id),
+            """INSERT INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(pack_id, account_id) DO UPDATE SET
+                   status=excluded.status, viewed_at=excluded.viewed_at,
+                   viewed_by=CASE WHEN excluded.viewed_by != '' THEN excluded.viewed_by ELSE ml_message_views.viewed_by END""",
+            (pack_id, account_id, viewed_by or "sistema", _t.time(), status),
         )
         await db.commit()
 

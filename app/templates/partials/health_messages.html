@@ -220,6 +220,18 @@ window._setMsgStatus = function(packId, status, btn) {
                 {% endif %}
             </div>
             {% endif %}
+
+            <!-- Bloqueado en ML (mediación, orden cancelada, etc.) -- avisar
+                 ANTES de que el usuario intente responder y le salga error. -->
+            {% if conv.is_blocked %}
+            <div class="bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2 text-xs text-red-700 flex items-center gap-2 flex-wrap">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                <span>
+                    Bloqueada en Mercado Libre{% if conv.blocked_substatus %} ({{ conv.blocked_substatus }}){% endif %}{% if conv.blocked_claim_id %} — reclamo #{{ conv.blocked_claim_id }}{% endif %}.
+                    El canal de Mensajes está cerrado; revisa el caso directamente en ML.
+                </span>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Mensajes del hilo -->
@@ -258,8 +270,11 @@ window._setMsgStatus = function(packId, status, btn) {
                 </button>
                 {% endif %}
 
-                <!-- Resolver: solo si hay una vista registrada y no está resuelto -->
-                {% if vi and vi_status != 'resolved' %}
+                <!-- Resolver: normalmente requiere haberla tomado antes, PERO si
+                     está bloqueada en ML (no se puede responder de ningún modo)
+                     se habilita directo -- no tiene sentido exigir "Tomar"
+                     primero para algo que no se puede atender por este canal. -->
+                {% if (vi and vi_status != 'resolved') or (conv.is_blocked and vi_status != 'resolved') %}
                 <button onclick="window._setMsgStatus('{{ conv.pack_id }}', 'resolved', this)"
                         class="text-xs px-3 py-1 rounded-full bg-green-100 text-green-700 hover:bg-green-200 font-semibold transition">
                     Marcar resuelto

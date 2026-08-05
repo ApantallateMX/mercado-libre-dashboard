@@ -9950,11 +9950,12 @@ async def _fetch_enriched_ml_conversations(
         async with sem_th:
             try:
                 r = await client.get_message_thread(row["pack_id"])
-                return row["pack_id"], r.get("messages", [])
+                return row["pack_id"], r.get("messages", []), r.get("conversation_status") or {}
             except Exception:
-                return row["pack_id"], []
-    thread_pairs = await asyncio.gather(*[_fetch_thread(r) for r in index_rows])
-    threads_by_pack = dict(thread_pairs)
+                return row["pack_id"], [], {}
+    thread_triples = await asyncio.gather(*[_fetch_thread(r) for r in index_rows])
+    threads_by_pack = {p: msgs for p, msgs, _cs in thread_triples}
+    conv_status_by_pack = {p: cs for p, _msgs, cs in thread_triples}
 
     order_context_map = {}
     order_ids_for_context = list({r["order_id"] for r in index_rows if r["order_id"]})
@@ -10012,6 +10013,9 @@ async def _fetch_enriched_ml_conversations(
             )]
 
         order_ctx = order_context_map.get(row["order_id"], {})
+        conv_status = conv_status_by_pack.get(row["pack_id"], {})
+        is_blocked = conv_status.get("status") == "blocked"
+        blocked_claim_ids = conv_status.get("claim_ids") or []
 
         enriched.append(SimpleNamespace(
             pack_id=row["pack_id"],
@@ -10022,6 +10026,9 @@ async def _fetch_enriched_ml_conversations(
             last_elapsed=last_elapsed,
             needs_response=needs_response,
             messages=enriched_msgs,
+            is_blocked=is_blocked,
+            blocked_substatus=conv_status.get("substatus") or "",
+            blocked_claim_id=str(blocked_claim_ids[0]) if blocked_claim_ids else "",
             order_product=order_ctx.get("product_title", ""),
             order_amount=order_ctx.get("total_amount", 0),
             order_currency=order_ctx.get("currency", ""),
