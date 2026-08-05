@@ -1201,13 +1201,24 @@ class MeliClient:
         """Envia un mensaje en una conversacion. Requiere el mismo query param
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
         "resource not found" en el POST (encontrado 2026-08-05, Jovan
-        reportó el error al intentar responder una conversación real)."""
+        reportó el error al intentar responder una conversación real).
+
+        Con el tag corregido, un mensaje de un solo párrafo se envió bien
+        (aparece en el thread real), pero uno con párrafos separados por
+        línea en blanco (típico de una sugerencia de IA de varias oraciones)
+        le da a ML "Unexpected exception parsing json string" -- su backend
+        de mensajería no tolera saltos de línea dobles. Se normalizan antes
+        de enviar (colapsa 2+ saltos a 1) en vez de exigirle al usuario que
+        edite el texto a mano cada vez."""
+        import re as _re_sm
+        clean_text = text.replace("\r\n", "\n")
+        clean_text = _re_sm.sub(r"\n{2,}", "\n", clean_text).strip()
         return await self.post(
             f"/messages/packs/{pack_id}/sellers/{self.user_id}",
             params={"tag": "post_sale"},
             json={
                 "from": {"user_id": self.user_id},
-                "text": {"plain": text},
+                "text": {"plain": clean_text},
             },
         )
 

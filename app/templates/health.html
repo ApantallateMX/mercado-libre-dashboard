@@ -183,7 +183,8 @@ var healthFilters = {
     offsets: { claims: 0, questions: 0, messages: 0 },
     statuses: { claims: '', questions: 'UNANSWERED' },
     limit: 20,
-    _filterOrderId: ''
+    _filterOrderId: '',
+    _filterMessagesQuery: ''
 };
 
 // One AbortController per section — cancels stale in-flight requests
@@ -209,6 +210,7 @@ function buildTabParams(tab) {
     if (tab === 'claims'    && healthFilters.statuses.claims)    p.push('status=' + healthFilters.statuses.claims);
     if (tab === 'claims'    && healthFilters._filterOrderId)     p.push('order_id=' + healthFilters._filterOrderId);
     if (tab === 'questions' && healthFilters.statuses.questions) p.push('status=' + healthFilters.statuses.questions);
+    if (tab === 'messages'  && healthFilters._filterMessagesQuery) p.push('q=' + encodeURIComponent(healthFilters._filterMessagesQuery));
     return p.join('&');
 }
 
@@ -425,7 +427,16 @@ window.setHealthStatus = function(tab, status) {
 // ---- Tab click handlers ----
 
 document.querySelectorAll('.health-tab').forEach(function(btn) {
-    btn.addEventListener('click', function() { loadTab(this.getAttribute('data-tab')); });
+    btn.addEventListener('click', function() {
+        var tab = this.getAttribute('data-tab');
+        // Un click directo en la pestaña (no via búsqueda) siempre limpia el
+        // filtro de la búsqueda anterior -- si no, un filtro que quedó puesto
+        // (ej. por goToMessagesForOrder) seguía aplicado silenciosamente la
+        // próxima vez que alguien abriera la pestaña normal.
+        if (tab === 'claims') healthFilters._filterOrderId = '';
+        if (tab === 'messages') healthFilters._filterMessagesQuery = '';
+        loadTab(tab);
+    });
 });
 
 // ============================================================
@@ -618,8 +629,14 @@ window.clearClaimsOrderFilter = function() {
     healthFilters._filterOrderId = ''; healthFilters.offsets.claims = 0;
     loadTab('claims');
 };
-window.goToMessagesForOrder = function() {
-    window.clearHealthSearch(); loadTab('messages');
+window.goToMessagesForOrder = function(orderId) {
+    // Antes ignoraba orderId por completo -- abría la pestaña de Mensajes
+    // genérica sin filtrar nada, perdiendo la conversación buscada
+    // (encontrado 2026-08-05, Jovan reportó no encontrar la orden buscada).
+    window.clearHealthSearch();
+    healthFilters._filterMessagesQuery = orderId || '';
+    healthFilters.offsets.messages = 0;
+    loadTab('messages');
 };
 
 // ============================================================
