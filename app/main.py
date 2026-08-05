@@ -19983,8 +19983,18 @@ async def _fetch_amazon_threads_for_seller(sid: str, days: int, oid: str = "", n
     views = await token_store.get_message_views(pack_ids, sid) if pack_ids else {}
     for th in threads:
         th["view_info"] = views.get(_amz_thread_key(th["reply_to_addr"]))
-        last_is_inbound = th["messages"][-1]["direction"] == "inbound" if th["messages"] else False
-        already_resolved = th["view_info"] and th["view_info"].get("status") == "resolved"
+        last_msg = th["messages"][-1] if th["messages"] else None
+        last_is_inbound = last_msg["direction"] == "inbound" if last_msg else False
+        resolved_info = th["view_info"] if th["view_info"] and th["view_info"].get("status") == "resolved" else None
+        # "Resuelto" no es permanente — si el comprador escribió DESPUÉS de la
+        # marca de resuelto, el hilo se reabre solo (caso real: Belum, orden
+        # 701-1037142-0773817, escribió 2 veces más tras marcarse resuelto y
+        # se quedó invisible para siempre con la lógica vieja, ver DEVLOG).
+        reopened_after_resolve = bool(
+            resolved_info and last_is_inbound
+            and (last_msg["ts"] or 0) > (resolved_info.get("viewed_at") or 0)
+        )
+        already_resolved = bool(resolved_info) and not reopened_after_resolve
         th["needs_response"] = last_is_inbound and not already_resolved
 
     return threads, len(rows)
