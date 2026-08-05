@@ -2208,7 +2208,15 @@ async def upsert_message_index(pack_id: str, account_id: str, order_id: str,
                                 last_message_from: str, last_message_text: str,
                                 last_message_date: str, total_messages: int) -> None:
     """Actualiza (o crea) el índice local de una conversación — llamado por el
-    webhook de topic 'messages' y por el backfill inicial."""
+    webhook de topic 'messages', por el backfill/refresh de órdenes nuevas y
+    por el refresh de conversaciones ya indexadas.
+
+    order_id="" preserva el order_id ya guardado (COALESCE contra el valor
+    existente en vez de sobreescribir con excluded.order_id). Necesario
+    porque el webhook y el refresh de conversaciones ya indexadas NO siempre
+    tienen a mano el order_id real de la orden — antes el webhook guardaba
+    pack_id como si fuera order_id (bug encontrado 2026-08-05, DEVLOG), y
+    mostraba un número de orden que en realidad era el pack_id."""
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
@@ -2216,7 +2224,8 @@ async def upsert_message_index(pack_id: str, account_id: str, order_id: str,
                (pack_id, account_id, order_id, last_message_from, last_message_text, last_message_date, total_messages, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(pack_id, account_id) DO UPDATE SET
-                   order_id=excluded.order_id, last_message_from=excluded.last_message_from,
+                   order_id=CASE WHEN excluded.order_id != '' THEN excluded.order_id ELSE ml_messages_index.order_id END,
+                   last_message_from=excluded.last_message_from,
                    last_message_text=excluded.last_message_text, last_message_date=excluded.last_message_date,
                    total_messages=excluded.total_messages, updated_at=excluded.updated_at""",
             (pack_id, account_id, order_id, last_message_from, last_message_text,

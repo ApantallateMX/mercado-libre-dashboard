@@ -683,7 +683,8 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     from app.services import buyer_messages_client as _bmc
     asyncio.create_task(_bmc.poll_loop())
-    asyncio.create_task(_ml_messages_refresh_loop())
+    asyncio.create_task(_ml_messages_new_orders_scan_loop())
+    asyncio.create_task(_ml_messages_index_refresh_loop())
     asyncio.create_task(token_store.feedback_sync_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
@@ -2155,10 +2156,15 @@ async def _process_ml_message_webhook(resource: str, user_id: str) -> None:
         text_raw = last.get("text", "")
         text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
         last_date = _ml_msg_date(last)
-        # El pack_id de mensajería a veces ES el order_id (mismo patrón que
-        # get_messages() en meli_client.py), no siempre viene separado.
+        # order_id="" preserva el order_id real ya guardado en el índice (ver
+        # upsert_message_index) — el payload del webhook NO trae el order_id
+        # real, solo el pack_id, y hasta 2026-08-05 este código guardaba
+        # pack_id como si fuera el order_id, mostrando un número de orden
+        # incorrecto en el dashboard (ver DEVLOG). Si es un pack nuevo sin
+        # fila previa, _ml_messages_new_orders_scan_loop lo completa poco
+        # después con el order_id real.
         await token_store.upsert_message_index(
-            pack_id=pack_id, account_id=user_id, order_id=pack_id,
+            pack_id=pack_id, account_id=user_id, order_id="",
             last_message_from=last_from, last_message_text=text[:500],
             last_message_date=last_date, total_messages=total,
         )
@@ -23240,7 +23246,7 @@ async def _ml_messages_scan_and_index(client, date_from: str, date_to: str,
                                        max_orders: int, start_offset: int = 0) -> tuple:
     """Escanea órdenes de UNA cuenta ML en un rango de fechas y actualiza
     ml_messages_index con la última conversación de cada pack. Compartido por
-    el backfill manual (diag) y por _ml_messages_refresh_loop (respaldo
+    el backfill manual (diag) y por _ml_messages_new_orders_scan_loop (respaldo
     periódico del webhook topic 'messages' — ver esa función para el porqué).
     Retorna (orders_scanned, conversations_indexed, next_offset, remaining)."""
     orders_batch = []
@@ -23296,15 +23302,19 @@ async def _ml_messages_scan_and_index(client, date_from: str, date_to: str,
     return len(orders_batch), indexed[0], offset, remaining
 
 
-async def _ml_messages_refresh_loop() -> None:
-    """Respaldo periódico del webhook topic 'messages' de ML — se detectó
-    2026-08-05 que una conversación real (12 mensajes, comprador esperando
-    respuesta) estaba completamente ausente de ml_messages_index pese al
-    webhook activo: ML no entrega la notificación de forma confiable para
-    este topic. Re-escanea una ventana corta (últimos 4 días) de órdenes de
-    las 4 cuentas cada 10 min y re-sincroniza sus conversaciones — mismo rol
-    que el backfill manual pero automático y acotado, así el índice se
-    autorepara aunque el webhook falle."""
+async def _ml_messages_new_orders_scan_loop() -> None:
+    """Respaldo periódico del webhook topic 'messages' de ML, PARTE 1 — cubre
+    conversaciones NUEVAS. Se detectó 2026-08-05 que una conversación real
+    (12 mensajes, comprador esperando respuesta) estaba completamente ausente
+    de ml_messages_index pese al webhook activo: ML no entrega la
+    notificación de forma confiable para este topic. Re-escanea una ventana
+    corta (últimos 4 días) de ÓRDENES de las 4 cuentas cada 10 min para
+    detectar conversaciones que todavía no existen en el índice.
+
+    Esto NO cubre respuestas nuevas en conversaciones sobre órdenes viejas
+    (ver _ml_messages_index_refresh_loop para ese caso — encontrado el mismo
+    día con un segundo caso real: comprador respondió 2 días después sobre
+    una orden ya fuera de esta ventana de 4 días, y se quedó invisible)."""
     from datetime import datetime as _dt_mr, timedelta as _td_mr
     await asyncio.sleep(60)
     while True:
@@ -23323,14 +23333,88 @@ async def _ml_messages_refresh_loop() -> None:
                     scanned, indexed, _off, _rem = await _ml_messages_scan_and_index(
                         client, date_from, date_to, max_orders=600,
                     )
-                    logger.info(f"[ML-MSG-REFRESH] cuenta={uid} ordenes={scanned} actualizadas={indexed}")
+                    logger.info(f"[ML-MSG-REFRESH-NEW] cuenta={uid} ordenes={scanned} actualizadas={indexed}")
                 except Exception as _e:
-                    logger.warning(f"[ML-MSG-REFRESH] error cuenta={uid}: {_e}")
+                    logger.warning(f"[ML-MSG-REFRESH-NEW] error cuenta={uid}: {_e}")
                 finally:
                     await client.close()
         except Exception as _e:
-            logger.warning(f"[ML-MSG-REFRESH] error general: {_e}")
+            logger.warning(f"[ML-MSG-REFRESH-NEW] error general: {_e}")
         await asyncio.sleep(600)
+
+
+async def _ml_refresh_indexed_pack(client, account_id: str, pack_id: str) -> bool:
+    """Re-consulta en vivo UN pack ya indexado y actualiza su fila — usado por
+    _ml_messages_index_refresh_loop. order_id="" preserva el order_id real ya
+    guardado (ver upsert_message_index)."""
+    try:
+        r = await client.get(f"/messages/packs/{pack_id}/sellers/{client.user_id}",
+                              params={"tag": "post_sale", "mark_as_read": "false"})
+        total_msgs = r.get("paging", {}).get("total", 0)
+        msgs = r.get("messages", [])
+        last = msgs[-1] if msgs else None
+        if not last:
+            return False
+        from_id = str(last.get("from", {}).get("user_id", ""))
+        last_from = "seller" if from_id == client.user_id else "buyer"
+        text_raw = last.get("text", "")
+        text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
+        last_date = _ml_msg_date(last)
+        await token_store.upsert_message_index(
+            pack_id=pack_id, account_id=account_id, order_id="",
+            last_message_from=last_from, last_message_text=text[:500],
+            last_message_date=last_date, total_messages=total_msgs,
+        )
+        return True
+    except Exception:
+        return False
+
+
+async def _ml_messages_index_refresh_loop() -> None:
+    """Respaldo periódico del webhook topic 'messages' de ML, PARTE 2 — cubre
+    conversaciones YA indexadas que siguen activas en órdenes viejas.
+
+    Encontrado 2026-08-05 (caso real, orden creada semanas antes): un
+    comprador respondió sobre una disputa de modelo de TV 2 días después de
+    la última respuesta del vendedor, y el mensaje nunca llegó al dashboard.
+    _ml_messages_new_orders_scan_loop no lo detecta porque solo mira órdenes
+    de los últimos 4 días — esta conversación es mucho más vieja que eso, solo
+    sigue activa. Por eso este loop, cada ~4 min, vuelve a consultar en vivo
+    TODAS las conversaciones ya indexadas con actividad en los últimos 21 días
+    (acotado — no tiene sentido re-chequear disputas de hace meses ya
+    cerradas) y refresca su estado, sin importar qué tan vieja sea la orden
+    original."""
+    await asyncio.sleep(150)
+    while True:
+        try:
+            from datetime import datetime as _dt_ir, timedelta as _td_ir
+            date_from = (_dt_ir.utcnow() - _td_ir(days=21)).strftime("%Y-%m-%d")
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if not uid:
+                    continue
+                rows, _total = await token_store.get_message_index(uid, offset=0, limit=2000, date_from=date_from)
+                if not rows:
+                    continue
+                client = await get_meli_client(user_id=uid)
+                if not client:
+                    continue
+                try:
+                    sem = asyncio.Semaphore(10)
+                    async def _one(pack_id):
+                        async with sem:
+                            return await _ml_refresh_indexed_pack(client, uid, pack_id)
+                    results = await asyncio.gather(*[_one(r["pack_id"]) for r in rows], return_exceptions=True)
+                    ok = sum(1 for r in results if r is True)
+                    logger.info(f"[ML-MSG-REFRESH-INDEX] cuenta={uid} packs={len(rows)} actualizados={ok}")
+                except Exception as _e:
+                    logger.warning(f"[ML-MSG-REFRESH-INDEX] error cuenta={uid}: {_e}")
+                finally:
+                    await client.close()
+        except Exception as _e:
+            logger.warning(f"[ML-MSG-REFRESH-INDEX] error general: {_e}")
+        await asyncio.sleep(240)
 
 
 @app.get("/api/diag/backfill-ml-messages-index")
@@ -23339,8 +23423,9 @@ async def diag_backfill_ml_messages_index(
     max_orders: int = 300, start_offset: int = 0,
 ):
     """Backfill manual de ml_messages_index (uso puntual/rango largo) —
-    _ml_messages_refresh_loop cubre el refresh automático de la ventana
-    corta reciente; este endpoint sigue sirviendo para poblar historial más
+    _ml_messages_new_orders_scan_loop e _ml_messages_index_refresh_loop cubren
+    el refresh automático (órdenes nuevas y conversaciones ya indexadas,
+    respectivamente); este endpoint sigue sirviendo para poblar historial más
     viejo o re-sincronizar bajo demanda. Acotado por max_orders/start_offset
     para llamarse repetidas veces sin pasar el timeout de Railway (~30s)."""
     if token != _DIAG_TOKEN:
