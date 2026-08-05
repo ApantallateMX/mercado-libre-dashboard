@@ -23161,6 +23161,64 @@ async def diag_ml_messages_audit(token: str = "", account_id: str = "", days: in
         await client.close()
 
 
+@app.get("/api/diag/ml-order-message-truth")
+async def diag_ml_order_message_truth(token: str = "", account_id: str = "", order_id: str = ""):
+    """Ground truth SIN CACHÉ NI ÍNDICE — pide a la API de ML, EN VIVO, la orden
+    y su pack_id real, y luego el thread de ese pack_id, para comparar contra
+    lo que muestra el dashboard cuando hay sospecha de que el order_id mostrado
+    no es el order_id real (bug encontrado 2026-08-05: _process_ml_message_webhook
+    guarda order_id=pack_id en vez del order_id real de la orden — ver DEVLOG)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not order_id:
+        return JSONResponse({"error": "account_id y order_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        order = await client.get(f"/orders/{order_id}")
+        real_pack_id = order.get("pack_id") or ""
+        index_row, _total = await token_store.get_message_index(account_id, offset=0, limit=1, date_from="", date_to="")
+        thread_by_order_id = {}
+        thread_by_real_pack = {}
+        try:
+            thread_by_order_id = await client.get_message_thread(str(order_id))
+        except Exception as _e1:
+            thread_by_order_id = {"error": str(_e1)}
+        if real_pack_id and str(real_pack_id) != str(order_id):
+            try:
+                thread_by_real_pack = await client.get_message_thread(str(real_pack_id))
+            except Exception as _e2:
+                thread_by_real_pack = {"error": str(_e2)}
+        # buscar la fila de índice que el dashboard usaría para este order_id
+        our_index_rows, _ = await token_store.get_message_index(account_id, offset=0, limit=1000, date_from="", date_to="")
+        matching_index_row = next((r for r in our_index_rows if str(r.get("order_id")) == str(order_id)
+                                    or str(r.get("pack_id")) == str(order_id)), None)
+        return {
+            "order_id_buscado": order_id,
+            "order_real": {
+                "id": order.get("id"), "pack_id": order.get("pack_id"),
+                "status": order.get("status"), "date_created": order.get("date_created"),
+                "buyer_nickname": order.get("buyer", {}).get("nickname", ""),
+            },
+            "thread_usando_order_id_como_pack": {
+                "total": thread_by_order_id.get("paging", {}).get("total") if isinstance(thread_by_order_id, dict) else None,
+                "last_message": (thread_by_order_id.get("messages", [])[-1] if isinstance(thread_by_order_id, dict) and thread_by_order_id.get("messages") else None),
+                "error": thread_by_order_id.get("error") if isinstance(thread_by_order_id, dict) else None,
+            },
+            "thread_usando_pack_id_real": {
+                "total": thread_by_real_pack.get("paging", {}).get("total") if isinstance(thread_by_real_pack, dict) else None,
+                "last_message": (thread_by_real_pack.get("messages", [])[-1] if isinstance(thread_by_real_pack, dict) and thread_by_real_pack.get("messages") else None),
+                "error": thread_by_real_pack.get("error") if isinstance(thread_by_real_pack, dict) else None,
+            } if real_pack_id and str(real_pack_id) != str(order_id) else "pack_id == order_id, no aplica",
+            "fila_en_nuestro_indice_que_matchea_ese_order_id": matching_index_row,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 async def _ml_messages_scan_and_index(client, date_from: str, date_to: str,
                                        max_orders: int, start_offset: int = 0) -> tuple:
     """Escanea órdenes de UNA cuenta ML en un rango de fechas y actualiza
