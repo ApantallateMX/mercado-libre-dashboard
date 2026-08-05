@@ -1223,7 +1223,15 @@ class MeliClient:
             conv_status = thread_check.get("conversation_status") or {}
             if conv_status.get("status") == "blocked":
                 claim_ids = conv_status.get("claim_ids") or []
-                claim_txt = f" (reclamo #{claim_ids[0]})" if claim_ids else ""
+                if claim_ids:
+                    # Auto-redirect: el canal de Mensajes está cerrado pero el
+                    # reclamo asociado SÍ acepta respuestas via su propio
+                    # endpoint (marketplace/v2/claims/{id}/actions/send-message).
+                    # Mejor UX que solo mostrar un error -- responder desde
+                    # aquí mismo, sin que el usuario tenga que ir a Reclamos
+                    # (pedido explícito de Jovan, 2026-08-06, ver DEVLOG).
+                    logger.info(f"[ML-SEND-MSG] pack={pack_id} bloqueado, redirigiendo a reclamo #{claim_ids[0]}")
+                    return await self.respond_claim(str(claim_ids[0]), "", text)
                 substatus_txt = f" [{conv_status.get('substatus')}]" if conv_status.get("substatus") else ""
                 raise MeliApiError(
                     status_code=409,
@@ -1232,9 +1240,9 @@ class MeliClient:
                         # "error" (no "message") -- MeliApiError.__init__ usa error_detail
                         # antes que message_code, así que el texto legible va en "error".
                         "error": (
-                            f"Esta conversación está bloqueada en Mercado Libre{substatus_txt}{claim_txt}. "
-                            "El canal de Mensajes queda cerrado mientras dure el bloqueo -- "
-                            "responde desde la sección de Reclamos, no desde aquí."
+                            f"Esta conversación está bloqueada en Mercado Libre{substatus_txt} "
+                            "y no tiene un reclamo asociado para redirigir la respuesta. "
+                            "Revisa el estado de la orden directamente en Mercado Libre."
                         ),
                     },
                 )
@@ -1244,6 +1252,23 @@ class MeliClient:
             pass  # si el chequeo mismo falla, seguir e intentar el envío normal
 
         clean_text = text.replace("\r\n", "\n")
+        # Límite documentado de ML para mensajería post-venta: 350 caracteres.
+        # Encontrado 2026-08-06 vía foro/docs oficiales de ML -- explica el
+        # caso sin bloqueo ni reclamo (pack 2000014248759857) que fallaba
+        # igual: los 3 intentos ahí superaban los 350 caracteres, nunca se
+        # probó uno corto. Se avisa claro en vez de dejar que ML tire el
+        # mismo error genérico de "parsing json string".
+        if len(clean_text) > 350:
+            raise MeliApiError(
+                status_code=400,
+                endpoint=f"/messages/packs/{pack_id}/sellers/{self.user_id}",
+                body={
+                    "error": (
+                        f"El mensaje tiene {len(clean_text)} caracteres -- Mercado Libre limita "
+                        "los mensajes a 350. Acórtalo e intenta de nuevo."
+                    ),
+                },
+            )
         try:
             return await self.post(
                 f"/messages/packs/{pack_id}/sellers/{self.user_id}",
