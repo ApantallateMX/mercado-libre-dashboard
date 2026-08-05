@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-05 — FIX: hilos de mensajes Amazon marcados "resuelto" se quedaban ocultos para siempre
+
+Jovan reportó el mensaje de Belum (Business Buyer, orden 701-1037142-0773817,
+VECKTOR) pidiendo factura CFDI como ausente del dashboard. Al buscar la orden
+directo (`/api/amazon/buyer-messages?order_id=...`) apareció el hilo completo
+con 4 mensajes — SÍ estaba en el sistema. El problema real: Jorge respondió
+con el link de facturación y el hilo quedó marcado "resuelto"; el cliente
+escribió 2 veces más después ("me aparece error al facturar", "los valores
+aparecen en cero") pero `needs_response` seguía en `false` porque la lógica
+en `_fetch_amazon_threads_for_seller` (`app/main.py:19987-19988`) trataba
+"resuelto" como un estado permanente, sin comparar contra la fecha del
+mensaje más reciente del comprador.
+
+Fix: un hilo resuelto se reabre automáticamente si hay un mensaje inbound
+posterior al timestamp de la marca de resuelto (`viewed_at`). Verificado en
+producción: Belum pasó a `needs_response: true`, y apareció un segundo caso
+idéntico ya oculto (Krystal, orden 702-9351719-4658635) que se reabrió solo
+con el mismo fix — confirmando que el bug afectaba más de un hilo, no solo
+el reportado.
+
+---
+
 ## 2026-08-05 — FIX: mensajes ML y Amazon seguían sin sincronizar pese a webhook/loop activos (mecanismo de respaldo)
 
 Jovan mostró Posventa de ML con 2 mensajes sin responder (uno de hace 30 min,
