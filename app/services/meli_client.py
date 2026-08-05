@@ -1198,11 +1198,18 @@ class MeliClient:
         })
 
     async def send_message(self, pack_id: str, text: str) -> dict:
-        """Envia un mensaje en una conversacion."""
-        return await self.post(f"/messages/packs/{pack_id}/sellers/{self.user_id}", json={
-            "from": {"user_id": self.user_id},
-            "text": {"plain": text},
-        })
+        """Envia un mensaje en una conversacion. Requiere el mismo query param
+        ?tag=post_sale que get_message_thread() -- sin él, ML responde
+        "resource not found" en el POST (encontrado 2026-08-05, Jovan
+        reportó el error al intentar responder una conversación real)."""
+        return await self.post(
+            f"/messages/packs/{pack_id}/sellers/{self.user_id}",
+            params={"tag": "post_sale"},
+            json={
+                "from": {"user_id": self.user_id},
+                "text": {"plain": text},
+            },
+        )
 
     # === Questions (gestionar) ===
 
