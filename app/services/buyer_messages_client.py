@@ -338,17 +338,55 @@ async def poll_all_accounts() -> dict:
 
 async def poll_loop() -> None:
     """Loop de fondo — se lanza una vez al arrancar la app (main.py startup),
-    igual que los demás loops de prewarm/cache existentes."""
+    igual que los demás loops de prewarm/cache existentes. Log a nivel INFO
+    en cada ciclo (antes solo se logueaba en error) para poder confirmar
+    desde los logs de Railway que el loop sigue vivo — se detectó 2026-08-05
+    que el índice se quedaba con mensajes de hasta 4 días de antigüedad sin
+    que hubiera ningún error visible, y sin heartbeat no había forma de saber
+    si el loop seguía corriendo o simplemente dejó de ejecutarse."""
     while True:
         if AMAZON_BUYER_INBOX_ACCOUNTS:
             try:
                 results = await poll_all_accounts()
                 errors = {k: v for k, v in results.items() if isinstance(v, str) and v.startswith("error:")}
+                total_new = sum(v for v in results.values() if isinstance(v, int))
+                logger.info(f"[BUYER-MSG-POLL] ciclo ok — {len(AMAZON_BUYER_INBOX_ACCOUNTS)} cuenta(s), {total_new} mensaje(s) nuevo(s)")
                 if errors:
                     logger.warning(f"[BUYER-MSG-POLL] Error en {len(errors)} cuenta(s): {errors}")
             except Exception as _e:
                 logger.warning(f"[BUYER-MSG-POLL] Error en poll_all_accounts: {_e}")
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+
+
+_opportunistic_last_run: dict[str, float] = {}
+_OPPORTUNISTIC_COOLDOWN_SECONDS = 60
+
+
+def trigger_opportunistic_poll(seller_id: str) -> None:
+    """Red de seguridad: dispara un poll en background de ESTA cuenta cuando
+    alguien abre la pestaña de Mensajes, sin bloquear la carga de la página
+    (fire-and-forget) y sin golpear IMAP en cada refresh del tab (cooldown).
+    Cubre el caso de que poll_loop() se detenga sin error visible (ver nota
+    en poll_loop) — el índice se auto-repara solo con que alguien mire la
+    pestaña, sin depender de que el loop de fondo esté sano."""
+    seller_id = (seller_id or "").strip()
+    if not seller_id:
+        return
+    now = time.time()
+    if now - _opportunistic_last_run.get(seller_id, 0) < _OPPORTUNISTIC_COOLDOWN_SECONDS:
+        return
+    cfg = next((c for c in AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == seller_id), None)
+    if not cfg:
+        return
+    _opportunistic_last_run[seller_id] = now
+
+    async def _run():
+        try:
+            await poll_account_inbox(cfg)
+        except Exception as _e:
+            logger.warning(f"[BUYER-MSG-OPPORTUNISTIC] error cuenta={seller_id}: {_e}")
+
+    asyncio.create_task(_run())
 
 
 def _build_mime_message(

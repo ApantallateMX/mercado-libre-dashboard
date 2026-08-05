@@ -683,6 +683,7 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     from app.services import buyer_messages_client as _bmc
     asyncio.create_task(_bmc.poll_loop())
+    asyncio.create_task(_ml_messages_refresh_loop())
     asyncio.create_task(token_store.feedback_sync_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
@@ -20057,6 +20058,8 @@ async def amazon_buyer_messages_list(
     oid = order_id.strip()
     if not sid:
         return {"error": "No hay cuenta Amazon activa", "threads": [], "total": 0, "unread": 0}
+    from app.services import buyer_messages_client as _bmc_op
+    _bmc_op.trigger_opportunistic_poll(sid)
     try:
         threads, total_rows = await _fetch_amazon_threads_for_seller(sid, days, oid)
         unread = sum(1 for th in threads for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
@@ -20084,6 +20087,9 @@ async def amazon_buyer_messages_unified(
     _require_subtab(request, "amz", "salud", "mensajes")
     oid = order_id.strip()
     accounts = await token_store.get_all_amazon_accounts()
+    from app.services import buyer_messages_client as _bmc_op
+    for _acc in accounts:
+        _bmc_op.trigger_opportunistic_poll(_acc.get("seller_id", ""))
     sem_amz = asyncio.Semaphore(3)
 
     async def _for_account(acc):
@@ -23145,16 +23151,113 @@ async def diag_ml_messages_audit(token: str = "", account_id: str = "", days: in
         await client.close()
 
 
+async def _ml_messages_scan_and_index(client, date_from: str, date_to: str,
+                                       max_orders: int, start_offset: int = 0) -> tuple:
+    """Escanea órdenes de UNA cuenta ML en un rango de fechas y actualiza
+    ml_messages_index con la última conversación de cada pack. Compartido por
+    el backfill manual (diag) y por _ml_messages_refresh_loop (respaldo
+    periódico del webhook topic 'messages' — ver esa función para el porqué).
+    Retorna (orders_scanned, conversations_indexed, next_offset, remaining)."""
+    orders_batch = []
+    offset = start_offset
+    total_available = 0
+    while len(orders_batch) < max_orders:
+        page = await client.get("/orders/search/recent", params={
+            "seller": client.user_id, "limit": 50, "offset": offset,
+            "sort": "date_desc",
+            "order.date_created.from": f"{date_from}T00:00:00.000-00:00",
+            "order.date_created.to": f"{date_to}T23:59:59.000-00:00",
+        })
+        results = page.get("results", [])
+        total_available = page.get("paging", {}).get("total", 0)
+        orders_batch.extend(results)
+        offset += 50
+        if not results or offset >= total_available:
+            break
+
+    sem = asyncio.Semaphore(10)
+    indexed = [0]
+    async def _check_and_save(order):
+        pack_id = str(order.get("pack_id") or order.get("id", ""))
+        if not pack_id:
+            return
+        async with sem:
+            try:
+                r = await client.get(f"/messages/packs/{pack_id}/sellers/{client.user_id}",
+                                      params={"tag": "post_sale", "mark_as_read": "false"})
+                total_msgs = r.get("paging", {}).get("total", 0)
+                if total_msgs <= 0:
+                    return
+                msgs = r.get("messages", [])
+                last = msgs[-1] if msgs else None
+                if not last:
+                    return
+                from_id = str(last.get("from", {}).get("user_id", ""))
+                last_from = "seller" if from_id == client.user_id else "buyer"
+                text_raw = last.get("text", "")
+                text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
+                last_date = _ml_msg_date(last)
+                await token_store.upsert_message_index(
+                    pack_id=pack_id, account_id=client.user_id, order_id=str(order.get("id", "")),
+                    last_message_from=last_from, last_message_text=text[:500],
+                    last_message_date=last_date, total_messages=total_msgs,
+                )
+                indexed[0] += 1
+            except Exception:
+                pass
+
+    await asyncio.gather(*[_check_and_save(o) for o in orders_batch], return_exceptions=True)
+    remaining = max(0, total_available - offset)
+    return len(orders_batch), indexed[0], offset, remaining
+
+
+async def _ml_messages_refresh_loop() -> None:
+    """Respaldo periódico del webhook topic 'messages' de ML — se detectó
+    2026-08-05 que una conversación real (12 mensajes, comprador esperando
+    respuesta) estaba completamente ausente de ml_messages_index pese al
+    webhook activo: ML no entrega la notificación de forma confiable para
+    este topic. Re-escanea una ventana corta (últimos 4 días) de órdenes de
+    las 4 cuentas cada 10 min y re-sincroniza sus conversaciones — mismo rol
+    que el backfill manual pero automático y acotado, así el índice se
+    autorepara aunque el webhook falle."""
+    from datetime import datetime as _dt_mr, timedelta as _td_mr
+    await asyncio.sleep(60)
+    while True:
+        try:
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if not uid:
+                    continue
+                client = await get_meli_client(user_id=uid)
+                if not client:
+                    continue
+                try:
+                    date_to = _dt_mr.utcnow().strftime("%Y-%m-%d")
+                    date_from = (_dt_mr.utcnow() - _td_mr(days=4)).strftime("%Y-%m-%d")
+                    scanned, indexed, _off, _rem = await _ml_messages_scan_and_index(
+                        client, date_from, date_to, max_orders=600,
+                    )
+                    logger.info(f"[ML-MSG-REFRESH] cuenta={uid} ordenes={scanned} actualizadas={indexed}")
+                except Exception as _e:
+                    logger.warning(f"[ML-MSG-REFRESH] error cuenta={uid}: {_e}")
+                finally:
+                    await client.close()
+        except Exception as _e:
+            logger.warning(f"[ML-MSG-REFRESH] error general: {_e}")
+        await asyncio.sleep(600)
+
+
 @app.get("/api/diag/backfill-ml-messages-index")
 async def diag_backfill_ml_messages_index(
     token: str = "", account_id: str = "", days: int = 14,
     max_orders: int = 300, start_offset: int = 0,
 ):
-    """Backfill único de ml_messages_index — llena el índice local con
-    conversaciones que ya existen hoy (antes del webhook topic 'messages')
-    para no perder pendientes reales al hacer el switch. Acotado por
-    max_orders/start_offset para llamarse repetidas veces sin pasar el
-    timeout de Railway (~30s), mismo patrón que la migración de fotos a S3."""
+    """Backfill manual de ml_messages_index (uso puntual/rango largo) —
+    _ml_messages_refresh_loop cubre el refresh automático de la ventana
+    corta reciente; este endpoint sigue sirviendo para poblar historial más
+    viejo o re-sincronizar bajo demanda. Acotado por max_orders/start_offset
+    para llamarse repetidas veces sin pasar el timeout de Railway (~30s)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not account_id:
@@ -23166,60 +23269,12 @@ async def diag_backfill_ml_messages_index(
     try:
         date_from = (_dt_bf.utcnow() - _td_bf(days=days)).strftime("%Y-%m-%d")
         date_to = _dt_bf.utcnow().strftime("%Y-%m-%d")
-
-        orders_batch = []
-        offset = start_offset
-        total_available = 0
-        while len(orders_batch) < max_orders:
-            page = await client.get("/orders/search/recent", params={
-                "seller": client.user_id, "limit": 50, "offset": offset,
-                "sort": "date_desc",
-                "order.date_created.from": f"{date_from}T00:00:00.000-00:00",
-                "order.date_created.to": f"{date_to}T23:59:59.000-00:00",
-            })
-            results = page.get("results", [])
-            total_available = page.get("paging", {}).get("total", 0)
-            orders_batch.extend(results)
-            offset += 50
-            if not results or offset >= total_available:
-                break
-
-        sem = asyncio.Semaphore(10)
-        indexed = [0]
-        async def _check_and_save(order):
-            pack_id = str(order.get("pack_id") or order.get("id", ""))
-            if not pack_id:
-                return
-            async with sem:
-                try:
-                    r = await client.get(f"/messages/packs/{pack_id}/sellers/{client.user_id}",
-                                          params={"tag": "post_sale", "mark_as_read": "false"})
-                    total_msgs = r.get("paging", {}).get("total", 0)
-                    if total_msgs <= 0:
-                        return
-                    msgs = r.get("messages", [])
-                    last = msgs[-1] if msgs else None
-                    if not last:
-                        return
-                    from_id = str(last.get("from", {}).get("user_id", ""))
-                    last_from = "seller" if from_id == client.user_id else "buyer"
-                    text_raw = last.get("text", "")
-                    text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
-                    last_date = _ml_msg_date(last)
-                    await token_store.upsert_message_index(
-                        pack_id=pack_id, account_id=client.user_id, order_id=str(order.get("id", "")),
-                        last_message_from=last_from, last_message_text=text[:500],
-                        last_message_date=last_date, total_messages=total_msgs,
-                    )
-                    indexed[0] += 1
-                except Exception:
-                    pass
-
-        await asyncio.gather(*[_check_and_save(o) for o in orders_batch], return_exceptions=True)
-        remaining = max(0, total_available - offset)
+        scanned, indexed, offset, remaining = await _ml_messages_scan_and_index(
+            client, date_from, date_to, max_orders, start_offset,
+        )
         return {
-            "account_id": account_id, "orders_scanned": len(orders_batch),
-            "conversations_indexed": indexed[0], "next_offset": offset, "remaining": remaining,
+            "account_id": account_id, "orders_scanned": scanned,
+            "conversations_indexed": indexed, "next_offset": offset, "remaining": remaining,
         }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
