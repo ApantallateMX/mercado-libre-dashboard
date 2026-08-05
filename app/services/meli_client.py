@@ -1202,39 +1202,57 @@ class MeliClient:
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
         "resource not found" en el POST (encontrado 2026-08-05).
 
-        Causa raíz real, confirmada con logging del payload+respuesta cruda
-        (2026-08-05): ML devuelve {"code":"bad_request","message":"Unexpected
-        exception parsing json string"} para CUALQUIER mensaje con acentos o
-        "¡"/"¿" en el campo text.plain -- confirmado con el payload en UTF-8
-        crudo bien formado (bytes correctos, JSON válido) y AUN ASÍ falla
-        idéntico. No es un problema de escaping de nuestro lado (dos intentos
-        previos con distinta codificación fallaron igual) -- es un bug real
-        del backend de mensajería de ML con esos caracteres específicos.
-        Patrón 100% consistente: los 3 mensajes que fallaron tenían "¡"; los
-        que Jorge escribió a mano (sin acentos ni "¡") sí se enviaron.
-        Workaround: transliterar a ASCII (quita acentos y ¡/¿) antes de
-        enviar -- pierde los signos de apertura y las tildes, pero el
-        mensaje SÍ llega, que es la prioridad."""
-        import json as _json_sm
-        import re as _re_sm
-        import unicodedata as _ud_sm
-        clean_text = _ud_sm.normalize("NFC", text.replace("\r\n", "\n"))
-        clean_text = _re_sm.sub(r"\n{2,}", "\n", clean_text).strip()
-        ascii_text = _ud_sm.normalize("NFKD", clean_text).encode("ascii", "ignore").decode("ascii")
-        payload = _json_sm.dumps(
-            {"from": {"user_id": self.user_id}, "text": {"plain": ascii_text}},
-        ).encode("utf-8")
+        CAUSA RAÍZ REAL (2026-08-05, confirmada con dump crudo del thread,
+        campo conversation_status): "Unexpected exception parsing json
+        string" NO tiene nada que ver con el contenido del mensaje -- se
+        probaron 3 hipótesis de contenido (saltos de línea, acentos/UTF-8,
+        ASCII puro) y las 3 fallaron idéntico, incluso un mensaje 100% ASCII
+        plano. El thread real trae conversation_status.status_update_allowed
+        = False y claim_ids no vacío: la conversación tiene un RECLAMO
+        FORMAL abierto en ML, y una vez que existe un reclamo, ML bloquea el
+        canal de mensajería post-sale por diseño -- hay que responder desde
+        Reclamos (marketplace/v2/claims/{claim_id}/actions/send-message,
+        ver respond_claim()), no desde este endpoint. El error "parsing
+        json string" es un mensaje genérico y engañoso que ML usa para
+        rechazar escrituras a un canal cerrado, no un problema real de JSON.
+
+        Se verifica esto ANTES de intentar el POST para dar un error claro
+        y accionable en vez del mensaje críptico de ML."""
+        try:
+            thread_check = await self.get_message_thread(pack_id)
+            conv_status = thread_check.get("conversation_status") or {}
+            if conv_status.get("status_update_allowed") is False:
+                claim_ids = conv_status.get("claim_ids") or []
+                claim_txt = f" (reclamo #{claim_ids[0]})" if claim_ids else ""
+                raise MeliApiError(
+                    status_code=409,
+                    endpoint=f"/messages/packs/{pack_id}/sellers/{self.user_id}",
+                    body={
+                        # "error" (no "message") -- MeliApiError.__init__ usa error_detail
+                        # antes que message_code, así que el texto legible va en "error".
+                        "error": (
+                            f"Esta conversación tiene un reclamo abierto en Mercado Libre{claim_txt}. "
+                            "El canal de Mensajes queda bloqueado mientras el reclamo esté activo -- "
+                            "responde desde la sección de Reclamos, no desde aquí."
+                        ),
+                    },
+                )
+        except MeliApiError:
+            raise
+        except Exception:
+            pass  # si el chequeo mismo falla, seguir e intentar el envío normal
+
+        clean_text = text.replace("\r\n", "\n")
         try:
             return await self.post(
                 f"/messages/packs/{pack_id}/sellers/{self.user_id}",
                 params={"tag": "post_sale"},
-                content=payload,
-                headers={"Content-Type": "application/json; charset=utf-8"},
+                json={"from": {"user_id": self.user_id}, "text": {"plain": clean_text}},
             )
         except MeliApiError as _e_sm:
             logger.error(
                 f"[ML-SEND-MSG] FALLO pack={pack_id} status={_e_sm.status_code} "
-                f"body_ml={_e_sm.body!r} payload_enviado={payload!r}"
+                f"body_ml={_e_sm.body!r} texto_enviado={clean_text!r}"
             )
             raise
 
