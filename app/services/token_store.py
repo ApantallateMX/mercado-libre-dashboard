@@ -2271,33 +2271,6 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
     return [dict(r) for r in rows], total
 
 
-async def count_ml_pending_messages(account_id: str) -> int:
-    """Cuenta conversaciones realmente pendientes (respeta 'Marcar resuelto') --
-    para el KPI 'Mensajes' del dashboard de Salud. Antes ese KPI usaba el total
-    crudo de ML (client.get_messages(limit=1).paging.total), que no sabe nada
-    de nuestro estado interno de resuelto -- por eso no bajaba en vivo al
-    resolver conversaciones (Jovan, 2026-08-06). Misma lógica de reapertura que
-    _fetch_enriched_ml_conversations en main.py: pendiente = último mensaje del
-    comprador Y (no resuelto O el comprador escribió después de la marca de
-    resuelto)."""
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        cur = await db.execute(
-            """SELECT COUNT(*) AS n
-               FROM ml_messages_index idx
-               LEFT JOIN ml_message_views v
-                   ON v.pack_id = idx.pack_id AND v.account_id = idx.account_id
-               WHERE idx.account_id = ?
-                 AND idx.last_message_from = 'buyer'
-                 AND (
-                     COALESCE(v.status, '') != 'resolved'
-                     OR CAST(strftime('%s', REPLACE(idx.last_message_date, 'Z', '')) AS INTEGER)
-                        > COALESCE(v.viewed_at, 0)
-                 )""",
-            (account_id,),
-        )
-        row = await cur.fetchone()
-    return row[0] if row else 0
-
 
 async def get_message_index_all_accounts(account_ids: list, date_from: str = "", date_to: str = "") -> list:
     """Todas las conversaciones indexadas de varias cuentas (bandeja unificada

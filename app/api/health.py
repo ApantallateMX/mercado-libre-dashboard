@@ -21,6 +21,76 @@ async def _log_history(request: Request, username: str, action: str, item_id: st
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
+# Cache de conversation_status por pack_id -- evita re-consultar ML en cada
+# poll del KPI "Mensajes". TTL 10 min: el estado bloqueado/reclamo no cambia
+# tan seguido como para justificar una llamada en vivo por cada poll.
+_conv_status_cache: dict = {}
+_CONV_STATUS_TTL = 600.0
+
+
+async def _count_ml_pending_excluding_blocked(client) -> int:
+    """Cuenta 'Mensajes pendientes' real: candidatos de la DB local (buyer +
+    no resuelto) MENOS los que ya están bloqueados/movidos a Reclamos en ML
+    (mediación, orden cancelada, etc.) -- esos ya NO son accionables desde
+    Mensajes y ya se cuentan en el KPI de Reclamos aparte.
+
+    Encontrado 2026-08-06: Jovan reportó que ML no mostraba NADA pendiente
+    en su bandeja de Mensajes, pero nuestro KPI marcaba 37+. Confirmado con
+    /api/diag/ml-pending-list?live_check=1: las conversaciones "pendientes"
+    de nuestro conteo tenían conversation_status.status=='blocked' (mediación
+    / orden cancelada) -- ya no viven en Mensajes para ML, solo para
+    nuestro índice local desactualizado. No se puede filtrar esto con una
+    query SQL pura (el estado bloqueado solo existe en vivo en ML), así que
+    se hace un chequeo en vivo acotado con caché de 10 min para no golpear
+    la API de ML en cada poll."""
+    import time as _t
+    acc = str(client.user_id)
+    rows, _total = await _ts.get_message_index(acc, offset=0, limit=1000)
+    views = await _ts.get_message_views([r["pack_id"] for r in rows], acc) if rows else {}
+
+    from datetime import datetime as _dt
+
+    def _iso_ts(iso_date):
+        if not iso_date:
+            return 0.0
+        try:
+            return _dt.fromisoformat(iso_date.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    candidates = []
+    for r in rows:
+        if r["last_message_from"] != "buyer":
+            continue
+        vi = views.get(r["pack_id"])
+        resolved_info = vi if vi and vi.get("status") == "resolved" else None
+        reopened = bool(resolved_info and _iso_ts(r["last_message_date"]) > (resolved_info.get("viewed_at") or 0))
+        already_resolved = bool(resolved_info) and not reopened
+        if not already_resolved:
+            candidates.append(r["pack_id"])
+
+    now = _t.time()
+    to_check = [
+        p for p in candidates
+        if p not in _conv_status_cache or (now - _conv_status_cache[p][0]) > _CONV_STATUS_TTL
+    ]
+    if to_check:
+        sem = asyncio.Semaphore(10)
+
+        async def _check(pack_id):
+            async with sem:
+                try:
+                    thread = await client.get_message_thread(pack_id)
+                    status = (thread.get("conversation_status") or {}).get("status")
+                except Exception:
+                    status = None  # falla la consulta -> no se descarta, se cuenta como pendiente
+                _conv_status_cache[pack_id] = (now, status)
+
+        await asyncio.gather(*[_check(p) for p in to_check])
+
+    blocked = sum(1 for p in candidates if _conv_status_cache.get(p, (0, None))[1] == "blocked")
+    return len(candidates) - blocked
+
 
 @router.get("/counts")
 async def health_counts():
@@ -45,9 +115,9 @@ async def health_counts():
 
         async def _m():
             # Igual que en /summary: cuenta pendientes reales (respeta
-            # "Marcar resuelto"), no el total crudo de ML.
+            # "Marcar resuelto" Y excluye bloqueadas/movidas a Reclamos).
             try:
-                return await _ts.count_ml_pending_messages(str(client.user_id))
+                return await _count_ml_pending_excluding_blocked(client)
             except Exception:
                 return 0
 
@@ -101,11 +171,12 @@ async def health_summary():
         except Exception:
             open_claims = 0
 
-        # Mensajes pendientes -- respeta "Marcar resuelto" (antes usaba el
-        # total crudo de ML vía get_messages(limit=1), que no reflejaba
-        # nuestro estado interno y no bajaba en vivo al resolver, ver DEVLOG).
+        # Mensajes pendientes -- respeta "Marcar resuelto" Y excluye
+        # conversaciones bloqueadas/movidas a Reclamos (antes usaba el total
+        # crudo de ML vía get_messages(limit=1), y luego solo un conteo local
+        # que no sabía de bloqueos -- ver DEVLOG ambos casos).
         try:
-            unread_messages = await _ts.count_ml_pending_messages(str(client.user_id))
+            unread_messages = await _count_ml_pending_excluding_blocked(client)
         except Exception:
             unread_messages = 0
 

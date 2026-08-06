@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: KPI y lista de "Mensajes" contaban conversaciones ya movidas a Reclamos
+
+Jovan preguntó, con razón: "en Mercado Libre no tenemos pendientes, ¿cómo es
+posible que marque 37?". Investigado con `/api/diag/ml-pending-list?live_check=1`
+comparando contra el thread real de ML: las conversaciones que contábamos como
+"pendientes" tenían `conversation_status.status == "blocked"` (mediación, orden
+cancelada) -- es decir, ML ya las movió fuera del canal de Mensajes hacia
+Reclamos, que las cuenta aparte (KPI "Reclamos"). Nuestro conteo (basado solo en
+`ml_messages_index`, que no sabe de bloqueos) las seguía contando como pendientes
+de Mensajes, duplicando el conteo entre dos KPIs distintos.
+
+No hay tabla local que trackee el estado de bloqueo en vivo, así que no se puede
+filtrar con una query SQL pura sin consultar ML. Fix: `_count_ml_pending_excluding_blocked()`
+en `app/api/health.py` -- toma los candidatos de la DB local (igual que antes)
+y hace un chequeo en vivo acotado (semáforo de 10, caché de 10 min por pack_id)
+para descartar los que ya están bloqueados. Se usa tanto en `/summary` como en
+`/counts`. También se corrigió `_fetch_enriched_ml_conversations()` (la función
+que arma la lista real de la pestaña Mensajes) para que `needs_response` excluya
+bloqueadas de la misma forma -- ahí no hace falta chequeo extra, ya trae
+`conversation_status` en el mismo fetch que usa para todo lo demás.
+
+---
+
 ## 2026-08-06 — FIX: KPI "Mensajes" (badge/tab) no bajaba en vivo al marcar resuelto
 
 Jovan marcó varias conversaciones como resueltas y el número "Mensajes: 37" (KPI

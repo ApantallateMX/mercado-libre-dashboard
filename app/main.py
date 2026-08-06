@@ -10051,6 +10051,8 @@ async def _fetch_enriched_ml_conversations(
         messages_list = _ml_sort_messages_asc(threads_by_pack.get(row["pack_id"], []))
         last_5 = messages_list[-5:] if messages_list else []
         last_from_buyer = row["last_message_from"] == "buyer"
+        _conv_status_early = conv_status_by_pack.get(row["pack_id"], {})
+        _is_blocked_early = _conv_status_early.get("status") == "blocked"
         _view_info = _views_map.get(row["pack_id"])
         _resolved_info = _view_info if _view_info and _view_info.get("status") == "resolved" else None
         _reopened_after_resolve = bool(
@@ -10058,7 +10060,11 @@ async def _fetch_enriched_ml_conversations(
             and _iso_to_ts(row["last_message_date"]) > (_resolved_info.get("viewed_at") or 0)
         )
         _already_resolved = bool(_resolved_info) and not _reopened_after_resolve
-        needs_response = last_from_buyer and not _already_resolved
+        # Bloqueada (mediación, orden cancelada) = ya no vive en Mensajes para
+        # ML, se movió a Reclamos -- no cuenta como pendiente aquí tampoco
+        # (Jovan reportó 2026-08-06 que ML no mostraba nada pendiente en su
+        # bandeja mientras nuestro KPI/lista sí marcaban estas conversaciones).
+        needs_response = last_from_buyer and not _already_resolved and not _is_blocked_early
         last_elapsed = "-"
         if row["last_message_date"]:
             last_elapsed, _ = _elapsed_str(row["last_message_date"])
@@ -23564,12 +23570,14 @@ async def diag_ml_message_mark_resolved_test(token: str = "", account_id: str = 
 
 @app.get("/api/diag/ml-pending-list")
 async def diag_ml_pending_list(token: str = "", account_id: str = "", live_check: int = 0):
-    """Lista las conversaciones que count_ml_pending_messages() cuenta como
-    pendientes para una cuenta, con su view_info -- para verificar si el
-    índice local (ml_messages_index) está desactualizado vs el estado real
-    en ML. Jovan reportó 2026-08-06 que el KPI marca pendientes que ya no
-    existen en Mercado Libre. live_check=1: para hasta 5 packs, compara
-    contra el thread real de ML (conversation_status + último mensaje)."""
+    """Lista las conversaciones candidatas a pendientes para una cuenta (misma
+    lógica base que _count_ml_pending_excluding_blocked en health.py, pero SIN
+    excluir bloqueadas -- para verificar si el índice local está desactualizado
+    vs el estado real en ML). Jovan reportó 2026-08-06 que el KPI marcaba
+    pendientes que ya no existían en Mercado Libre -- resultaron ser
+    conversaciones bloqueadas/movidas a Reclamos (mediación, orden cancelada).
+    live_check=1: para hasta 5 packs, compara contra el thread real de ML
+    (conversation_status + último mensaje)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not account_id:
