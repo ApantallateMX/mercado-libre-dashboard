@@ -2247,25 +2247,40 @@ async def upsert_message_index(pack_id: str, account_id: str, order_id: str,
 
 async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
                              date_from: str = "", date_to: str = "") -> tuple:
-    """Lista conversaciones indexadas de UNA cuenta, más recientes primero.
-    Retorna (rows, total) — total antes de paginar, para 'X de Y'."""
+    """Lista conversaciones indexadas de UNA cuenta. Pendientes reales primero
+    (último mensaje del comprador y no resuelto), luego por fecha más reciente.
+    Retorna (rows, total) — total antes de paginar, para 'X de Y'.
+
+    Antes ordenaba solo por last_message_date DESC -- un mensaje sin responder
+    de hace 2 semanas podía quedar enterrado más allá de la primera página
+    (offset=0, limit=20) si hubo 20+ conversaciones más recientes desde
+    entonces, aunque el KPI de pendientes (que no pagina) sí lo contara.
+    Jovan reportó 2026-08-06 que el KPI marcaba pendientes reales que la
+    lista nunca mostraba en ninguna página visible por default."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
-        where = "WHERE account_id = ?"
+        where = "WHERE idx.account_id = ?"
         params: list = [account_id]
         if date_from:
-            where += " AND last_message_date >= ?"
+            where += " AND idx.last_message_date >= ?"
             params.append(date_from)
         if date_to:
-            where += " AND last_message_date <= ?"
+            where += " AND idx.last_message_date <= ?"
             params.append(date_to + "T23:59:59")
-        cur = await db.execute(f"SELECT COUNT(*) AS n FROM ml_messages_index {where}", params)
+        cur = await db.execute(f"SELECT COUNT(*) AS n FROM ml_messages_index idx {where}", params)
         total = (await cur.fetchone())["n"]
         rows = await (await db.execute(
-            f"""SELECT pack_id, order_id, last_message_from, last_message_text,
-                       last_message_date, total_messages
-                FROM ml_messages_index {where}
-                ORDER BY last_message_date DESC LIMIT ? OFFSET ?""",
+            f"""SELECT idx.pack_id, idx.order_id, idx.last_message_from, idx.last_message_text,
+                       idx.last_message_date, idx.total_messages
+                FROM ml_messages_index idx
+                LEFT JOIN ml_message_views v
+                    ON v.pack_id = idx.pack_id AND v.account_id = idx.account_id
+                {where}
+                ORDER BY
+                    CASE WHEN idx.last_message_from = 'buyer' AND COALESCE(v.status, '') != 'resolved'
+                         THEN 0 ELSE 1 END,
+                    idx.last_message_date DESC
+                LIMIT ? OFFSET ?""",
             params + [limit, offset],
         )).fetchall()
     return [dict(r) for r in rows], total

@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: pendientes viejos enterrados fuera de la primera página, invisibles aunque el KPI los contara
+
+Con el filtro de fecha ya ignorado (entrada siguiente), Jovan seguía sin ver
+las 4 pendientes reales. Causa: `get_message_index()` ordenaba únicamente por
+`last_message_date DESC` -- si hubo 20+ conversaciones más recientes desde el
+último mensaje pendiente (posible fácilmente con mensajes de hace 1-2 semanas
+en una cuenta activa), esas pendientes quedaban en la página 2, 3, etc.,
+nunca visibles en la carga default (offset=0, limit=20) aunque el KPI (que
+no pagina) sí las contara.
+
+Fix: la query ahora hace LEFT JOIN contra `ml_message_views` y ordena
+`CASE WHEN pendiente THEN 0 ELSE 1 END, last_message_date DESC` -- pendientes
+reales (comprador + no resuelto) siempre primero, sin importar antigüedad,
+así siempre caen dentro de la primera página.
+
+---
+
 ## 2026-08-06 — FIX: KPI "Mensajes" marcaba 4 pero la lista salía vacía -- el filtro de fecha ocultaba pendientes reales
 
 Con los dos fixes anteriores desplegados, Jovan reportó: KPI dice 4, pero la
