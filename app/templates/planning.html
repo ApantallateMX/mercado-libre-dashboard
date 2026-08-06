@@ -120,6 +120,35 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 3.5 — Transferencias Sugeridas Entre Almacenes
+     (movido de Productos > Stock 2026-08-06 — decisión de logística/
+     distribución, no de catálogo, pedido explícito de Jovan)
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6" id="plan-transfers-section">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
+         onclick="toggleSection('plan-transfers')">
+        <svg class="w-4 h-4 text-teal-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Transferencias Sugeridas Entre Almacenes</h2>
+        <span class="text-xs text-gray-400">— MTY / CDMX / Tijuana</span>
+        <span id="transfers-count-badge" class="text-xs font-bold bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full border border-teal-200"></span>
+        <button onclick="event.stopPropagation(); loadTransfers()" id="btn-load-transfers"
+                class="ml-auto bg-teal-600 text-white text-xs px-3 py-1.5 rounded hover:bg-teal-700 font-semibold">
+            Cargar transferencias
+        </button>
+        <svg id="chevron-plan-transfers" class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </div>
+    <div id="plan-transfers" class="hidden">
+        <div id="plan-transfers-content" class="p-5">
+            <p class="text-center text-gray-400 text-sm py-6">Haz clic en <strong>Cargar transferencias</strong> para ver las sugerencias.</p>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
      BLOQUE 4.5 — Stock Detenido
 ═══════════════════════════════════════════════════════════ -->
 <div class="bg-white rounded-xl shadow mb-6" id="plan-stagnant-section" style="display:none">
@@ -490,6 +519,51 @@ window.loadCoverage = function() {
             _renderOrderSection(d);
             _renderStagnant();
             _renderRadar();
+        })
+        .catch(function(e){
+            el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
+};
+
+// ============================================================
+// TRANSFERENCIAS SUGERIDAS ENTRE ALMACENES
+// (movido de Productos > Stock — reusa el mismo cache, no recalcula)
+// ============================================================
+window.loadTransfers = function() {
+    _openSection('plan-transfers');
+    var el = document.getElementById('plan-transfers-content');
+    el.innerHTML = _spinner('Cargando transferencias sugeridas...');
+
+    fetch('/api/planning/transfer-suggestions')
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            var items = d.transfer_suggestions || [];
+            var badge = document.getElementById('transfers-count-badge');
+            if (badge) badge.textContent = items.length ? items.length : '';
+            if (!d.ready) {
+                el.innerHTML = '<p class="text-center text-gray-400 text-sm py-6">Los datos todavía se están calculando (corre junto con Productos &gt; Stock) — vuelve a intentar en unos minutos.</p>';
+                return;
+            }
+            if (!items.length) {
+                el.innerHTML = '<p class="text-center text-gray-400 text-sm py-6">No hay transferencias sugeridas por ahora — requiere suficiente historial de envíos con zona resuelta.</p>';
+                return;
+            }
+            var html = '<div class="bg-teal-50 border border-teal-200 rounded-lg px-4 py-2 mb-3 text-xs text-teal-800">' +
+                'Cruza dónde se vende más (envíos recientes por zona) contra dónde está el stock físico. Solo lectura — el movimiento real se hace en BinManager.' +
+                '</div><div class="space-y-2">';
+            items.forEach(function(t) {
+                html += '<div class="bg-white rounded-lg shadow p-3 border-l-4 border-teal-400 flex items-center justify-between gap-2 flex-wrap">' +
+                    '<div>' +
+                    '<p class="text-xs font-medium text-gray-800">' + (t.product_title || '').substring(0, 70) + '</p>' +
+                    '<p class="font-mono text-[11px] text-gray-400">' + t.sku + '</p>' +
+                    '<p class="text-[11px] text-gray-500 mt-0.5">Stock: MTY ' + t.mty + ' &middot; CDMX ' + t.cdmx + ' &middot; Tijuana ' + t.tj + '</p>' +
+                    '</div>' +
+                    '<div class="text-xs font-semibold text-teal-700 bg-teal-100 px-3 py-1.5 rounded-full whitespace-nowrap">' +
+                    'Mover ' + t.qty + ' de ' + t.from_zone + ' → ' + t.to_zone +
+                    '</div></div>';
+            });
+            html += '</div>';
+            el.innerHTML = html;
         })
         .catch(function(e){
             el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';

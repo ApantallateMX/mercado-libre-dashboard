@@ -21181,6 +21181,32 @@ async def planning_page(request: Request):
     return templates.TemplateResponse(request, "planning.html", {**ctx, "user": user, "active": "planning"})
 
 
+@app.get("/api/planning/transfer-suggestions")
+async def planning_transfer_suggestions():
+    """Transferencias sugeridas entre almacenes (MTY/CDMX/Tijuana) -- movido
+    de Productos > Stock a Planeación (pedido explícito de Jovan 2026-08-06:
+    es una decisión de logística/distribución, no de catálogo). Reusa el
+    mismo cache que ya calcula el prewarm de Productos (_stock_issues_cache)
+    en vez de recalcular -- el cruce demanda-por-zona vs stock físico ya es
+    caro de por sí."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "No autenticado"}, status_code=401)
+    try:
+        key = f"stock_issues:{client.user_id}:t10"
+        entry = _stock_issues_cache.get(key)
+        if not entry:
+            return {"transfer_suggestions": [], "count": 0, "ready": False}
+        data = entry[1]
+        return {
+            "transfer_suggestions": data.get("transfer_suggestions", []),
+            "count": data.get("transfer_suggestions_count", 0),
+            "ready": True,
+        }
+    finally:
+        await client.close()
+
+
 async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) -> list:
     """Fetch paginated paid orders for a MeLi user in a date range."""
     client = await get_meli_client(user_id=uid)
