@@ -19,7 +19,7 @@ from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
 from app.api.metrics import router as metrics_router
-from app.api.health import router as health_router
+from app.api.health import router as health_router, _count_ml_pending_excluding_blocked
 from app.api.sku_inventory import router as sku_inventory_router
 from app.api.health_ai import router as health_ai_router
 from app.api.amazon_products import router as amazon_products_router
@@ -9106,17 +9106,19 @@ async def health_summary_partial(
             return 0
 
         async def _fetch_messages():
-            # Cuenta conversaciones pendientes (último mensaje del comprador)
-            # desde ml_messages_index — el mismo índice que usa la vista de
-            # detalle (/partials/health-messages). Antes llamaba a
-            # client.get_messages(), el escaneo viejo de "50 órdenes más
-            # recientes" que se reemplazó por el índice el 2026-08-04 pero
-            # se quedó sin actualizar aquí — el card de resumen seguía
-            # mostrando 0 aunque la vista de detalle ya mostrara pendientes
-            # reales (encontrado 2026-08-05, ver DEVLOG).
+            # Cuenta conversaciones REALMENTE pendientes -- respeta "Marcar
+            # resuelto" y excluye bloqueadas/movidas a Reclamos. Historial:
+            # (1) usaba client.get_messages(), el escaneo viejo de "50 órdenes
+            # más recientes" reemplazado por el índice el 2026-08-04 pero
+            # dejado sin actualizar aquí (2026-08-05); (2) se cambió a un
+            # conteo naive de ml_messages_index (solo last_message_from=='buyer',
+            # SIN mirar resuelto ni bloqueo) -- Jovan reportó 2026-08-06 que
+            # el número no bajaba al resolver Y que ML no mostraba nada
+            # pendiente mientras acá marcaba 37+. Esta es la MISMA lógica ya
+            # usada en app/api/health.py — reutilizada para que todas las
+            # vistas del KPI "Mensajes" sean consistentes entre sí.
             try:
-                rows, _total = await token_store.get_message_index(str(client.user_id), offset=0, limit=2000)
-                return sum(1 for r in rows if r.get("last_message_from") == "buyer")
+                return await _count_ml_pending_excluding_blocked(client)
             except Exception:
                 return 0
 

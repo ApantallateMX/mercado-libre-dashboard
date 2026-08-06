@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX (real, el número seguía en 37): tercera implementación duplicada del conteo de Mensajes
+
+El fix anterior (mismo día, entrada siguiente) no bajó el número en la página real
+-- seguía en 37 después de desplegar. Investigando por qué: encontré que el KPI
+"Mensajes" que Jovan ve en `/health` NO viene de `/api/health/summary` (el que
+arreglé) -- viene de `partials/health_summary.html`, renderizado por
+`health_summary_partial()` en `app/main.py`, que tiene su PROPIA función
+`_fetch_messages()` completamente separada y nunca tocada hasta ahora.
+
+Esa función ni siquiera miraba "resuelto" -- solo contaba filas de
+`ml_messages_index` con `last_message_from == 'buyer'`, sin JOIN a
+`ml_message_views` ni chequeo de bloqueo. Por eso el número real (37) era
+MAYOR que incluso el conteo sin filtrar de mi propio diagnóstico (30) -- ni
+siquiera excluía las ya marcadas resueltas.
+
+Tres implementaciones distintas del mismo KPI habían divergido con el tiempo:
+`/api/health/summary` (JSON, `app/api/health.py`), `/api/health/counts`
+(polling, mismo archivo), y esta tercera en `main.py` que resultó ser la que
+realmente renderiza la página. Fix: `main.py` ahora importa y reutiliza
+`_count_ml_pending_excluding_blocked()` de `app/api/health.py` (import de un
+solo sentido, sin ciclo -- health.py no importa nada de main.py) en vez de
+mantener una cuarta copia de la misma lógica.
+
+---
+
 ## 2026-08-06 — FIX: KPI y lista de "Mensajes" contaban conversaciones ya movidas a Reclamos
 
 Jovan preguntó, con razón: "en Mercado Libre no tenemos pendientes, ¿cómo es
