@@ -23541,6 +23541,27 @@ async def diag_ml_message_send_test(token: str = "", account_id: str = "", pack_
         await client.close()
 
 
+@app.get("/api/diag/ml-message-mark-resolved-test")
+async def diag_ml_message_mark_resolved_test(token: str = "", account_id: str = "", pack_id: str = ""):
+    """DIAG con efecto real: llama EXACTAMENTE la misma función que usa
+    /api/health/messages/{pack_id}/status (update_message_view_status) y
+    devuelve el resultado + una relectura vía get_message_views, para
+    aislar si el problema es del lado del servidor/DB o del frontend.
+    Jovan reportó 2026-08-06 que "Marcar resuelto" no hace nada al hacer clic."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id:
+        return JSONResponse({"error": "account_id y pack_id requeridos"}, status_code=400)
+    try:
+        before = await token_store.get_message_views([pack_id], account_id)
+        await token_store.update_message_view_status(pack_id, account_id, "resolved", viewed_by="diag-test")
+        after = await token_store.get_message_views([pack_id], account_id)
+        return {"ok": True, "before": before.get(pack_id), "after": after.get(pack_id)}
+    except Exception as e:
+        import traceback as _tb
+        return {"ok": False, "error": str(e), "tipo": type(e).__name__, "trace": _tb.format_exc()[-1500:]}
+
+
 @app.get("/api/diag/ml-message-raw-dump")
 async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_id: str = ""):
     """Dump SIN filtrar de los últimos mensajes de un pack -- todos los campos
