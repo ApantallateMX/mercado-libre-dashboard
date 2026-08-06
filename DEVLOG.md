@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: cambiar de cuenta Amazon desde /dashboard se quedaba viendo el dashboard de ML
+
+Jovan reportó: cambió de cuenta a "AUTOBOT AMZ MX" desde el selector, el nav sí cambió a
+tema Amazon (tabs FBA & Stock, Sync Stock, etc.) pero el contenido debajo seguía siendo
+el dashboard de ML con datos de APANTALLATEMX.
+
+Causa: `/auth/switch-amazon` solo redirige a `/amazon` cuando la página actual está en
+`_ML_ONLY_PATHS` (tabs SIN equivalente en Amazon, ej. Ads, Sync Stock). Pero "Dashboard"
+SÍ tiene equivalente Amazon — solo que en una URL distinta (`/amazon?tab=dashboard`, no
+`/dashboard`) — así que `_ML_ONLY_PATHS` no lo detectaba y el redirect se quedaba en la
+misma URL `/dashboard`, que es una ruta 100% ML sin ninguna lógica de plataforma. Mismo
+patrón afecta a Ventas, Productos, Salud y FBA (todas usan el dispatcher `/amazon?tab=`).
+
+Fix: nuevo mapa `_ML_HREF_TO_AMZ_HREF` (ml_href → amz_href por tab) en `/auth/switch-amazon`
+— si la URL actual mapea a una URL Amazon distinta, redirige ahí; si no tiene equivalente
+en absoluto, cae al `/amazon` genérico como antes.
+
+---
+
 ## 2026-08-06 — FIX: import roto impedía persistir el desglose MTY/CDMX de TVs en DB
 
 Encontrado al verificar en producción el fix del deadlock de BM (ver entrada siguiente):

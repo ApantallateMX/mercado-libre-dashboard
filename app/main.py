@@ -1333,6 +1333,19 @@ _ML_ONLY_PATHS = {
     t["ml_href"] for t in _NAV_TAB_DEFS if t["ml_href"] and not t["amz_href"]
 } | _ML_ONLY_EXTRA_PATHS
 
+# Mapa ml_href -> amz_href de cada tab. Usado por /auth/switch-amazon: si el
+# usuario cambia de cuenta Amazon desde una página cuya URL es DISTINTA entre
+# plataformas (ej. Dashboard: "/dashboard" en ML vs "/amazon?tab=dashboard"
+# en Amazon), hay que redirigir a esa URL específica — no basta con el guard
+# de _ML_ONLY_PATHS, que solo cubre tabs SIN equivalente en Amazon (amz_href
+# None). Bug real 2026-08-06: Jovan cambiaba de cuenta Amazon parado en
+# /dashboard y se quedaba viendo el dashboard de ML con el nav ya cambiado a
+# Amazon — _ML_ONLY_PATHS no incluye "/dashboard" porque SÍ tiene amz_href,
+# solo que es una URL diferente.
+_ML_HREF_TO_AMZ_HREF = {
+    t["ml_href"]: t["amz_href"] for t in _NAV_TAB_DEFS if t["ml_href"]
+}
+
 
 def _build_nav_tabs(active_platform: str, dashboard_user) -> list:
     """Lista de pestañas para el nav (desktop + mobile), ya filtrada por
@@ -1394,8 +1407,12 @@ async def switch_amazon_account(request: Request):
         account = await token_store.get_amazon_account(seller_id)
         if account:
             next_url = form.get("next") or request.headers.get("referer", "/amazon")
-            # Si viene de una página ML-only, redirigir al dashboard Amazon
-            if next_url in _ML_ONLY_PATHS:
+            # Si la URL actual es de una tab con equivalente Amazon en OTRA
+            # URL (ej. Dashboard: /dashboard -> /amazon?tab=dashboard),
+            # redirigir ahí. Si no tiene equivalente en absoluto, al genérico.
+            if next_url in _ML_HREF_TO_AMZ_HREF:
+                next_url = _ML_HREF_TO_AMZ_HREF[next_url] or "/amazon"
+            elif next_url in _ML_ONLY_PATHS:
                 next_url = "/amazon"
             response = RedirectResponse(next_url, status_code=303)
             response.set_cookie("active_amazon_id", seller_id, max_age=2592000, httponly=True, samesite="lax")
