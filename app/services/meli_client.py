@@ -1040,8 +1040,24 @@ class MeliClient:
             "variation",
             "cannot_update", "cannot update",
         )
+        payload = {"available_quantity": quantity}
+        # Si el item está pausado por out_of_stock, reactivarlo en la MISMA
+        # llamada -- antes se hacía en una segunda llamada separada
+        # (_reactivate_if_oos_bg, disparada después del PUT de cantidad) y
+        # eso dejaba una condición de carrera real: encontrado 2026-08-06,
+        # SNTV008002 (Jovan reportó que el sync decía OK pero ML seguía en 0
+        # y pausado) -- la reactivación llegaba antes de que ML terminara de
+        # procesar el cambio de cantidad y quedaba sin aplicarse ninguno de
+        # los dos. Un solo PUT con ambos campos evita la carrera.
+        if quantity > 0:
+            try:
+                current = await self.get(f"/items/{item_id}")
+                if current.get("status") == "paused" and "out_of_stock" in (current.get("sub_status") or []):
+                    payload["status"] = "active"
+            except Exception:
+                pass
         try:
-            result = await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
+            result = await self.put(f"/items/{item_id}", json=payload)
         except MeliApiError as e:
             err_msg = str(e).lower()
             body_str = str(e.body).lower() if e.body else ""
