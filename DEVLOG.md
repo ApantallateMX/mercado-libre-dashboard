@@ -7,6 +7,20 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: import roto impedía persistir el desglose MTY/CDMX de TVs en DB
+
+Encontrado al verificar en producción el fix del deadlock de BM (ver entrada siguiente):
+`[BM-TV-WH] Error persistiendo en DB: No module named 'app.db'`. `_fetch_tv_wh_breakdown()`
+(`app/main.py:6626`) importaba `from app.db import token_store as _tv_ts` — módulo que no
+existe (el correcto es `app.services.token_store`, ya importado a nivel de módulo como
+`token_store`). El bare `except Exception` lo tragaba silenciosamente, así que este paso
+llevaba fallando desde siempre sin que nadie lo notara: el desglose MTY/CDMX de TVs nunca
+se guardaba en `bm_sku_master`, por lo que cada restart/deploy arrancaba TODOS los TVs en
+frío (mty=0, cdmx=0, ts=0) hasta que el ciclo de prewarm los recalculaba desde cero otra
+vez. Fix: usar el `token_store` ya importado, sin re-importar nada.
+
+---
+
 ## 2026-08-06 — FIX: un solo request colgado a BM podía tumbar TODA la consulta de stock de la app
 
 Jovan reportó que BinManager sí estaba respondiendo del lado de él (navegando directo),

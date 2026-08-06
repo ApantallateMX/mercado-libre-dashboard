@@ -6623,7 +6623,6 @@ async def _fetch_tv_wh_breakdown():
         # el DB queda con mty=0/_wh_fetched=False. Sin este save, cada restart/deploy
         # arranca con MTY="—" para todos los TVs durante 3 minutos.
         try:
-            from app.db import token_store as _tv_ts
             _tv_entries = [
                 (_ck, _bm_stock_cache[_ck][1], _bm_stock_cache[_ck][0])
                 for _ck in _bm_stock_cache
@@ -6633,7 +6632,7 @@ async def _fetch_tv_wh_breakdown():
                      or _bm_stock_cache[_ck][1].get("_wh_fetched"))
             ]
             if _tv_entries:
-                await _tv_ts.upsert_bm_stock_batch(_tv_entries)
+                await token_store.upsert_bm_stock_batch(_tv_entries)
                 _tvlog.info(f"[BM-TV-WH] {len(_tv_entries)} entradas SNTV* persistidas en DB")
         except Exception as _tv_db_err:
             _tvlog.warning(f"[BM-TV-WH] Error persistiendo en DB: {_tv_db_err}")
