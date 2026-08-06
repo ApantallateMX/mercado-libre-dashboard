@@ -23562,6 +23562,68 @@ async def diag_ml_message_mark_resolved_test(token: str = "", account_id: str = 
         return {"ok": False, "error": str(e), "tipo": type(e).__name__, "trace": _tb.format_exc()[-1500:]}
 
 
+@app.get("/api/diag/ml-pending-list")
+async def diag_ml_pending_list(token: str = "", account_id: str = "", live_check: int = 0):
+    """Lista las conversaciones que count_ml_pending_messages() cuenta como
+    pendientes para una cuenta, con su view_info -- para verificar si el
+    índice local (ml_messages_index) está desactualizado vs el estado real
+    en ML. Jovan reportó 2026-08-06 que el KPI marca pendientes que ya no
+    existen en Mercado Libre. live_check=1: para hasta 5 packs, compara
+    contra el thread real de ML (conversation_status + último mensaje)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    rows, total = await token_store.get_message_index(account_id, offset=0, limit=1000)
+    pack_ids = [r["pack_id"] for r in rows]
+    views = await token_store.get_message_views(pack_ids, account_id) if pack_ids else {}
+
+    def _iso_to_ts_local(iso_date):
+        if not iso_date:
+            return 0.0
+        try:
+            return datetime.fromisoformat(iso_date.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    pending = []
+    for r in rows:
+        if r["last_message_from"] != "buyer":
+            continue
+        vi = views.get(r["pack_id"])
+        resolved_info = vi if vi and vi.get("status") == "resolved" else None
+        reopened = bool(resolved_info and _iso_to_ts_local(r["last_message_date"]) > (resolved_info.get("viewed_at") or 0))
+        already_resolved = bool(resolved_info) and not reopened
+        if not already_resolved:
+            pending.append({
+                "pack_id": r["pack_id"], "order_id": r["order_id"],
+                "last_message_date": r["last_message_date"], "last_message_text": (r["last_message_text"] or "")[:80],
+                "view_info": vi,
+            })
+
+    if live_check:
+        client = await get_meli_client(user_id=account_id)
+        if client:
+            try:
+                for p in pending[:5]:
+                    try:
+                        thread = await client.get_message_thread(p["pack_id"])
+                        msgs = thread.get("messages") or []
+                        last_live = msgs[0] if msgs else None
+                        p["live_conversation_status"] = thread.get("conversation_status")
+                        p["live_last_message"] = {
+                            "from": (last_live.get("from") or {}).get("user_id") if last_live else None,
+                            "text": (last_live.get("text") if isinstance(last_live.get("text"), str) else (last_live.get("text") or {}).get("plain")) if last_live else None,
+                            "date": last_live.get("message_date", {}).get("available") if last_live else None,
+                        } if last_live else None
+                    except Exception as _e_live:
+                        p["live_check_error"] = str(_e_live)
+            finally:
+                await client.close()
+
+    return {"account_id": account_id, "total_indexed": total, "pending_count": len(pending), "pending": pending}
+
+
 @app.get("/api/diag/ml-message-raw-dump")
 async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_id: str = ""):
     """Dump SIN filtrar de los últimos mensajes de un pack -- todos los campos
