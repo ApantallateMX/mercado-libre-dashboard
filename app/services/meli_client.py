@@ -1218,31 +1218,35 @@ class MeliClient:
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
         "resource not found" en el POST (encontrado 2026-08-05).
 
-        "Unexpected exception parsing json string" NO depende del contenido
-        del mensaje -- se probaron y descartaron 3 hipótesis de contenido
-        (saltos de línea, acentos/UTF-8, ASCII puro) con evidencia real,
-        incluso un mensaje 100% ASCII plano falló idéntico.
+        ROOT CAUSE REAL de "Unexpected exception parsing json string"
+        (confirmado 2026-08-06 tras un día completo de investigación): el
+        payload mandaba "text" como objeto anidado {"plain": texto} -- ML
+        espera "text" como STRING PLANO (así lo devuelve también en el GET
+        del thread, y así lo muestra el ejemplo oficial de su doc). El
+        parser de ML truena con ese objeto anidado sin importar contenido,
+        longitud, cuenta, o si la conversación está bloqueada o no -- por
+        eso ninguna hipótesis de contenido (saltos de línea, acentos/UTF-8,
+        ASCII puro) explicaba el patrón: nunca fue el contenido.
 
-        conversation_status.status_update_allowed=False resultó ser un
-        falso indicador -- aparece en la MAYORÍA de las conversaciones
-        (incluso sanas), no solo las bloqueadas, así que NO se usa para
-        detectar el bloqueo (se probó y daba falsos positivos). El único
-        estado inequívoco visto hasta ahora es status="blocked" +
-        substatus="blocked_by_mediation" + claim_ids no vacío -- ese caso SÍ
-        se detecta y se avisa claro. Hay al menos un caso confirmado
-        (pack 2000014248759857, sin reclamo ni bloqueo aparente) donde el
-        envío también falla y la causa real sigue sin confirmarse -- para
-        ese caso el error de ML se deja pasar tal cual, sin inventar una
-        explicación que no está confirmada.
+        Confirmado con /api/diag/ml-message-send-test probando en vivo: con
+        "text": {"plain": ...} fallaba 100% de las veces (2 cuentas, 2
+        conversaciones, con/sin bloqueo, con/sin option_id previo); con
+        "text": clean_text (string) funcionó de inmediato. Jovan también
+        probó administrado.net (app de terceros) contra una de estas MISMAS
+        conversaciones con el MISMO texto y sí se envió -- eso fue lo que
+        descartó la hipótesis de bloqueo real de ML y forzó a revisar la
+        forma del payload en vez del estado de la conversación.
 
-        Fix real 2026-08-06: el payload NUNCA incluía "to" (user_id del
-        comprador) -- solo "from" y "text". La doc oficial de ML muestra "to"
-        como campo del payload. Confirmado con evidencia real: Jovan probó
-        una app de terceros (administrado.net) contra esta MISMA conversación
-        con el MISMO texto y sí se envió, descartando bloqueo real de ML.
-        Ahora se extrae el user_id del comprador del thread ya obtenido
-        (mismo fetch que el chequeo de bloqueo, sin llamada extra) y se
-        agrega como "to"."""
+        conversation_status.status_update_allowed=False sigue siendo un
+        falso indicador de bloqueo (aparece en la mayoría de conversaciones
+        sanas también). status="blocked" + substatus="blocked_by_mediation"
+        + claim_ids sigue siendo el único estado de bloqueo real confirmado,
+        y se detecta aparte, antes de llegar a este payload.
+
+        "to" (user_id del comprador, extraído del thread) y castear
+        user_id a int se agregaron en el camino como buenas prácticas que
+        coinciden con el formato real de ML -- no eran la causa, pero no
+        sobran."""
         thread_check = {}
         try:
             thread_check = await self.get_message_thread(pack_id)
@@ -1279,11 +1283,10 @@ class MeliClient:
 
         clean_text = text.replace("\r\n", "\n")
         # Límite documentado de ML para mensajería post-venta: 350 caracteres.
-        # Encontrado 2026-08-06 vía foro/docs oficiales de ML -- explica el
-        # caso sin bloqueo ni reclamo (pack 2000014248759857) que fallaba
-        # igual: los 3 intentos ahí superaban los 350 caracteres, nunca se
-        # probó uno corto. Se avisa claro en vez de dejar que ML tire el
-        # mismo error genérico de "parsing json string".
+        # Se avisa claro en vez de dejar que ML tire el mismo error genérico
+        # de "parsing json string" (que, como se documenta arriba, resultó
+        # ser principalmente un problema de formato de payload, no de límite
+        # -- pero el límite real de 350 sigue existiendo y aplica aparte).
         if len(clean_text) > 350:
             raise MeliApiError(
                 status_code=400,
@@ -1308,18 +1311,14 @@ class MeliClient:
 
         # ML devuelve user_id como entero en sus propias respuestas (ej.
         # "from":{"user_id":42144032}, sin comillas) -- self.user_id es str
-        # en todo el cliente. Mandar "from.user_id" como string cuando ML
-        # espera int puede ser justo lo que su parser no tolera y explica
-        # el "Unexpected exception parsing json string" genérico incluso en
-        # conversaciones sin bloqueo real (2026-08-06).
+        # en todo el cliente. Castear a int por consistencia con el formato
+        # real de ML (no es la causa del bug, ver docstring arriba).
         try:
             from_uid_int = int(self.user_id)
         except (TypeError, ValueError):
             from_uid_int = self.user_id
-        # Ejemplo oficial de ML manda "text" como STRING plano, no
-        # {"plain": ...} -- el GET del thread también devuelve "text" como
-        # string plano en los mensajes reales. Probando este formato ya que
-        # "to"+int no resolvió un caso nuevo (2026-08-06).
+        # "text" como STRING plano (no {"plain": ...}) -- ESTA es la causa
+        # real confirmada del "Unexpected exception parsing json string".
         payload = {"from": {"user_id": from_uid_int}, "text": clean_text}
         if buyer_id:
             try:

@@ -7,34 +7,50 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
-## 2026-08-06 — FIX (real, por fin): "Unexpected exception parsing json string" al responder mensajes ML — faltaba el campo "to"
+## 2026-08-06 — FIX (real, cierre de la saga): "Unexpected exception parsing json string" al responder mensajes ML — "text" iba como objeto anidado, ML espera string plano
 
-Cierre de la saga del día completo con este error. Jovan probó una app de terceros
-(administrado.net) contra la MISMA conversación (pack 2000014395529751) con el
-MISMO texto exacto que fallaba en nuestro sistema -- y ahí SÍ se envió. Eso
-descartó de raíz la hipótesis de bloqueo real de ML para esta conversación
-(la que habíamos armado con el especialista de Mercado Libre vía "Reasons to
-communicate" / action_guide bloqueado).
+Cierre de la saga del día completo con este error, tras varios intentos previos
+que ayudaron pero no eran la causa raíz. Camino completo:
 
-Con eso confirmado como falso positivo, until conseguí vía WebSearch el ejemplo
-oficial de ML del payload de este endpoint -- y ahí saltó: el payload SIEMPRE
-requiere "to" (user_id del comprador), campo que `send_message()` en
-`meli_client.py` JAMÁS enviaba, solo mandaba "from" y "text". Verificado con
-`/api/diag/ml-message-send-test` (nuevo endpoint que llama exactamente
-`send_message()` real y devuelve el error crudo de ML, no el ya envuelto):
-el 400 "Unexpected exception parsing json string" es literalmente lo que ML
-devuelve cuando falta ese campo -- probablemente su parser interno revienta
-al no encontrarlo, en vez de dar una validación limpia.
+1. Jovan probó una app de terceros (administrado.net) contra una conversación
+   real (pack 2000014395529751, cuenta AUTOBOT) con el MISMO texto exacto que
+   fallaba en nuestro sistema -- y ahí SÍ se envió. Eso descartó de raíz la
+   hipótesis de bloqueo real de ML para esa conversación (la armada con el
+   especialista de Mercado Libre vía "Reasons to communicate" / action_guide
+   bloqueado -- resultó ser una señal no relacionada con el envío real).
+2. Vía WebSearch se encontró el ejemplo oficial de ML del payload, que incluye
+   "to" (user_id del comprador) -- campo que `send_message()` en
+   `meli_client.py` JAMÁS enviaba. Se agregó, extrayendo el user_id del mismo
+   thread que ya se obtiene para el chequeo de bloqueo (sin llamada extra).
+   Ayudó pero NO resolvió el error en un caso nuevo (pack 2000014384279257,
+   cuenta LUTEMA, conversación iniciada por el comprador).
+3. Se probó castear `self.user_id`/buyer_id a int (ML los devuelve como
+   entero en sus respuestas, nuestro cliente los maneja como string) --
+   tampoco resolvió ese caso nuevo.
+4. Se aisló con `/api/diag/ml-message-send-test` (nuevo endpoint que llama
+   exactamente `send_message()` real y devuelve el error crudo de ML, no el
+   ya envuelto) probando con un pack_id inventado: ML respondió un 404 limpio
+   ("order_not_found"), NO el error genérico -- confirmando que el request
+   sí llega a la lógica real de ML, descartando un problema de scope/permiso
+   de la app a nivel general.
+5. Comparando contra el ejemplo oficial de ML letra por letra: el payload
+   real espera `"text": "string plano"`, NO `"text": {"plain": "..."}` como
+   mandaba nuestro código desde siempre. Confirmado en vivo: con el objeto
+   anidado fallaba el 100% de las veces (2 cuentas, conversaciones bloqueadas
+   y no bloqueadas, con o sin "to"); cambiando a string plano funcionó de
+   inmediato -- verificado enviando un mensaje real de prueba y luego la
+   respuesta real y útil al comprador.
 
-Fix: `send_message()` ahora extrae el user_id del comprador del mismo thread
-que ya obtiene para el chequeo de bloqueo (sin llamada extra a ML) y lo agrega
-como "to" en el payload.
+Explica por qué ninguna de las ~5 hipótesis de contenido probadas en días
+anteriores (saltos de línea, acentos/UTF-8, ASCII puro, límite de caracteres,
+bloqueo de conversación) encajaba con el patrón completo: nunca fue el
+contenido ni el estado de la conversación, era la FORMA del payload.
 
-Nota para el historial: las causas reales encontradas ANTES en esta misma
-saga (bloqueo por mediación/cancelación, límite de 350 caracteres) siguen
-siendo válidas y se quedan -- afectan a OTRAS conversaciones distintas a
-esta. El campo "to" faltante es una causa adicional, no reemplaza a las
-otras dos.
+Las causas reales encontradas antes en esta misma saga (bloqueo por mediación/
+cancelación real, límite de 350 caracteres) siguen siendo válidas y se quedan
+-- son restricciones reales de ML que aplican aparte, independientes de este
+bug de formato. "to" + cast a int se quedan también, como buenas prácticas
+correctas aunque no eran la causa.
 
 ---
 
