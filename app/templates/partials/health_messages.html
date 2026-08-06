@@ -314,11 +314,11 @@ window._setMsgStatus = function(packId, status, btn) {
                 </button>
                 {% endif %}
 
-                <!-- Resolver: normalmente requiere haberla tomado antes, PERO si
-                     está bloqueada en ML (no se puede responder de ningún modo)
-                     se habilita directo -- no tiene sentido exigir "Tomar"
-                     primero para algo que no se puede atender por este canal. -->
-                {% if (vi and vi_status != 'resolved') or (conv.is_blocked and vi_status != 'resolved') %}
+                <!-- Resolver: disponible siempre (no requiere "Tomar" antes) --
+                     Jovan reportó 2026-08-06 que tras responder no aparecía
+                     forma de marcar resuelto sin ese paso extra. Ya no depende
+                     de vi -- solo de que no esté YA resuelto. -->
+                {% if vi_status != 'resolved' %}
                 <button onclick="window._setMsgStatus('{{ conv.pack_id }}', 'resolved', this)"
                         class="text-xs px-3 py-1 rounded-full bg-green-100 text-green-700 hover:bg-green-200 font-semibold transition">
                     Marcar resuelto
