@@ -24,6 +24,32 @@ así siempre caen dentro de la primera página.
 
 ---
 
+## 2026-08-06 — FIX: "Stock BM" en Amazon Productos > Inactivos leía de Mercado Libre, no de BM
+
+Jovan reportó SNHG000006 mostrando "Stock BM: 2040" en Amazon cuando el stock real
+en BinManager es 0. Rastreado: eran 2 publicaciones de MERCADO LIBRE (no Amazon)
+con `available_quantity=1020` cada una, congeladas desde antes del 2026-08-05
+(cuando se excluyó Tijuana del vendible) y nunca vueltas a sincronizar -- se
+corrigieron manualmente a 0 (ver `/api/diag/ml-item-stock-fix`, nuevo endpoint).
+
+Pero el problema de fondo, señalado correctamente por Jovan, era de diseño: la
+columna "Stock BM" del tab Inactivos (`amazon_products_sin_publicar()`) nunca
+consultaba BinManager -- hacía `SUM(available_qty) FROM ml_listings WHERE
+status='active'` y le llamaba "bm_stock" como atajo para evitar llamadas extra
+a BM. Un listing de Amazon terminaba mostrando un número que depende de qué
+tan actualizada esté una publicación de OTRA plataforma (Mercado Libre) — si
+el SKU nunca se publicó en ML, o su publicación ML estaba desactualizada
+(como en este caso), el dato mostrado no tenía relación real con BM.
+
+Fix: las 3 queries de esa función ahora hacen `LEFT JOIN bm_sku_master` (el
+maestro BM ya corregido para excluir Tijuana) en vez de `ml_listings` --
+Amazon ya no depende de qué esté sincronizado en ML para mostrar su propio
+stock BM. Confirmado que el resto de tabs de Amazon Productos (Inventario,
+Stock, Resumen) ya usaban el camino correcto (`_fetch_base()`, consulta viva
+a BM) -- el atajo por ml_listings estaba confinado solo a Inactivos.
+
+---
+
 ## 2026-08-06 — FIX: KPI "Mensajes" marcaba 4 pero la lista salía vacía -- el filtro de fecha ocultaba pendientes reales
 
 Con los dos fixes anteriores desplegados, Jovan reportó: KPI dice 4, pero la

@@ -2661,21 +2661,25 @@ async def amazon_products_sin_publicar(
                 _parent_filter = "" if show_parents else "AND (al.is_parent IS NULL OR al.is_parent = 0)"
 
                 # Enhanced query: includes price, qty, bm_price
-                # BM stock via ML listings (no new BM API calls — uses cached ML data)
+                # BM stock leído directo de bm_sku_master -- el mismo maestro
+                # ya corregido para excluir Tijuana (ver
+                # project_bm_tijuana_exclusion.md). Antes leía de ml_listings
+                # (SUM de available_qty de publicaciones ML activas) como
+                # "proxy" del stock BM -- Jovan señaló correctamente 2026-08-06
+                # que Amazon no tiene por qué depender de qué esté sincronizado
+                # en Mercado Libre; si un SKU nunca se publicó en ML, o su
+                # publicación ML estaba desactualizada, el número mostrado acá
+                # era ajeno a la realidad de BM.
                 _base_q = f"""
                     SELECT al.sku, al.asin, al.title, al.status,
                            al.price, al.available_qty, al.synced_at,
                            COALESCE(bc.retail_ph, 0) as bm_price,
                            COALESCE(al.is_parent, 0) as is_parent,
-                           COALESCE(bm_stk.bm_stock, 0) as bm_stock
+                           COALESCE(bsm.available_qty, 0) as bm_stock
                     FROM amazon_listings al
                     LEFT JOIN bm_product_catalog bc
                         ON bc.sku = al.base_sku OR bc.sku = al.sku
-                    LEFT JOIN (
-                        SELECT base_sku, SUM(available_qty) as bm_stock
-                        FROM ml_listings WHERE status = 'active'
-                        GROUP BY base_sku
-                    ) bm_stk ON bm_stk.base_sku = al.base_sku
+                    LEFT JOIN bm_sku_master bsm ON bsm.sku = al.base_sku
                     WHERE al.seller_id=? AND UPPER(al.status) = ? {_parent_filter}
                     ORDER BY al.title LIMIT ? OFFSET ?"""
 
@@ -2691,7 +2695,7 @@ async def amazon_products_sin_publicar(
                             "status": _status,
                             "price": _r["price"] or 0,
                             "qty":      _r["available_qty"] or 0,   # Amazon QTY
-                            "bm_stock": _r["bm_stock"] or 0,       # BM stock via ML
+                            "bm_stock": _r["bm_stock"] or 0,       # BM stock real (bm_sku_master)
                             "bm_price": _r["bm_price"] or 0,
                             "issues": [],
                             "sc_url": (
@@ -2703,8 +2707,8 @@ async def amazon_products_sin_publicar(
 
                 # bm_filter: all | with_stock | no_stock
                 _bm_having = {
-                    'with_stock': 'AND COALESCE(bm_stk2.bm_stock,0) > 0',
-                    'no_stock':   'AND COALESCE(bm_stk2.bm_stock,0) = 0',
+                    'with_stock': 'AND COALESCE(bsm2.available_qty,0) > 0',
+                    'no_stock':   'AND COALESCE(bsm2.available_qty,0) = 0',
                 }.get(bm_filter, '')
 
                 for _status_filter in ("SUPPRESSED", "INCOMPLETE"):
@@ -2718,10 +2722,10 @@ async def amazon_products_sin_publicar(
                            al.price, al.available_qty, al.synced_at,
                            COALESCE(bc.retail_ph, 0) as bm_price,
                            COALESCE(al.is_parent, 0) as is_parent,
-                           COALESCE(bm_stk2.bm_stock, 0) as bm_stock
+                           COALESCE(bsm2.available_qty, 0) as bm_stock
                     FROM amazon_listings al
                     LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
-                    LEFT JOIN (SELECT base_sku, SUM(available_qty) as bm_stock FROM ml_listings WHERE status='active' GROUP BY base_sku) bm_stk2 ON bm_stk2.base_sku=al.base_sku
+                    LEFT JOIN bm_sku_master bsm2 ON bsm2.sku = al.base_sku
                     WHERE al.seller_id=?
                       AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
                       {_parent_filter} {_bm_having}"""
@@ -2729,9 +2733,9 @@ async def amazon_products_sin_publicar(
                 # Count with/without BM stock for filter pills
                 _cws = await (await _db.execute(
                     f"""SELECT COUNT(*) FROM amazon_listings al
-                        LEFT JOIN (SELECT base_sku, SUM(available_qty) as s FROM ml_listings WHERE status='active' GROUP BY base_sku) bm ON bm.base_sku=al.base_sku
+                        LEFT JOIN bm_sku_master bsm3 ON bsm3.sku = al.base_sku
                         WHERE al.seller_id=? AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE') {_parent_filter}
-                        AND COALESCE(bm.s,0) > 0""", (client.seller_id,)
+                        AND COALESCE(bsm3.available_qty,0) > 0""", (client.seller_id,)
                 )).fetchone()
                 inac_with_stock = _cws[0] if _cws else 0
 
