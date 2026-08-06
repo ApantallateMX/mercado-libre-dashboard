@@ -16140,11 +16140,21 @@ async def diag_bm_stock_snapshot(token: str = ""):
 
 
 @app.get("/api/diag/bm-sku-master-lookup")
-async def diag_bm_sku_master_lookup(token: str = "", sku: str = ""):
+async def diag_bm_sku_master_lookup(token: str = "", sku: str = "", fix_zero: bool = False):
     """Lee directo la fila de bm_sku_master para un SKU -- para rastrear de
     dónde sale un número de "Stock BM" que no coincide con BM real. También
     trae amazon_listings/ml_listings crudos con el mismo base_sku, para ver
-    todas las fuentes de una sola vez."""
+    todas las fuentes de una sola vez.
+
+    fix_zero=true: pone available_qty/reserve_qty/total_qty en 0 en
+    bm_sku_master para este SKU (sin borrar la fila -- conserva title/brand/
+    retail_ph/cost_usd). Necesario porque delete_bm_stock_skus() SOLO borra
+    de bm_stock_cache (tabla legacy) -- bm_sku_master es la fusión más nueva
+    de catálogo+stock y esa función nunca se actualizó para tocarla también
+    (encontrado 2026-08-06: un SKU sin listings activos en ningún lado nunca
+    vuelve a pasar por el ciclo de prewarm, así que su snapshot en
+    bm_sku_master queda huérfano con el último valor visto antes de quedar
+    inactivo, para siempre)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not sku:
@@ -16153,6 +16163,12 @@ async def diag_bm_sku_master_lookup(token: str = "", sku: str = ""):
     import aiosqlite as _aio_bsl
     async with _aio_bsl.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_bsl.Row
+        if fix_zero:
+            await db.execute(
+                "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, total_qty=0, stock_updated_at=? WHERE sku=?",
+                (_time.time(), base),
+            )
+            await db.commit()
         master = await (await db.execute(
             "SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at FROM bm_sku_master WHERE sku=?",
             (base,),
