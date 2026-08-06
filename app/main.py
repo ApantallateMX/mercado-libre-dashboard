@@ -23481,6 +23481,34 @@ async def diag_ml_message_caps(token: str = "", account_id: str = "", pack_id: s
         await client.close()
 
 
+@app.get("/api/diag/ml-message-send-test")
+async def diag_ml_message_send_test(token: str = "", account_id: str = "", pack_id: str = "",
+                                     text: str = "", confirm: bool = False):
+    """DIAG con efecto real: llama EXACTAMENTE el mismo client.send_message() que usa
+    /api/health/messages/{pack_id}/send en producción, para ver el error crudo de ML
+    (status_code + body) en vez del MeliApiError ya envuelto. confirm=true requerido
+    para evitar disparos accidentales -- si confirm=true y no hay bloqueo, el mensaje
+    SÍ se envía de verdad al comprador (mismo comportamiento que el botón Enviar)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id or not text:
+        return JSONResponse({"error": "account_id, pack_id y text requeridos"}, status_code=400)
+    if not confirm:
+        return JSONResponse({"error": "pasa confirm=true -- este endpoint SÍ envía el mensaje real si ML lo permite"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        result = await client.send_message(pack_id, text)
+        return {"ok": True, "result": result}
+    except MeliApiError as e:
+        return {"ok": False, "status_code": e.status_code, "endpoint": e.endpoint, "body_ml": e.body}
+    except Exception as e:
+        return {"ok": False, "error_generico": str(e), "tipo": type(e).__name__}
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-message-raw-dump")
 async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_id: str = ""):
     """Dump SIN filtrar de los últimos mensajes de un pack -- todos los campos
