@@ -23495,6 +23495,7 @@ async def diag_ml_message_send_test(token: str = "", account_id: str = "", pack_
         return JSONResponse({"error": "account_id, pack_id y text requeridos"}, status_code=400)
     if not confirm:
         return JSONResponse({"error": "pasa confirm=true -- este endpoint SÍ envía el mensaje real si ML lo permite"}, status_code=400)
+    from app.services.meli_client import MeliApiError
     client = await get_meli_client(user_id=account_id)
     if not client:
         return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
