@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: "Marcar resuelto" en mensajes ML no tenía ningún efecto persistente
+
+Jovan reportó: el botón "Marcar resuelto" no parecía hacer nada — la conversación
+debería desaparecer de Pendientes y guardarse en Histórico, y volver a Pendientes
+solo si el comprador escribe de nuevo.
+
+Causa: `needs_response` (el campo que decide si una conversación cuenta como
+"pendiente", tanto para el badge visual como para el filtro "Pendientes") en
+`_fetch_enriched_ml_conversations()` (`app/main.py`) se calculaba ÚNICAMENTE
+de si el último mensaje era del comprador (`last_message_from == "buyer"`) —
+sin mirar nunca el estado de "resuelto" guardado en `ml_message_views`. El
+botón SÍ guardaba el resuelto en la base de datos correctamente y lo quitaba
+de la vista al instante (animación JS), pero en cualquier recarga posterior
+volvía a aparecer en Pendientes exactamente igual, porque el servidor nunca
+consideraba ese estado al recalcular la lista.
+
+Mismo patrón de bug que ya se había corregido para Amazon el mismo día (ver
+entrada "hilos de mensajes Amazon marcados resuelto se quedaban ocultos para
+siempre") — pero en la dirección inversa: ahí un resuelto se quedaba oculto
+para siempre aunque el comprador respondiera; acá un resuelto nunca se
+ocultaba porque el cálculo ni siquiera miraba el estado.
+
+Fix: se trae `view_info` (misma tabla `ml_message_views`) ANTES de calcular
+`needs_response`, replicando el patrón ya usado en Amazon —
+`needs_response = last_from_buyer AND NOT (resuelto Y sin mensaje del
+comprador posterior a la marca de resuelto)`. Un resuelto se reabre solo si
+hay un mensaje nuevo del comprador después del timestamp de resuelto; si no,
+se queda fuera de Pendientes de forma persistente (sigue visible en "Todos"
+con el badge "✓ Resuelto").
+
+---
+
 ## 2026-08-06 — FIX (real, cierre de la saga): "Unexpected exception parsing json string" al responder mensajes ML — "text" iba como objeto anidado, ML espera string plano
 
 Cierre de la saga del día completo con este error, tras varios intentos previos

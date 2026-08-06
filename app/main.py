@@ -10022,12 +10022,43 @@ async def _fetch_enriched_ml_conversations(
             if isinstance(r, tuple):
                 order_context_map[r[0]] = r[1]
 
+    # view_info ANTES de calcular needs_response -- "pendiente" depende tanto
+    # de si el último mensaje es del comprador COMO de si ya se marcó resuelto
+    # a mano. Bug real 2026-08-06: needs_response solo miraba last_message_from,
+    # así que "Marcar resuelto" no tenía ningún efecto persistente -- el hilo
+    # volvía a aparecer en Pendientes en cualquier recarga (mismo patrón que
+    # ya se había corregido para Amazon, ver DEVLOG "hilos de Amazon marcados
+    # resuelto se quedaban ocultos" -- acá era el problema inverso: nunca se
+    # ocultaban). "Resuelto" no es permanente -- si el comprador escribió
+    # DESPUÉS de la marca de resuelto, el hilo se reabre solo.
+    _acc_for_views = account_id or seller_id
+    _pack_ids_for_views = [r["pack_id"] for r in index_rows if r["pack_id"]]
+    try:
+        _views_map = await token_store.get_message_views(_pack_ids_for_views, _acc_for_views) if _pack_ids_for_views else {}
+    except Exception:
+        _views_map = {}
+
+    def _iso_to_ts(iso_date: str) -> float:
+        if not iso_date:
+            return 0.0
+        try:
+            return datetime.fromisoformat(iso_date.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
     enriched = []
     for row in index_rows:
         messages_list = _ml_sort_messages_asc(threads_by_pack.get(row["pack_id"], []))
         last_5 = messages_list[-5:] if messages_list else []
         last_from_buyer = row["last_message_from"] == "buyer"
-        needs_response = last_from_buyer
+        _view_info = _views_map.get(row["pack_id"])
+        _resolved_info = _view_info if _view_info and _view_info.get("status") == "resolved" else None
+        _reopened_after_resolve = bool(
+            _resolved_info and last_from_buyer
+            and _iso_to_ts(row["last_message_date"]) > (_resolved_info.get("viewed_at") or 0)
+        )
+        _already_resolved = bool(_resolved_info) and not _reopened_after_resolve
+        needs_response = last_from_buyer and not _already_resolved
         last_elapsed = "-"
         if row["last_message_date"]:
             last_elapsed, _ = _elapsed_str(row["last_message_date"])
