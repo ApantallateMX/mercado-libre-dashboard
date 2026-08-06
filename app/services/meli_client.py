@@ -1233,7 +1233,17 @@ class MeliClient:
         (pack 2000014248759857, sin reclamo ni bloqueo aparente) donde el
         envío también falla y la causa real sigue sin confirmarse -- para
         ese caso el error de ML se deja pasar tal cual, sin inventar una
-        explicación que no está confirmada."""
+        explicación que no está confirmada.
+
+        Fix real 2026-08-06: el payload NUNCA incluía "to" (user_id del
+        comprador) -- solo "from" y "text". La doc oficial de ML muestra "to"
+        como campo del payload. Confirmado con evidencia real: Jovan probó
+        una app de terceros (administrado.net) contra esta MISMA conversación
+        con el MISMO texto y sí se envió, descartando bloqueo real de ML.
+        Ahora se extrae el user_id del comprador del thread ya obtenido
+        (mismo fetch que el chequeo de bloqueo, sin llamada extra) y se
+        agrega como "to"."""
+        thread_check = {}
         try:
             thread_check = await self.get_message_thread(pack_id)
             conv_status = thread_check.get("conversation_status") or {}
@@ -1285,11 +1295,26 @@ class MeliClient:
                     ),
                 },
             )
+        buyer_id = None
+        for m in (thread_check.get("messages") or []):
+            _from_uid = (m.get("from") or {}).get("user_id")
+            _to_uid = (m.get("to") or {}).get("user_id")
+            if _from_uid and str(_from_uid) != str(self.user_id):
+                buyer_id = _from_uid
+                break
+            if _to_uid and str(_to_uid) != str(self.user_id):
+                buyer_id = _to_uid
+                break
+
+        payload = {"from": {"user_id": self.user_id}, "text": {"plain": clean_text}}
+        if buyer_id:
+            payload["to"] = {"user_id": buyer_id}
+
         try:
             return await self.post(
                 f"/messages/packs/{pack_id}/sellers/{self.user_id}",
                 params={"tag": "post_sale"},
-                json={"from": {"user_id": self.user_id}, "text": {"plain": clean_text}},
+                json=payload,
             )
         except MeliApiError as _e_sm:
             logger.error(

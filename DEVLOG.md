@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX (real, por fin): "Unexpected exception parsing json string" al responder mensajes ML — faltaba el campo "to"
+
+Cierre de la saga del día completo con este error. Jovan probó una app de terceros
+(administrado.net) contra la MISMA conversación (pack 2000014395529751) con el
+MISMO texto exacto que fallaba en nuestro sistema -- y ahí SÍ se envió. Eso
+descartó de raíz la hipótesis de bloqueo real de ML para esta conversación
+(la que habíamos armado con el especialista de Mercado Libre vía "Reasons to
+communicate" / action_guide bloqueado).
+
+Con eso confirmado como falso positivo, until conseguí vía WebSearch el ejemplo
+oficial de ML del payload de este endpoint -- y ahí saltó: el payload SIEMPRE
+requiere "to" (user_id del comprador), campo que `send_message()` en
+`meli_client.py` JAMÁS enviaba, solo mandaba "from" y "text". Verificado con
+`/api/diag/ml-message-send-test` (nuevo endpoint que llama exactamente
+`send_message()` real y devuelve el error crudo de ML, no el ya envuelto):
+el 400 "Unexpected exception parsing json string" es literalmente lo que ML
+devuelve cuando falta ese campo -- probablemente su parser interno revienta
+al no encontrarlo, en vez de dar una validación limpia.
+
+Fix: `send_message()` ahora extrae el user_id del comprador del mismo thread
+que ya obtiene para el chequeo de bloqueo (sin llamada extra a ML) y lo agrega
+como "to" en el payload.
+
+Nota para el historial: las causas reales encontradas ANTES en esta misma
+saga (bloqueo por mediación/cancelación, límite de 350 caracteres) siguen
+siendo válidas y se quedan -- afectan a OTRAS conversaciones distintas a
+esta. El campo "to" faltante es una causa adicional, no reemplaza a las
+otras dos.
+
+---
+
 ## 2026-08-06 — FIX: cambiar de cuenta Amazon desde /dashboard se quedaba viendo el dashboard de ML
 
 Jovan reportó: cambió de cuenta a "AUTOBOT AMZ MX" desde el selector, el nav sí cambió a
