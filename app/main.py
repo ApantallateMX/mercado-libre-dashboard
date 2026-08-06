@@ -6577,11 +6577,14 @@ async def _fetch_tv_wh_breakdown():
             _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
             _tj   = _tv_lkp(_extj, _bytj, _ck.upper())
             _avt  = _cd.get("avail_total", 0) or 0
-            _lsum = _cdmx + _mty + _tj
+            _lsum = _cdmx + _mty
             # Confiar en el bulk per-location ALL (ICB/ICC incluido) sobre el bulk combinado.
-            # El bulk combinado LOC47+68+TJ retorna a veces un Available inferior al real
+            # El bulk combinado LOC47+68 retorna a veces un Available inferior al real
             # (discrepancia de agregación en BM API). Si per-location suma más, actualizar
             # avail_total para que BM Disp refleje el valor correcto.
+            # TJ excluida desde 2026-08-05 — solo CDMX/MTY venden en línea, ver
+            # project_bm_tijuana_exclusion.md. _tj se sigue guardando abajo para
+            # desglose/Transferencias Sugeridas, pero nunca suma a avail_total.
             if _lsum > _avt:
                 _cd["avail_total"] = _lsum
             _cd["cdmx"] = _cdmx
@@ -6744,7 +6747,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, no_vendible_direct=0, avail_ok=True, wh_responded=True):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
 
-        avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68,45,69,43,42 (MTY+CDMX+Cuautitlán+TJ real vendible)
+        avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68 (MTY+CDMX+Cuautitlán, único vendible online — TJ excluida desde 2026-08-05)
         reserve_direct: Reserve del mismo endpoint — unidades reservadas para órdenes pendientes.
         avail_ok:       True si get_stock_with_reserve respondió (tuple); False si fue excepción/timeout.
         wh_responded:   True si el WH endpoint devolvió JSON válido (aunque vacío []).
@@ -6824,7 +6827,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             return
         async with wh_sem:
             try:
-                # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68,45,69,43,42 (MTY+CDMX+Cuautitlán+TJ real vendible) — fuente única correcta.
+                # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68 (MTY+CDMX+Cuautitlán, TJ excluida) — fuente única correcta.
                 # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
                 # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
                 # timeout=8s: cubre re-login interno (3-5s) + latencia normal. Antes era 25s —
@@ -16088,7 +16091,7 @@ async def diag_tv_stock_vs_sales(token: str = "", days: int = 60, weeks: int = 1
     TVs más vendidos están fuera de stock. Cruza los SKUs de TV (prefijo
     SNTV) con más ingreso reciente (order_history, ML+Amazon) contra su
     available_qty ACTUAL en bm_sku_master (ya es el vendible real: suma de
-    los locations 47,62,68,45,69,43,42, ver CLAUDE.md) — para confirmar con
+    los locations 47,62,68 — TJ excluida desde 2026-08-05, ver CLAUDE.md) — para confirmar con
     datos si el patrón es real y qué tan grave es, y una tendencia semanal de
     ingresos para dimensionar la baja."""
     if token != _DIAG_TOKEN:
@@ -22587,7 +22590,7 @@ async def bm_launch_opportunities(
             if isinstance(_s, set):
                 ml_bm_skus.update(_s)
 
-    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68,45,69,43,42 + CONDITION vendible + CONCEPTID=1)
+    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68 — TJ excluida — + CONDITION vendible + CONCEPTID=1)
     #    get_bulk_stock() usa los mismos filtros que el resto de la app — stock vendible real.
     now = _time.time()
     if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL:

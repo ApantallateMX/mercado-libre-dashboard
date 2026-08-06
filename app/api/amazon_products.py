@@ -150,7 +150,8 @@ _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/Invento
 # GlobalStock_InventoryBySKU_Condition — BROKEN: status siempre retorna "Otro", no usar para avail/reserved
 _BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
 _BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-_BM_LOC_IDS  = "47,62,68,45,69,43,42"
+_BM_LOC_IDS  = "47,62,68,45,69,43,42"          # desglose MTY/CDMX/TJ (Warehouse endpoint) — incluye Tijuana
+_BM_LOC_IDS_VENDIBLE = "47,62,68"              # stock vendible online real — Tijuana excluida (2026-08-05)
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
 _bm_all_refreshing:   set   = set()  # "bm_all" cuando BG pre-fetch activo
@@ -1432,7 +1433,7 @@ async def _enrich_bm_amz(items: list, timeout_s: float | None = None) -> None:
             "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 1,
             "NUMBERPAGE": 1, "RECORDSPAGE": 5,
             "NEEDRETAILPRICEPH": False, "NEEDRETAILPRICE": False, "NEEDAVGCOST": False,
-            "LOCATIONID": _BM_LOC_IDS,
+            "LOCATIONID": _BM_LOC_IDS_VENDIBLE,
         }
         # InventoryReport: RetailPH + AvgCost por SKU
         inv_payload = {

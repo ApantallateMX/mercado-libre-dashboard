@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-05 — DECISION: stock de Tijuana excluido del "vendible online" — solo CDMX/MTY venden en línea
+
+Jovan aclaró la regla de negocio: el producto en Tijuana es bueno y vendible, pero solo los
+almacenes CDMX y Monterrey están autorizados operativamente para vender en línea. Tijuana
+existe únicamente para reabastecer (transferir) a esos 2 almacenes, nunca para atender
+demanda online directamente. Esto REVIERTE la regla documentada el 2026-07-21 que incluía
+Tijuana (BM LocationIDs 45,69,43,42) como vendible tras una auditoría SKU por SKU — el dato
+de esa auditoría seguía siendo correcto (stock físico real), lo que cambió es la regla de
+qué almacenes pueden despachar venta en línea.
+
+Set final de stock vendible: `47,62,68` (antes `47,62,68,45,69,43,42`).
+
+Fix central: 3 defaults de `location_id` en `binmanager_client.py`
+(`get_bulk_stock`, `get_stock_with_reserve`, `_query_bm_stock`) — la mayoría de call sites
+de la app no pasan override, así que se corrigen automáticamente `/api/diag/sku`,
+`bm_sku_master.available_qty`, `/api/diag/tv-stock-vs-sales`, el finder de "no lanzados",
+y el prewarm de Stock/alertas.
+
+Bug real encontrado aparte (no solo el default): el bloque de refresco de TVs (SNTV*) en
+`app/main.py:6580` sumaba explícitamente `_cdmx + _mty + _tj` al sobreescribir
+`avail_total` — fix independiente para que los TVs también dejen de contar TJ como vendible.
+
+También: split de `_BM_LOC_IDS` en `amazon_products.py` (una constante para el desglose por
+almacén que sigue incluyendo TJ, otra para el total vendible que ya no la incluye).
+Verificado en `sku_inventory.py` que ya excluía TJ correctamente sin necesitar cambios.
+
+Transferencias Sugeridas Entre Almacenes (tab Planeación) NO se tocó — sigue calculando
+MTY/CDMX/TJ por separado con sus propios fetches dedicados, que es justo donde Tijuana
+debe seguir contando.
+
+Verificado localmente: SHLB000019 (stock físico solo en Tijuana) pasó de `avail=723` a
+`avail=0` en `/api/diag/sku` tras el fix, confirmando que ya no se cuenta como vendible.
+
+Ver `.claude/memory/project_bm_tijuana_exclusion.md` para el detalle completo por archivo.
+
+---
+
 ## 2026-08-05 — FIX: hilos de mensajes Amazon marcados "resuelto" se quedaban ocultos para siempre
 
 Jovan reportó el mensaje de Belum (Business Buyer, orden 701-1037142-0773817,

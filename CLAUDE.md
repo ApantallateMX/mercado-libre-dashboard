@@ -96,9 +96,9 @@ Cualquier feature pedido para ML o Amazon → implementar en TODAS las plataform
 - 63 = Tijuana BC real (WH14, "TJ-B2B") — sin stock propio (0 registros); el producto vendible de Tijuana vive en WH2 MITIJ
 - 68 = Monterrey MAXX
 - 66 = Guadalajara (NO incluida)
-- 45, 69, 43, 42 = ubicaciones de WH2 "MITIJ" (Tijuana) clasificadas como vendible real tras auditoría SKU por SKU — **incluidas desde 2026-07-21**. El resto de MITIJ (tránsito "To Mexico", aduana, defectuoso, en proceso, y el bin de 340K que resultó ser 98.6% material de empaque) queda excluido a propósito.
+- 45, 69, 43, 42 = ubicaciones de WH2 "MITIJ" (Tijuana), stock real y bueno, pero **EXCLUIDAS del vendible desde 2026-08-05**: solo los almacenes CDMX y MTY están autorizados a vender en línea; Tijuana existe únicamente para reabastecer (transferir) a esos 2 almacenes, no para atender demanda online directamente.
 
-Set final de stock vendible: `47,62,68,45,69,43,42`. Ver `.claude/memory/project_bm_locationid_62_63_swap.md` para el hallazgo completo y el detalle de qué se implementó en cada archivo.
+Set final de stock vendible: `47,62,68` (Tijuana excluida). Las ubicaciones 45,69,43,42 se siguen consultando, pero SOLO para el desglose MTY/CDMX/TJ y la feature de Transferencias Sugeridas Entre Almacenes (Planeación) — nunca para el total "disponible para venta". Ver `.claude/memory/project_bm_tijuana_exclusion.md` (cambio actual) y `.claude/memory/project_bm_locationid_62_63_swap.md` (contexto histórico, ya superado en cuanto a incluir TJ).
 
 ### UI / Frontend
 - Funciones onclick en scripts htmx: SIEMPRE `window.foo = function()`, nunca `function foo()`
