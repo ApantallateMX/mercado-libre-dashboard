@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: KPI "Mensajes" marcaba 4 pero la lista salía vacía -- el filtro de fecha ocultaba pendientes reales
+
+Con los dos fixes anteriores desplegados, Jovan reportó: KPI dice 4, pero la
+lista de Pendientes no muestra nada. Confirmado con `/api/diag/ml-pending-list`:
+las conversaciones pendientes reales de la cuenta eran todas de fechas
+ANTERIORES al "desde" activo en el filtro global de Salud (ej. "desde
+2026-07-31" mientras las pendientes eran del 24, 28, 30 de julio).
+
+Causa: el KPI (`_count_ml_pending_excluding_blocked`) nunca aplicó filtro de
+fecha (correcto, cuenta TODO lo pendiente sin importar antigüedad), pero la
+LISTA (`_fetch_enriched_ml_conversations`, vía `health_messages_partial`)
+sí respeta el filtro de fecha global de Salud -- diseñado para Reclamos/
+Preguntas como reporte de un periodo, pero aplicado también sin querer a
+Mensajes. Un mensaje sin responder de hace 2 semanas sigue siendo pendiente;
+no debería desaparecer de la cola de acción solo por estar fuera de un
+rango de fechas arbitrario.
+
+Fix: `health_messages_partial()` y `health_messages_unified_partial()` ahora
+ignoran el filtro de fecha global por completo -- Mensajes es una cola viva,
+no un reporte de periodo, así que siempre muestra todo lo pendiente sin
+importar antigüedad.
+
+---
+
 ## 2026-08-06 — FIX: la pestaña Mensajes nunca aplicaba el filtro "Pendientes" al cargar
 
 Con el conteo de KPI ya corregido (entrada siguiente), Jovan reportó que el número

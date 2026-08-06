@@ -10153,8 +10153,17 @@ async def health_messages_partial(
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
-        df = date_from or None
-        dt = date_to or None
+        # Mensajes IGNORA el filtro de fecha global de Salud -- a diferencia
+        # de Reclamos/Preguntas (reportes de un periodo), "Pendientes" es una
+        # cola de acción viva: un mensaje sin responder de hace 2 semanas
+        # sigue siendo pendiente, no deja de serlo por estar fuera de un
+        # rango de fechas arbitrario. Bug real 2026-08-06: el KPI "Mensajes"
+        # (sin filtro de fecha) marcaba 4, pero la lista (SÍ filtrada por
+        # fecha) no mostraba ninguna -- las 4 pendientes reales eran de antes
+        # del "desde" activo, así que quedaban ocultas aunque genuinamente
+        # necesitaran respuesta.
+        df = None
+        dt = None
         seller_id = str(client.user_id)
         try:
             enriched, real_total = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
@@ -10216,8 +10225,9 @@ async def health_messages_unified_partial(
     account_nickname para poder Tomar/Resolver/Enviar desde la cuenta
     correcta sin depender de cuál esté 'activa' en el navegador."""
     _require_subtab(request, "ml", "salud", "messages")
-    df = date_from or None
-    dt = date_to or None
+    # Mensajes ignora el filtro de fecha global -- ver health_messages_partial().
+    df = None
+    dt = None
     accounts = await token_store.get_all_tokens()
     sem_ml = asyncio.Semaphore(3)
 
