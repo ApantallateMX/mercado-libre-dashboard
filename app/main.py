@@ -5530,7 +5530,14 @@ async def _load_bm_cache_from_db():
         rows = await token_store.load_bm_stock_cache(max_age_s=7200.0)  # 2h — solo hay >0 en DB
         loaded = 0
         for row in rows:
-            sku = row["sku"].upper()
+            # normalize_to_bm_sku(): defensa contra filas viejas con SKU compuesto sin
+            # limpiar (ej. "SNTV004280-ICB+SNWM000001") — encontradas y purgadas 2026-08-06.
+            # Sin esto, una fila así queda como llave huérfana permanente en el caché
+            # (ts=0 → el prewarm nunca la vuelve a tocar porque ningún SKU real normaliza
+            # a esa cadena compuesta).
+            sku = normalize_to_bm_sku(row["sku"].upper())
+            if not sku:
+                continue
             data = _json.loads(row["data_json"])
             # Solo cargar entradas con stock > 0 (DB solo debería tener >0, pero doble guarda)
             if sku not in _bm_stock_cache and data.get("avail_total", 0) > 0:
