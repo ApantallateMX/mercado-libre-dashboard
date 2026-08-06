@@ -16139,6 +16139,40 @@ async def diag_bm_stock_snapshot(token: str = ""):
     }
 
 
+@app.get("/api/diag/bm-sku-master-lookup")
+async def diag_bm_sku_master_lookup(token: str = "", sku: str = ""):
+    """Lee directo la fila de bm_sku_master para un SKU -- para rastrear de
+    dónde sale un número de "Stock BM" que no coincide con BM real. También
+    trae amazon_listings/ml_listings crudos con el mismo base_sku, para ver
+    todas las fuentes de una sola vez."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    base = normalize_to_bm_sku(sku.upper())
+    import aiosqlite as _aio_bsl
+    async with _aio_bsl.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_bsl.Row
+        master = await (await db.execute(
+            "SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at FROM bm_sku_master WHERE sku=?",
+            (base,),
+        )).fetchone()
+        amz_rows = await (await db.execute(
+            "SELECT sku, base_sku, seller_id, status, available_qty, synced_at FROM amazon_listings WHERE base_sku=?",
+            (base,),
+        )).fetchall()
+        ml_rows = await (await db.execute(
+            "SELECT item_id, sku, base_sku, account_id, status, available_qty, synced_at FROM ml_listings WHERE base_sku=?",
+            (base,),
+        )).fetchall()
+    return {
+        "base_sku": base,
+        "bm_sku_master": dict(master) if master else None,
+        "amazon_listings": [dict(r) for r in amz_rows],
+        "ml_listings": [dict(r) for r in ml_rows],
+    }
+
+
 @app.get("/api/diag/reconcile-realtime-alerts")
 async def diag_reconcile_realtime_alerts(token: str = ""):
     """Dispara YA el chequeo de reconciliación (normalmente corre solo cada
