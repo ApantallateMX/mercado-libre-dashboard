@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: "Marcar resuelto" tiraba "window._setMsgStatus is not a function" en consola
+
+Jovan confirmó con la consola del navegador (F12) el error real: `Uncaught TypeError:
+window._setMsgStatus is not a function at HTMLButtonElement.onclick`. Probé la función
+del servidor directo (`token_store.update_message_view_status`) y funcionaba perfecto
+-- confirmando que el problema era 100% del navegador, no del backend.
+
+Causa: `partials/health_messages.html` definía `_setMsgStatus`, `_takeMsgConv`,
+`filterMessages`, `setMsgScope`, `searchMessages`, `clearMsgSearch` dentro de su
+PROPIO `<script>` embebido. Este partial se intercambia dentro de health.html vía
+AJAX (htmx `innerHTML` swap) -- y un `<script>` embebido en HTML intercambiado así
+no se re-ejecuta de forma confiable en cada swap. Funciones equivalentes que SÍ
+funcionaban siempre (`sendChatMessage`, `respondClaim`) ya vivían en `health.html`
+(la página persistente) precisamente por este motivo -- el patrón correcto ya
+existía, solo que `health_messages.html` no lo seguía.
+
+Fix: se movieron las 6 funciones a `health.html`. La única complicación:
+`_msgBaseUrl()` dependía de `window._msgIsUnified`, una variable horneada por Jinja
+en el partial (`{{ 'true' if unified else 'false' }}`) -- al vivir ahora en la
+página persistente sin ese contexto, se cambió para leer `data-msg-unified` del DOM
+(atributo agregado al contenedor superior del partial, que sí se re-renderiza en
+cada swap aunque el script no se re-ejecute).
+
+---
+
 ## 2026-08-06 — FIX: "Marcar resuelto" en mensajes ML no tenía ningún efecto persistente
 
 Jovan reportó: el botón "Marcar resuelto" no parecía hacer nada — la conversación

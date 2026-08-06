@@ -1,11 +1,11 @@
 <!-- Barra superior: búsqueda + filtros -->
-<div class="flex flex-wrap gap-2 mb-4 items-center">
+<div class="flex flex-wrap gap-2 mb-4 items-center" data-msg-unified="{{ 'true' if unified else 'false' }}">
     <!-- Filtro Pendientes / Todos -->
-    <button onclick="filterMessages('pending')" id="msg-filter-pending"
+    <button onclick="window.filterMessages('pending')" id="msg-filter-pending"
             class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
         Pendientes
     </button>
-    <button onclick="filterMessages('all')" id="msg-filter-all"
+    <button onclick="window.filterMessages('all')" id="msg-filter-all"
             class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
         Todos
     </button>
@@ -27,7 +27,7 @@
     </button>
 
     <!-- Búsqueda -->
-    <form id="msg-search-form" class="flex items-center gap-1 ml-auto" onsubmit="searchMessages(event)">
+    <form id="msg-search-form" class="flex items-center gap-1 ml-auto" onsubmit="window.searchMessages(event)">
         <input type="text" id="msg-search-input" value="{{ q or '' }}"
                placeholder="Buscar por orden, comprador, producto..."
                class="border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-700 w-56 focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-300">
@@ -36,7 +36,7 @@
             Buscar
         </button>
         {% if q %}
-        <button type="button" onclick="clearMsgSearch()"
+        <button type="button" onclick="window.clearMsgSearch()"
                 class="px-2 py-1.5 bg-gray-100 text-gray-500 text-xs rounded-lg hover:bg-gray-200 transition">
             ✕
         </button>
@@ -50,130 +50,6 @@
     — {{ conversations | length }} coincidencia{{ 's' if conversations | length != 1 }}
 </p>
 {% endif %}
-
-<script>
-window.filterMessages = function(filter) {
-    var cards = document.querySelectorAll('.msg-conv-card');
-    var btnPending = document.getElementById('msg-filter-pending');
-    var btnAll = document.getElementById('msg-filter-all');
-    if (filter === 'pending') {
-        btnPending.className = 'px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold';
-        btnAll.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200';
-        cards.forEach(function(c) {
-            c.style.display = c.getAttribute('data-needs-response') === 'true' ? '' : 'none';
-        });
-    } else {
-        btnAll.className = 'px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold';
-        btnPending.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200';
-        cards.forEach(function(c) { c.style.display = ''; });
-    }
-};
-
-window._msgIsUnified = {{ 'true' if unified else 'false' }};
-window._msgBaseUrl = function() {
-    return window._msgIsUnified ? '/partials/health-messages-unified' : '/partials/health-messages';
-};
-
-window.setMsgScope = function(scope) {
-    var url = (scope === 'all') ? '/partials/health-messages-unified' : '/partials/health-messages';
-    if (window.switchHealthTab) {
-        window.switchHealthTab('messages', url);
-    } else {
-        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
-    }
-};
-
-window.searchMessages = function(e) {
-    e.preventDefault();
-    var q = document.getElementById('msg-search-input').value.trim();
-    var url = window._msgBaseUrl() + '?q=' + encodeURIComponent(q);
-    if (window.switchHealthTab) {
-        window.switchHealthTab('messages', url);
-    } else {
-        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
-    }
-};
-
-window.clearMsgSearch = function() {
-    var url = window._msgBaseUrl();
-    if (window.switchHealthTab) {
-        window.switchHealthTab('messages', url);
-    } else {
-        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
-    }
-};
-
-window._takeMsgConv = function(packId, btn) {
-    btn.disabled = true; btn.textContent = '...';
-    var card = btn.closest('.msg-conv-card');
-    var accountId = card ? card.getAttribute('data-account-id') : '';
-    var qs = accountId ? ('?account_id=' + encodeURIComponent(accountId)) : '';
-    fetch('/api/health/messages/' + packId + '/take' + qs, {
-        method: 'POST', headers: {'Content-Type': 'application/json'}
-    })
-    .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
-        return r.json();
-    })
-    .then(function(d) {
-        var badge = document.getElementById('msg-view-badge-' + packId);
-        if (badge) {
-            badge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700';
-            badge.innerHTML = '&#9679; Atendiendo: ' + (d.taken_by || '?');
-        }
-        btn.textContent = 'Tomado ✓'; btn.disabled = true;
-        btn.className = btn.className.replace('bg-violet-100 text-violet-700 hover:bg-violet-200', 'bg-gray-100 text-gray-400 cursor-default');
-    })
-    .catch(function(e) {
-        btn.disabled = false; btn.textContent = 'Tomar';
-        alert('No se pudo tomar la conversación: ' + e.message);
-    });
-};
-
-window._setMsgStatus = function(packId, status, btn) {
-    btn.disabled = true;
-    var card = btn.closest('.msg-conv-card');
-    var accountId = card ? card.getAttribute('data-account-id') : '';
-    fetch('/api/health/messages/' + packId + '/status', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({status: status, account_id: accountId || ''})
-    })
-    .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
-        return r.json();
-    })
-    .then(function() {
-        var cardEl = document.getElementById('msg-card-' + packId);
-        if (status === 'resolved') {
-            // Antes solo bajaba la opacidad y quedaba visible en Pendientes --
-            // Jovan pidio explicitamente que al resolver desaparezca de la
-            // vista, no solo que se vea "apagada".
-            if (cardEl) {
-                cardEl.style.transition = 'opacity 0.3s, max-height 0.3s';
-                cardEl.style.opacity = '0';
-                cardEl.style.maxHeight = cardEl.scrollHeight + 'px';
-                setTimeout(function() {
-                    cardEl.style.maxHeight = '0'; cardEl.style.overflow = 'hidden';
-                    cardEl.style.padding = '0'; cardEl.style.margin = '0'; cardEl.style.border = 'none';
-                }, 300);
-                setTimeout(function() { cardEl.remove(); }, 600);
-            }
-            return;
-        }
-        var badge = document.getElementById('msg-view-badge-' + packId);
-        if (badge) {
-            badge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-600';
-            badge.textContent = 'Reabierto';
-        }
-        btn.disabled = false;
-    })
-    .catch(function(e) {
-        btn.disabled = false;
-        alert('No se pudo actualizar: ' + e.message);
-    });
-};
-</script>
 
 {% if conversations %}
 <div class="space-y-4">
