@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: la pestaña Mensajes nunca aplicaba el filtro "Pendientes" al cargar
+
+Con el conteo de KPI ya corregido (entrada siguiente), Jovan reportó que el número
+bajó correctamente (7 → 4) pero la LISTA seguía mostrando conversaciones ya
+marcadas como resueltas bajo "Pendientes".
+
+Causa: el botón "Pendientes" se ve activo por una clase CSS fija en el template
+del lado del servidor, pero `window.filterMessages('pending')` (la función que
+realmente oculta las tarjetas con `data-needs-response="false"`) solo se
+invocaba cuando el usuario le daba clic MANUALMENTE al botón. `loadTab()` en
+`health.html` (usado para la carga inicial, refresh manual, cambio de pestaña
+y aplicar/limpiar filtros de fecha) hacía `content.innerHTML = html` y nunca
+llamaba a `filterMessages()` -- así que toda conversación (pendiente o
+resuelta) quedaba visible hasta el primer clic manual en el filtro.
+
+Fix: `loadTab()` ahora llama `window.filterMessages('pending')` automáticamente
+después de cargar el HTML cuando la pestaña es 'messages'.
+
+---
+
 ## 2026-08-06 — FIX (real, el número seguía en 37): tercera implementación duplicada del conteo de Mensajes
 
 El fix anterior (mismo día, entrada siguiente) no bajó el número en la página real

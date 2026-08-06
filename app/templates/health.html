@@ -287,6 +287,15 @@ function loadTab(tab) {
             _updateTimestamp();
             // After a manual load, reset known counts so we don't immediately re-notify
             _syncKnownCountsFromSummary();
+            // El botón "Pendientes" se ve activo por default (clase fija en el
+            // template), pero filterMessages() nunca se invocaba tras cargar
+            // el HTML -- así que TODAS las conversaciones (incluidas ya
+            // resueltas) quedaban visibles hasta que alguien le diera clic
+            // manualmente al filtro. Jovan reportó 2026-08-06 que seguía
+            // viendo mensajes ya resueltos en Pendientes tras recargar.
+            if (tab === 'messages' && window.filterMessages) {
+                window.filterMessages('pending');
+            }
         })
         .catch(function(e) {
             if (e.name !== 'AbortError')
