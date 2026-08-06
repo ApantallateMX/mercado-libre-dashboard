@@ -28,7 +28,7 @@
 {% if parents_count > 0 %}
 <div class="mb-3 flex items-center gap-3 text-xs">
   <span class="text-gray-500">{% if show_parents %}Mostrando parents de variaciones{% else %}{{ parents_count }} parents de variaciones ocultos{% endif %}</span>
-  <a href="?seller_id={{ seller_id }}&show_parents={{ 'false' if show_parents else 'true' }}"
+  <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&show_parents={{ 'false' if show_parents else 'true' }}')"
      class="px-2.5 py-1 border rounded-lg transition {% if show_parents %}bg-orange-100 border-orange-300 text-orange-700 hover:bg-orange-50{% else %}bg-white border-gray-200 text-gray-500 hover:bg-gray-50{% endif %}">
     {% if show_parents %}Ocultar parents{% else %}Mostrar parents ({{ parents_count }}){% endif %}
   </a>
@@ -190,13 +190,13 @@
   <div class="px-4 py-2.5 border-t border-gray-100 flex items-center justify-between bg-gray-50/40">
     <p class="text-[10px] text-gray-400">{{ sup_total }} listings &middot; P&aacute;gina {{ sup_page }} de {{ sup_pages }}</p>
     <div class="flex items-center gap-1">
-      {% if sup_page > 1 %}<a href="?seller_id={{ seller_id }}&sup_page={{ sup_page - 1 }}"
+      {% if sup_page > 1 %}<a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&sup_page={{ sup_page - 1 }}')"
          class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&larr;</a>{% endif %}
       {% for p in range([1, sup_page - 2]|max, [sup_pages + 1, sup_page + 3]|min) %}
-      <a href="?seller_id={{ seller_id }}&sup_page={{ p }}"
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&sup_page={{ p }}')"
          class="px-3 py-1 text-[10px] rounded {{ 'bg-gray-600 text-white' if p == sup_page else 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50' }}">{{ p }}</a>
       {% endfor %}
-      {% if sup_page < sup_pages %}<a href="?seller_id={{ seller_id }}&sup_page={{ sup_page + 1 }}"
+      {% if sup_page < sup_pages %}<a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&sup_page={{ sup_page + 1 }}')"
          class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&rarr;</a>{% endif %}
     </div>
   </div>
@@ -217,9 +217,9 @@
     </div>
     <div class="flex items-center gap-1">
       <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ inac_total }}</span>
-      <a href="?seller_id={{ seller_id }}&bm_filter=all" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if not bm_filter or bm_filter == 'all' %}bg-gray-600 text-white{% else %}bg-white text-gray-500 border-gray-200 hover:bg-gray-50{% endif %}">Todos</a>
-      <a href="?seller_id={{ seller_id }}&bm_filter=with_stock" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if bm_filter == 'with_stock' %}bg-purple-600 text-white{% else %}bg-white text-purple-600 border-purple-200 hover:bg-purple-50{% endif %}">&#x26A1; Con Stock ({{ inac_with_stock }})</a>
-      <a href="?seller_id={{ seller_id }}&bm_filter=no_stock" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if bm_filter == 'no_stock' %}bg-gray-400 text-white{% else %}bg-white text-gray-400 border-gray-200 hover:bg-gray-50{% endif %}">Sin Stock</a>
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&bm_filter=all')" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if not bm_filter or bm_filter == 'all' %}bg-gray-600 text-white{% else %}bg-white text-gray-500 border-gray-200 hover:bg-gray-50{% endif %}">Todos</a>
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&bm_filter=with_stock')" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if bm_filter == 'with_stock' %}bg-purple-600 text-white{% else %}bg-white text-purple-600 border-purple-200 hover:bg-purple-50{% endif %}">&#x26A1; Con Stock ({{ inac_with_stock }})</a>
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&bm_filter=no_stock')" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if bm_filter == 'no_stock' %}bg-gray-400 text-white{% else %}bg-white text-gray-400 border-gray-200 hover:bg-gray-50{% endif %}">Sin Stock</a>
     </div>
   </div>
     <div class="hidden md:block overflow-x-auto">
@@ -337,13 +337,13 @@
   <div class="px-4 py-2.5 border-t border-gray-100 flex items-center justify-between bg-gray-50/40">
     <p class="text-[10px] text-gray-400">{{ inac_total }} listings &middot; P&aacute;gina {{ inac_page }} de {{ inac_pages }}</p>
     <div class="flex items-center gap-1">
-      {% if inac_page > 1 %}<a href="?seller_id={{ seller_id }}&inac_page={{ inac_page - 1 }}"
+      {% if inac_page > 1 %}<a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&bm_filter={{ bm_filter or 'all' }}&inac_page={{ inac_page - 1 }}')"
          class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&larr;</a>{% endif %}
       {% for p in range([1, inac_page - 2]|max, [inac_pages + 1, inac_page + 3]|min) %}
-      <a href="?seller_id={{ seller_id }}&inac_page={{ p }}"
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&bm_filter={{ bm_filter or 'all' }}&inac_page={{ p }}')"
          class="px-3 py-1 text-[10px] rounded {{ 'bg-gray-600 text-white' if p == inac_page else 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50' }}">{{ p }}</a>
       {% endfor %}
-      {% if inac_page < inac_pages %}<a href="?seller_id={{ seller_id }}&inac_page={{ inac_page + 1 }}"
+      {% if inac_page < inac_pages %}<a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&bm_filter={{ bm_filter or 'all' }}&inac_page={{ inac_page + 1 }}')"
          class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&rarr;</a>{% endif %}
     </div>
   </div>
@@ -365,7 +365,7 @@
     </div>
     <div class="flex items-center gap-1 flex-wrap">
       {% for d, lbl in [(30,'30d'),(90,'90d'),(180,'6m'),(365,'1 año'),(730,'2 años')] %}
-      <a href="?seller_id={{ seller_id }}&days={{ d }}"
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&days={{ d }}')"
          class="px-2.5 py-1 text-[10px] font-semibold rounded-lg transition border {% if cand_days == d %}bg-red-500 text-white border-red-500{% else %}bg-white text-red-600 border-red-200 hover:bg-red-50{% endif %}">
         {{ lbl }}
       </a>
@@ -473,17 +473,17 @@
     <p class="text-[10px] text-gray-400">Pagina {{ cand_page }} de {{ cand_pages }} &middot; {{ cand_total }} total</p>
     <div class="flex items-center gap-1">
       {% if cand_page > 1 %}
-      <a href="?seller_id={{ seller_id }}&days={{ cand_days }}&page={{ cand_page - 1 }}"
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&days={{ cand_days }}&page={{ cand_page - 1 }}')"
          class="px-3 py-1.5 bg-white border border-red-200 text-red-600 text-[10px] rounded-lg hover:bg-red-50">&larr; Ant.</a>
       {% endif %}
       {% for p in range([1, cand_page - 2]|max, [cand_pages + 1, cand_page + 3]|min) %}
-      <a href="?seller_id={{ seller_id }}&days={{ cand_days }}&page={{ p }}"
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&days={{ cand_days }}&page={{ p }}')"
          class="px-3 py-1.5 text-[10px] rounded-lg {% if p == cand_page %}bg-red-500 text-white{% else %}bg-white border border-red-200 text-red-600 hover:bg-red-50{% endif %}">
         {{ p }}
       </a>
       {% endfor %}
       {% if cand_page < cand_pages %}
-      <a href="?seller_id={{ seller_id }}&days={{ cand_days }}&page={{ cand_page + 1 }}"
+      <a href="#" onclick="return window._loadSinPublicarTab('/api/amazon/products/sin-publicar?seller_id={{ seller_id }}&days={{ cand_days }}&page={{ cand_page + 1 }}')"
          class="px-3 py-1.5 bg-white border border-red-200 text-red-600 text-[10px] rounded-lg hover:bg-red-50">Sig. &rarr;</a>
       {% endif %}
     </div>

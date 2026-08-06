@@ -24,6 +24,25 @@ así siempre caen dentro de la primera página.
 
 ---
 
+## 2026-08-06 — FIX: paginación/filtros de Amazon Productos > Sin Publicar recargaban toda la página y volvían a Resumen
+
+Jovan reportó: darle clic a "página 2" en Inactivos lo mandaba de vuelta al tab
+Resumen en vez de avanzar de página. Causa: todos los links de paginación y
+filtros de ese tab (Suprimidos, Inactivos, Con Stock/Sin Stock, filtro de días
+y paginación de Candidatos a Eliminar) eran `<a href="?...">` planos -- una
+navegación de página COMPLETA del navegador a `/amazon/products?...`, en vez
+de una recarga AJAX del panel. Esa navegación completa vuelve a cargar el
+shell de la página desde cero, que por default muestra Resumen e ignora el
+query param de paginación.
+
+El tab Inventario ya tenía el patrón correcto (`_loadInvTab`, fetch + swap de
+`#amz-prod-tab-content` sin recargar la página) -- Sin Publicar simplemente
+nunca lo adoptó. Fix: nueva función `window._loadSinPublicarTab()` (mismo
+patrón que `_loadInvTab`) y los 12 enlaces del partial convertidos de
+`href="?..."` a `onclick="return window._loadSinPublicarTab('...')"`.
+
+---
+
 ## 2026-08-06 — FIX: "Stock BM" en Amazon Productos > Inactivos leía de Mercado Libre, no de BM
 
 Jovan reportó SNHG000006 mostrando "Stock BM: 2040" en Amazon cuando el stock real

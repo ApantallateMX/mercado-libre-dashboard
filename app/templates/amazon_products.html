@@ -318,6 +318,26 @@ window._loadInvTab = function(url) {
         });
 };
 
+// ── Tab Sin Publicar (Inactivos/Suprimidos): carga AJAX con paginación/filtros ──
+// Antes los links de paginación/filtro de este tab eran <a href="?..."> planos --
+// navegación de página completa real, que recarga /amazon/products desde cero y
+// cae de vuelta en el tab Resumen por default, ignorando el query param. Jovan
+// reportó 2026-08-06 que darle clic a "página 2" lo mandaba al inicio. Mismo
+// patrón ya usado correctamente por _loadInvTab arriba.
+window._loadSinPublicarTab = function(url) {
+    var container = document.getElementById('amz-prod-tab-content');
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold mb-1">Error</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+    return false;
+};
+
 // ── Helpers para leer el estado actual del inventario ─────────────────────
 function _invState() {
     var s = document.getElementById('amz-inv-state');
