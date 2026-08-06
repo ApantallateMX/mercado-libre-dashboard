@@ -5798,8 +5798,16 @@ _bm_health: dict = {
 _bm_health_log: list = []   # últimos 20 registros de health checks
 
 async def _check_bm_health():
-    """Estado de BM derivado del último bulk fetch — sin llamadas extra a BM.
-    ok=True si el último bulk trajo filas. ok=False si falló o nunca corrió.
+    """Ping real y liviano a BM (GET /User/Index) — no solo inferir del bulk cache.
+
+    Antes (hasta 2026-08-06) este check derivaba "ok" únicamente de si
+    _bm_bulk_gr_cache tenía filas, sin tocar BM. Eso producía falsos "BM no
+    responde" cuando el bulk simplemente no había corrido aún (cache fría
+    tras restart) o estaba bloqueado detrás de OTRA petición atascada en el
+    semáforo global — el health check reportaba el síntoma, no la causa real.
+    Ahora sí prueba conectividad real, protegido por el hard-timeout de
+    _get() (ver binmanager_client.py) que garantiza que esta llamada nunca
+    se queda colgada indefinidamente.
     """
     global _bm_health, _bm_health_log
     t0 = _time.time()
@@ -5808,14 +5816,16 @@ async def _check_bm_health():
     error_msg = ""
     elapsed_ms = 0
     try:
-        # Derivar estado de BM del bulk cache — sin llamada extra a BM.
-        if _bm_bulk_gr_cache and len(_bm_bulk_gr_cache[1]) > 0:
-            ok = True
-            elapsed_ms = 0
-        else:
-            ok = False
-            error_type = "error"
-            error_msg = "Bulk GR cache vacío o no inicializado"
+        from app.services.binmanager_client import get_shared_bm as _get_bm_health, _BM_BASE as _bm_health_base
+        _bm_h = await _get_bm_health()
+        # _get() ya trae su propio hard-timeout (ver binmanager_client.py) —
+        # esta llamada nunca se queda colgada indefinidamente. 15s (no 10s):
+        # BM puede tardar 30s+ en consultas pesadas incluso sano (verificado
+        # 2026-08-06), así que el ping liviano necesita margen para no marcar
+        # falso "down" por simple lentitud momentánea.
+        await _bm_h._get(f"{_bm_health_base}/User/Index", timeout=15)
+        ok = True
+        elapsed_ms = round((_time.time() - t0) * 1000)
     except asyncio.TimeoutError:
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = False

@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: un solo request colgado a BM podía tumbar TODA la consulta de stock de la app
+
+Jovan reportó que BinManager sí estaba respondiendo del lado de él (navegando directo),
+mientras nuestro dashboard llevaba minutos sin poder refrescar ningún stock. Confirmado
+con logs de Railway: `[BM-HEALTH] BM no responde — fallo #5`, `[BM-CACHE] BM DOWN — skip
+fetch de 2487 SKUs`.
+
+Causa raíz real: TODAS las llamadas a BM pasan por un único semáforo global
+(`asyncio.Semaphore(1)` en `binmanager_client.py`, "solo 1 request activo a la vez").
+Aunque cada llamada recibe un `timeout=` explícito para httpx, si una petición se
+queda esperando sin que ese timeout llegue a dispararse (verificado: BM puede tardar
+30s+ incluso sano en consultas pesadas, y bajo carga real esa cola puede crecer sin
+límite), el semáforo nunca se libera — y CUALQUIER otra llamada a BM en toda la app,
+sin relación alguna con la petición original, queda esperando detrás para siempre.
+Reiniciar el servicio "arreglaba" el síntoma pero no la causa: podía volver a pasar
+con cualquier lentitud futura de BM.
+
+Fix definitivo (no reinicio): `_post()`/`_get()` en `binmanager_client.py` ahora
+envuelven la llamada real a httpx con `asyncio.wait_for()` — una red de seguridad
+independiente del timeout de httpx que garantiza, vía cancelación de asyncio, que el
+semáforo se libere sin importar la causa del colgamiento. Ningún incidente futuro de
+esta clase puede volver a bloquear el acceso a BM para toda la app.
+
+También se corrigió `_check_bm_health()` (`app/main.py`): antes deducía "BM caído"
+solo de si el bulk cache tenía filas, sin tocar BM — de ahí el falso "BM no responde"
+mientras en realidad la petición estaba bloqueada detrás de otra. Ahora hace un ping
+real y liviano (`GET /User/Index`, timeout 15s) protegido por el mismo hard-timeout.
+
+---
+
 ## 2026-08-06 — FIX: BM Disp. mostraba stock alto atascado sin corregirse hacia abajo (riesgo de sobreventa en TVs)
 
 Jovan reportó SNTV007472 (TCL 32"): dashboard mostraba "BM Disp. 18" pero BinManager

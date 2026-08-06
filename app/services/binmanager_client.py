@@ -89,16 +89,36 @@ class BinManagerClient:
         return "User/Index" in str(r.url) or r.status_code == 401
 
     async def _post(self, url: str, **kwargs) -> httpx.Response:
-        """POST a BM a través de la cola global — máx 1 request activo a la vez."""
+        """POST a BM a través de la cola global — máx 1 request activo a la vez.
+
+        asyncio.wait_for() envuelve la llamada como red de seguridad independiente
+        del timeout que httpx recibe en kwargs. Incidente 2026-08-06: una conexión
+        colgada nunca disparó su propio timeout de httpx (causa exacta desconocida —
+        posible problema de red a nivel TCP que httpx no detectó), dejando el
+        semáforo global bloqueado para siempre y tumbando TODAS las consultas BM
+        de la app hasta un restart manual. asyncio.wait_for cancela la tarea sin
+        importar la causa del colgamiento, garantizando que el semáforo se libere.
+        """
+        _hard_timeout = (kwargs.get("timeout") or 30) + 5
         async with _get_bm_sem():
-            r = await self._client().post(url, **kwargs)
+            try:
+                r = await asyncio.wait_for(self._client().post(url, **kwargs), timeout=_hard_timeout)
+            except asyncio.TimeoutError:
+                logger.error(f"BinManager _post: hard-timeout ({_hard_timeout}s) forzado en {url} — liberando semáforo")
+                raise
             await asyncio.sleep(_BM_REQUEST_DELAY)
             return r
 
     async def _get(self, url: str, **kwargs) -> httpx.Response:
-        """GET a BM a través de la cola global — máx 1 request activo a la vez."""
+        """GET a BM a través de la cola global — máx 1 request activo a la vez.
+        Ver _post() — mismo hard-timeout de seguridad vía asyncio.wait_for."""
+        _hard_timeout = (kwargs.get("timeout") or 30) + 5
         async with _get_bm_sem():
-            r = await self._client().get(url, **kwargs)
+            try:
+                r = await asyncio.wait_for(self._client().get(url, **kwargs), timeout=_hard_timeout)
+            except asyncio.TimeoutError:
+                logger.error(f"BinManager _get: hard-timeout ({_hard_timeout}s) forzado en {url} — liberando semáforo")
+                raise
             await asyncio.sleep(_BM_REQUEST_DELAY)
             return r
 
