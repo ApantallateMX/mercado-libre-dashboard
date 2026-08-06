@@ -23559,6 +23559,38 @@ async def diag_ml_message_send_test(token: str = "", account_id: str = "", pack_
         await client.close()
 
 
+@app.get("/api/diag/ml-item-stock-fix")
+async def diag_ml_item_stock_fix(token: str = "", account_id: str = "", item_id: str = "",
+                                  quantity: int = -1, confirm: bool = False):
+    """DIAG con efecto real: llama EXACTAMENTE client.update_item_stock() --
+    misma función que usa PUT /api/items/{id}/stock (el botón "Sync" real de
+    Stock/Ventas Perdidas). Para corregir manualmente un item cuyo stock en ML
+    quedó desactualizado (ej. tenía stock vendible solo en Tijuana antes del
+    2026-08-05, nunca se volvió a sincronizar tras excluirla)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not item_id or quantity < 0:
+        return JSONResponse({"error": "account_id, item_id y quantity (>=0) requeridos"}, status_code=400)
+    if not confirm:
+        return JSONResponse({"error": "pasa confirm=true -- este endpoint SÍ actualiza el stock real en ML"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        before = await client.get(f"/items/{item_id}")
+        result = await client.update_item_stock(item_id, quantity)
+        after = await client.get(f"/items/{item_id}")
+        return {
+            "ok": True,
+            "before": {"status": before.get("status"), "available_quantity": before.get("available_quantity")},
+            "after": {"status": after.get("status"), "available_quantity": after.get("available_quantity")},
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tipo": type(e).__name__}
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-message-mark-resolved-test")
 async def diag_ml_message_mark_resolved_test(token: str = "", account_id: str = "", pack_id: str = ""):
     """DIAG con efecto real: llama EXACTAMENTE la misma función que usa
