@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: BM Disp. mostraba stock alto atascado sin corregirse hacia abajo (riesgo de sobreventa en TVs)
+
+Jovan reportó SNTV007472 (TCL 32"): dashboard mostraba "BM Disp. 18" pero BinManager
+directo confirmaba Reserve=17, Available=1. Confirmado con `/api/diag/sku`: BM vivo y bulk
+ya daban avail=1/reserve=17 correctamente (el fix de Tijuana del día anterior funcionaba
+bien), pero la entrada en `_bm_stock_cache` seguía en avail_total=18, reserved_total=0.
+
+Causa real (bug independiente, preexistente en el bloque de TVs que se tocó el día
+anterior para excluir Tijuana, no causado por ese cambio): `_fetch_tv_wh_breakdown()`
+(`app/main.py` ~6570) solo sobreescribía `avail_total` cuando el nuevo cálculo por
+almacén (`_lsum`) era MAYOR al valor ya cacheado (`if _lsum > _avt`). Si ese valor quedaba
+alto por cualquier motivo (dato viejo, glitch de BM), nunca se podía corregir hacia abajo
+aunque llegaran reservas nuevas reales — un TV podía mostrar "disponible" stock que en
+realidad ya estaba reservado para otras órdenes, con riesgo directo de sobreventa.
+
+Fix: se quitó la condición — ahora `avail_total` siempre se actualiza al valor calculado
+por almacén (`_cd["avail_total"] = _lsum`), en ambas direcciones. El guard existente que
+aborta todo el bloque si las 3 consultas por ubicación fallan sigue protegiendo contra
+pisar con ceros por una falla parcial de BM. Mitigación inmediata: se limpió la entrada de
+caché de SNTV007472 vía `/api/diag/clear-bm-sku` para que muestre el dato correcto sin
+esperar al próximo ciclo.
+
+---
+
 ## 2026-08-05 — DECISION: stock de Tijuana excluido del "vendible online" — solo CDMX/MTY venden en línea
 
 Jovan aclaró la regla de negocio: el producto en Tijuana es bueno y vendible, pero solo los

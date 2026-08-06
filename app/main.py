@@ -6576,17 +6576,20 @@ async def _fetch_tv_wh_breakdown():
             _cdmx = _tv_lkp(_ex47, _by47, _ck.upper())
             _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
             _tj   = _tv_lkp(_extj, _bytj, _ck.upper())
-            _avt  = _cd.get("avail_total", 0) or 0
             _lsum = _cdmx + _mty
-            # Confiar en el bulk per-location ALL (ICB/ICC incluido) sobre el bulk combinado.
-            # El bulk combinado LOC47+68 retorna a veces un Available inferior al real
-            # (discrepancia de agregación en BM API). Si per-location suma más, actualizar
-            # avail_total para que BM Disp refleje el valor correcto.
+            # Confiar SIEMPRE en el bulk per-location ALL (ICB/ICC incluido) sobre el bulk
+            # combinado, en ambas direcciones. El bulk combinado LOC47+68 puede quedar
+            # desincronizado del real (discrepancia de agregación en BM API, o un avail_total
+            # viejo que ya no refleja reservas nuevas) — per-location es la fuente más granular.
+            # Bug real 2026-08-06: antes solo se sobreescribía si _lsum era MAYOR al valor
+            # existente ("if _lsum > _avt"), así que un avail_total atascado en un valor alto
+            # (ej. SNTV007472: caché=18 vs real=1, con 17 reservados) nunca se corregía hacia
+            # abajo — riesgo de sobreventa. El guard de "las 3 consultas fallaron" arriba ya
+            # protege contra pisar con ceros por una falla parcial de BM.
             # TJ excluida desde 2026-08-05 — solo CDMX/MTY venden en línea, ver
             # project_bm_tijuana_exclusion.md. _tj se sigue guardando abajo para
             # desglose/Transferencias Sugeridas, pero nunca suma a avail_total.
-            if _lsum > _avt:
-                _cd["avail_total"] = _lsum
+            _cd["avail_total"] = _lsum
             _cd["cdmx"] = _cdmx
             _cd["mty"]  = _mty
             _cd["tj"]   = _tj
