@@ -23373,12 +23373,23 @@ async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_i
         return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
     try:
         thread = await client.get_message_thread(pack_id)
+        pack_lookup_error = ""
+        pack_data = {}
+        try:
+            pack_data = await client.get(f"/packs/{pack_id}")
+        except Exception as _e_pk:
+            pack_lookup_error = str(_e_pk)
         return {
             "pack_id": pack_id,
             "paging": thread.get("paging"),
             "conversation_status": thread.get("conversation_status"),
             "top_level_keys": list(thread.keys()),
             "mensajes_completos": thread.get("messages", []),
+            "pack_lookup": {
+                "orders": pack_data.get("orders"),
+                "status": pack_data.get("status"),
+                "error": pack_lookup_error or None,
+            },
         }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
