@@ -1316,7 +1316,11 @@ class MeliClient:
             from_uid_int = int(self.user_id)
         except (TypeError, ValueError):
             from_uid_int = self.user_id
-        payload = {"from": {"user_id": from_uid_int}, "text": {"plain": clean_text}}
+        # Ejemplo oficial de ML manda "text" como STRING plano, no
+        # {"plain": ...} -- el GET del thread también devuelve "text" como
+        # string plano en los mensajes reales. Probando este formato ya que
+        # "to"+int no resolvió un caso nuevo (2026-08-06).
+        payload = {"from": {"user_id": from_uid_int}, "text": clean_text}
         if buyer_id:
             try:
                 payload["to"] = {"user_id": int(buyer_id)}
