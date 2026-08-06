@@ -23446,6 +23446,41 @@ async def diag_ml_order_message_truth(token: str = "", account_id: str = "", ord
         await client.close()
 
 
+@app.get("/api/diag/ml-message-caps")
+async def diag_ml_message_caps(token: str = "", account_id: str = "", pack_id: str = ""):
+    """Consulta GET /messages/action_guide/packs/{pack_id}/caps_available?tag=post_sale --
+    "motivos para comunicarse" real de ML. Investigando 2026-08-06 "Unexpected exception
+    parsing json string" en conversaciones iniciadas por el vendedor (ej. via flujo
+    automático SEND_INVOICE_LINK) -- ML documenta que ahí requiere elegir un option_id
+    (Reasons to communicate) en vez de texto libre, o retorna
+    blocked_by_conversation_started_by_seller. Ver si option_id=OTHER (u otro) tiene
+    cap_available > 0 para saber si el freeform reply es viable aquí."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id:
+        return JSONResponse({"error": "account_id y pack_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        caps = None
+        caps_error = None
+        try:
+            caps = await client.get(f"/messages/action_guide/packs/{pack_id}/caps_available", params={"tag": "post_sale"})
+        except Exception as _e_caps:
+            caps_error = str(_e_caps)
+        guide = None
+        guide_error = None
+        try:
+            guide = await client.get(f"/messages/action_guide/packs/{pack_id}", params={"tag": "post_sale"})
+        except Exception as _e_guide:
+            guide_error = str(_e_guide)
+        return {"pack_id": pack_id, "caps_available": caps, "caps_error": caps_error,
+                "action_guide": guide, "action_guide_error": guide_error}
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-message-raw-dump")
 async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_id: str = ""):
     """Dump SIN filtrar de los últimos mensajes de un pack -- todos los campos
