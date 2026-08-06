@@ -44,9 +44,10 @@ async def health_counts():
                 return 0
 
         async def _m():
+            # Igual que en /summary: cuenta pendientes reales (respeta
+            # "Marcar resuelto"), no el total crudo de ML.
             try:
-                r = await client.get_messages(limit=1)
-                return r.get("paging", {}).get("total", 0)
+                return await _ts.count_ml_pending_messages(str(client.user_id))
             except Exception:
                 return 0
 
@@ -100,10 +101,11 @@ async def health_summary():
         except Exception:
             open_claims = 0
 
-        # Mensajes sin leer
+        # Mensajes pendientes -- respeta "Marcar resuelto" (antes usaba el
+        # total crudo de ML vía get_messages(limit=1), que no reflejaba
+        # nuestro estado interno y no bajaba en vivo al resolver, ver DEVLOG).
         try:
-            messages = await client.get_messages(limit=1)
-            unread_messages = messages.get("paging", {}).get("total", 0)
+            unread_messages = await _ts.count_ml_pending_messages(str(client.user_id))
         except Exception:
             unread_messages = 0
 

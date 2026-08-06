@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-06 — FIX: KPI "Mensajes" (badge/tab) no bajaba en vivo al marcar resuelto
+
+Jovan marcó varias conversaciones como resueltas y el número "Mensajes: 37" (KPI
+arriba y badge de la pestaña) se quedó exactamente igual.
+
+Causa: ese número venía de `client.get_messages(limit=1).paging.total` -- el
+conteo CRUDO de ML, que no tiene ninguna noción de nuestro estado interno de
+"resuelto" (eso vive solo en nuestra tabla `ml_message_views`). Por diseño, ML
+nunca iba a reflejar algo que solo nosotros trackeamos.
+
+Fix: nueva función `token_store.count_ml_pending_messages(account_id)` -- cuenta
+directo en SQLite (JOIN entre `ml_messages_index` y `ml_message_views`, sin
+llamada a ML) con la misma lógica de reapertura que ya usa la lista real:
+pendiente = último mensaje del comprador Y (no resuelto O el comprador escribió
+después de la marca de resuelto). Reemplaza el conteo crudo tanto en
+`/api/health/summary` (el KPI "Mensajes") como en `/api/health/counts` (badge
+de notificaciones global) para que ambos sean consistentes entre sí y con la
+lista de Mensajes.
+
+---
+
 ## 2026-08-06 — FIX: "Marcar resuelto" tiraba "window._setMsgStatus is not a function" en consola
 
 Jovan confirmó con la consola del navegador (F12) el error real: `Uncaught TypeError:
