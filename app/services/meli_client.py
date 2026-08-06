@@ -1306,9 +1306,22 @@ class MeliClient:
                 buyer_id = _to_uid
                 break
 
-        payload = {"from": {"user_id": self.user_id}, "text": {"plain": clean_text}}
+        # ML devuelve user_id como entero en sus propias respuestas (ej.
+        # "from":{"user_id":42144032}, sin comillas) -- self.user_id es str
+        # en todo el cliente. Mandar "from.user_id" como string cuando ML
+        # espera int puede ser justo lo que su parser no tolera y explica
+        # el "Unexpected exception parsing json string" genérico incluso en
+        # conversaciones sin bloqueo real (2026-08-06).
+        try:
+            from_uid_int = int(self.user_id)
+        except (TypeError, ValueError):
+            from_uid_int = self.user_id
+        payload = {"from": {"user_id": from_uid_int}, "text": {"plain": clean_text}}
         if buyer_id:
-            payload["to"] = {"user_id": buyer_id}
+            try:
+                payload["to"] = {"user_id": int(buyer_id)}
+            except (TypeError, ValueError):
+                payload["to"] = {"user_id": buyer_id}
 
         try:
             return await self.post(
