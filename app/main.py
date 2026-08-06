@@ -17046,6 +17046,60 @@ async def diag_cache_health(token: str = ""):
     })
 
 
+@app.get("/api/diag/tv-cache-audit")
+async def diag_tv_cache_audit(token: str = "", fix: bool = False):
+    """Diagnóstico: audita TODOS los SNTV* en _bm_stock_cache buscando el bug del
+    2026-08-06 — avail_total atascado por encima del real MTY+CDMX (el merge de
+    _fetch_tv_wh_breakdown solo corregía hacia arriba antes del fix).
+    fix=true: además de reportar, borra del caché+DB cada SKU stale_high (mismo efecto
+    que /api/diag/clear-bm-sku uno por uno, aquí en batch)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    now = _time.time()
+    stale = []
+    checked = 0
+    for bm_key, (ts, data) in list(_bm_stock_cache.items()):
+        if not bm_key.upper().startswith("SNTV"):
+            continue
+        checked += 1
+        avail_total = data.get("avail_total", 0) or 0
+        mty = data.get("mty", 0) or 0
+        cdmx = data.get("cdmx", 0) or 0
+        real = mty + cdmx
+        if avail_total > real:
+            stale.append({
+                "sku": bm_key,
+                "cache_avail_total": avail_total,
+                "real_mty_plus_cdmx": real,
+                "reserved_total": data.get("reserved_total", 0),
+                "mty": mty, "cdmx": cdmx, "tj": data.get("tj", 0),
+                "age_s": round(now - ts),
+                "wh_fetched": data.get("_wh_fetched", False),
+            })
+
+    stale.sort(key=lambda x: x["cache_avail_total"] - x["real_mty_plus_cdmx"], reverse=True)
+
+    fixed = []
+    if fix and stale:
+        for item in stale:
+            bk = item["sku"]
+            _bm_stock_cache.pop(bk, None)
+            try:
+                await token_store.delete_bm_stock_skus([bk])
+            except Exception:
+                pass
+            fixed.append(bk)
+
+    return JSONResponse({
+        "snTV_checked": checked,
+        "stale_high_found": len(stale),
+        "stale_high": stale,
+        "fixed_count": len(fixed),
+        "fixed_skus": fixed if fix else [],
+    })
+
+
 @app.get("/api/diag/clear-bm-sku")
 async def diag_clear_bm_sku(sku: str = "", token: str = ""):
     """Admin: borra un SKU de _bm_stock_cache, _stock_issues_cache activate, y DB.
