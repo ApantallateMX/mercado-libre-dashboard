@@ -5423,6 +5423,14 @@ _AMAZON_DAILY_CACHE_TTL = 180  # 3 min — más fresco que MeLi porque Amazon ti
 _sale_price_cache: dict[str, tuple[float, dict | None]] = {}
 _SALE_PRICE_CACHE_TTL = 300  # 5 min
 _stock_issues_cache: dict[str, tuple[float, dict]] = {}
+# Lista COMPLETA de products (todos, no solo los que caen en alguna alerta),
+# ya enriquecida con _bm_avail/_cvr por _prewarm_caches. FIX 2026-08-07:
+# /api/health/scores, /api/dashboard/cvr-funnel y /api/dashboard/price-competition
+# leían `_stock_issues_cache[...].get("products")` -- esa clave NUNCA existió ahí
+# (_sic_data solo guarda las listas de alertas: restock/activate/critical/etc.),
+# así que los 3 siempre devolvían vacío en silencio. Cache separado para no
+# duplicar la lista completa dentro de cada snapshot de alertas.
+_health_products_cache: dict[str, tuple[float, list]] = {}
 # Cache cross-account para dashboard general (independiente de cuenta activa)
 _multi_account_cache: dict[str, tuple[float, dict]] = {}
 _MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
@@ -5913,6 +5921,56 @@ async def _bm_health_loop():
         await asyncio.sleep(120)  # cada 2 minutos
 
 
+async def _bm_verify_sku_direct(bm_cli, sku: str) -> dict | None:
+    """Verifica un SKU directo contra BM (1 request, CONCEPTID=1 LOC47+62+68) y
+    actualiza _bm_stock_cache. Devuelve el dict de datos actualizado, o None si
+    el SKU no tiene base BM válida.
+
+    FIX 2026-08-07: extraído de la lógica de `_wh_phase` (closure interna de
+    `_get_bm_stock_cached`, no accesible desde otras funciones) para que
+    `_fetch_activate_wh` pueda verificar per-SKU sin depender de una función
+    fuera de su alcance -- antes esa llamada lanzaba NameError en cada
+    iteración, atrapado en silencio por un try/except genérico, así que la
+    verificación de "Activar" nunca corría de verdad. A diferencia de
+    `_wh_phase` (que siempre pone mty/cdmx/tj en 0 porque no consulta el
+    endpoint de warehouse), esta versión preserva el desglose mty/cdmx/tj
+    existente -- aquí solo nos interesa refrescar avail_total.
+    """
+    base = normalize_to_bm_sku(sku)
+    if not base:
+        return None
+    try:
+        stock = await asyncio.wait_for(
+            bm_cli.get_stock_with_reserve(base, conditions=_bm_conditions_for_sku(sku)),
+            timeout=8.0,
+        )
+        avail_ok = stock is not None
+        avail_direct = stock[0] if avail_ok else 0
+        reserve_direct = stock[1] if avail_ok else 0
+    except Exception:
+        avail_ok = False
+        avail_direct = 0
+        reserve_direct = 0
+    avail_total = int(avail_direct or 0)
+    reserved_total = int(reserve_direct or 0)
+    verified = avail_ok or avail_total > 0 or reserved_total > 0
+    existing = _bm_stock_cache.get(base)
+    # Fix A (mismo patrón que _store_wh): si BM falló y todo quedó en 0, no
+    # pisar una entrada previa ya verificada con stock real.
+    if not verified and avail_total == 0 and existing and existing[1].get("_v") and existing[1].get("avail_total", 0) > 0:
+        return existing[1]
+    prev = existing[1] if existing else {}
+    inv = {
+        "mty": prev.get("mty", 0), "cdmx": prev.get("cdmx", 0), "tj": prev.get("tj", 0),
+        "total": prev.get("total", 0),
+        "avail_total": avail_total, "reserved_total": reserved_total,
+        "no_vendible": prev.get("no_vendible", 0), "_v": verified,
+        "_wh_fetched": prev.get("_wh_fetched", False),
+    }
+    _bm_stock_cache[base] = (_time.time(), inv)
+    return inv
+
+
 async def _prewarm_caches(user_id: str = None):
     """Pre-carga products + orders + BM stock + stock issues en background.
     Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
@@ -6142,6 +6200,12 @@ async def _prewarm_caches(user_id: str = None):
                             })
                 await token_store.replace_coverage_price_alerts(str(client.user_id), _coverage_alerts)
 
+                # Cache separado con la lista COMPLETA de products (ya enriquecida con
+                # _bm_avail arriba) para /api/health/scores, /api/dashboard/cvr-funnel y
+                # /api/dashboard/price-competition — ver comentario en la declaración de
+                # _health_products_cache (fix 2026-08-07, antes siempre vacío).
+                _health_products_cache[str(client.user_id)] = (_time.time(), products)
+
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
                 # Items sincronizados recientemente (TTL 60 min, cross-user, DB-backed):
@@ -6158,21 +6222,31 @@ async def _prewarm_caches(user_id: str = None):
                 # ACTUAL de este prewarm (ts > 0). Entradas con ts=0 son warm-start de DB y
                 # pueden tener stock obsoleto — excluirlas de alertas evita falsos positivos
                 # cuando BM ya no tiene ese SKU en stock.
-                restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
+                #
+                # FIX 2026-08-07 (Jovan reportó SNTV007240/BLOW en "Reabastecer" pausado con
+                # stock BM real): ninguno de restock/oversell_risk/critical/stagnant revisaba
+                # el status real del listing en ML — solo cantidad. Un listing PAUSADO con
+                # ventas históricas (units>0) caía en "Reabastecer" en vez de "Activar", y
+                # "Reabastecer" no dispara la lógica de reactivación (solo confirma cantidad
+                # sobre un listing que YA está vendible). Ahora restock/oversell_risk/critical/
+                # stagnant exigen status=="active" explícitamente; activate exige status==
+                # "paused" explícitamente (antes dependía solo de "no estar ya en restock").
+                restock = [p for p in products if p.get("status") == "active" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
                 # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
                 # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
                 # porque (None or 0)==0. Solo flaggear cuando BM confirmó explícitamente avail=0.
-                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and (p.get("_bm_avail_raw") or 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
+                oversell_risk = [p for p in products if p.get("status") == "active" and p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and (p.get("_bm_avail_raw") or 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
                 # _bm_avail_verified_zero: si per-SKU verificó 0 recientemente, no incluir aunque
                 # el bulk diga >0 — bulk de BM puede devolver phantom stock (bug BM server-side).
-                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
+                activate = [p for p in products if p.get("status") == "paused" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
                 activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 critical = [
                     p for p in products
-                    if p.get("available_quantity", 0) > 0
+                    if p.get("status") == "active"
+                    and p.get("available_quantity", 0) > 0
                     and 0 < (p.get("_bm_avail") or 0) <= _DEFAULT_THRESHOLD
                     and not p.get("is_full")
                     and p.get("sku")
@@ -6185,7 +6259,8 @@ async def _prewarm_caches(user_id: str = None):
                 # GAP 7: Inventario estancado — stock en ambos lados pero 0 ventas en 30d
                 stagnant = [
                     p for p in products
-                    if (p.get("_bm_avail") or 0) > 0
+                    if p.get("status") == "active"
+                    and (p.get("_bm_avail") or 0) > 0
                     and p.get("available_quantity", 0) > 0
                     and p.get("units", 0) == 0
                     and not p.get("is_full")
@@ -6364,16 +6439,15 @@ async def _prewarm_caches(user_id: str = None):
                         _updated = list(_act)
                         _n_ok = 0
                         _n_evict = 0
+                        from app.services.binmanager_client import get_shared_bm as _gsbm_act
+                        _bm_cli_act = await _gsbm_act()
                         for _i, _ap in enumerate(_act):
                             _asku = _ap.get("sku", "")
                             if not _asku:
                                 continue
                             try:
-                                await _wh_phase(_asku, _track_progress=False)
-                                _abk = normalize_to_bm_sku(_asku)
-                                _ae  = _bm_stock_cache.get(_abk)
-                                if _ae:
-                                    _entry = _ae[1]
+                                _entry = await _bm_verify_sku_direct(_bm_cli_act, _asku)
+                                if _entry:
                                     _avail = _entry.get("avail_total", 0)
                                     _ver   = _entry.get("_v", False)
                                     if _ver and _avail > 0:
@@ -6859,7 +6933,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         return inv["total"] > 0 or avail_total > 0
 
     def _store_empty(sku):
-        _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), _EMPTY_BM)
+        # FIX 2026-08-07: mismo guard "Fix A" que ya tiene _store_wh — sin esto,
+        # una excepción tardía en _wh_phase (sesión BM caída a medio ciclo, etc.)
+        # pisaba una entrada previa ya verificada con stock real con ceros,
+        # generando un falso oversell_risk/restock hasta el próximo TTL.
+        _bk = normalize_to_bm_sku(sku)
+        _existing = _bm_stock_cache.get(_bk)
+        if _existing and _existing[1].get("_v") and _existing[1].get("avail_total", 0) > 0:
+            return
+        _bm_stock_cache[_bk] = (_time.time(), _EMPTY_BM)
 
     # Semaphore(1) = estrictamente secuencial — esperar respuesta antes de lanzar el siguiente.
     # Evita rate-limiting de BM. ~600 SKUs × ~0.5s = ~5 min por ciclo de prewarm (15 min).
@@ -8856,14 +8938,7 @@ async def health_scores(request: Request):
 
     # Leer products del prewarm cache más reciente para este usuario
     _scored: list = []
-    for _ck, _cv in _stock_issues_cache.items():
-        if not _ck.startswith(f"stock_issues:{uid}:"):
-            continue
-        _products = _cv.get("products") or []
-        if _products:
-            break
-    else:
-        _products = []
+    _products = (_health_products_cache.get(uid) or (0, []))[1]
 
     def _calc_score(p: dict) -> dict:
         score = 0
@@ -8937,12 +9012,7 @@ async def dashboard_cvr_funnel():
     uid = str(client.user_id)
     await client.close()
 
-    products: list = []
-    for _ck, _cv in _stock_issues_cache.items():
-        if _ck.startswith(f"stock_issues:{uid}:"):
-            products = _cv.get("products") or []
-            if products:
-                break
+    products: list = (_health_products_cache.get(uid) or (0, []))[1]
 
     with_visits: list = []
     no_visits: list = []
@@ -9001,12 +9071,7 @@ async def dashboard_price_competition():
         await client.close()
         return JSONResponse(cached["data"])
 
-    products: list = []
-    for _ck, _cv in _stock_issues_cache.items():
-        if _ck.startswith(f"stock_issues:{uid}:"):
-            products = _cv.get("products") or []
-            if products:
-                break
+    products: list = (_health_products_cache.get(uid) or (0, []))[1]
 
     active = [p for p in products if (p.get("available_quantity", 0) or 0) > 0 and p.get("id")]
     active.sort(key=lambda x: (x.get("units", 0) or 0), reverse=True)
@@ -18392,37 +18457,6 @@ async def _fetch_all_claims_cached(client, df, dt) -> list:
         _returns_claims_cache[key] = (_tc.time(), claims)
         return claims
 
-_bm_retail_cache: tuple[float, dict] | None = None  # (ts, {sku: retail_usd})
-_BM_RETAIL_TTL = 600  # 10 min
-
-
-
-async def _get_bm_retail_prices() -> dict:
-    """Returns {bm_sku: retail_price_usd} with 10-min cache. Uses get_bulk_stock()."""
-    global _bm_retail_cache
-    import time as _t2
-    if _bm_retail_cache and (_t2.time() - _bm_retail_cache[0]) < _BM_RETAIL_TTL:
-        return _bm_retail_cache[1]
-    try:
-        from app.services.binmanager_client import BinManagerClient
-        bm = BinManagerClient()
-        if not await bm.login():
-            return {}
-        items = await bm.get_bulk_stock()
-        price_map: dict = {}
-        for item in items:
-            sku = (item.get("SKU") or "").strip()
-            if sku:
-                price = float(item.get("LastRetailPricePurchaseHistory") or 0)
-                if price > 0:
-                    price_map[sku] = price
-        _bm_retail_cache = (_t2.time(), price_map)
-        return price_map
-    except Exception as _e:
-        logger.warning(f"[BM-RETAIL] Error al obtener precios: {_e}")
-        return {}
-
-
 def _get_retail_ph_map() -> dict:
     """Retorna {bm_sku: last_retail_price_ph_usd} desde _bm_retail_ph_cache (SQLite catalog).
     CERO hits a BM — el catalog se sincroniza 1x/semana y se carga en memoria al arrancar.
@@ -23691,6 +23725,35 @@ async def diag_ml_message_send_test(token: str = "", account_id: str = "", pack_
         return {"ok": False, "status_code": e.status_code, "endpoint": e.endpoint, "body_ml": e.body}
     except Exception as e:
         return {"ok": False, "error_generico": str(e), "tipo": type(e).__name__}
+    finally:
+        await client.close()
+
+
+@app.get("/api/diag/ml-item-status")
+async def diag_ml_item_status(token: str = "", account_id: str = "", item_id: str = ""):
+    """DIAG de solo lectura -- status/sub_status/available_quantity real de un
+    item en ML, sin escribir nada. Para revisar el motivo real de pausa antes
+    de decidir si reactivar (ver project_bm_tv_avail_total_fix / SNTV007240)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not item_id:
+        return JSONResponse({"error": "account_id e item_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        detail = await client.get_item(item_id)
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "status": detail.get("status"),
+            "sub_status": detail.get("sub_status"),
+            "available_quantity": detail.get("available_quantity"),
+            "sku": next((a.get("value_name") for a in (detail.get("attributes") or []) if a.get("id") == "SELLER_SKU"), None),
+            "health": detail.get("health"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tipo": type(e).__name__}
     finally:
         await client.close()
 
