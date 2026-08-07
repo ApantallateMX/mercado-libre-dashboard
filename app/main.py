@@ -17175,6 +17175,39 @@ async def diag_trigger_feedback_sync(token: str = ""):
     return JSONResponse({"ok": True, "message": "Sync de feedback iniciado en background"})
 
 
+@app.get("/api/diag/prewarm-state")
+async def diag_prewarm_state(token: str = ""):
+    """Diagnóstico: estado del prewarm/TV-breakdown SIN necesitar sesión de
+    ninguna cuenta -- para investigar "se quedó calculando" reportado por el
+    usuario sin depender de su cookie de sesión."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    now = _time.time()
+    progress = {}
+    if _prewarm_progress.get("total", 0) > 0:
+        progress = {
+            "done": _prewarm_progress.get("done", 0),
+            "total": _prewarm_progress.get("total", 0),
+            "elapsed_s": round(now - _prewarm_progress.get("started_at", now)),
+        }
+    stock_issues_keys = sorted(_stock_issues_cache.keys())
+    stock_issues_ages = {
+        k: round(now - _stock_issues_cache[k][0]) for k in stock_issues_keys
+    }
+    return JSONResponse({
+        "prewarm_running": _prewarm_running,
+        "prewarm_source": _prewarm_source,
+        "prewarm_progress": progress,
+        "bm_tv_loc_running": _bm_tv_loc_running,
+        "bm_health": _bm_health,
+        "stock_issues_cache_keys": stock_issues_keys,
+        "stock_issues_cache_ages_s": stock_issues_ages,
+        "bm_stock_cache_total": len(_bm_stock_cache),
+        "bulk_gr_age_s": round(now - _bm_bulk_gr_cache[0]) if _bm_bulk_gr_cache else None,
+        "bulk_all_age_s": round(now - _bm_bulk_all_cache[0]) if _bm_bulk_all_cache else None,
+    })
+
+
 @app.get("/api/diag/cache-health")
 async def diag_cache_health(token: str = ""):
     """Diagnóstico: salud general del caché BM.
