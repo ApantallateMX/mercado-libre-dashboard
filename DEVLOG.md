@@ -83,6 +83,32 @@ Diag endpoints nuevos (todos gated por `_DIAG_TOKEN`): `ml-item-status`
 `oversell-exposure-audit`, `oversell-correction-run`/`-status`,
 `force-qty-sync`.
 
+**Fase 2 (Lanzador) y Fase 3 (stock_sync_multi) del plan de consolidacion
+de arquitectura BM, cerradas el mismo dia:**
+
+- **Fase 2**: `_bm_fetch_all_skus_with_stock()` en `lanzar.py` descartaba
+  `AvailableQTY`/`Reserve` del row crudo de BM aunque el endpoint los
+  trajera -- `_bm_qty()` siempre usaba `TotalQty` (bruto, incluye
+  reservado) para gaps/priority_score/precio sugerido, sobre-estimando
+  el stock vendible real. Corregido: se captura `AvailableQTY`/`Reserve`
+  y se prefiere sobre `TotalQty` (con `is not None`, no OR-chaining, para
+  no tratar un 0 genuino como "ausente").
+- **Fase 3 -- hallazgo importante**: al leer `stock_sync_multi.py` para
+  "unificarlo" con el resto, resultó que el algoritmo correcto de reparto
+  YA EXISTE (`_plan()`: concentra en la cuenta ganadora si `bm_avail` está
+  bajo el umbral dinámico, divide equitativamente si hay abundante,
+  protección nocturna, detección de canibalización) -- **mejor** que la
+  corrección construida hoy. El motivo real de los 724 SKUs oversold: el
+  loop automático de 5 min está deshabilitado a propósito desde abril
+  2026 (commit `ddb2552`, decisión explícita de Jovan, coincide con la
+  regla de CLAUDE.md "sync automático que escribe en ML está prohibido")
+  -- solo corre manual vía "Sync ahora". Nadie lo disparaba seguido, así
+  que el stock real y lo publicado se desincronizaban con el tiempo.
+  **No se reactivó el loop automático** (violaría esa regla explícita) --
+  en su lugar, chequeo periódico de SOLO LECTURA (1h) que alimenta un
+  banner en `/stock-sync` avisando cuándo conviene dar clic a "Sync
+  ahora". Cierra el hueco de detección sin automatizar la escritura.
+
 ---
 
 ## 2026-08-07 — FIX DEFINITIVO: avail_total de TVs (SNTV*) se recalculaba en una tarea redundante y podía quedar mal con apariencia fresca
