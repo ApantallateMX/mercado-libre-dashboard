@@ -7,6 +7,16 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-07 — FIX DEFINITIVO: avail_total de TVs (SNTV*) se recalculaba en una tarea redundante y podía quedar mal con apariencia fresca
+
+Jovan reportó SNTV007472 mostrando "BM Disp.: 10" en la app cuando BM (su propia UI) mostraba Reserve 1, Available 2 -- y exigió una solución definitiva, no un parche puntual, bajo la premisa "si falla en 1 falla en todas".
+
+Causa raíz: `_fetch_tv_wh_breakdown()` corre 180s después del prewarm principal SOLO para calcular el desglose CDMX/MTY de televisiones, con su propio fetch independiente por ubicación (loc47/loc68/locTJ, condición ALL). Pero ese mismo bloque también usaba la suma de ese fetch para **sobreescribir** `avail_total` -- pisando el valor que el prewarm principal ya había fijado correctamente a T+0 desde `_bm_bulk_all_cache` (la misma fuente única que usa cualquier otro SKU, con su propio TTL/retry/cap de staleness ya probado). Si el fetch independiente de la tarea TV fallaba, sus ramas de fallback reusaban cache vieja (potencialmente de horas) sin checar edad, y aun así la entrada se re-timestampeaba como "recién verificada" -- quedaba con apariencia fresca pero dato incorrecto. Como esta ruta solo existe para SKUs SNTV*, el resto del catálogo (que siempre usó la fuente única) nunca mostró este síntoma -- de ahí que fallara sistemáticamente en TVs y en nada más.
+
+Fix: `_fetch_tv_wh_breakdown()` ya NO toca `avail_total`. Solo calcula el desglose cdmx/mty/tj (para UI y Transferencias Sugeridas) y lo prorratea contra el `avail_total` ya confiable -- el mismo patrón que ya usan los SKUs no-SNTV en la segunda pasada del prewarm principal. Una sola fuente de verdad para `avail_total` en todos los tipos de SKU, sin excepción para TVs. Verificado en producción tras el deploy: SNTV007472 quedó estable en `avail_total: 2, reserved_total: 1`, exactamente igual a BM.
+
+---
+
 ## 2026-08-06 — FIX: pendientes viejos enterrados fuera de la primera página, invisibles aunque el KPI los contara
 
 Con el filtro de fecha ya ignorado (entrada siguiente), Jovan seguía sin ver
