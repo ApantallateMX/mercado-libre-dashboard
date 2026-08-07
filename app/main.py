@@ -24080,6 +24080,7 @@ async def diag_ml_item_status(token: str = "", account_id: str = "", item_id: st
             "available_quantity": detail.get("available_quantity"),
             "sku": next((a.get("value_name") for a in (detail.get("attributes") or []) if a.get("id") == "SELLER_SKU"), None),
             "health": detail.get("health"),
+            "logistic_type": (detail.get("shipping") or {}).get("logistic_type"),
             "has_variations": bool(_variations),
             "variations": [
                 {"id": v.get("id"), "available_quantity": v.get("available_quantity"),
