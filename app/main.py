@@ -6610,30 +6610,47 @@ async def _fetch_tv_wh_breakdown():
             _cdmx = _tv_lkp(_ex47, _by47, _ck.upper())
             _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
             _tj   = _tv_lkp(_extj, _bytj, _ck.upper())
-            _lsum = _cdmx + _mty
-            # Confiar SIEMPRE en el bulk per-location ALL (ICB/ICC incluido) sobre el bulk
-            # combinado, en ambas direcciones. El bulk combinado LOC47+68 puede quedar
-            # desincronizado del real (discrepancia de agregación en BM API, o un avail_total
-            # viejo que ya no refleja reservas nuevas) — per-location es la fuente más granular.
-            # Bug real 2026-08-06: antes solo se sobreescribía si _lsum era MAYOR al valor
-            # existente ("if _lsum > _avt"), así que un avail_total atascado en un valor alto
-            # (ej. SNTV007472: caché=18 vs real=1, con 17 reservados) nunca se corregía hacia
-            # abajo — riesgo de sobreventa. El guard de "las 3 consultas fallaron" arriba ya
-            # protege contra pisar con ceros por una falla parcial de BM.
-            # TJ excluida desde 2026-08-05 — solo CDMX/MTY venden en línea, ver
-            # project_bm_tijuana_exclusion.md. _tj se sigue guardando abajo para
-            # desglose/Transferencias Sugeridas, pero nunca suma a avail_total.
-            _cd["avail_total"] = _lsum
+            # FIX DEFINITIVO 2026-08-07 (no parche): avail_total YA NO se toca aquí.
+            # El ciclo principal de prewarm (líneas ~7043-7170) ya fija avail_total para
+            # TODO SKU, incluidos SNTV*, desde _bm_bulk_all_cache — la misma fuente única
+            # y confiable que usa cualquier otro SKU (con su propio TTL, cap de staleness
+            # y retry per-SKU). Esta tarea (T+180s) hace un fetch INDEPENDIENTE y REDUNDANTE
+            # (loc47_all_cache/loc68_all_cache/loctj_all_cache) solo para poder repartir el
+            # desglose CDMX/MTY/TJ — nunca debió ser la fuente de verdad del total.
+            #
+            # Bug real (recurrente, ej. SNTV007472 caché=10/18 vs BM real=2/1): si este
+            # fetch independiente fallaba, sus ramas de except/elif reusaban el cache
+            # anterior SIN checar su edad (podía tener horas), y aun así el bloque de abajo
+            # re-timestampeaba _bm_stock_cache[_ck] como "recién verificado" — una entrada
+            # con apariencia fresca pero avail_total calculado con datos viejos. Como esto
+            # corría en un fetch propio separado del prewarm principal, cualquier SKU que
+            # dependiera de esta ruta podía quedar mal sin que el resto del sistema (que sí
+            # usa la fuente única) se viera afectado — de ahí que "si falla 1 fallan todos
+            # los TV" pero no los demás SKUs.
+            #
+            # Solución: una sola fuente de verdad para avail_total en TODOS los SKU types
+            # (bulk combinado). El desglose por ubicación se PRORRATEA contra ese total ya
+            # confiable — el mismo patrón que ya usan los SKUs no-SNTV en la segunda pasada
+            # del prewarm principal (líneas ~7216-7222). TJ excluida del total desde
+            # 2026-08-05 (project_bm_tijuana_exclusion.md); _tj se guarda solo para
+            # desglose/Transferencias Sugeridas.
+            _avail_total = _cd.get("avail_total", 0) or 0
+            _loc_sum = _cdmx + _mty + _tj
+            if _loc_sum > _avail_total and _avail_total > 0:
+                _scale = _avail_total / _loc_sum
+                _mty  = round(_mty  * _scale)
+                _cdmx = round(_cdmx * _scale)
+                _tj   = _avail_total - _mty - _cdmx
             _cd["cdmx"] = _cdmx
             _cd["mty"]  = _mty
             _cd["tj"]   = _tj
             _cd["_wh_fetched"] = True
-            # Actualizar ts a tiempo actual: marca esta entrada como bulk-verificada (ts > 0).
-            # Sin esto, SNTV* quedan con ts=0 (DB warm-start) y serían excluidas de alertas.
-            _bm_stock_cache[_ck] = (_time.time(), _cd)
+            # NO se reasigna _bm_stock_cache[_ck] con timestamp nuevo: _cd es el mismo dict
+            # (mutación in-place → result_map también se actualiza), y esta tarea ya no
+            # verifica avail_total, así que no debe fingir que lo hizo.
             _tv_n += 1
 
-        _tvlog.info(f"[BM-TV-WH] MTY/CDMX actualizado para {_tv_n} TVs (SNTV*)")
+        _tvlog.info(f"[BM-TV-WH] Desglose MTY/CDMX actualizado para {_tv_n} TVs (SNTV*) — avail_total intacto, fuente única = bulk combinado")
 
         # Persistir entradas SNTV* al DB con mty/cdmx ya actualizados.
         # El DB save del prewarm ocurre a T+0 (antes de este task a T+180s), así que
@@ -6654,11 +6671,12 @@ async def _fetch_tv_wh_breakdown():
         except Exception as _tv_db_err:
             _tvlog.warning(f"[BM-TV-WH] Error persistiendo en DB: {_tv_db_err}")
 
-        # Invalidar _stock_issues_cache: fue construido en prewarm (T+0) con avail_total
-        # incorrecto para SNTV*. Ahora que tenemos mty/cdmx/avail correctos, forzar
-        # reconstrucción en el próximo request del Stock tab.
+        # Invalidar _stock_issues_cache: fue construido en prewarm (T+0) antes de que
+        # mty/cdmx/tj de SNTV* tuvieran desglose (avail_total ya era correcto desde T+0,
+        # ver fix 2026-08-07 arriba). Forzar reconstrucción en el próximo request del
+        # Stock tab para que el desglose por almacén también quede al día.
         _stock_issues_cache.clear()
-        _tvlog.info("[BM-TV-WH] _stock_issues_cache limpiado — próximo request reconstruye con datos BM correctos")
+        _tvlog.info("[BM-TV-WH] _stock_issues_cache limpiado — próximo request reconstruye con desglose actualizado")
         # Disparar prewarm para reconstruir stock_issues_cache en background sin esperar al usuario.
         if not _prewarm_running:
             asyncio.create_task(_prewarm_caches())
