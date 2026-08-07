@@ -109,6 +109,23 @@ de arquitectura BM, cerradas el mismo dia:**
   banner en `/stock-sync` avisando cuándo conviene dar clic a "Sync
   ahora". Cierra el hueco de detección sin automatizar la escritura.
 
+**Cierre final del mismo día — los ~20 SKUs "FULL" eran falsa alarma:**
+Jovan preguntó por qué no verificábamos el stock Full nosotros mismos
+por API en vez de pedirle que lo revisara a mano. Se delegó al agente
+`mercadolibre-strategist`, que encontró y probó en vivo
+`GET /inventories/{inventory_id}/stock/fulfillment` contra
+BLOWTECHNOLOGIES real. Resultado: el `available_quantity` que ML
+muestra en un item FULL YA ES su stock físico real (`not_available_quantity`
+≈0 en todos los casos probados) -- no hay unidades ocultas. BM deja de
+contar esas unidades en cuanto se envían a la bodega Full; comparar
+`bm_avail` contra lo publicado en FULL siempre daba falsa sobreventa,
+nunca fue sobreventa real. Fix: `is_full=1` (ML) / `can_update=0`
+(Amazon FBA) ahora se EXCLUYEN por completo de la auditoría y de la
+corrección (antes se restaban del presupuesto -- conservador pero de
+más, nunca causó riesgo real). Resultado: **56 → 15 SKUs**, ninguno de
+los TVs FULL de antes aparece ya. Nuevo método permanente:
+`client.get_fulfillment_stock()` + diag `/api/diag/ml-fulfillment-stock`.
+
 ---
 
 ## 2026-08-07 — FIX DEFINITIVO: avail_total de TVs (SNTV*) se recalculaba en una tarea redundante y podía quedar mal con apariencia fresca
