@@ -382,6 +382,17 @@ class MeliClient:
         """Obtiene el detalle de un item."""
         return await self.get(f"/items/{item_id}")
 
+    async def get_fulfillment_stock(self, inventory_id: str) -> dict:
+        """Stock real gestionado por ML para un inventory_id de Mercado Envíos
+        Full (solo lectura). El inventory_id viene en item["inventory_id"]
+        (items simples) o en cada item["variations"][i]["inventory_id"]
+        (items con variaciones) -- ver GET /items/{item_id}.
+        Respuesta: {inventory_id, total, available_quantity,
+        not_available_quantity, not_available_detail[], external_references[]}.
+        not_available_detail puede traer unidades dañadas/en tránsito/en
+        revisión que no se ven en available_quantity del item."""
+        return await self.get(f"/inventories/{inventory_id}/stock/fulfillment")
+
     async def get_items_details(self, item_ids: list) -> list:
         """Obtiene detalles de multiples items.
         include_attributes=all es necesario para que las variaciones incluyan

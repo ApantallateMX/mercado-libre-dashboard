@@ -24129,6 +24129,55 @@ async def diag_ml_item_status(token: str = "", account_id: str = "", item_id: st
         await client.close()
 
 
+@app.get("/api/diag/ml-fulfillment-stock")
+async def diag_ml_fulfillment_stock(token: str = "", account_id: str = "", item_id: str = ""):
+    """DIAG de solo lectura -- stock real que ML reporta gestionar para un
+    item FULL, vía GET /inventories/{inventory_id}/stock/fulfillment.
+    Jovan preguntó por qué no verificamos el stock Full nosotros mismos en
+    vez de pedirle que lo revise a mano en Seller Central -- este endpoint
+    responde eso. Maneja items simples (inventory_id en la raíz) y con
+    variaciones (inventory_id por variación). not_available_detail puede
+    traer unidades dañadas/en tránsito/en revisión que explican una brecha
+    real entre lo publicado y el stock de BinManager."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not item_id:
+        return JSONResponse({"error": "account_id e item_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        detail = await client.get_item(item_id)
+        _root_inv = detail.get("inventory_id")
+        _variations = detail.get("variations") or []
+        _targets = []
+        if _root_inv:
+            _targets.append({"inventory_id": _root_inv, "variation_id": None})
+        for v in _variations:
+            if v.get("inventory_id"):
+                _targets.append({"inventory_id": v["inventory_id"], "variation_id": v.get("id")})
+        if not _targets:
+            return {"ok": False, "error": "sin inventory_id -- ¿item no es FULL?",
+                    "logistic_type": (detail.get("shipping") or {}).get("logistic_type")}
+        results = []
+        for t in _targets:
+            try:
+                fs = await client.get_fulfillment_stock(t["inventory_id"])
+                results.append({**t, "fulfillment_stock": fs})
+            except Exception as _e:
+                results.append({**t, "error": str(_e)})
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "item_available_quantity": detail.get("available_quantity"),
+            "results": results,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tipo": type(e).__name__}
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-item-variations-fix")
 async def diag_ml_item_variations_fix(token: str = "", account_id: str = "", item_id: str = "",
                                        updates: str = "", confirm: bool = False):
