@@ -16337,6 +16337,27 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
     }
 
 
+@app.post("/api/diag/force-qty-sync")
+async def diag_force_qty_sync(token: str = ""):
+    """Dispara el sync ligero de qty (ML + Amazon) sin esperar al loop
+    periódico -- para que /api/diag/oversell-exposure-audit refleje
+    correcciones ya escritas directo a las APIs reales (esta auditoría lee
+    ml_listings/amazon_listings, snapshots locales que solo se refrescan
+    con este sync -- por diseño hay un desfase normal entre escribir en
+    ML/Amazon y que la copia local lo refleje)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.ml_listing_sync import run_ml_qty_sync
+    from app.services.amazon_listing_sync import run_amazon_qty_sync
+    ml_result, amz_result = await asyncio.gather(
+        run_ml_qty_sync(), run_amazon_qty_sync(), return_exceptions=True
+    )
+    return JSONResponse({
+        "ml": ml_result if not isinstance(ml_result, Exception) else {"error": str(ml_result)},
+        "amazon": amz_result if not isinstance(amz_result, Exception) else {"error": str(amz_result)},
+    })
+
+
 _oversell_correction_running = False
 _oversell_correction_progress: dict = {"done": 0, "total": 0, "started_at": 0.0, "writes": 0, "errors": 0, "skipped": 0}
 _oversell_correction_last_result: list = []  # últimas correcciones aplicadas, para revisar sin ir a la DB
