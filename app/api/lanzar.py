@@ -126,6 +126,13 @@ async def _bm_fetch_all_skus_with_stock() -> list[dict]:
             results.append({
                 "SKU": (row.get("SKU") or "").upper().strip(),
                 "TotalQty": qty,
+                # FIX 2026-08-07: capturar AvailableQTY/Reserve del row crudo de BM
+                # si el endpoint los trae -- antes se descartaban aquí y _bm_qty()
+                # nunca los veía, así que el Lanzador siempre usaba TotalQty
+                # (bruto, incluye reservado) para gaps/priority_score/precio
+                # sugerido, sobre-estimando el stock vendible real.
+                "AvailableQTY": row.get("AvailableQTY"),
+                "Reserve": row.get("Reserve"),
                 "Brand": row.get("Brand") or "",
                 "Model": row.get("Model") or "",
                 "Title": row.get("Title") or "",
@@ -559,14 +566,20 @@ async def _run_gap_scan(user_id: str | None = None):
                 return u
 
             def _bm_qty(prod: dict) -> int:
-                """BM returns stock in TotalQty (global inventory endpoint).
-                Fallbacks for other endpoint variants: AvailableQTY, QtyTotal, QTY."""
-                v = (prod.get("TotalQty") or prod.get("AvailableQTY")
-                     or prod.get("QtyTotal") or prod.get("QTY") or 0)
-                try:
-                    return int(v)
-                except (TypeError, ValueError):
-                    return 0
+                """Preferir AvailableQTY (neto, ya resta reservas) sobre TotalQty
+                (bruto) cuando el endpoint lo trae -- FIX 2026-08-07: antes
+                TotalQty tenía prioridad, sobre-estimando el stock vendible real
+                de los gaps del Lanzador (mismo bug bruto-vs-neto ya corregido en
+                el resto del sistema). Se usa `is not None` en vez de OR-chaining
+                porque un AvailableQTY=0 genuino es un dato real, no "ausente"."""
+                for _key in ("AvailableQTY", "TotalQty", "QtyTotal", "QTY"):
+                    v = prod.get(_key)
+                    if v is not None:
+                        try:
+                            return int(v)
+                        except (TypeError, ValueError):
+                            continue
+                return 0
 
             bm_map = {}
             for prod in bm_products:
