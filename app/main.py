@@ -16329,6 +16329,224 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
     }
 
 
+_oversell_correction_running = False
+_oversell_correction_progress: dict = {"done": 0, "total": 0, "started_at": 0.0, "writes": 0, "errors": 0}
+_oversell_correction_last_result: list = []  # últimas correcciones aplicadas, para revisar sin ir a la DB
+
+
+async def _ensure_oversell_correction_log_table(db):
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS oversell_correction_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sku TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            account TEXT NOT NULL,
+            listing_key TEXT NOT NULL,
+            old_qty INTEGER NOT NULL,
+            new_qty INTEGER NOT NULL,
+            dry_run INTEGER NOT NULL,
+            ok INTEGER NOT NULL,
+            error TEXT DEFAULT '',
+            ts REAL NOT NULL
+        )
+    """)
+
+
+async def _run_oversell_correction(limit: int, dry_run: bool):
+    """Corrección algorítmica de sobreventa cross-cuenta: para cada SKU donde
+    ML+Amazon (todas las cuentas) exponen más unidades que el stock real de
+    BM, reduce PROPORCIONALMENTE las cantidades -- nunca sube, nunca pausa.
+
+    Encontrado 2026-08-07 (ver /api/diag/oversell-exposure-audit): el reparto
+    automático (stock_sync_multi) solo actúa ante escasez -- SKUs con
+    cantidad alta puesta hace tiempo en ML/Amazon nunca se vuelven a revisar
+    contra el stock real de BM. Esta corrección es el fix puntual mientras
+    se diseña la Fase 3 (tope global cross-cuenta permanente).
+
+    Excluye explícitamente lo que no controlamos:
+    - ML: listings con is_full=1 (FULL -- ML gestiona ese stock)
+    - Amazon: listings con can_update=0 (FBA/FLX -- Amazon gestiona ese stock)
+    Esas cantidades SÍ se restan del presupuesto disponible para las que sí
+    controlamos (si un FULL/FBA ya consume todo el stock real, lo editable
+    se reduce a 0 -- nunca se ignora el hecho de que ya está comprometido).
+    """
+    global _oversell_correction_running, _oversell_correction_progress, _oversell_correction_last_result
+    if _oversell_correction_running:
+        return
+    _oversell_correction_running = True
+    _oversell_correction_progress = {"done": 0, "total": 0, "started_at": _time.time(), "writes": 0, "errors": 0}
+    _results: list = []
+    import aiosqlite as _aio_oc
+    try:
+        async with _aio_oc.connect(DATABASE_PATH, timeout=15) as db:
+            db.row_factory = _aio_oc.Row
+            await _ensure_oversell_correction_log_table(db)
+            await db.commit()
+            skus = await (await db.execute("""
+                SELECT bm.sku AS sku, bm.available_qty AS bm_avail
+                FROM bm_sku_master bm
+                LEFT JOIN (
+                    SELECT base_sku, SUM(available_qty) AS ml_sum FROM ml_listings
+                    WHERE status = 'active' GROUP BY base_sku
+                ) ml ON ml.base_sku = bm.sku
+                LEFT JOIN (
+                    SELECT base_sku, SUM(available_qty) AS amz_sum FROM amazon_listings
+                    WHERE status = 'ACTIVE' GROUP BY base_sku
+                ) amz ON amz.base_sku = bm.sku
+                WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
+                ORDER BY (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) - bm.available_qty) DESC
+                LIMIT ?
+            """, (limit,))).fetchall()
+            _oversell_correction_progress["total"] = len(skus)
+
+            _meli_clients: dict = {}   # account_id -> client (reutilizar conexión)
+            _amz_clients: dict = {}    # seller_id -> client
+
+            for _row in skus:
+                _sku = _row["sku"]
+                _bm_avail = int(_row["bm_avail"] or 0)
+
+                _ml_rows = await (await db.execute(
+                    "SELECT item_id, account_id, available_qty, is_full FROM ml_listings "
+                    "WHERE base_sku = ? AND status = 'active'", (_sku,)
+                )).fetchall()
+                _amz_rows = await (await db.execute(
+                    "SELECT sku, seller_id, available_qty, can_update FROM amazon_listings "
+                    "WHERE base_sku = ? AND status = 'ACTIVE'", (_sku,)
+                )).fetchall()
+
+                _editable_ml = [r for r in _ml_rows if not r["is_full"]]
+                _editable_amz = [r for r in _amz_rows if r["can_update"]]
+                _locked_qty = (
+                    sum(int(r["available_qty"] or 0) for r in _ml_rows if r["is_full"])
+                    + sum(int(r["available_qty"] or 0) for r in _amz_rows if not r["can_update"])
+                )
+                _editable_total = (
+                    sum(int(r["available_qty"] or 0) for r in _editable_ml)
+                    + sum(int(r["available_qty"] or 0) for r in _editable_amz)
+                )
+                _budget = max(0, _bm_avail - _locked_qty)
+
+                if _editable_total > 0 and _editable_total > _budget:
+                    _scale = _budget / _editable_total
+                else:
+                    _scale = None  # ya cabe -- no tocar nada de este SKU
+
+                if _scale is not None:
+                    for _r in _editable_ml:
+                        _old = int(_r["available_qty"] or 0)
+                        _new = int(_old * _scale)  # floor
+                        if _new == _old:
+                            continue
+                        _ok, _err = True, ""
+                        if not dry_run:
+                            try:
+                                _uid = _r["account_id"]
+                                if _uid not in _meli_clients:
+                                    _meli_clients[_uid] = await get_meli_client(user_id=_uid)
+                                _mc = _meli_clients[_uid]
+                                if not _mc:
+                                    raise RuntimeError("sin sesión ML para esta cuenta")
+                                await _mc.update_item_stock(_r["item_id"], _new)
+                                await asyncio.sleep(0.4)
+                            except Exception as _e:
+                                _ok, _err = False, str(_e)
+                                _oversell_correction_progress["errors"] += 1
+                        if _ok and not dry_run:
+                            _oversell_correction_progress["writes"] += 1
+                        _entry = {
+                            "sku": _sku, "platform": "ml", "account": _r["account_id"],
+                            "listing_key": _r["item_id"], "old_qty": _old, "new_qty": _new,
+                            "dry_run": dry_run, "ok": _ok, "error": _err, "ts": _time.time(),
+                        }
+                        _results.append(_entry)
+                        await db.execute(
+                            "INSERT INTO oversell_correction_log "
+                            "(sku, platform, account, listing_key, old_qty, new_qty, dry_run, ok, error, ts) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (_sku, "ml", _r["account_id"], _r["item_id"], _old, _new, int(dry_run), int(_ok), _err, _time.time()),
+                        )
+
+                    from app.services.amazon_client import get_amazon_client as _gac
+                    for _r in _editable_amz:
+                        _old = int(_r["available_qty"] or 0)
+                        _new = int(_old * _scale)
+                        if _new == _old:
+                            continue
+                        _ok, _err = True, ""
+                        if not dry_run:
+                            try:
+                                _sid = _r["seller_id"]
+                                if _sid not in _amz_clients:
+                                    _amz_clients[_sid] = await _gac(seller_id=_sid)
+                                _ac = _amz_clients[_sid]
+                                if not _ac:
+                                    raise RuntimeError("sin sesión Amazon para esta cuenta")
+                                await _ac.update_listing_quantity(_r["sku"], _new)
+                                await asyncio.sleep(0.4)
+                            except Exception as _e:
+                                _ok, _err = False, str(_e)
+                                _oversell_correction_progress["errors"] += 1
+                        if _ok and not dry_run:
+                            _oversell_correction_progress["writes"] += 1
+                        _entry = {
+                            "sku": _sku, "platform": "amazon", "account": _r["seller_id"],
+                            "listing_key": _r["sku"], "old_qty": _old, "new_qty": _new,
+                            "dry_run": dry_run, "ok": _ok, "error": _err, "ts": _time.time(),
+                        }
+                        _results.append(_entry)
+                        await db.execute(
+                            "INSERT INTO oversell_correction_log "
+                            "(sku, platform, account, listing_key, old_qty, new_qty, dry_run, ok, error, ts) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (_sku, "amazon", _r["seller_id"], _r["sku"], _old, _new, int(dry_run), int(_ok), _err, _time.time()),
+                        )
+                    await db.commit()
+
+                _oversell_correction_progress["done"] += 1
+
+            for _uid, _mc in _meli_clients.items():
+                if _mc:
+                    try:
+                        await _mc.close()
+                    except Exception:
+                        pass
+    except Exception as _e:
+        logger.error(f"[OVERSELL-CORRECTION] Error inesperado: {_e}")
+    finally:
+        _oversell_correction_last_result = _results
+        _oversell_correction_running = False
+
+
+@app.post("/api/diag/oversell-correction-run")
+async def diag_oversell_correction_run(token: str = "", limit: int = 50, dry_run: bool = True, confirm: bool = False):
+    """Corre la corrección algorítmica de sobreventa cross-cuenta (ver
+    /api/diag/oversell-exposure-audit) en background sobre los `limit` SKUs
+    con mayor brecha. dry_run=true (default) SOLO calcula y registra lo que
+    HARÍA, sin escribir nada real -- usar dry_run=false + confirm=true para
+    aplicar de verdad. Nunca pausa, nunca sube cantidades, nunca toca FULL/FBA."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if _oversell_correction_running:
+        return JSONResponse({"error": "ya hay una corrección corriendo -- ver /api/diag/oversell-correction-status"}, status_code=409)
+    if not dry_run and not confirm:
+        return JSONResponse({"error": "dry_run=false requiere confirm=true -- esto escribe cantidades reales en ML/Amazon"}, status_code=400)
+    asyncio.create_task(_run_oversell_correction(limit=limit, dry_run=dry_run))
+    return JSONResponse({"ok": True, "started": True, "limit": limit, "dry_run": dry_run})
+
+
+@app.get("/api/diag/oversell-correction-status")
+async def diag_oversell_correction_status(token: str = ""):
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return JSONResponse({
+        "running": _oversell_correction_running,
+        "progress": _oversell_correction_progress,
+        "last_result_count": len(_oversell_correction_last_result),
+        "last_result": _oversell_correction_last_result[:300],
+    })
+
+
 @app.get("/api/diag/reconcile-realtime-alerts")
 async def diag_reconcile_realtime_alerts(token: str = ""):
     """Dispara YA el chequeo de reconciliación (normalmente corre solo cada
