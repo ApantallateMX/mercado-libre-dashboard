@@ -16370,6 +16370,41 @@ async def diag_ml_webhook_activity(token: str = "", minutes: int = 60):
     }
 
 
+@app.get("/api/diag/ml-messages-index-freshness")
+async def diag_ml_messages_index_freshness(token: str = ""):
+    """Diagnóstico: qué tan reciente es el último mensaje indexado en
+    ml_messages_index por cuenta, comparado contra ahora -- para confirmar si
+    el webhook + backup polling de mensajes (ver
+    project_ml_amazon_messages_backup_polling.md) realmente sigue corriendo.
+    Jovan reportó 2026-08-07 que ML mostraba mensajes de hace 10 min/2h/10h
+    en su bandeja real, mientras nuestro índice no tenía nada más reciente
+    que días atrás para esa cuenta."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_mif
+    async with _aio_mif.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_mif.Row
+        cur = await db.execute("""
+            SELECT account_id, COUNT(*) AS n, MAX(last_message_date) AS last_date
+            FROM ml_messages_index
+            GROUP BY account_id
+        """)
+        by_account = [dict(r) for r in await cur.fetchall()]
+    now = datetime.utcnow()
+    for r in by_account:
+        if r["last_date"]:
+            try:
+                dt = datetime.fromisoformat(r["last_date"].replace("Z", "+00:00")).replace(tzinfo=None)
+                r["age_hours"] = round((now - dt).total_seconds() / 3600, 1)
+            except Exception:
+                r["age_hours"] = None
+    known = await token_store.get_all_tokens()
+    known_ids = {str(a.get("user_id", "")): a.get("nickname", "") for a in known}
+    for r in by_account:
+        r["nickname"] = known_ids.get(str(r["account_id"]), "")
+    return {"by_account": by_account}
+
+
 @app.get("/api/diag/trigger-catalog-sync")
 async def diag_trigger_catalog_sync(token: str = ""):
     """Dispara el sync manual del catálogo BM sin necesitar sesión admin —
