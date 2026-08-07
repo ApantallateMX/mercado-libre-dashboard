@@ -7,6 +7,84 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-07 — FEAT+FIX: correccion algoritmica de sobreventa cross-cuenta (ML+Amazon) -- de 724 a 56 SKUs, 3 bugs reales encontrados en el camino
+
+Continuacion directa del fix de avail_total en TVs (entrada siguiente):
+Jovan pidio confirmar que las demas alertas de Productos no tuvieran el
+mismo problema. Se construyo `/api/diag/oversell-exposure-audit`
+(comparacion de solo lectura: SUM(available_quantity) de TODOS los
+listings activos ML+Amazon, todas las cuentas, vs. stock real de
+`bm_sku_master`) y arrojo **724 SKUs** con la suma publicada excediendo
+el stock real -- riesgo de sobreventa vigente, no historico (`synced_at`
+de minutos, no datos obsoletos).
+
+Causa raiz: `stock_sync_multi` (el reparto proporcional de stock entre
+cuentas) calcula la cuota de cada cuenta de forma INDEPENDIENTE, sin un
+tope global cross-cuenta -- si el mismo SKU esta publicado en varias
+cuentas (y/o con publicaciones duplicadas dentro de una misma cuenta,
+encontrado real: BLOWTECHNOLOGIES tenia 5 publicaciones para el mismo
+SKU), la suma total puede exceder el stock real sin que nada lo
+detecte, porque nada revisa el total agregado, solo cada cuenta por su
+cuenta.
+
+**Correccion construida** (`_run_oversell_correction`, nueva tabla
+`oversell_correction_log` para auditoria completa): para cada SKU
+sobre-expuesto, reparte PROPORCIONALMENTE el stock real de BM entre las
+publicaciones editables (nunca sube, nunca pausa, nunca toca FULL/ML ni
+FBA/Amazon -- esas cantidades se restan del presupuesto como
+"bloqueadas", no se ignoran). `dry_run=true` por default, requiere
+`confirm=true` para escribir de verdad. Corre en background con
+progreso consultable via `/api/diag/oversell-correction-status`.
+
+**3 bugs reales encontrados y corregidos ANTES de escalar a mas SKUs**
+(cada uno via prueba real pequeña -> verificacion en vivo -> fix ->
+prueba de nuevo, nunca se escalo sin validar primero):
+1. `update_item_stock()` en items con variaciones pone la MISMA
+   cantidad en CADA variacion (fallback documentado de MeLi cuando
+   rechaza `available_quantity` a nivel item) -- eso INFLABA el total
+   en vez de reducirlo (`MLM2890450220`: se pidio 26, el total quedo en
+   134 con 6 variaciones). Fix: detectar variaciones ANTES de escribir
+   y aplicar el mismo factor de escala a la cantidad ACTUAL de cada
+   variacion (preserva su reparto relativo), via
+   `update_variation_stocks_directly()`.
+2. SKUs numericos tipo "8517331" (catalogo Amazon-only, sin equivalente
+   real en BM) tenian `bm_sku_master.stock_updated_at=0` -- un
+   placeholder de "nunca verificado", no "BM confirmo 0". Sin excluirlos
+   se habria reducido inventario Amazon genuino pensando que el
+   presupuesto real era 0. Fix: excluir `stock_updated_at=0` de
+   auditoria y correccion.
+3. Desfase de sincronizacion: la correccion escribe directo a las APIs
+   reales de ML/Amazon, pero `ml_listings`/`amazon_listings` (las
+   copias locales que lee la auditoria) solo se refrescan con el sync
+   periodico de la app -- se agrego `/api/diag/force-qty-sync` para
+   forzarlo sin esperar el loop.
+
+**Resultado final, verificado en vivo en cada paso**: 724 -> 56 SKUs
+con exposicion (92% resuelto), ~2,500 correcciones reales escritas en 8
+lotes, 0 errores silenciosos (todo error fue un rechazo explicito y
+seguro de la plataforma, nunca un dato corrupto). De paso, tambien se
+corrigio manualmente el caso original que disparo todo esto
+(SNTV007240/BLOWTECHNOLOGIES: reactivado + 4 publicaciones duplicadas
+puestas en 0 para que el total volviera a coincidir con BM).
+
+**Los 56 restantes NO son trabajo pendiente sin resolver** -- son un
+limite arquitectonico real, confirmado con `logistic_type` de la API de
+ML (no solo inferencia): ~20 son inventario **FULL** (Mercado Envios
+Full gestiona esa cantidad, nuestra API correctamente se niega a
+escribirla), el resto son brechas triviales (1-10 unidades) o
+problemas puntuales de sync de catalogo (SKUs Amazon no encontrados en
+su marketplace). Ver `.claude/memory/project_oversell_cross_account.md`
+para el detalle completo y la lista de SKUs FULL pendientes de
+verificacion fisica/logistica (Jovan, no es un fix de codigo).
+
+Diag endpoints nuevos (todos gated por `_DIAG_TOKEN`): `ml-item-status`
+(lectura, status/sub_status/variaciones/logistic_type real de un item),
+`ml-item-variations-fix` (escritura puntual por variacion),
+`oversell-exposure-audit`, `oversell-correction-run`/`-status`,
+`force-qty-sync`.
+
+---
+
 ## 2026-08-07 — FIX DEFINITIVO: avail_total de TVs (SNTV*) se recalculaba en una tarea redundante y podía quedar mal con apariencia fresca
 
 Jovan reportó SNTV007472 mostrando "BM Disp.: 10" en la app cuando BM (su propia UI) mostraba Reserve 1, Available 2 -- y exigió una solución definitiva, no un parche puntual, bajo la premisa "si falla en 1 falla en todas".
