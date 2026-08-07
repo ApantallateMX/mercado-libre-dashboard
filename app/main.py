@@ -16272,6 +16272,63 @@ async def diag_bm_sku_master_lookup(token: str = "", sku: str = "", fix_zero: bo
     }
 
 
+@app.get("/api/diag/oversell-exposure-audit")
+async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
+    """Auditoría de solo lectura: SKUs donde la suma de available_quantity de
+    TODOS los listings activos (ML + Amazon, todas las cuentas) excede el
+    stock real disponible en bm_sku_master -- riesgo real de sobreventa.
+
+    Encontrado 2026-08-07 (SNTV007240/BLOWTECHNOLOGIES): stock_sync_multi
+    distribuye proporcionalmente por cuenta de forma INDEPENDIENTE, sin un
+    tope global cross-cuenta -- si un mismo SKU está publicado en varias
+    cuentas (y/o con publicaciones duplicadas dentro de una misma cuenta),
+    la suma total puede exceder el stock real de BM sin que nada lo detecte.
+    Este endpoint cuantifica cuántos SKUs más están en esa misma situación
+    ahora mismo -- ver project_bm_tv_avail_total_fix / consolidación Fase 3."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_ov
+    async with _aio_ov.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_ov.Row
+        rows = await (await db.execute("""
+            SELECT bm.sku AS sku, bm.available_qty AS bm_avail,
+                   COALESCE(ml.ml_sum, 0) AS ml_sum,
+                   COALESCE(amz.amz_sum, 0) AS amz_sum,
+                   COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) AS total_exposed,
+                   COALESCE(ml.ml_listings, 0) AS ml_listings,
+                   COALESCE(amz.amz_listings, 0) AS amz_listings
+            FROM bm_sku_master bm
+            LEFT JOIN (
+                SELECT base_sku, SUM(available_qty) AS ml_sum, COUNT(*) AS ml_listings
+                FROM ml_listings WHERE status = 'active' GROUP BY base_sku
+            ) ml ON ml.base_sku = bm.sku
+            LEFT JOIN (
+                SELECT base_sku, SUM(available_qty) AS amz_sum, COUNT(*) AS amz_listings
+                FROM amazon_listings WHERE status = 'ACTIVE' GROUP BY base_sku
+            ) amz ON amz.base_sku = bm.sku
+            WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
+            ORDER BY (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) - bm.available_qty) DESC
+            LIMIT ?
+        """, (limit,))).fetchall()
+        total_count = (await (await db.execute("""
+            SELECT COUNT(*) FROM bm_sku_master bm
+            LEFT JOIN (
+                SELECT base_sku, SUM(available_qty) AS ml_sum FROM ml_listings
+                WHERE status = 'active' GROUP BY base_sku
+            ) ml ON ml.base_sku = bm.sku
+            LEFT JOIN (
+                SELECT base_sku, SUM(available_qty) AS amz_sum FROM amazon_listings
+                WHERE status = 'ACTIVE' GROUP BY base_sku
+            ) amz ON amz.base_sku = bm.sku
+            WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
+        """)).fetchone())[0]
+    return {
+        "total_skus_oversold": total_count,
+        "showing": len(rows),
+        "rows": [dict(r) | {"gap": r["total_exposed"] - r["bm_avail"]} for r in rows],
+    }
+
+
 @app.get("/api/diag/reconcile-realtime-alerts")
 async def diag_reconcile_realtime_alerts(token: str = ""):
     """Dispara YA el chequeo de reconciliación (normalmente corre solo cada
