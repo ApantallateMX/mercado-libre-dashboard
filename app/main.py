@@ -16294,7 +16294,18 @@ async def _compute_oversell_exposure(limit: int = 100) -> dict:
     verificado por BM -- placeholder, NO "BM confirmó 0"). Encontrado con
     SKUs numéricos tipo "8517331" -- catálogo Amazon-only sin equivalente
     real en BM; sin este filtro se habría tratado su presupuesto real como
-    0 y reducido inventario Amazon genuino que BM nunca gestiona."""
+    0 y reducido inventario Amazon genuino que BM nunca gestiona.
+
+    FIX 2026-08-07 (b): excluye ml_listings.is_full=1 y amazon_listings.
+    can_update=0 (FULL/FBA) de la suma. Verificado en vivo vía
+    GET /inventories/{id}/stock/fulfillment (client.get_fulfillment_stock)
+    contra items FULL reales: el available_quantity que ML muestra en el
+    item YA ES el stock físico real de su bodega (confirmado, no hay
+    unidades ocultas). BM deja de contar esas unidades cuando se envían a
+    FULL/FBA -- comparar bm_avail contra esa cantidad SIEMPRE da falsa
+    sobreventa, porque son dos inventarios que ML ya gestiona por separado
+    del nuestro, no un mismo pool. Antes de este fix, ~20 SKUs de TVs
+    aparecían como "sobreventa" sin serlo -- ver project_oversell_cross_account."""
     import aiosqlite as _aio_ov
     async with _aio_ov.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_ov.Row
@@ -16308,11 +16319,11 @@ async def _compute_oversell_exposure(limit: int = 100) -> dict:
             FROM bm_sku_master bm
             LEFT JOIN (
                 SELECT base_sku, SUM(available_qty) AS ml_sum, COUNT(*) AS ml_listings
-                FROM ml_listings WHERE status = 'active' GROUP BY base_sku
+                FROM ml_listings WHERE status = 'active' AND is_full = 0 GROUP BY base_sku
             ) ml ON ml.base_sku = bm.sku
             LEFT JOIN (
                 SELECT base_sku, SUM(available_qty) AS amz_sum, COUNT(*) AS amz_listings
-                FROM amazon_listings WHERE status = 'ACTIVE' GROUP BY base_sku
+                FROM amazon_listings WHERE status = 'ACTIVE' AND can_update = 1 GROUP BY base_sku
             ) amz ON amz.base_sku = bm.sku
             WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
               AND bm.stock_updated_at > 0
@@ -16323,11 +16334,11 @@ async def _compute_oversell_exposure(limit: int = 100) -> dict:
             SELECT COUNT(*) FROM bm_sku_master bm
             LEFT JOIN (
                 SELECT base_sku, SUM(available_qty) AS ml_sum FROM ml_listings
-                WHERE status = 'active' GROUP BY base_sku
+                WHERE status = 'active' AND is_full = 0 GROUP BY base_sku
             ) ml ON ml.base_sku = bm.sku
             LEFT JOIN (
                 SELECT base_sku, SUM(available_qty) AS amz_sum FROM amazon_listings
-                WHERE status = 'ACTIVE' GROUP BY base_sku
+                WHERE status = 'ACTIVE' AND can_update = 1 GROUP BY base_sku
             ) amz ON amz.base_sku = bm.sku
             WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
               AND bm.stock_updated_at > 0
@@ -16451,11 +16462,11 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
                 FROM bm_sku_master bm
                 LEFT JOIN (
                     SELECT base_sku, SUM(available_qty) AS ml_sum FROM ml_listings
-                    WHERE status = 'active' GROUP BY base_sku
+                    WHERE status = 'active' AND is_full = 0 GROUP BY base_sku
                 ) ml ON ml.base_sku = bm.sku
                 LEFT JOIN (
                     SELECT base_sku, SUM(available_qty) AS amz_sum FROM amazon_listings
-                    WHERE status = 'ACTIVE' GROUP BY base_sku
+                    WHERE status = 'ACTIVE' AND can_update = 1 GROUP BY base_sku
                 ) amz ON amz.base_sku = bm.sku
                 WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
                   AND bm.stock_updated_at > 0
@@ -16482,15 +16493,17 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
 
                 _editable_ml = [r for r in _ml_rows if not r["is_full"]]
                 _editable_amz = [r for r in _amz_rows if r["can_update"]]
-                _locked_qty = (
-                    sum(int(r["available_qty"] or 0) for r in _ml_rows if r["is_full"])
-                    + sum(int(r["available_qty"] or 0) for r in _amz_rows if not r["can_update"])
-                )
+                # FIX 2026-08-07: FULL (ML)/FBA (Amazon) ya NO se resta del presupuesto.
+                # Verificado en vivo vía GET /inventories/{id}/stock/fulfillment: el
+                # available_quantity que ML muestra en items FULL YA ES su stock físico
+                # real (ML lo gestiona por completo desde que se le envía la mercancía) --
+                # no compite por el mismo stock de BM, es un pool aparte. Restarlo aquí
+                # habría reducido de más lo editable en SKUs con ambos tipos de listing.
                 _editable_total = (
                     sum(int(r["available_qty"] or 0) for r in _editable_ml)
                     + sum(int(r["available_qty"] or 0) for r in _editable_amz)
                 )
-                _budget = max(0, _bm_avail - _locked_qty)
+                _budget = _bm_avail
 
                 if _editable_total > 0 and _editable_total > _budget:
                     _scale = _budget / _editable_total
