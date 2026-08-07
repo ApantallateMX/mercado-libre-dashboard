@@ -24055,6 +24055,47 @@ async def diag_ml_item_status(token: str = "", account_id: str = "", item_id: st
         await client.close()
 
 
+@app.get("/api/diag/ml-item-variations-fix")
+async def diag_ml_item_variations_fix(token: str = "", account_id: str = "", item_id: str = "",
+                                       updates: str = "", confirm: bool = False):
+    """DIAG con efecto real: aplica cantidades especificas por variacion via
+    update_variation_stocks_directly(). Para corregir items con variaciones
+    que la correccion de sobreventa infló por error (ver fix 2026-08-07 en
+    _run_oversell_correction) -- update_item_stock() pone la MISMA cantidad
+    en CADA variacion si el item las tiene, en vez de repartir.
+    updates: JSON de {variation_id: qty, ...}, ej: {"181797281863":5,"181799027337":5}"""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not item_id or not updates:
+        return JSONResponse({"error": "account_id, item_id y updates requeridos"}, status_code=400)
+    if not confirm:
+        return JSONResponse({"error": "pasa confirm=true -- esto escribe cantidades reales en ML"}, status_code=400)
+    import json as _j_ovf
+    try:
+        _upd_map = _j_ovf.loads(updates)
+    except Exception as _e:
+        return JSONResponse({"error": f"updates no es JSON válido: {_e}"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        before = await client.get_item(item_id)
+        var_updates = [{"id": int(vid), "available_quantity": int(qty)} for vid, qty in _upd_map.items()]
+        result = await client.update_variation_stocks_directly(item_id, var_updates)
+        after = await client.get_item(item_id)
+        return {
+            "ok": True,
+            "before": {"available_quantity": before.get("available_quantity"),
+                       "variations": [{"id": v.get("id"), "qty": v.get("available_quantity")} for v in (before.get("variations") or [])]},
+            "after": {"available_quantity": after.get("available_quantity"),
+                      "variations": [{"id": v.get("id"), "qty": v.get("available_quantity")} for v in (after.get("variations") or [])]},
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tipo": type(e).__name__}
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-item-stock-fix")
 async def diag_ml_item_stock_fix(token: str = "", account_id: str = "", item_id: str = "",
                                   quantity: int = -1, confirm: bool = False):
