@@ -16330,7 +16330,7 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
 
 
 _oversell_correction_running = False
-_oversell_correction_progress: dict = {"done": 0, "total": 0, "started_at": 0.0, "writes": 0, "errors": 0}
+_oversell_correction_progress: dict = {"done": 0, "total": 0, "started_at": 0.0, "writes": 0, "errors": 0, "skipped": 0}
 _oversell_correction_last_result: list = []  # últimas correcciones aplicadas, para revisar sin ir a la DB
 
 
@@ -16374,7 +16374,7 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
     if _oversell_correction_running:
         return
     _oversell_correction_running = True
-    _oversell_correction_progress = {"done": 0, "total": 0, "started_at": _time.time(), "writes": 0, "errors": 0}
+    _oversell_correction_progress = {"done": 0, "total": 0, "started_at": _time.time(), "writes": 0, "errors": 0, "skipped": 0}
     _results: list = []
     import aiosqlite as _aio_oc
     try:
@@ -16438,7 +16438,7 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
                         _new = int(_old * _scale)  # floor
                         if _new == _old:
                             continue
-                        _ok, _err = True, ""
+                        _ok, _err, _skipped = True, "", False
                         if not dry_run:
                             try:
                                 _uid = _r["account_id"]
@@ -16447,17 +16447,32 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
                                 _mc = _meli_clients[_uid]
                                 if not _mc:
                                     raise RuntimeError("sin sesión ML para esta cuenta")
-                                await _mc.update_item_stock(_r["item_id"], _new)
+                                # FIX (encontrado en el primer batch real 2026-08-07): un item
+                                # con variaciones NO puede recibir available_quantity a nivel
+                                # item -- update_item_stock() detecta el error de MeLi y cae a
+                                # su fallback de "poner la MISMA cantidad en CADA variación",
+                                # lo que INFLA el total real (ej. MLM2890450220: se pidió 26,
+                                # el total quedó en 134 porque tiene varias variaciones). Se
+                                # verifica ANTES de escribir y se omite -- requiere reparto
+                                # manual entre variaciones, no un valor plano por variación.
+                                _item_chk = await _mc.get_item(_r["item_id"])
+                                if _item_chk.get("variations"):
+                                    _skipped = True
+                                    _err = "tiene variaciones -- omitido (requiere reparto manual, ver /api/diag/ml-item-status)"
+                                else:
+                                    await _mc.update_item_stock(_r["item_id"], _new)
                                 await asyncio.sleep(0.4)
                             except Exception as _e:
                                 _ok, _err = False, str(_e)
                                 _oversell_correction_progress["errors"] += 1
-                        if _ok and not dry_run:
+                        if _ok and not dry_run and not _skipped:
                             _oversell_correction_progress["writes"] += 1
+                        if _skipped:
+                            _oversell_correction_progress["skipped"] = _oversell_correction_progress.get("skipped", 0) + 1
                         _entry = {
                             "sku": _sku, "platform": "ml", "account": _r["account_id"],
                             "listing_key": _r["item_id"], "old_qty": _old, "new_qty": _new,
-                            "dry_run": dry_run, "ok": _ok, "error": _err, "ts": _time.time(),
+                            "dry_run": dry_run, "ok": _ok, "skipped": _skipped, "error": _err, "ts": _time.time(),
                         }
                         _results.append(_entry)
                         await db.execute(
@@ -24018,6 +24033,7 @@ async def diag_ml_item_status(token: str = "", account_id: str = "", item_id: st
         return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
     try:
         detail = await client.get_item(item_id)
+        _variations = detail.get("variations") or []
         return {
             "ok": True,
             "item_id": item_id,
@@ -24026,6 +24042,12 @@ async def diag_ml_item_status(token: str = "", account_id: str = "", item_id: st
             "available_quantity": detail.get("available_quantity"),
             "sku": next((a.get("value_name") for a in (detail.get("attributes") or []) if a.get("id") == "SELLER_SKU"), None),
             "health": detail.get("health"),
+            "has_variations": bool(_variations),
+            "variations": [
+                {"id": v.get("id"), "available_quantity": v.get("available_quantity"),
+                 "sku": next((a.get("value_name") for a in (v.get("attributes") or []) if a.get("id") == "SELLER_SKU"), None)}
+                for v in _variations
+            ],
         }
     except Exception as e:
         return {"ok": False, "error": str(e), "tipo": type(e).__name__}
