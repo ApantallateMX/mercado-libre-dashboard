@@ -16452,13 +16452,21 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
                                 # item -- update_item_stock() detecta el error de MeLi y cae a
                                 # su fallback de "poner la MISMA cantidad en CADA variación",
                                 # lo que INFLA el total real (ej. MLM2890450220: se pidió 26,
-                                # el total quedó en 134 porque tiene varias variaciones). Se
-                                # verifica ANTES de escribir y se omite -- requiere reparto
-                                # manual entre variaciones, no un valor plano por variación.
+                                # el total quedó en 134 porque tenía 6 variaciones). Se verifica
+                                # ANTES de escribir; si tiene variaciones, se aplica el MISMO
+                                # factor de escala (_scale) a la cantidad ACTUAL de cada
+                                # variación (floor, preservando su reparto relativo) en vez de
+                                # un valor plano -- así el total final SÍ queda dentro del
+                                # presupuesto real, sin adivinar cómo repartir.
                                 _item_chk = await _mc.get_item(_r["item_id"])
-                                if _item_chk.get("variations"):
-                                    _skipped = True
-                                    _err = "tiene variaciones -- omitido (requiere reparto manual, ver /api/diag/ml-item-status)"
+                                _var_list = _item_chk.get("variations") or []
+                                if _var_list:
+                                    _var_updates = []
+                                    for _v in _var_list:
+                                        _v_old = int(_v.get("available_quantity") or 0)
+                                        _v_new = int(_v_old * _scale)
+                                        _var_updates.append({"id": _v["id"], "available_quantity": _v_new})
+                                    await _mc.update_variation_stocks_directly(_r["item_id"], _var_updates)
                                 else:
                                     await _mc.update_item_stock(_r["item_id"], _new)
                                 await asyncio.sleep(0.4)
