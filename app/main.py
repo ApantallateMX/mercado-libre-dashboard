@@ -16284,7 +16284,13 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
     cuentas (y/o con publicaciones duplicadas dentro de una misma cuenta),
     la suma total puede exceder el stock real de BM sin que nada lo detecte.
     Este endpoint cuantifica cuántos SKUs más están en esa misma situación
-    ahora mismo -- ver project_bm_tv_avail_total_fix / consolidación Fase 3."""
+    ahora mismo -- ver project_bm_tv_avail_total_fix / consolidación Fase 3.
+
+    FIX 2026-08-07: excluye bm_sku_master.stock_updated_at=0 (nunca
+    verificado por BM -- placeholder, NO "BM confirmó 0"). Encontrado con
+    SKUs numéricos tipo "8517331" -- catálogo Amazon-only sin equivalente
+    real en BM; sin este filtro se habría tratado su presupuesto real como
+    0 y reducido inventario Amazon genuino que BM nunca gestiona."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_ov
@@ -16307,6 +16313,7 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
                 FROM amazon_listings WHERE status = 'ACTIVE' GROUP BY base_sku
             ) amz ON amz.base_sku = bm.sku
             WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
+              AND bm.stock_updated_at > 0
             ORDER BY (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) - bm.available_qty) DESC
             LIMIT ?
         """, (limit,))).fetchall()
@@ -16321,6 +16328,7 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
                 WHERE status = 'ACTIVE' GROUP BY base_sku
             ) amz ON amz.base_sku = bm.sku
             WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
+              AND bm.stock_updated_at > 0
         """)).fetchone())[0]
     return {
         "total_skus_oversold": total_count,
@@ -16394,6 +16402,7 @@ async def _run_oversell_correction(limit: int, dry_run: bool):
                     WHERE status = 'ACTIVE' GROUP BY base_sku
                 ) amz ON amz.base_sku = bm.sku
                 WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
+                  AND bm.stock_updated_at > 0
                 ORDER BY (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) - bm.available_qty) DESC
                 LIMIT ?
             """, (limit,))).fetchall()
