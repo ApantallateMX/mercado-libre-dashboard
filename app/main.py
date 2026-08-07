@@ -676,6 +676,7 @@ async def lifespan(app: FastAPI):
     start_stock_sync()
     from app.services.stock_sync_multi import start_multi_stock_sync
     start_multi_stock_sync()
+    asyncio.create_task(_oversell_alert_loop())
     start_token_refresh()
     start_supplier_debt_sync()
     start_realtime_alerts_reconcile()
@@ -3412,6 +3413,7 @@ async def stock_sync_page(request: Request):
         "threshold": status.get("threshold", 10),
         "history": history,
         "rules": rules,
+        "oversell_alert": _oversell_alert_cache,
         **ctx
     })
 
@@ -16272,27 +16274,27 @@ async def diag_bm_sku_master_lookup(token: str = "", sku: str = "", fix_zero: bo
     }
 
 
-@app.get("/api/diag/oversell-exposure-audit")
-async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
+async def _compute_oversell_exposure(limit: int = 100) -> dict:
     """Auditoría de solo lectura: SKUs donde la suma de available_quantity de
     TODOS los listings activos (ML + Amazon, todas las cuentas) excede el
     stock real disponible en bm_sku_master -- riesgo real de sobreventa.
 
     Encontrado 2026-08-07 (SNTV007240/BLOWTECHNOLOGIES): stock_sync_multi
-    distribuye proporcionalmente por cuenta de forma INDEPENDIENTE, sin un
-    tope global cross-cuenta -- si un mismo SKU está publicado en varias
-    cuentas (y/o con publicaciones duplicadas dentro de una misma cuenta),
-    la suma total puede exceder el stock real de BM sin que nada lo detecte.
-    Este endpoint cuantifica cuántos SKUs más están en esa misma situación
-    ahora mismo -- ver project_bm_tv_avail_total_fix / consolidación Fase 3.
+    tiene un algoritmo de reparto correcto (_plan() en stock_sync_multi.py --
+    concentra en cuenta ganadora si hay poco stock, divide equitativamente si
+    hay abundante), pero solo corre manualmente ("Sync ahora") por decisión
+    explícita de Jovan (commit ddb2552, abril 2026 -- CLAUDE.md: "Sync
+    automático que ESCRIBE en ML está prohibido"). Sin nadie disparándolo
+    seguido, el stock real y lo publicado se desincronizan con el tiempo.
+    Esta función NO escribe nada -- solo mide, para poder avisar sin violar
+    esa regla. Usada por /api/diag/oversell-exposure-audit y por el chequeo
+    periódico de solo lectura que alimenta el banner en /stock-sync.
 
     FIX 2026-08-07: excluye bm_sku_master.stock_updated_at=0 (nunca
     verificado por BM -- placeholder, NO "BM confirmó 0"). Encontrado con
     SKUs numéricos tipo "8517331" -- catálogo Amazon-only sin equivalente
     real en BM; sin este filtro se habría tratado su presupuesto real como
     0 y reducido inventario Amazon genuino que BM nunca gestiona."""
-    if token != _DIAG_TOKEN:
-        return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_ov
     async with _aio_ov.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_ov.Row
@@ -16335,6 +16337,39 @@ async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
         "showing": len(rows),
         "rows": [dict(r) | {"gap": r["total_exposed"] - r["bm_avail"]} for r in rows],
     }
+
+
+@app.get("/api/diag/oversell-exposure-audit")
+async def diag_oversell_exposure_audit(token: str = "", limit: int = 100):
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return await _compute_oversell_exposure(limit)
+
+
+_oversell_alert_cache: dict = {"total": 0, "top_gap": 0, "top_sku": "", "checked_at": 0.0}
+_OVERSELL_ALERT_INTERVAL = 3600  # 1h -- solo lee, nunca escribe (respeta "sync solo manual")
+
+
+async def _oversell_alert_loop():
+    """Chequeo periódico de SOLO LECTURA de exposición cross-cuenta (ver
+    _compute_oversell_exposure) -- avisa en /stock-sync cuándo conviene dar
+    clic a "Sync ahora", sin automatizar la escritura misma (esa decisión
+    es explícitamente manual, ver CLAUDE.md / commit ddb2552)."""
+    global _oversell_alert_cache
+    await asyncio.sleep(300)  # 5 min delay al arranque -- esperar a que bm_sku_master tenga datos
+    while True:
+        try:
+            _r = await _compute_oversell_exposure(limit=1)
+            _top = _r["rows"][0] if _r["rows"] else None
+            _oversell_alert_cache = {
+                "total": _r["total_skus_oversold"],
+                "top_gap": _top["gap"] if _top else 0,
+                "top_sku": _top["sku"] if _top else "",
+                "checked_at": _time.time(),
+            }
+        except Exception as _e:
+            logger.warning(f"[OVERSELL-ALERT] Error en chequeo periódico: {_e}")
+        await asyncio.sleep(_OVERSELL_ALERT_INTERVAL)
 
 
 @app.post("/api/diag/force-qty-sync")

@@ -50,6 +50,23 @@
     </div>
   </div>
 
+  <!-- ── Alerta de sobreventa cross-cuenta (solo lectura, nunca escribe) ── -->
+  {% if oversell_alert and oversell_alert.total > 0 %}
+  <div class="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4 flex items-start gap-3">
+    <svg class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    <div>
+      <p class="text-sm font-semibold text-amber-800">
+        {{ oversell_alert.total }} SKU{{ 's' if oversell_alert.total != 1 else '' }} con más unidades publicadas que stock real de BM
+      </p>
+      <p class="text-xs text-amber-700 mt-0.5">
+        Ej: {{ oversell_alert.top_sku }} (brecha de {{ oversell_alert.top_gap }} unidades) — el reparto entre cuentas solo se actualiza al dar clic en "Ver cambios" / "Sync ahora". Corre uno para corregirlo.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- ── Precio sugerido por cobertura de stock ───────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
     <div class="flex items-center justify-between">
