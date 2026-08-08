@@ -14457,7 +14457,11 @@ async def amazon_returns_page(request: Request):
 
 _STOCK_SYNC_INTERVAL = 4 * 3600   # 4 horas
 _stock_sync_running: dict = {}     # user_id -> bool (lock por cuenta)
-_auto_zero_enabled: dict = {}      # user_id -> bool (poner qty=0 automáticamente al detectar riesgo)
+# FIX 2026-08-08: se eliminó el checkbox "Auto qty=0" + su dict de estado --
+# nada en el código lo leía nunca (verificado con grep global). Prometía una
+# protección automática contra sobreventa que jamás existió, y activarla no
+# hacía nada real -- confusión de UI de alto impacto encontrada en la
+# auditoría de alertas de 2026-08-08.
 
 
 async def _run_stock_sync_for_user(user_id: str):
@@ -14831,11 +14835,6 @@ async def get_sync_alerts_partial(request: Request):
               class="text-[11px] bg-red-500 hover:bg-red-600 text-white font-semibold px-3 py-1.5 rounded-xl transition-colors">
         Poner en 0 ({total})
       </button>
-      <label class="flex items-center gap-1.5 cursor-pointer" title="Poner qty=0 autom\u00e1ticamente al detectar riesgo">
-        <span class="text-[11px] text-gray-500">Auto qty=0</span>
-        <input type="checkbox" id="chk-auto-pause" onchange="toggleAutoPause(this.checked)"
-               class="w-3.5 h-3.5 accent-red-500">
-      </label>
       <button onclick="triggerStockSync()" id="btn-sync-now"
               class="text-[11px] text-gray-500 hover:text-gray-700 font-medium">Sync ahora</button>
     </div>
@@ -15021,21 +15020,6 @@ window.triggerStockSync = function() {{
       if (b) {{ b.textContent = 'Error — reintentar'; b.style.pointerEvents = 'auto'; b.style.color = '#dc2626'; }}
     }});
 }}
-// Load initial auto-pause state
-fetch('/api/config/auto-pause').then(function(r){{return r.json();}}).then(function(d){{
-  var chk = document.getElementById('chk-auto-pause');
-  if (chk) chk.checked = d.enabled || false;
-}}).catch(function(){{}});
-window.toggleAutoPause = function(enabled) {{
-  fetch('/api/config/auto-pause', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{enabled: enabled}})
-  }}).then(function(r){{return r.json();}}).then(function(d){{
-    var chk = document.getElementById('chk-auto-pause');
-    if (chk) chk.checked = d.enabled;
-  }});
-}}
 </script>"""
     return HTMLResponse(html)
 
@@ -15073,6 +15057,19 @@ async def get_stock_counts():
         cached_paused = _paused_items_cache.get(uid)
         pausados = len(cached_paused[1]) if cached_paused else 0
 
+        # FIX 2026-08-08: "sin_publicar" estaba hardcodeado a 0 SIEMPRE -- el
+        # badge correspondiente nunca podía aparecer aunque hubiera decenas de
+        # SKUs BM reales sin publicar (dato real ya disponible en bm_sku_gaps,
+        # la misma tabla que alimenta /bm/unlaunched y /productos). Se conecta
+        # aquí con la misma query que ya usa /api/productos/stats.
+        import aiosqlite as _aio_sc
+        async with _aio_sc.connect(DATABASE_PATH, timeout=15) as _db_sc:
+            _row_sc = await (await _db_sc.execute(
+                "SELECT COUNT(*) FROM bm_sku_gaps WHERE status='unlaunched' AND user_id=?",
+                (uid,),
+            )).fetchone()
+            sin_publicar = _row_sc[0] if _row_sc else 0
+
         key = f"stock_issues:{client.user_id}:t10"
         entry = _stock_issues_cache.get(key)
         if entry:
@@ -15087,13 +15084,13 @@ async def get_stock_counts():
                 "stagnant": ctx.get("stagnant_count", 0) or 0,
                 "price_risk": ctx.get("price_risk_count", 0) or 0,
                 "no_bm_sku": ctx.get("no_bm_sku_count", 0) or 0,
-                "sin_publicar": 0,
+                "sin_publicar": sin_publicar,
                 "pausados": pausados,
             }
         # Sin cache en absoluto (primer arranque) -- fallback a alertas de
         # sobreventa desde DB, lo único disponible sin esperar al prewarm.
         alerts = await token_store.get_sync_alerts(client.user_id)
-        return {**_empty, "riesgo": len(alerts), "pausados": pausados}
+        return {**_empty, "riesgo": len(alerts), "pausados": pausados, "sin_publicar": sin_publicar}
     finally:
         await client.close()
 
@@ -18733,24 +18730,6 @@ async def get_platform_rules():
     _uid = str(_ctx.get() or "")
     rules = await token_store.get_all_sku_platform_rules(user_id=_uid)
     return {"rules": rules}
-
-
-@app.get("/api/config/auto-pause")
-async def get_auto_pause():
-    client = await get_meli_client()
-    if not client:
-        return JSONResponse({"error": "no_session"}, status_code=401)
-    return {"enabled": _auto_zero_enabled.get(client.user_id, False)}
-
-
-@app.post("/api/config/auto-pause")
-async def set_auto_pause(request: Request):
-    client = await get_meli_client()
-    if not client:
-        return JSONResponse({"error": "no_session"}, status_code=401)
-    body = await request.json()
-    _auto_zero_enabled[client.user_id] = bool(body.get("enabled", False))
-    return {"enabled": _auto_zero_enabled[client.user_id]}
 
 
 @app.get("/api/config/fx-rate")

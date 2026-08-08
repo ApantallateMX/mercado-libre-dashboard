@@ -44,6 +44,8 @@
       setText('stat-active',     d.active     ?? '—');
       setText('stat-paused',     d.paused     ?? '—');
       setText('stat-criticos',   d.criticos   ?? '—');
+      const cappedEl = document.getElementById('stat-criticos-capped');
+      if (cappedEl) cappedEl.classList.toggle('hidden', !d.criticos_capped);
       setText('stat-candidates', d.candidates ?? '—');
       setText('cnt-all',         d.total      ?? '—');
       setText('cnt-active',      d.active     ?? '—');

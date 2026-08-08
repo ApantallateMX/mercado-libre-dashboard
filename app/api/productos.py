@@ -181,12 +181,50 @@ async def get_stats():
                 (user_id,)
             )).fetchone()
             candidates = row[0] if row else 0
+
+        # FIX 2026-08-08: "criticos" venía hardcodeado a None con el comentario
+        # "computed client-side" -- pero productos.js nunca lo calculaba, así
+        # que el tile mostraba "—" siempre, para toda cuenta, desde que existe.
+        # _calc_score() solo necesita el body crudo del item (fotos/video/
+        # envío/status/qty/título) -- NO stock BM -- así que se puede contar
+        # sin las llamadas caras de BM. Capado a 500 items (mismo tope que
+        # list_productos) para que "/stats" siga siendo rápido en catálogos
+        # grandes; si hay más, el conteo queda marcado como parcial.
+        criticos = 0
+        criticos_capped = False
+        try:
+            _ids: list = []
+            for _st in ("active", "paused"):
+                _off = 0
+                while True:
+                    _d = await client.get_items(offset=_off, limit=200, status=_st)
+                    _batch = _d.get("results", [])
+                    _tot = _d.get("paging", {}).get("total", 0)
+                    _ids.extend(_batch)
+                    _off += len(_batch)
+                    if not _batch or _off >= _tot or _off >= 500:
+                        break
+            if len(_ids) >= 500:
+                criticos_capped = True
+            for i in range(0, len(_ids), 20):
+                _details = await client.get_items_details(_ids[i:i + 20])
+                for _b in (_details if isinstance(_details, list) else []):
+                    if not isinstance(_b, dict):
+                        continue
+                    _score, _ = _calc_score(_b)
+                    if _score < 40:
+                        criticos += 1
+        except Exception as _e_crit:
+            logger.warning(f"stats: error calculando criticos: {_e_crit}")
+            criticos = None
+
         return {
-            "active":     active_total,
-            "paused":     paused_total,
-            "criticos":   None,   # computed client-side from score_category filter
-            "candidates": candidates,
-            "total":      active_total + paused_total,
+            "active":          active_total,
+            "paused":          paused_total,
+            "criticos":        criticos,
+            "criticos_capped": criticos_capped,
+            "candidates":      candidates,
+            "total":           active_total + paused_total,
         }
     finally:
         await client.close()
