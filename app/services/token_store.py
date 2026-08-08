@@ -60,6 +60,22 @@ async def init_db():
     if db_path.parent != Path("."):
         db_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        # FIX 2026-08-08: WAL mode -- por default SQLite usa "rollback journal",
+        # que bloquea TODAS las lecturas mientras hay una escritura en curso
+        # (causó "database is locked" reales en producción, ej. 2026-08-07:
+        # varias peticiones GET fallaron con 500 durante ~6s por una escritura
+        # concurrente). WAL permite lecturas concurrentes con una escritura en
+        # curso -- solo sigue habiendo un escritor a la vez, pero deja de
+        # bloquear lectores. journal_mode=WAL se persiste en el header del
+        # archivo .db, así que basta fijarlo una vez aquí (init_db corre al
+        # arranque) para que TODAS las conexiones futuras -- las de este
+        # archivo y las decenas de aiosqlite.connect() sueltos en main.py --
+        # queden en WAL sin tener que tocar cada una. synchronous=NORMAL es
+        # la combinación estándar recomendada con WAL (segura ante crash de la
+        # app, ligeramente menos estricta que FULL ante un corte de energía
+        # real -- aceptable para este caso de uso).
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
         # ─────────────────────────────────────────────────────────────────
         # TABLA: tokens (cuentas de Mercado Libre)
         # Almacena access_token + refresh_token por user_id de MeLi.
