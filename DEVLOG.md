@@ -7,6 +7,82 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-08 — FIX: auditoria completa del sistema de alertas de stock (ML+Amazon) -- 7 bugs reales corregidos
+
+Jovan reporto con screenshot una contradiccion obvia: el banner superior de
+`/items` decia "Inventario en orden -- sin alertas activas" mientras la
+cuadricula de KPIs de la MISMA pagina mostraba "Total Alertas: 1662". Pidio
+analizar a fondo como funcionan TODAS las alertas (ML y Amazon) y mejorar
+tanto la logica como la forma de trabajar con ellas.
+
+Un agente Explore mapeo las 9 categorias de ML + 7 de Amazon completas
+(definicion exacta, fuente de datos, donde se muestran, acciones
+disponibles) y encontro 16 problemas reales, varios mas graves que la
+contradiccion original. Corregidos hoy (por orden de impacto):
+
+1. **Banner vs cuadricula (el original)**: `get_stock_counts()` exigia
+   datos de <15min o caia a un fallback casi vacio; la cuadricula SI
+   tolera datos viejos. Ademas solo conocia 5 de las 9 categorias reales.
+   Se quito el filtro de frescura y se agregaron las 6 categorias
+   faltantes (`activate`/`full_no_stock`/`imbalanced`/`stagnant`/
+   `price_risk`/`no_bm_sku`) con sus badges correspondientes.
+2. **"Total Alertas" de ML contaba doble**: `restock_count` ya incluye
+   `activate_count` (`len(restock)+len(activate)`), y la formula lo
+   volvia a sumar aparte -- inflaba el total real.
+3. **Checkbox "Auto qty=0" no hacia absolutamente nada**: se guardaba en
+   un dict en memoria (`_auto_zero_enabled`) que ningun otro codigo leia
+   jamas (confirmado con grep global) -- prometia una proteccion
+   automatica contra sobreventa que no existia en ningun punto del
+   sistema. Eliminado por completo (checkbox + JS + 2 endpoints + dict).
+4. **Badge "Sin publicar" hardcodeado a 0**: nunca podia aparecer aunque
+   hubiera SKUs BM reales sin publicar (dato ya disponible en
+   `bm_sku_gaps`, la misma tabla de `/bm/unlaunched` y `/productos`).
+   Conectado.
+5. **Tile "Criticos" de `/productos` mostraba "—" siempre**: el backend
+   devolvia `criticos: None` con el comentario "computed client-side",
+   pero el JS nunca lo calculaba -- roto desde que existe el tile. Ahora
+   se calcula server-side con `_calc_score()` (capado a 500 items para
+   catalogos grandes, marcado como parcial con un asterisco si aplica).
+6. **2 sistemas paralelos de "Riesgo Sobreventa" en ML**: el panel
+   persistente + badge de pestana leian de `token_store.get_sync_alerts()`
+   (tabla escrita por un loop legacy cada 4h), completamente
+   independiente del KPI del tab Stock (que sale de `_stock_issues_cache`,
+   recalculado cada ~15min por el prewarm) -- dos numeros distintos para
+   el mismo concepto en la misma pantalla. Ambos endpoints (`/api/sync/
+   alerts`, `/api/sync/alerts-count`) ahora leen la misma fuente que el
+   KPI. Las acciones (Qty 0 individual y bulk) siguen igual, llaman al
+   mismo endpoint real sin importar el origen de la lista.
+7. **Amazon: mismo bug de conteo doble, peor**: `total_alertas` sumaba 7
+   listas donde 3 (`riesgo_sobreventa`/`stock_critico`/`estancado`) no
+   tienen exclusion mutua entre si ni con las otras 4 -- un SKU podia
+   contarse hasta 4 veces. Corregido a SKUs unicos.
+8. **Amazon: sobreventa con BM=0 era invisible**: `riesgo_sobreventa`
+   exigia `bm_avail>0`, asi que el caso mas grave (Amazon vendible, BM
+   literalmente en 0) no caia en ninguna de las 7 categorias. Corregido,
+   marcado visualmente como "SIN RESPALDO BM".
+9. **Amazon: ninguna alerta tenia accion real**, solo enlace a Seller
+   Central. Agregado boton real "Sync stock BM" (escribe cantidad real
+   via `fulfillment-action`/`set_qty`) en las 4 categorias FBM
+   (Reabastecer/Riesgo Sobreventa/Stock Bajo/Restock Urgente) -- nunca
+   visible en SKUs FBA puro, donde Amazon controla el stock directamente.
+
+Implementado con `amazon-specialist` (agente) para el punto 7-9,
+verificado por Jovan via 4 decisiones explicitas (dedup por SKU unico,
+boton en las 4 categorias FBM, arreglar el hueco de BM=0 ya, sin
+acciones "avanzadas" de conversion FBA/FBM por ahora).
+
+**Pendiente, menor impacto** (documentado, no bloqueante): "SKU no en
+catalogo BM" tiene 2 implementaciones que no coinciden (`no_bm_sku` del
+tab Stock vs. `/productos/sin-bm`); banner "actualizando en background"
+le miente a operadores (el refresh solo lo dispara un admin); texto de
+`/stock-sync` dice "ciclo cada 5 min" cuando no existe ningun ciclo
+automatico (decision explicita de Jovan, no es un bug); solapamiento
+residual entre `critical`/`stagnant`/`price_risk`/`imbalanced` de ML
+(no son mutuamente excluyentes); tile "Criticos" de `/productos` choca
+de nombre con "Stock Critico" del tab Stock (conceptos distintos).
+
+---
+
 ## 2026-08-07 — FEAT+FIX: correccion algoritmica de sobreventa cross-cuenta (ML+Amazon) -- de 724 a 56 SKUs, 3 bugs reales encontrados en el camino
 
 Continuacion directa del fix de avail_total en TVs (entrada siguiente):
