@@ -279,6 +279,18 @@ def _is_amz_onsite(item: dict) -> bool:
     return False
 
 
+def _fulfillment_channel_of(item: dict) -> str:
+    """
+    Canal real de fulfillment de un listing: 'FBM' (merchant, editable via
+    set_qty por la Listings Items API) o 'FBA' (Amazon-fulfilled o Seller Flex,
+    NO editable con set_qty directo — requiere enviar inventario a FBA).
+
+    Mismo criterio que amazon_listing_sync.can_update: cualquier cosa que
+    _is_amz_onsite() marque como no editable (AMAZON_NA o sufijo -FLX) es FBA.
+    """
+    return "FBA" if _is_amz_onsite(item) else "FBM"
+
+
 def _db_status_to_api(status_str: str) -> list:
     """Convierte status de DB ('Active','Inactive'...) al formato de la Listings API (['BUYABLE',...])."""
     s = (status_str or "").strip().upper()
@@ -2465,10 +2477,11 @@ async def amazon_products_stock_alerts(request: Request):
                 if price > 0:
                     break
             listings_idx[sku] = {
-                "title":  summary_0.get("itemName", sku)[:65],
-                "asin":   summary_0.get("asin") or "",
-                "status": _listing_status(summaries),
-                "price":  price,
+                "title":   summary_0.get("itemName", sku)[:65],
+                "asin":    summary_0.get("asin") or "",
+                "status":  _listing_status(summaries),
+                "price":   price,
+                "channel": _fulfillment_channel_of(item),
             }
 
         # Construir lista unificada para enriquecer con BM
@@ -2486,7 +2499,7 @@ async def amazon_products_stock_alerts(request: Request):
             sales     = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
             units_30d = sales["units"]
             vel_dia   = units_30d / 30.0
-            listing   = listings_idx.get(sku, {"title": name, "asin": asin, "status": "ACTIVE", "price": 0.0})
+            listing   = listings_idx.get(sku, {"title": name, "asin": asin, "status": "ACTIVE", "price": 0.0, "channel": "FBA"})
             title     = listing["title"] or name
             l_asin    = listing["asin"] or asin
             sc_url    = (
@@ -2503,6 +2516,7 @@ async def amazon_products_stock_alerts(request: Request):
                 "vel_dia":    round(vel_dia, 2) if vel_dia > 0 else None,
                 "sc_url":     sc_url,
                 "price":      listing.get("price", 0.0),
+                "channel":    listing.get("channel", "FBA"),
             })
 
         # Enriquecer con BM (bm_avail, bm_reserved, bm_mty, bm_cdmx, bm_tj, _bm_retail_ph)
@@ -2547,9 +2561,14 @@ async def amazon_products_stock_alerts(request: Request):
                     item["sugeridas"]   = max(0, round(vel_v * 60) - fulfillable - item["inbound"])
                     restock_urgente.append(item)
 
-            # Riesgo Sobreventa: FBA > BM disponible
-            if fulfillable > 0 and bm_avail > 0 and fulfillable > bm_avail:
+            # Riesgo Sobreventa: FBA > BM disponible (incluye BM=0 —
+            # antes este caso quedaba invisible: no entraba aquí porque
+            # exigía bm_avail>0, y no entraba en sin_stock/reabastecer
+            # porque esos exigen fulfillable==0. Vendible en Amazon con
+            # BM=0 es el caso más grave de sobreventa, no uno a ignorar.)
+            if fulfillable > 0 and fulfillable > bm_avail:
                 item["gap_units"] = fulfillable - bm_avail
+                item["bm_zero"] = (bm_avail == 0)
                 riesgo_sobreventa.append(item)
 
             # Stock Crítico BM: BM > 0 pero < 10
@@ -2569,10 +2588,15 @@ async def amazon_products_stock_alerts(request: Request):
         stock_critico.sort(key=lambda x: x.get("bm_avail") or 0)
         estancado.sort(key=lambda x: -(x.get("bm_avail") or 0))
 
-        total_alertas = (
-            len(sin_stock) + len(reabastecer) + len(riesgo_sobreventa) +
-            len(stock_bajo) + len(restock_urgente) + len(stock_critico) + len(estancado)
-        )
+        # Dedup por SKU único — un mismo SKU puede caer en varias categorías
+        # (ej. Stock Bajo + Riesgo Sobreventa a la vez) y antes se contaba
+        # doble en "Total Alertas".
+        _alert_skus: set = set()
+        for _lst in (sin_stock, reabastecer, riesgo_sobreventa, stock_bajo,
+                     restock_urgente, stock_critico, estancado):
+            for _it in _lst:
+                _alert_skus.add(_it["sku"])
+        total_alertas = len(_alert_skus)
 
         ctx = {
             "sin_stock":         sin_stock,

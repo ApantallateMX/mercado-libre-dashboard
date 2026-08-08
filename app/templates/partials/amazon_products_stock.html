@@ -127,10 +127,19 @@
                         {% else %}<span class="text-xs text-gray-300">Sin datos</span>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
-                        <a href="{{ item.sc_url }}" target="_blank"
-                           class="inline-block px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
-                            Seller Central →
-                        </a>
+                        <div class="flex items-center justify-center gap-1">
+                            {% if item.channel == 'FBM' %}
+                            <button data-sku="{{ item.sku }}" data-bm="{{ item.bm_avail or 0 }}"
+                                    onclick="window._amzSyncBmStock(this)"
+                                    class="inline-block px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                                Sync stock BM
+                            </button>
+                            {% endif %}
+                            <a href="{{ item.sc_url }}" target="_blank"
+                               class="inline-block px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                                Seller Central →
+                            </a>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -186,15 +195,27 @@
                     </td>
                     <td class="py-3 px-3 text-right">
                         <span class="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">-{{ item.gap_units or 0 }}</span>
+                        {% if item.bm_zero %}
+                        <p class="text-[10px] text-red-500 font-bold mt-0.5">SIN RESPALDO BM</p>
+                        {% endif %}
                     </td>
                     <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
                     <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
                     <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
                     <td class="py-3 px-3 text-center">
-                        <a href="{{ item.sc_url }}" target="_blank"
-                           class="inline-block px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
-                            Seller Central →
-                        </a>
+                        <div class="flex items-center justify-center gap-1">
+                            {% if item.channel == 'FBM' %}
+                            <button data-sku="{{ item.sku }}" data-bm="{{ item.bm_avail or 0 }}"
+                                    onclick="window._amzSyncBmStock(this)"
+                                    class="inline-block px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                                Sync stock BM
+                            </button>
+                            {% endif %}
+                            <a href="{{ item.sc_url }}" target="_blank"
+                               class="inline-block px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                                Seller Central →
+                            </a>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -259,10 +280,19 @@
                         {% else %}<span class="text-xs text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
-                        <a href="{{ item.sc_url }}" target="_blank"
-                           class="inline-block px-3 py-1 bg-orange-400 hover:bg-orange-500 text-white text-xs font-medium rounded-lg transition">
-                            Ver →
-                        </a>
+                        <div class="flex items-center justify-center gap-1">
+                            {% if item.channel == 'FBM' %}
+                            <button data-sku="{{ item.sku }}" data-bm="{{ item.bm_avail or 0 }}"
+                                    onclick="window._amzSyncBmStock(this)"
+                                    class="inline-block px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                                Sync stock BM
+                            </button>
+                            {% endif %}
+                            <a href="{{ item.sc_url }}" target="_blank"
+                               class="inline-block px-3 py-1 bg-orange-400 hover:bg-orange-500 text-white text-xs font-medium rounded-lg transition">
+                                Ver →
+                            </a>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -332,10 +362,19 @@
                         {% else %}<span class="text-xs text-gray-400">Ya en camino</span>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
-                        <a href="{{ item.sc_url }}" target="_blank"
-                           class="inline-block px-3 py-1 bg-yellow-400 hover:bg-yellow-500 text-white text-xs font-medium rounded-lg transition">
-                            Ver →
-                        </a>
+                        <div class="flex items-center justify-center gap-1">
+                            {% if item.channel == 'FBM' %}
+                            <button data-sku="{{ item.sku }}" data-bm="{{ item.bm_avail or 0 }}"
+                                    onclick="window._amzSyncBmStock(this)"
+                                    class="inline-block px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                                Sync stock BM
+                            </button>
+                            {% endif %}
+                            <a href="{{ item.sc_url }}" target="_blank"
+                               class="inline-block px-3 py-1 bg-yellow-400 hover:bg-yellow-500 text-white text-xs font-medium rounded-lg transition">
+                                Ver →
+                            </a>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -527,6 +566,36 @@
 {% endif %}
 
 <script>
+window._amzSyncBmStock = function(btn) {
+    var sku = btn.dataset.sku;
+    var bm  = parseInt(btn.dataset.bm, 10) || 0;
+    if (!confirm('¿Sincronizar el stock FBM de ' + sku + ' a ' + bm + ' unidad(es) (stock disponible en BM)?\n\nEsto actualiza la cantidad del listing directamente en Amazon Seller Central.')) return;
+    var orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando…';
+    fetch('/api/amazon/products/' + encodeURIComponent(sku) + '/fulfillment-action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'set_qty', quantity: bm})
+    })
+    .then(function(r) {
+        if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
+            throw new Error(d.detail || r.statusText);
+        });
+        return r.json();
+    })
+    .then(function() {
+        btn.textContent = '✓ ' + bm + ' uds';
+        btn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+        btn.classList.add('bg-green-600');
+    })
+    .catch(function(e) {
+        alert('Error al sincronizar stock: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = orig;
+    });
+};
+
 (function() {
     var PER = 10;
     function amzPaginate(tbodyId, pagerId) {
