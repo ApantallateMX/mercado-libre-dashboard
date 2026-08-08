@@ -15042,30 +15042,58 @@ window.toggleAutoPause = function(enabled) {{
 
 @app.get("/api/sync/stock-counts")
 async def get_stock_counts():
-    """Conteos rápidos de los 4 grupos de acción. Usa _stock_issues_cache si disponible."""
+    """Conteos para la barra de alertas del header. Usa _stock_issues_cache si
+    disponible -- SIN filtro de frescura (ver fix 2026-08-08 abajo).
+
+    FIX 2026-08-08: esta barra decía "sin alertas activas" mientras la
+    cuadrícula de KPIs de la misma página (products_stock_issues.html,
+    lee el MISMO _stock_issues_cache) mostraba 1,662 alertas reales --
+    Jovan lo reportó con screenshot, contradicción obvia. Dos causas:
+    1. Esta función exigía `(_time.time() - entry[0]) < _STOCK_ISSUES_TTL`
+       (15 min) para servir el cache -- si el dato tenía >15 min (pasa
+       seguido, la cuadrícula de abajo SÍ tolera datos viejos con solo un
+       aviso "datos de hace Xmin"), caía al fallback casi-vacío
+       (sin_stock=0, critico=0 siempre) en vez de mostrar el dato real
+       aunque viejo. Se quitó el gate -- servir cache mientras exista,
+       igual que la cuadrícula.
+    2. Solo sumaba 5 de las 9 categorías reales de alerta (faltaban
+       activate/full_no_stock/imbalanced/stagnant/price_risk/no_bm_sku)
+       -- el total podía ser 0 aquí con alertas reales en categorías que
+       esta función ni conocía. Ahora expone las 9, igual que "Total
+       Alertas" de la cuadrícula (ya corregido para no contar activate
+       dos veces, restock_count ya lo incluye)."""
     client = await get_meli_client()
+    _empty = {"sin_stock": 0, "riesgo": 0, "critico": 0, "activate": 0,
+              "full_no_stock": 0, "imbalanced": 0, "stagnant": 0,
+              "price_risk": 0, "no_bm_sku": 0, "sin_publicar": 0, "pausados": 0}
     if not client:
-        return {"sin_stock": 0, "riesgo": 0, "critico": 0, "sin_publicar": 0, "pausados": 0}
+        return _empty
     try:
-        # Paused count from cache (non-blocking — returns 0 if not yet fetched)
         uid = str(client.user_id)
         cached_paused = _paused_items_cache.get(uid)
         pausados = len(cached_paused[1]) if cached_paused else 0
 
         key = f"stock_issues:{client.user_id}:t10"
         entry = _stock_issues_cache.get(key)
-        if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
+        if entry:
             ctx = entry[1]
             return {
                 "sin_stock": ctx.get("restock_count", 0),
                 "riesgo": ctx.get("risk_count", 0),
                 "critico": ctx.get("critical_count", 0),
+                "activate": ctx.get("activate_count", 0),
+                "full_no_stock": ctx.get("full_no_stock_count", 0),
+                "imbalanced": ctx.get("imbalanced_count", 0) or 0,
+                "stagnant": ctx.get("stagnant_count", 0) or 0,
+                "price_risk": ctx.get("price_risk_count", 0) or 0,
+                "no_bm_sku": ctx.get("no_bm_sku_count", 0) or 0,
                 "sin_publicar": 0,
                 "pausados": pausados,
             }
-        # Fallback: solo alertas de sobreventa desde DB (siempre disponibles)
+        # Sin cache en absoluto (primer arranque) -- fallback a alertas de
+        # sobreventa desde DB, lo único disponible sin esperar al prewarm.
         alerts = await token_store.get_sync_alerts(client.user_id)
-        return {"sin_stock": 0, "riesgo": len(alerts), "critico": 0, "sin_publicar": 0, "pausados": pausados}
+        return {**_empty, "riesgo": len(alerts), "pausados": pausados}
     finally:
         await client.close()
 

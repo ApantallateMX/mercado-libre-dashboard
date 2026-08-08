@@ -215,7 +215,10 @@ window._stockFilter = function(q) {
     {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300 kpi-card">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0) }}</p>
+        {# FIX 2026-08-08: restock_count YA incluye activate_count (restock_count =
+           len(restock)+len(activate), ver main.py _sic_data) -- sumarlo aparte aqui
+           contaba cada item de Activar 2 veces en el total. #}
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
     {% if orphan_count %}
