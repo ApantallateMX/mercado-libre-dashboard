@@ -14772,24 +14772,38 @@ def start_token_refresh():
 
 @app.get("/api/sync/alerts", response_class=HTMLResponse)
 async def get_sync_alerts_partial(request: Request):
-    """Retorna HTML con las alertas de sobreventa del usuario actual."""
+    """Retorna HTML con las alertas de sobreventa del usuario actual.
+
+    FIX 2026-08-08: antes leía de token_store.get_sync_alerts() (tabla DB
+    escrita por un loop legacy cada 4h, _run_stock_sync_for_user) -- un
+    sistema COMPLETAMENTE INDEPENDIENTE del que alimenta el KPI "Riesgo
+    Sobreventa" del tab Stock (que sale de _stock_issues_cache, recalculado
+    cada ~15 min por el prewarm). Auditoría de alertas 2026-08-08: esto
+    hacía que este panel y el badge de la pestaña mostraran un número
+    DISTINTO al de la cuadrícula del tab Stock para el mismo concepto de
+    negocio, en la misma pantalla. Ahora lee la MISMA fuente que el KPI --
+    una sola fuente de verdad para "riesgo de sobreventa" en toda la app."""
     client = await get_meli_client()
     if not client:
         return HTMLResponse("")
     user_id = client.user_id
-    alerts = await token_store.get_sync_alerts(user_id)
-    status = await token_store.get_sync_status(user_id)
-    last_run = status.get("last_run", "") if status else ""
-    if not alerts:
+    await client.close()
+    key = f"stock_issues:{user_id}:t10"
+    entry = _stock_issues_cache.get(key)
+    products_risk = entry[1].get("oversell_risk", []) if entry else []
+    last_str = f"datos de hace {int((_time.time() - entry[0]) / 60)}min" if entry else ""
+    if not products_risk:
         return HTMLResponse("")
-    total = len(alerts)
-    last_str = f"sync: {last_run[:16]}" if last_run else ""
-    all_ids = ",".join(f"'{a['item_id']}'" for a in alerts)
+    total = len(products_risk)
+    all_ids = ",".join(f"'{p['id']}'" for p in products_risk)
 
     rows = ""
-    for i, a in enumerate(alerts):
-        sku_str   = a.get("sku") or ""
-        price_val = a.get("price", 0) or 0
+    for i, p in enumerate(products_risk):
+        item_id   = p.get("id", "")
+        title     = p.get("title", "") or ""
+        sku_str   = p.get("sku") or ""
+        price_val = p.get("price", 0) or 0
+        meli_stock = p.get("available_quantity", 0) or 0
         price_html = (f'<div class="text-center hidden md:block">'
                       f'<div class="text-[10px] text-gray-400 mb-0.5">Precio</div>'
                       f'<span class="text-xs font-semibold text-gray-700">${price_val:,.0f}</span>'
@@ -14798,26 +14812,26 @@ async def get_sync_alerts_partial(request: Request):
                     if sku_str else '<span class="text-[10px] text-gray-300 font-mono">sin SKU</span>')
         rows += (
             f'<div class="alert-row flex items-center gap-3 px-4 py-3 border-b border-gray-100'
-            f' last:border-0 hover:bg-red-50/20 transition-colors" data-idx="{i}" data-item-id="{a["item_id"]}" style="display:none">'
+            f' last:border-0 hover:bg-red-50/20 transition-colors" data-idx="{i}" data-item-id="{item_id}" style="display:none">'
             f'<div class="min-w-0 flex-1">'
             f'<div class="flex items-center gap-2 flex-wrap mb-0.5">'
-            f'<span class="font-mono text-[11px] font-semibold text-blue-600">{a["item_id"]}</span>'
+            f'<span class="font-mono text-[11px] font-semibold text-blue-600">{item_id}</span>'
             f'{sku_html}'
             f'</div>'
-            f'<span class="text-xs text-gray-600 truncate block" title="{a["title"]}">{a["title"][:70]}</span>'
+            f'<span class="text-xs text-gray-600 truncate block" title="{title}">{title[:70]}</span>'
             f'</div>'
             f'<div class="flex-shrink-0 flex items-center gap-4 text-xs">'
             f'{price_html}'
             f'<div class="text-center">'
             f'<div class="text-[10px] text-gray-400 mb-0.5">MeLi</div>'
-            f'<span class="bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-lg text-xs">{a["meli_stock"]}</span>'
+            f'<span class="bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-lg text-xs">{meli_stock}</span>'
             f'</div>'
             f'<div class="text-center">'
             f'<div class="text-[10px] text-gray-400 mb-0.5">BM</div>'
             f'<span class="bg-gray-100 text-gray-500 font-bold px-2 py-0.5 rounded-lg text-xs">0</span>'
             f'</div>'
             f'</div>'
-            f'<button onclick="zeroAlertItem(\'{a["item_id"]}\', this)"'
+            f'<button onclick="zeroAlertItem(\'{item_id}\', this)"'
             f' class="flex-shrink-0 bg-red-500 hover:bg-red-600 active:bg-red-700 text-white'
             f' px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-colors min-w-[56px] text-center">Qty 0</button>'
             f'</div>'
@@ -15251,11 +15265,18 @@ async def get_stock_sync_status():
 
 @app.get("/api/sync/alerts-count")
 async def get_sync_alerts_count():
-    """Retorna solo el conteo de alertas (para badges)."""
+    """Retorna solo el conteo de alertas (para badges). FIX 2026-08-08:
+    misma fuente que get_sync_alerts_partial() -- ver comentario ahí."""
     client = await get_meli_client()
     if not client:
         return {"count": 0}
-    alerts = await token_store.get_sync_alerts(client.user_id)
+    uid = client.user_id
+    await client.close()
+    key = f"stock_issues:{uid}:t10"
+    entry = _stock_issues_cache.get(key)
+    if entry:
+        return {"count": entry[1].get("risk_count", 0)}
+    alerts = await token_store.get_sync_alerts(uid)
     return {"count": len(alerts)}
 
 
