@@ -431,7 +431,7 @@ async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: 
 
 
 @router.post("/messages/{pack_id}/send")
-async def send_message(pack_id: str, body: MessageRequest):
+async def send_message(pack_id: str, body: MessageRequest, request: Request):
     """Enviar mensaje en una conversacion. account_id (opcional) permite
     responder desde la bandeja unificada sin depender de cuál cuenta esté
     'activa' en el navegador — sin él, se comporta exactamente igual que
@@ -441,6 +441,20 @@ async def send_message(pack_id: str, body: MessageRequest):
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         result = await client.send_message(pack_id, body.text)
+        # FIX 2026-08-09: Jovan reporto con screenshot que una conversacion ya
+        # respondida seguia apareciendo "Pendiente" en la bandeja -- el envio
+        # nunca marcaba la conversacion como resuelta, se quedaba asi hasta el
+        # proximo resync del indice desde la API de ML (que puede tardar).
+        # Al responder, se marca resuelta de inmediato -- la logica de
+        # _reopened_after_resolve (ya existente, ver health_messages_partial)
+        # la reabre sola si el comprador vuelve a escribir despues de esto.
+        try:
+            acc = body.account_id or str(client.user_id)
+            user = getattr(request.state, "dashboard_user", {}) or {}
+            username = user.get("sub") or user.get("name") or "?"
+            await _ts.update_message_view_status(pack_id, acc, "resolved", viewed_by=username)
+        except Exception:
+            pass  # best-effort -- nunca debe tumbar el envio ya exitoso
         return result
     except MeliApiError as e:
         raise HTTPException(status_code=e.status_code or 400, detail=str(e))
