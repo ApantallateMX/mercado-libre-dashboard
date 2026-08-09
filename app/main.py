@@ -6203,7 +6203,16 @@ async def _prewarm_caches(user_id: str = None):
                     _cap = _r_alloc if _r_alloc > 0 else _r_raw
                     _boost = _seasonal_boost_for(_rp.get("title", ""), _rp.get("category_id", ""))
                     if _u30 == 0:
-                        _rp["_rec_qty"]   = min(2, _cap)
+                        # FIX 2026-08-09: Jovan reporto SHIL000531 (400+ uds reales en BM,
+                        # 0 ventas en 30d por estar recien reactivado/sin stock antes, no
+                        # por falta real de demanda) activandose con solo 1-2 unidades --
+                        # el tope fijo de 2 no distinguia "nunca se vende" de "no pudo
+                        # venderse porque no tenia stock". Aprobado explicitamente por
+                        # Jovan via pregunta directa: escalar como % del stock real en vez
+                        # de un tope fijo -- 10% de _cap, piso 2 (SKUs con poco stock),
+                        # techo 20 (no comprometer de golpe stock grande sin demanda
+                        # probada, sigue siendo conservador).
+                        _rp["_rec_qty"]   = min(_cap, max(2, min(round(_cap * 0.10), 20)))
                         _rp["_rec_badge"] = "sin historial"
                     else:
                         _cov_days = _target_coverage_days_for_sku(_rp.get("sku", ""))
