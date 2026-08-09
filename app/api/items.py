@@ -260,6 +260,16 @@ async def get_items_needs_work():
                 if offset >= total:
                     break
 
+        # _price_comp_cache solo cubre top 20 por ventas (ver dashboard_price_competition
+        # en main.py) -- no hay dato para el resto del catalogo, y no se llama a la API
+        # de precios por item aqui (seria cientos de llamadas extra en este loop bulk).
+        _price_delta_by_id: dict = {}
+        _pc_entry = _main_module._price_comp_cache.get(str(client.user_id))
+        if _pc_entry:
+            for _pi in _pc_entry.get("data", {}).get("items", []):
+                if _pi.get("id") and _pi.get("delta_pct") is not None:
+                    _price_delta_by_id[_pi["id"]] = _pi["delta_pct"]
+
         items_with_scores = []
         for i in range(0, len(all_item_ids), 20):
             batch = all_item_ids[i:i+20]
@@ -271,7 +281,9 @@ async def get_items_needs_work():
                 body = item.get("body", item)
                 if not body or not body.get("id"):
                     continue
-                score, problems, _ = _calculate_health_score(body)
+                score, problems, _ = _calculate_health_score(
+                    body, price_delta_pct=_price_delta_by_id.get(body["id"])
+                )
                 # Extract SELLER_SKU
                 seller_sku = body.get("seller_custom_field") or ""
                 if not seller_sku and body.get("attributes"):
@@ -815,8 +827,16 @@ async def get_item_history(item_id: str, limit: int = Query(50, ge=1, le=200)):
     return {"item_id": item_id, "history": rows, "count": len(rows)}
 
 
-def _calculate_health_score(body: dict, description: str = "") -> tuple:
-    """Calcula health score (0-100), lista de problemas y breakdown detallado."""
+def _calculate_health_score(body: dict, description: str = "", price_delta_pct: float | None = None) -> tuple:
+    """Calcula health score (0-100), lista de problemas y breakdown detallado.
+
+    price_delta_pct: % del precio actual vs. precio sugerido/top-3 de categoria
+    (de _price_comp_cache, solo disponible para los top 20 items por ventas --
+    el resto del catalogo no tiene este dato y el check simplemente se omite,
+    no se penaliza por falta de dato). Antes el score no consideraba precio en
+    absoluto: un listing podia sacar 95/100 y estar 25% caro, quemando
+    presupuesto de Ads en clics que no convierten sin que el score lo reflejara.
+    """
     score = 100
     problems = []
     breakdown = []  # list of {label, impact, ok, tip}
@@ -912,6 +932,22 @@ def _calculate_health_score(body: dict, description: str = "") -> tuple:
     breakdown.append({"label": f"Tipo: {'Premium' if lt == 'gold_pro' else ('Clasica' if lt == 'gold_special' else lt)}",
                        "impact": -5 if is_clasica else 0, "ok": not is_clasica,
                        "tip": "" if not is_clasica else "Actualizar a gold_pro (Premium) para mejor exposicion y MSI"})
+
+    # Precio vs competencia (solo si hay dato disponible -- top 20 por ventas,
+    # ver _price_comp_cache). Un score alto con precio caro es engañoso: el
+    # listing puede estar listo para escalar en fotos/titulo/etc. y aun asi
+    # quemar presupuesto de Ads porque no convierte por precio.
+    if price_delta_pct is not None:
+        if price_delta_pct > 25:
+            score -= 20; problems.append(f"Precio {price_delta_pct:.0f}% sobre el sugerido/competencia")
+            breakdown.append({"label": f"Precio vs competencia (+{price_delta_pct:.0f}%)", "impact": -20, "ok": False,
+                               "tip": "Precio muy por arriba del top-3 de categoria -- revisar antes de invertir en Ads"})
+        elif price_delta_pct > 10:
+            score -= 15; problems.append(f"Precio {price_delta_pct:.0f}% sobre el sugerido/competencia")
+            breakdown.append({"label": f"Precio vs competencia (+{price_delta_pct:.0f}%)", "impact": -15, "ok": False,
+                               "tip": "Precio arriba del top-3 de categoria -- puede estar limitando conversion"})
+        else:
+            breakdown.append({"label": "Precio vs competencia", "impact": 0, "ok": True, "tip": ""})
 
     return max(score, 0), problems, breakdown
 

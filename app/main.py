@@ -10586,7 +10586,25 @@ async def item_edit_partial(request: Request, item_id: str):
         except Exception:
             description = ""
 
-        score, problems, breakdown = _calculate_health_score(item, description)
+        # Precio vs competencia/sugerido -- vista de un solo item, se puede
+        # consultar en vivo (a diferencia del loop bulk de /needs-work).
+        _price_delta_pct = None
+        try:
+            _pr = await client.get_price_suggestions(item_id)
+            _sug = None
+            if _pr and isinstance(_pr, dict):
+                for _field in ("price", "suggested_price", "sale_price"):
+                    _v = _pr.get(_field)
+                    if _v:
+                        _sug = float(_v)
+                        break
+            _cur = float(item.get("price") or 0)
+            if _sug and _cur > 0:
+                _price_delta_pct = round((_cur - _sug) / _sug * 100, 1)
+        except Exception:
+            pass
+
+        score, problems, breakdown = _calculate_health_score(item, description, price_delta_pct=_price_delta_pct)
 
         # Extract seller_sku — prioridad: variaciones > padre
         seller_sku = _get_item_sku(item)
