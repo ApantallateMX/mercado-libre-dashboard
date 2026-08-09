@@ -231,12 +231,19 @@ def build_claim_analysis_prompt(reason_desc, product_title, product_price, days_
 
 
 def build_message_reply_prompt(thread_messages, last_buyer_message):
+    # FIX 2026-08-09: decia "Maximo 500 caracteres", pero el limite REAL de
+    # Mercado Libre para mensajeria post-venta es 350 (ya validado server-side
+    # en meli_client.py al enviar) -- el prompt nunca coincidio con ese limite,
+    # asi que la sugerencia de IA seguido salia sobre 350 y el vendedor tenia
+    # que acortarla a mano cada vez antes de poder enviarla.
     system = (
         "Eres un vendedor profesional de post-venta en Mercado Libre Mexico. "
         "Responde mensajes de compradores de forma util y profesional.\n"
         "REGLAS:\n"
         "- NUNCA compartas datos de contacto externos\n"
-        "- Maximo 500 caracteres\n"
+        "- Maximo 300 caracteres -- ES UN LIMITE DURO: Mercado Libre RECHAZA "
+        "cualquier mensaje de mas de 350 caracteres, y esta apuntando a 300 "
+        "para dejar margen de seguridad. Cuenta los caracteres antes de responder.\n"
         "- Tono amable y servicial\n"
         "- Si es un problema con el envio, sugiere revisar el tracking en la app de MeLi\n"
         "- Responde SOLO con el texto del mensaje, sin explicaciones ni comillas"
