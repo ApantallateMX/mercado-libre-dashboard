@@ -474,6 +474,56 @@ BM_CONDITIONS_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"
 
 ---
 
+## ⚠️ HALLAZGO CRÍTICO — NO EXISTE forma confiable de verificar "¿existe este SKU?" (2026-08-09)
+
+**Nunca respondas "el SKU no existe en BM" basándote en que no aparece stock/movimientos.
+Un SKU real puede tener CERO stock y CERO movimientos desde siempre — eso NO significa
+que no exista como producto registrado.**
+
+Contexto real: se generó una alerta "SKU no registrado en catálogo BM" con boton de
+BORRADO MASIVO e IRREVERSIBLE de listings de Mercado Libre, basada en que el SKU no
+aparecía en `bm_sku_master`/`bm_product_catalog` (tabla local, alimentada solo desde el
+bulk de stock). Un agente (yo, en una invocación anterior) verificó 5 SKUs de esa lista
+con `movement_history` + `inventory_by_sku_condition` (SP) + `inventory_by_sku` (snapshot)
++ `sc_exists_lpn_or_sku` (el propio SP de "scan" de BM, `FFM.sp_Exists_LPNorSKUwithData`)
+— **los 4 métodos dieron "no existe" para SNAC000025**. El usuario (Jovan) verificó
+manualmente en la pantalla "Global Stock" de BM y encontró que SNAC000025 **SÍ es un
+producto real**: Brand=Hisense, Model=AW1422CW1W, UPC=819130029672, Category=Air
+Conditioners, RetailPrice PH=$499.00 — simplemente con QTY=0/Reserve=0/Available=0/
+Sales=0 desde siempre (nunca recibió stock).
+
+**Causa raíz confirmada:** TODOS los mecanismos de verificación disponibles hoy
+—`movement_history`, `inventory_by_sku_condition`, `inventory_by_sku` (snapshot),
+`sc_exists_lpn_or_sku`, y el endpoint HTTP `Get_GlobalStock_InventoryBySKU` con
+CONCEPTID=1 (stock) o CONCEPTID=8 (info de producto, sin LOCATIONID)— **solo devuelven
+datos si el SKU tiene registro de STOCK o MOVIMIENTO**. Ninguno consulta el maestro de
+catálogo puro (`PRO.SKUData`/`BM.CompanyProductSKU`, confirmado que existe vía
+`operations_guide` del MCP, pero SIN ruta HTTP ni tool MCP conocido que lo expongan
+por SKU exacto). `GetCategoryBrandModel` (HTTP, `{COMPANYASSIGNMENTID}`) SÍ confirma
+que la combinación Categoría→Marca→Modelo existe en la taxonomía (prueba indirecta de
+que el producto es real), pero no da el SKU exacto ni sus demás campos.
+
+La pantalla web "Global Stock" (la que usó Jovan, con buscador de SKU que muestra
+Brand/Model/UPC/Description/Category/RetailPricePH/QTY/Reserve/Available/NotSellable/
+Sales incluso en 0) SÍ tiene acceso a datos de catálogo puro — intenté reproducir su
+llamada de red (`GetBinInventoryReportBySearch`, minado del JS `InventoryReport.js`)
+y devolvió `[]` incluso para un SKU con 4,223 unidades reales — ese endpoint puede estar
+roto/descontinuado, o requiere un parámetro que no identifiqué. **No confirmado aún.**
+
+**Qué hacer la próxima vez que te pidan esto:**
+1. NUNCA concluyas "no existe" solo con movement_history/inventory_by_sku*/
+   sc_exists_lpn_or_sku — todos dan falso negativo para SKUs reales sin stock/movimiento.
+2. Si necesitas confirmar existencia real de un SKU específico con certeza, pide
+   explícitamente que alguien con sesión de navegador abierta en BM (Jovan u otro) abra
+   DevTools → Network → XHR, busque el SKU en la pantalla "Global Stock", y comparta la
+   request real (cURL/URL+body) — es la única fuente que hasta ahora demostró ver
+   catálogo puro sin depender de stock. Documenta el endpoint aquí en cuanto se confirme.
+3. Para decisiones DESTRUCTIVAS/IRREVERSIBLES (borrar listings, etc.) basadas en
+   "¿existe en BM?": nunca automatices el borrado solo con estos métodos — es
+   estructuralmente inseguro hasta que se confirme un endpoint de catálogo puro confiable.
+
+---
+
 ## HALLAZGOS CRITICOS — BinManager API (2026-04-01)
 
 ### 1. `GlobalStock_InventoryBySKU_Condition` devuelve `{}` NO `[]`

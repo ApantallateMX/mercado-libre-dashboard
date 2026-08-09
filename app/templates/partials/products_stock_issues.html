@@ -2476,11 +2476,26 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             <span class="text-xs text-gray-400 bg-violet-50 border border-violet-200 rounded px-2 py-0.5">
                 {{ no_bm_sku_count }} SKU{{ 's' if no_bm_sku_count != 1 }} · catálogo {{ bm_catalog_size | default(0) }} entradas
             </span>
-            <button onclick="window._closeAllNoBmSku()" id="close-all-no-bm-btn"
-                    class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
-                Eliminar Todos ({{ no_bm_sku_count }})
-            </button>
         </div>
+    </div>
+    <!-- FIX 2026-08-09: se quito el boton "Eliminar Todos" (borrado masivo e
+         irreversible de listings ML) -- Jovan verifico manualmente en BM que el
+         primer SKU de esta lista (SNAC000025) SI es un producto real (Hisense
+         AW1422CW1W, catalogado con Brand/Model/UPC/RetailPrice), solo que nunca
+         tuvo stock/movimientos. Se confirmo (con binmanager-specialist, 2 rondas
+         de verificacion) que NINGUN mecanismo disponible hoy distingue "SKU no
+         existe" de "SKU existe con 0 stock desde siempre" -- esta tabla local
+         (bm_sku_master) se alimenta SOLO del bulk de stock, así que cualquier
+         SKU real sin stock historico cae aqui por error. Ver hallazgo critico
+         2026-08-09 en .claude/agents/binmanager-specialist.md. El titulo de esta
+         seccion ya decia correctamente "requiere alta" (dar de alta en BM), no
+         "requiere borrado" -- la tarjeta mobile de abajo ya reflejaba esto bien
+         ("Dar de alta en BinManager"), solo la tabla desktop tenia el boton
+         destructivo equivocado. -->
+    <div class="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+        ⚠️ Estos SKU pueden ser productos reales sin stock histórico en BM (no necesariamente
+        inválidos) — verifica manualmente en BinManager antes de decidir si dar de alta el SKU
+        o descontinuar el listing. No hay forma automática confiable de confirmar cuál es cuál.
     </div>
     <!-- Desktop table -->
     <div class="hidden md:block bg-white rounded-lg shadow overflow-hidden border border-violet-100">
@@ -2530,11 +2545,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
                     <td class="py-2 px-3 text-center font-medium">{{ p.available_quantity or 0 }}</td>
                     <td class="py-2 px-3 text-center text-gray-500">{{ p.sold_30d or 0 }}</td>
                     <td class="py-2 px-3">
-                        <button onclick="window._closeNoBmSku('{{ p.id }}', this)"
-                                id="nobm-btn-{{ p.id }}"
-                                class="px-2 py-1 bg-red-500 text-white text-[10px] font-bold rounded hover:bg-red-600 transition">
-                            Eliminar
-                        </button>
+                        <span class="text-[10px] text-violet-600 font-medium">→ Dar de alta en BinManager</span>
                     </td>
                 </tr>
                 {% endfor %}
@@ -2570,60 +2581,6 @@ window.syncOneImbalanced = function(itemId, bmQty) {
         {% endfor %}
     </div>
 </div>
-<script>
-(function() {
-  window._closeNoBmSku = function(itemId, btn) {
-    if (!confirm('¿Eliminar listing ' + itemId + ' de Mercado Libre?\n\nEsta acción es irreversible.')) return;
-    btn.textContent = '...'; btn.disabled = true;
-    fetch('/api/items/' + itemId + '/close', {method: 'POST', headers: {'Content-Type': 'application/json'}})
-      .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
-      .then(function(res) {
-        if (res.ok) {
-          var row = document.getElementById('nobm-row-' + itemId);
-          if (row) { row.style.opacity = '0.3'; setTimeout(function() { row.remove(); }, 500); }
-          if (window.showToast) showToast('Listing ' + itemId + ' eliminado de ML', 'success');
-        } else {
-          btn.textContent = 'Eliminar'; btn.disabled = false;
-          if (window.showToast) showToast((res.d && res.d.detail) || 'Error al eliminar', 'error');
-        }
-      })
-      .catch(function() {
-        btn.textContent = 'Eliminar'; btn.disabled = false;
-        if (window.showToast) showToast('Error de red', 'error');
-      });
-  };
-
-  window._closeAllNoBmSku = function() {
-    var rows = document.querySelectorAll('#tbody-no-bm-sku tr[id^="nobm-row-"]');
-    var ids = [];
-    rows.forEach(function(r) { var id = r.id.replace('nobm-row-', ''); if (id) ids.push(id); });
-    if (!ids.length) return;
-    if (!confirm('¿Eliminar TODOS los ' + ids.length + ' listings de Mercado Libre?\n\nEsta acción es irreversible.')) return;
-    var allBtn = document.getElementById('close-all-no-bm-btn');
-    if (allBtn) { allBtn.textContent = 'Cerrando...'; allBtn.disabled = true; }
-    fetch('/api/items/close-batch', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({item_ids: ids})
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      (d.closed_ids || ids).forEach(function(iid) {
-        var row = document.getElementById('nobm-row-' + iid);
-        if (row) { row.style.opacity = '0.3'; setTimeout(function() { row.remove(); }, 400); }
-      });
-      var msg = 'Eliminados: ' + (d.closed || 0);
-      if (d.errors && d.errors.length) msg += ' · Errores: ' + d.errors.length;
-      if (allBtn) { allBtn.textContent = msg; }
-      if (window.showToast) showToast(msg, d.errors && d.errors.length ? 'warning' : 'success');
-    })
-    .catch(function() {
-      if (allBtn) { allBtn.textContent = 'Eliminar Todos'; allBtn.disabled = false; }
-      if (window.showToast) showToast('Error de red', 'error');
-    });
-  };
-})();
-</script>
 {% endif %}
 
 {% if orphan_count %}
