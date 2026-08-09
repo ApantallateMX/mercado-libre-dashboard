@@ -270,9 +270,13 @@
                 // doble). Ahora cubre las 9 categorias reales, no solo 5 -- antes esta
                 // barra podia decir "sin alertas" con cientos reales en categorias que
                 // ni conocia (estancado, precio<retail, SKU no en catalogo, etc).
-                var total = (d.sin_stock||0) + (d.riesgo||0) + (d.critico||0) + (d.sin_publicar||0) +
-                    (d.pausados||0) + (d.full_no_stock||0) + (d.imbalanced||0) + (d.stagnant||0) +
-                    (d.price_risk||0) + (d.no_bm_sku||0);
+                // total_unique (listings unicos, sin doble conteo por solapamiento
+                // entre categorias) decide "sin alertas" vs "hay alertas" cuando esta
+                // disponible; sin_publicar/pausados son conceptos aparte y si suman.
+                var _coreTotal = (d.total_unique != null) ? d.total_unique :
+                    ((d.sin_stock||0) + (d.riesgo||0) + (d.critico||0) + (d.full_no_stock||0) +
+                     (d.imbalanced||0) + (d.stagnant||0) + (d.price_risk||0) + (d.no_bm_sku||0));
+                var total = _coreTotal + (d.sin_publicar||0) + (d.pausados||0);
                 var goAccion = "window.switchProductTab('inventory','/partials/products-inventory?preset=accion&enrich=full')";
                 var syncBtn = '<div class="ml-auto flex items-center gap-3">' +
                   '<button onclick="triggerSyncNow()" id="btn-sync-bar" class="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap">↻ Actualizar alertas</button>' +

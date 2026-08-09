@@ -6373,10 +6373,27 @@ async def _prewarm_caches(user_id: str = None):
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
                 _sic_ts   = _time.time()
+                # FIX 2026-08-08 (auditoría de alertas): critical/stagnant/price_risk/
+                # imbalanced/no_bm_sku NO son mutuamente excluyentes entre sí (a
+                # diferencia de restock/activate/oversell_risk, que sí se excluyen
+                # razonablemente bien por status) -- un mismo listing puede caer en
+                # varias a la vez (ej. poco stock + 0 ventas + precio bajo retail).
+                # "Total Alertas" contaba cada listing una vez POR CATEGORÍA en la
+                # que aparecía, inflando el número real de listings con problemas.
+                # Mismo fix que ya se aplicó a Amazon el mismo día: contar por
+                # listing único (item id), no por aparición en cada lista.
+                _alert_ids: set = set()
+                for _lst in (restock, oversell_risk, activate, critical, full_no_stock,
+                             imbalanced, stagnant, price_risk, no_bm_sku):
+                    for _it in _lst:
+                        if _it.get("id"):
+                            _alert_ids.add(_it["id"])
+
                 _sic_data = {
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                     "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
                     "stagnant": stagnant, "price_risk": price_risk, "no_bm_sku": no_bm_sku,
+                    "total_alertas_unique": len(_alert_ids),
                     "restock_count": len(restock) + len(activate),
                     "lost_revenue": sum(p.get("revenue", 0) for p in restock) + sum(p.get("price", 0) * min(p.get("_bm_avail", 0), 3) for p in activate),
                     "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
@@ -15100,6 +15117,10 @@ async def get_stock_counts():
                 "no_bm_sku": ctx.get("no_bm_sku_count", 0) or 0,
                 "sin_publicar": sin_publicar,
                 "pausados": pausados,
+                # FIX 2026-08-08: listings únicos con al menos 1 problema -- para
+                # decidir "sin alertas" vs "hay alertas" sin inflar por
+                # solapamiento entre categorías (ver total_alertas_unique).
+                "total_unique": ctx.get("total_alertas_unique"),
             }
         # Sin cache en absoluto (primer arranque) -- fallback a alertas de
         # sobreventa desde DB, lo único disponible sin esperar al prewarm.
