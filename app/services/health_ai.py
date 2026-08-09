@@ -230,12 +230,21 @@ def build_claim_analysis_prompt(reason_desc, product_title, product_price, days_
     return system, user, 800
 
 
-def build_message_reply_prompt(thread_messages, last_buyer_message):
+def build_message_reply_prompt(thread_messages, last_buyer_message, user_context=None):
     # FIX 2026-08-09: decia "Maximo 500 caracteres", pero el limite REAL de
     # Mercado Libre para mensajeria post-venta es 350 (ya validado server-side
     # en meli_client.py al enviar) -- el prompt nunca coincidio con ese limite,
     # asi que la sugerencia de IA seguido salia sobre 350 y el vendedor tenia
     # que acortarla a mano cada vez antes de poder enviarla.
+    #
+    # FIX 2026-08-09 (mismo dia, reporte de Jovan con screenshot): a diferencia
+    # de Preguntas y Mensajes Amazon, este prompt no tenia forma de recibir
+    # una instruccion del vendedor -- y sin ninguna regla sobre logistica real
+    # de Mercado Envios, el modelo inventaba compromisos que Apantallate no
+    # puede cumplir (ej. "con gusto agregamos un moño al empaque", cuando el
+    # paquete lo sella la paqueteria oficial de MeLi, no el vendedor). Se
+    # agrega user_context (mismo patron que build_buyer_message_reply_prompt)
+    # + una regla explicita de logistica para no prometer de mas.
     system = (
         "Eres un vendedor profesional de post-venta en Mercado Libre Mexico. "
         "Responde mensajes de compradores de forma util y profesional.\n"
@@ -246,15 +255,29 @@ def build_message_reply_prompt(thread_messages, last_buyer_message):
         "para dejar margen de seguridad. Cuenta los caracteres antes de responder.\n"
         "- Tono amable y servicial\n"
         "- Si es un problema con el envio, sugiere revisar el tracking en la app de MeLi\n"
+        "- Logistica real: los paquetes se envian sellados por la paqueteria oficial "
+        "de Mercado Envios -- el vendedor NO puede personalizar el empaque "
+        "(moños, envoltura de regalo, notas dentro de la caja, etc). Si el "
+        "comprador pide algo asi, dile amablemente que no es posible por esta "
+        "razon, NO prometas que si se puede.\n"
         "- Responde SOLO con el texto del mensaje, sin explicaciones ni comillas"
     )
     history = ""
     for msg in (thread_messages or []):
         sender = "Vendedor" if msg.get("is_seller") else "Comprador"
         history += f"  {sender}: {msg.get('text', '')}\n"
+    context = ""
+    if user_context:
+        context = (
+            f"\n⚠️ MANDATO DEL VENDEDOR (PRIORIDAD MAXIMA -- ANULA TODO LO DEMAS, "
+            f"incluida la regla de logistica de arriba si el vendedor confirma "
+            f"explicitamente que SI es posible): {user_context}\n"
+            "Esta instruccion es definitiva. Construye tu respuesta basandote en esto como hecho absoluto.\n"
+        )
     user = (
         "Historial de conversacion reciente:\n"
-        f"{history}\n"
+        f"{history}"
+        f"{context}\n"
         f'Ultimo mensaje del comprador: "{last_buyer_message}"\n\n'
         "Genera una respuesta profesional:"
     )

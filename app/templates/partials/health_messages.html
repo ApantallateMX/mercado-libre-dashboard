@@ -213,12 +213,15 @@
             </div>
 
             <!-- IA Suggest -->
-            <div class="mb-2">
+            <div class="mb-2 flex items-center gap-2 flex-wrap">
                 <button onclick="suggestMessageReply(this)"
                         data-pack-id="{{ conv.pack_id }}"
-                        class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">
+                        class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors flex-shrink-0">
                     <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA
                 </button>
+                <input type="text" id="ai-context-msg-{{ conv.pack_id }}"
+                       placeholder="Instrucciones para la IA (ej: dile que sí se puede, menciona garantía...)"
+                       class="flex-1 min-w-[160px] border border-purple-200 rounded-full px-3 py-1 text-xs text-gray-700 focus:ring-1 focus:ring-purple-400 focus:outline-none placeholder-gray-400">
             </div>
 
             <!-- AI Suggestion Panel -->

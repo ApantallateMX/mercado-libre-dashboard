@@ -397,6 +397,7 @@ async def suggest_message(request: Request):
     system, prompt, max_tokens = build_message_reply_prompt(
         body.get("thread_messages", []),
         body.get("last_buyer_message", ""),
+        user_context=body.get("user_context", ""),
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),

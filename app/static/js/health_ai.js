@@ -352,9 +352,13 @@ window.suggestMessageReply = function (btn) {
         });
     }
 
+    var contextInput = document.getElementById('ai-context-msg-' + packId);
+    var userContext = contextInput ? contextInput.value.trim() : '';
+
     var payload = {
         thread_messages: threadMessages,
-        last_buyer_message: lastBuyer
+        last_buyer_message: lastBuyer,
+        user_context: userContext
     };
 
     streamAiResponse('/api/health-ai/suggest-message', payload, textId, function (fullText) {
