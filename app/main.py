@@ -9139,37 +9139,10 @@ async def dashboard_price_competition():
     return JSONResponse(data)
 
 
-@app.get("/api/health/counts")
-async def health_counts():
-    """Contadores rápidos para badges de navegación: reclamos abiertos + preguntas sin respuesta."""
-    client = await get_meli_client()
-    if not client:
-        return JSONResponse({"claims": 0, "questions": 0, "messages": 0})
-    try:
-        all_claims = await _fetch_all_claims_cached(client, None, None)
-        open_claims = sum(1 for c in all_claims if c.get("status") == "opened")
-
-        unanswered = 0
-        try:
-            q_data = await client.get_questions(status="UNANSWERED", limit=1)
-            unanswered = q_data.get("paging", {}).get("total", 0)
-        except Exception:
-            pass
-
-        unread_msgs = 0
-        try:
-            m_data = await client.get("/messages", params={"status": "unread", "mark_as_read": "false", "limit": 1})
-            unread_msgs = (m_data.get("paging", {}).get("total", 0) or
-                           m_data.get("total", 0) or
-                           len(m_data.get("messages", [])))
-        except Exception:
-            pass
-
-        return JSONResponse({"claims": open_claims, "questions": unanswered, "messages": unread_msgs})
-    except Exception:
-        return JSONResponse({"claims": 0, "questions": 0, "messages": 0})
-    finally:
-        await client.close()
+# NOTA (barrido final 2026-08-08): existía otro GET /api/health/counts aquí,
+# código muerto por colisión de rutas con app/api/health.py (esa gana por
+# ser la que se registra primero). Ver health.py:health_counts() -- versión
+# real que corre en producción.
 
 
 @app.get("/partials/health-summary", response_class=HTMLResponse)
@@ -13410,18 +13383,29 @@ async def get_multi_account_launches(
 
 @app.get("/api/dashboard/morning-briefing")
 async def morning_briefing(request: Request):
-    """Resumen matutino de todas las cuentas: ventas hoy, alertas, estado."""
+    """Resumen matutino de todas las cuentas: ventas hoy, alertas, estado.
+
+    FIX 2026-08-08 (barrido final de fuentes duplicadas): "alert_count" leía
+    de token_store.get_all_sync_alerts() -- tabla escrita por el loop legacy
+    de 4h (_run_stock_sync_for_user), la MISMA fuente que ya se dejó de usar
+    para el panel/badge de "riesgo de sobreventa" en /items?tab=stock (ver
+    fix de esta mañana). El comentario en multi_dashboard.html ya advertía
+    que esto podía mostrar un número distinto al hacer clic en "Ver alertas
+    →" (que sí va a la fuente correcta) -- se cambió el TEXTO en su momento,
+    nunca la fuente. Ahora lee _stock_issues_cache.risk_count por cuenta,
+    igual que /items?tab=stock."""
     _require_subtab(request, "ml", "multidashboard", "ventas")
     # Usar hora México (CST UTC-6) para que la fecha del resumen sea correcta en el servidor UTC
     today = (datetime.utcnow() - timedelta(hours=6)).strftime("%Y-%m-%d")
     accounts_list = await token_store.get_all_tokens()
-    all_alerts = await token_store.get_all_sync_alerts()
 
-    # Count alerts per user
+    # Count alerts per user desde la fuente unificada (_stock_issues_cache)
     alerts_by_user = {}
-    for a in all_alerts:
-        uid = a.get("user_id", "")
-        alerts_by_user[uid] = alerts_by_user.get(uid, 0) + 1
+    for acc in accounts_list:
+        uid = acc.get("user_id", "")
+        entry = _stock_issues_cache.get(f"stock_issues:{uid}:t10")
+        alerts_by_user[uid] = entry[1].get("risk_count", 0) if entry else 0
+    total_alerts_count = sum(alerts_by_user.values())
 
     # Fetch daily_goal per account in parallel
     import asyncio as _asyncio
@@ -13446,7 +13430,7 @@ async def morning_briefing(request: Request):
     return {
         "accounts": result,
         "date": today,
-        "total_alerts": len(all_alerts),
+        "total_alerts": total_alerts_count,
         "total_goal": total_goal,
     }
 

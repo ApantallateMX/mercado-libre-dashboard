@@ -128,6 +128,20 @@ async def health_counts():
             "open_claims": claims,
             "unread_messages": messages,
             "total": questions + claims + messages,
+            # FIX 2026-08-08 (barrido final de fuentes duplicadas): este
+            # endpoint colisionaba con otro `GET /api/health/counts` en
+            # main.py (código muerto, nunca corría por first-match-wins de
+            # FastAPI/orden de registro). base.html (badge global de
+            # notificaciones) y dashboard.html (franja de alertas) se
+            # escribieron esperando las claves del backend MUERTO
+            # (claims/questions/messages) -- con el backend real (este)
+            # devolviendo otros nombres, ambos elementos de UI llevaban
+            # tiempo silenciosamente rotos (siempre 0/oculto). Se agregan
+            # como alias sin quitar los nombres nuevos, por si algún otro
+            # consumidor ya los usa.
+            "claims": claims,
+            "questions": questions,
+            "messages": messages,
         }
     finally:
         await client.close()
