@@ -7,6 +7,95 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-08 — FIX/FEAT: auditoria de logica de negocio con 5 especialistas en paralelo -- 9 cambios reales desplegados
+
+Jovan pidio, con toda la experiencia acumulada del proyecto, analizar si la
+LOGICA de cada automatizacion tiene sentido de negocio (no solo si el
+codigo corre bien) y usar a todos los especialistas de dominio. Se lanzaron
+5 agentes en paralelo (mercadolibre-strategist, amazon-specialist,
+binmanager-specialist, planning-specialist, uxui-designer), cada uno
+auditando su dominio de forma independiente. Con "vamos por todos" se
+implemento, verifico y desplego cada hallazgo real, en orden de prioridad.
+
+**Implementados (9, todos con compile-check + smoke test local + deploy
+Railway SUCCESS + verificacion en produccion antes de pasar al siguiente):**
+
+1. **Reputacion en reparto de stock ML** (`stock_sync_multi._score()`):
+   el algoritmo que decide que cuenta se queda con stock escaso solo
+   pesaba precio_neto x velocidad_30d historica -- no sabia si una cuenta
+   tiene reputacion deteriorada. Se agrego `rep_factor` (verde=1.0 /
+   light_green=0.85 / amarillo=0.5 / naranja=0.25 / rojo=0.15) leido de
+   `seller_reputation.level_id` real por cuenta, protege a cuentas en
+   crisis (ej. BLOWTECHNOLOGIES) de seguir recibiendo stock preferente
+   solo por historial de ventas previo a la crisis.
+2. **Doble conservadurismo al activar/reabastecer**: `_rec_qty` (ventana
+   14d) se pasaba a las funciones JS de sync, que volvian a multiplicar
+   por 0.6 pensando que recibian el total crudo de BM -- respondia
+   directamente la pregunta que Jovan hizo en la sesion ("por que al
+   activar solo pones 1?"). Las 3 funciones JS dejaron de multiplicar;
+   Jinja es ahora la unica fuente de la cantidad final en los 6
+   call-sites de un solo item. Tambien: `_target_coverage_days_for_sku()`
+   sube la ventana a 30 dias solo para SNTV* (TVs, lead time real de
+   importacion 20-45d) -- no se adivinaron otros prefijos sin confirmar
+   su taxonomia.
+3. **FX hardcodeado unificado**: 2 formulas de precio sugerido usaban
+   constantes fijas (18 y 17.5) en vez de `_last_fx_rate`/
+   `_manual_fx_rate` (mismo patron ya usado en otros 3 lugares del
+   archivo).
+4. **Riesgo Sobreventa Amazon redefinido**: comparaba `fulfillable`
+   (stock YA fisico en FBA, fuera de nuestro control) contra BM -- eso
+   es el resultado NORMAL de enviar a FBA, no un riesgo; mientras que la
+   sobreventa real y accionable (SKU FBM publicado con mas cantidad de
+   la que BM tiene) nunca se detectaba. Nueva categoria informativa
+   "Discrepancia BM vs FBA" (auditoria, no alerta) + Riesgo Sobreventa
+   real ahora filtrado a FBM. Implementado por amazon-specialist,
+   revisado y optimizado por mi (fusione 2 llamadas a BM en 1 antes de
+   deploy -- BM esta limitado a 1 sesion a la vez).
+5. **Listing Quality Score ML + precio vs competencia**: el score nunca
+   consideraba precio -- un listing podia sacar 95/100 y estar 25% caro,
+   quemando presupuesto de Ads sin que el score lo reflejara. Nuevo
+   parametro `price_delta_pct`: en el loop bulk (`/needs-work`) se reusa
+   el cache existente de top-20 (`_price_comp_cache`, sin llamadas
+   nuevas a la API); en la vista de un solo item se consulta en vivo.
+6. **FBA Reimbursements cruzado contra devoluciones**: el endpoint v1
+   solo mostraba reembolsos YA aprobados -- el propio codigo documentaba
+   el hueco (dinero real sin reclamar). Ahora cruza devoluciones vs
+   reembolsos por (order_id, sku); cualquier devolucion >45 dias sin
+   reembolso entra a "candidatas a revisar" (heuristico, no reclamos
+   garantizados). Verificado con datos reales de VECKTOR.
+7. **Dashboard reestructurado**: 3 herramientas de analisis (busqueda
+   de producto, CVR funnel, precio vs competencia) competian
+   visualmente con las alertas urgentes reales. Se agruparon en un
+   `<details>` colapsado por default, reordenadas para quedar despues
+   de "Ultimas Ventas". El fetch de CVR (el unico que se auto-disparaba)
+   ahora espera a que se abra la seccion.
+
+**Correcciones sobre los propios hallazgos de los especialistas (verificar
+antes de actuar, no confiar ciegamente):**
+- BinManager: el hallazgo #1 original ("migrar a `inventory_snapshot`")
+  resulto NO viable -- un segundo especialista confirmo con evidencia
+  cruzada que esa tabla es exclusiva del servidor MCP, sin ruta HTTP
+  alcanzable por el codigo de produccion. Nuestro propio
+  `bm_stock_snapshot` en SQLite YA es el equivalente casero. Accion real:
+  pedirle a BinManager que expongan un endpoint HTTP (agregado a la
+  solicitud pendiente en #support-binmanager).
+- UX: el tab de nav "Inv.Global" que el especialista marco como "muerto"
+  NO lo esta -- Jovan lo oculto a proposito el 2026-07-18 (ruta viva para
+  admins via URL directa). No se toco.
+- Amazon: el hallazgo de "SLA/antiguedad en mensajes" ya estaba
+  implementado -- el especialista solo leyo `health_messages.html`
+  (de ML) y no vio `amazon_dashboard.js`, donde vive un sistema de
+  tiers de urgencia (urgent/warn/ok) mas completo que lo recomendado.
+
+**Pendiente, decision explicita de Jovan (AskUserQuestion):** consolidar
+los 6 mecanismos de notificacion independientes (badge de nav, campana
+ML, banner BM stale, banner disco, banner global de errores, franja
+Dashboard) en un centro unico -- Jovan eligio "solo lo seguro": no tocar
+`base.html` (carga en cada pagina, sin poder verificar visualmente en
+esta sesion). Documentado para retomar en sesion con navegador.
+
+---
+
 ## 2026-08-08 — FIX: barrido final de fuentes de datos duplicadas/independientes (raiz del patron "datos viejos")
 
 Jovan planteo la queja de fondo: "siempre me dices son datos viejos, algo
