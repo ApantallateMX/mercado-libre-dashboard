@@ -7,6 +7,65 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-09 — FIX: BM lento/cascada de reintentos, persistencia de stock_issues_cache, activacion sin historial, y borrado masivo inseguro removido
+
+Sesion de fixes reactivos en produccion, cada uno con verificacion real
+antes/despues del deploy (diag endpoints, unit tests, o ambos):
+
+1. **`_bm_avail`/`_bm_avail_raw` congelados hasta el proximo prewarm**:
+   SHIL000026 seguia mostrando 623 en "Activar" cuando la cache real
+   (`_bm_stock_cache`) ya tenia 2 -- las 9 listas de alertas son una foto
+   tomada por prewarm (~15-30min), sin refresco al momento de renderizar.
+   Fix: `_refresh_bm_avail_live()` corre en cada request y ajusta a la
+   baja contra la cache viva (nunca sube, para no reintroducir riesgo de
+   sobreventa).
+2. **Cascada de reintentos cuando BM esta lento**: el bulk de BM (5 tipos:
+   GR/LOC47/LOC68/LOC-TJ/ALL) es UNA sola llamada compartida entre las 4
+   cuentas en el caso normal (confirmado, era la intuicion correcta de
+   Jovan) -- pero si esa llamada fallaba, cada cuenta del loop de prewarm
+   reintentaba la MISMA llamada fallida en cascada (hasta 5 x 270s x 4 =
+   90 min en el peor caso). Fix: timeout 270s->90s + tracker dedicado de
+   "fallo reciente" (independiente del health-check general, que puede
+   resetear el contador compartido con su propio ping liviano) -- si un
+   tipo de bulk fallo hace <3min, las siguientes cuentas van directo a
+   stale sin reintentar.
+3. **Persistencia en disco de `_stock_issues_cache`**: cada deploy borraba
+   la caché de alertas en memoria, mostrando "Calculando..." aunque el
+   sistema ya tuviera la info minutos antes. Hallazgo: la logica completa
+   para esto YA ESTABA en main.py (carga al arrancar + guardado a disco al
+   final de cada prewarm) pero llamaba a 2 funciones de token_store.py que
+   nunca se implementaron -- fallaba en silencio siempre. Implementadas
+   (`save_stock_issues_snapshot`/`load_all_stock_issues_snapshots` + tabla
+   `stock_issues_snapshot`), verificado con test de round-trip real.
+4. **Activacion sin historial de ventas escalaba mal con stock real**:
+   SHIL000531 (400+ uds reales) se activaba con solo 1-2 unidades por el
+   tope fijo `min(2, cap)`. Aprobado por Jovan (pregunta directa, 3
+   opciones): ahora 10% del stock real, piso 2, techo 20. Bug propio
+   detectado y corregido ANTES de deploy (la primera version del piso
+   podia recomendar mas que el stock real si cap<2 -- riesgo de
+   sobreventa que no llego a produccion).
+5. **Borrado masivo inseguro en "SKU no en catalogo BM" -- removido**:
+   Jovan verifico manualmente en BM que el primer SKU de la lista de 24
+   candidatos a "Eliminar Todos" SI es un producto real (Hisense
+   AW1422CW1W, catalogado con Brand/Model/UPC/RetailPrice), solo que nunca
+   tuvo stock/movimientos -- nuestra tabla local de catalogo se alimenta
+   solo del bulk de STOCK, que omite filas en 0. Confirmado con
+   binmanager-specialist (2 rondas) que NINGUN mecanismo disponible hoy
+   distingue "no existe" de "existe con 0 stock desde siempre". Se quito
+   el boton "Eliminar Todos" (bulk, irreversible) y el "Eliminar"
+   individual de la tabla desktop -- la version mobile de la misma
+   seccion ya tenia el texto correcto ("Dar de alta en BinManager", sin
+   accion destructiva). Hallazgo documentado permanentemente en
+   `.claude/agents/binmanager-specialist.md` para que no se repita la
+   misma verificacion equivocada (el especialista dio falso negativo con
+   4 metodos distintos, todos basados en movimientos/inventario, no
+   catalogo puro).
+
+Ver memoria del proyecto: `project_no_bm_sku_deletion_risk.md`,
+`project_business_logic_audit_2026-08-08.md` (sesion anterior, relacionada).
+
+---
+
 ## 2026-08-08 — FIX/FEAT: auditoria de logica de negocio con 5 especialistas en paralelo -- 9 cambios reales desplegados
 
 Jovan pidio, con toda la experiencia acumulada del proyecto, analizar si la
