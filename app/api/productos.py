@@ -20,7 +20,8 @@ from fastapi.templating import Jinja2Templates
 from app.services.meli_client import get_meli_client, _active_user_id as _ctx
 from app.services.sku_utils import base_sku as _base_sku
 from app.services.token_store import (
-    DATABASE_PATH, save_product_video, update_clip_status, get_videos_for_items
+    DATABASE_PATH, save_product_video, update_clip_status, get_videos_for_items,
+    get_bm_catalog_all,
 )
 
 router = APIRouter(prefix="/api/productos", tags=["productos"])
@@ -490,36 +491,42 @@ async def ml_sin_bm(
     per_page: int = Query(10, ge=5, le=50),
     q:        str = Query(""),
 ):
-    """Listings activos en ML cuyo SKU base no existe en BinManager."""
-    from app.services.binmanager_client import get_shared_bm
+    """Listings activos en ML cuyo SKU base no existe en BinManager.
 
+    FIX 2026-08-08 (auditoría de alertas): antes hacía su PROPIA llamada
+    EN VIVO a bm_cli.get_bulk_stock() en cada carga de página -- una
+    llamada BM redundante y cara, exactamente el patrón que ya se
+    consolidó en el resto de la app (ver Fase 2/3 de la consolidación de
+    arquitectura BM, 2026-08-07). Ahora lee del catálogo BM cacheado
+    (misma fuente que `no_bm_sku` del tab Stock, `token_store.
+    get_bm_catalog_all()`, sync semanal) en vez de golpear BM en vivo.
+
+    También aplica la MISMA exclusión de prefijos dropship que ya usa
+    `no_bm_sku` en main.py (SKUs numéricos tipo "8517331" son catálogo
+    externo sin equivalente real en BM -- sin esta exclusión, esta vista
+    y el KPI del tab Stock daban números distintos para el mismo
+    concepto de negocio). Los items SIN SKU en absoluto se siguen
+    reportando siempre (no dependen del prefijo)."""
     client = await get_meli_client()
     if not client:
         return _templates.TemplateResponse(
             request, "partials/ml_productos_sin_bm.html", {"no_account": True}
         )
     try:
-        # 1. BM bulk + primeros IDs en paralelo
-        bm_cli = await get_shared_bm()
-        bm_rows_r, first_page_r = await asyncio.gather(
-            bm_cli.get_bulk_stock(),
+        # 1. Catálogo BM cacheado + primeros IDs en paralelo (sin llamar a BM)
+        _BM_PREFIXES = ("SN", "SHIL", "RMTC", "SHEL", "SHFL", "SHHP", "SHLB")
+        _cat_rows_r, first_page_r = await asyncio.gather(
+            get_bm_catalog_all(),
             client.get_items(offset=0, limit=200, status="active"),
             return_exceptions=True,
         )
 
-        _BM_SFX = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         bm_skus: set[str] = set()
-        if not isinstance(bm_rows_r, Exception):
-            for row in bm_rows_r:
-                sk = (row.get("SKU") or "").strip().upper()
-                if not sk:
-                    continue
-                bm_skus.add(sk)
-                # BM puede retornar "SNTV000872-GRA"; agregar también la base
-                for sfx in _BM_SFX:
-                    if sk.endswith(sfx):
-                        bm_skus.add(sk[:-len(sfx)])
-                        break
+        if not isinstance(_cat_rows_r, Exception):
+            for row in (_cat_rows_r or []):
+                sk = (row.get("sku") or "").strip().upper()
+                if sk:
+                    bm_skus.add(sk)
 
         # 2. Recolectar todos los IDs activos
         all_ids: list = []
@@ -548,7 +555,10 @@ async def ml_sin_bm(
             except Exception:
                 pass
 
-        # 4. Filtrar: sin SKU o SKU no en BM
+        # 4. Filtrar: sin SKU, o SKU con prefijo BM que no existe en el catálogo.
+        # Un SKU con prefijo NO-BM (ej. "8517331", dropship externo) nunca fue
+        # pensado para estar en BinManager -- reportarlo aquí sería un falso
+        # positivo, igual que se excluye en no_bm_sku (main.py).
         sin_bm: list = []
         for d in raw_items:
             body = d.get("body", d)
@@ -558,6 +568,8 @@ async def ml_sin_bm(
             base = _base_sku(sku) if sku else ""
             if base and base.upper() in bm_skus:
                 continue  # sí existe en BM → skip
+            if base and not any(base.upper().startswith(_px) for _px in _BM_PREFIXES):
+                continue  # prefijo no-BM (dropship externo) → no es un gap real
             sin_bm.append({
                 "item_id":   body.get("id", ""),
                 "title":     body.get("title", "-")[:80],

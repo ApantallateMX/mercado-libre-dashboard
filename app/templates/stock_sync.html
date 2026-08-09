@@ -8,7 +8,11 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-xl font-bold text-gray-800">Sync Stock Multi-Plataforma</h1>
-      <p class="text-xs text-gray-500 mt-0.5">BinManager → MercadoLibre + Amazon · ciclo cada {{ interval_min }} min · umbral={{ threshold }} uds</p>
+      <!-- FIX 2026-08-08: decía "ciclo cada {{interval_min}} min" -- no existe
+           ningún ciclo automático (start_multi_stock_sync() solo loguea, ver
+           commit ddb2552 abril 2026: escribir en ML solo puede ser manual,
+           por decisión explícita de Jovan). El texto le mentía al admin. -->
+      <p class="text-xs text-gray-500 mt-0.5">BinManager → MercadoLibre + Amazon · solo manual (clic en "Ver cambios" / "Sync ahora") · umbral={{ threshold }} uds</p>
     </div>
     <div class="flex flex-col items-end gap-1">
       <button id="btn-preview" onclick="runPreview()"
