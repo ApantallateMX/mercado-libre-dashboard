@@ -666,6 +666,11 @@ async def lifespan(app: FastAPI):
         try:
             import aiosqlite as _aio_init
             from app.config import DATABASE_PATH as _DB_INIT
+            # FIX 2026-08-08 (barrido de logica de negocio): usaba un FX fijo en 18
+            # en vez del tipo de cambio real ya calculado en cada prewarm
+            # (_last_fx_rate) -- mismo patron de fallback que el resto de endpoints
+            # sin cliente ML vivo (ver linea 4213/4598/4656).
+            _fx_init = _manual_fx_rate if _manual_fx_rate > 0 else _last_fx_rate
             updated = 0
             async with _aio_init.connect(_DB_INIT) as _db:
                 _rows = await (await _db.execute(
@@ -673,8 +678,8 @@ async def lifespan(app: FastAPI):
                 )).fetchall()
                 for _row in _rows:
                     _rowid, _retail = _row[0], float(_row[1] or 0)
-                    _new_sug  = round(_retail * 18 * 1.20, 0) if _retail > 0 else 0
-                    _new_cost = round(_retail * 18, 0) if _retail > 0 else 0
+                    _new_sug  = round(_retail * _fx_init * 1.20, 0) if _retail > 0 else 0
+                    _new_cost = round(_retail * _fx_init, 0) if _retail > 0 else 0
                     await _db.execute(
                         "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=?, cost_usd=? WHERE rowid=?",
                         (_new_sug, _new_cost, _retail, _rowid)
@@ -23085,7 +23090,11 @@ async def planning_unlaunched():
             tag = "unlaunched"     # Stock in BM but no sales anywhere
 
         retail_usd = row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0
-        rev_potential = round(stock * float(retail_usd) * 17.5, 0) if retail_usd else 0
+        # FIX 2026-08-08: FX fijo en 17.5 en vez del tipo de cambio real (mismo
+        # patron de fallback _manual_fx_rate/_last_fx_rate que el resto de
+        # endpoints sin cliente ML vivo).
+        _fx_unl = _manual_fx_rate if _manual_fx_rate > 0 else _last_fx_rate
+        rev_potential = round(stock * float(retail_usd) * _fx_unl, 0) if retail_usd else 0
 
         entry = {
             "sku": sku,
