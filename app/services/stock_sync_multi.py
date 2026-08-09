@@ -222,13 +222,27 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
 # ML — recopilar listings activos de todas las cuentas
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Factor de reputación ML por level_id — pondera _score() para que el reparto de
+# stock escaso no siga favoreciendo a una cuenta con reputación deteriorada
+# (ej. BLOWTECHNOLOGIES, amarilla desde 2026-08 con ventas -82%). None/desconocido
+# (cuenta nueva sin historial de reputación) no se penaliza.
+_REPUTATION_FACTOR = {
+    "5_green":       1.00,
+    "4_light_green": 0.85,
+    "3_yellow":      0.50,
+    "2_orange":      0.25,
+    "1_red":         0.15,
+}
+
+
 async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
     """
     Retorna {base_sku: [listing_dict, ...]} para todos los items activos Y pausados ML.
-    listing_dict: {platform, account_id, item_id, price, qty, sold_qty, date_created, sku, status, can_update}
+    listing_dict: {platform, account_id, item_id, price, qty, sold_qty, date_created, sku, status, can_update, rep_factor}
 
     can_update=False si el item es FULL (logistic_type=fulfillment) — ML gestiona ese stock.
     status='paused' permite que _execute active el listing cuando BM tiene stock.
+    rep_factor: multiplicador de _score() según reputación real de la cuenta (ver _REPUTATION_FACTOR).
     """
     from app.services.meli_client import get_meli_client
 
@@ -242,6 +256,14 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
             client = await get_meli_client(user_id=uid)
             if not client:
                 continue
+
+            rep_factor = 1.0
+            try:
+                _user_info = await client.get_user_info()
+                _level_id = (_user_info.get("seller_reputation", {}) or {}).get("level_id")
+                rep_factor = _REPUTATION_FACTOR.get(_level_id, 1.0)
+            except Exception as e:
+                logger.warning(f"[MULTI-SYNC] Cuenta {uid}: no se pudo leer reputación ({e}), rep_factor=1.0")
 
             # Recopilar activos + pausados + inactivos ("Inactiva sin stock")
             item_ids = await client.get_all_item_ids_by_statuses(["active", "paused", "inactive"])
@@ -285,6 +307,7 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                             "sku":          sku,
                             "status":       item_status,
                             "can_update":   not is_full,
+                            "rep_factor":   rep_factor,
                         })
                 except Exception as e:
                     logger.warning(f"[MULTI-SYNC-ML] Batch error uid={uid} i={i}: {e}")
@@ -392,8 +415,11 @@ async def _collect_amz_listings(amz_accounts: list) -> dict[str, list]:
 
 def _score(listing: dict) -> float:
     """
-    score = precio_neto × velocidad_30d
-    Representa el ingreso neto estimado que generaría esta plataforma en 30 días.
+    score = precio_neto × velocidad_30d × rep_factor
+    Representa el ingreso neto estimado que generaría esta plataforma en 30 días,
+    ponderado por la reputación real de la cuenta (rep_factor, solo ML — ver
+    _REPUTATION_FACTOR) para no seguir concentrando stock escaso en una cuenta
+    en crisis de reputación solo porque vendía bien en el pasado.
     Mínimo retorna el precio_neto para que ninguna plataforma quede con score=0
     si tiene precio pero no tiene historial de ventas.
     """
@@ -420,7 +446,8 @@ def _score(listing: dict) -> float:
         velocity  = float(listing.get("sold_qty_30d") or 0)
 
     # Mínimo = net_price (como si vendiéramos 1 unidad/mes)
-    return net_price * max(1.0, velocity)
+    rep_factor = float(listing.get("rep_factor", 1.0)) if platform == "ml" else 1.0
+    return net_price * max(1.0, velocity) * rep_factor
 
 
 # ─────────────────────────────────────────────────────────────────────────────

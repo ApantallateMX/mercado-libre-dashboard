@@ -56,6 +56,23 @@ def _extract_base_sku(sku: str) -> str:
     return sku
 
 
+def _target_coverage_days_for_sku(sku: str) -> int:
+    """Días de cobertura objetivo para _rec_qty (cuánto stock recomendar sincronizar/comprar).
+
+    14 días por default asume reabasto rápido (accesorios, SKUs locales). Pero
+    el lead time real de importación de electrónicos (TVs, aduanas/pedimento,
+    ver CLAUDE.md) es de 20-45 días — con 14 días fijos para TODO el catálogo,
+    SNTV* sistemáticamente se recomendaba comprar corto. Solo se sube SNTV*
+    (categoría de importación confirmada y ya tratada distinto en todo el
+    código, ver _bm_conditions_for_sku) — no se adivinan otros prefijos sin
+    confirmar su taxonomía real, para no des-calibrar compras de SKUs que sí
+    reabastecen rápido.
+    """
+    if (sku or "").upper().startswith("SNTV"):
+        return 30
+    return 14
+
+
 def _bm_conditions_for_sku(sku: str) -> str:
     """Retorna condiciones BM según formato del SELLER_SKU y categoría.
 
@@ -6110,7 +6127,8 @@ async def _prewarm_caches(user_id: str = None):
                         _rp["_rec_qty"]   = min(2, _cap)
                         _rp["_rec_badge"] = "sin historial"
                     else:
-                        _target = max(1, int(_math_rec.ceil(_u30 / 30.0 * 14 * _boost["multiplier"])))
+                        _cov_days = _target_coverage_days_for_sku(_rp.get("sku", ""))
+                        _target = max(1, int(_math_rec.ceil(_u30 / 30.0 * _cov_days * _boost["multiplier"])))
                         _rp["_rec_qty"]   = max(1, min(_cap, _target))
                         _rp["_rec_badge"] = (
                             "alta demanda" if _u30 >= 20 else

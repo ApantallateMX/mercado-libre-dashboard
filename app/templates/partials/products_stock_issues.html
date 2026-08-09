@@ -316,7 +316,8 @@ window._stockFilter = function(q) {
                            class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
                             Ver en MeLi ↗
                         </a>
-                        <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_rec_qty') or _rst_alloc }}, this)"
+                        {% set _full_final_qty = p.get('_rec_qty') or ([(_rst_alloc * 0.6) | int, 1] | max) %}
+                        <button onclick="syncFullItem('{{ p.id }}', {{ _full_final_qty }}, this)"
                                 class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600">
                             Ya cambié → Sync
                         </button>
@@ -439,7 +440,8 @@ window._stockFilter = function(q) {
                             <span class="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold whitespace-nowrap">⚠️ FULL</span>
                             <a href="https://articulo.mercadolibre.com.mx/{{ p.id | replace('MLM', 'MLM-') }}" target="_blank"
                                class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium whitespace-nowrap">Ver en MeLi ↗</a>
-                            <button onclick="syncFullItem('{{ p.id }}', {{ _rst_dt_alloc }}, this)"
+                            {% set _full_dt_final = p.get('_rec_qty') or _rst_dt_sq %}
+                            <button onclick="syncFullItem('{{ p.id }}', {{ _full_dt_final }}, this)"
                                     class="px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium whitespace-nowrap">
                                 Ya cambié → Sync
                             </button>
@@ -769,7 +771,8 @@ window._stockFilter = function(q) {
                     Concentrar{% if p.get('_days_supply') is not none and p._days_supply < 3 %} ⚡{% endif %}
                 </button>
                 {% endif %}
-                <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
+                {% set _crit_final_qty = p.get('_rec_qty') or ([(p.get('_bm_avail', 0) * 0.6) | int, 1] | max) %}
+                <button onclick="syncRestockItem('{{ p.id }}', {{ _crit_final_qty }}, this)"
                         class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
                     Sync BM
                 </button>
@@ -854,7 +857,8 @@ window._stockFilter = function(q) {
                                 Concentrar
                             </button>
                             {% endif %}
-                            <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
+                            {% set _crit_dt_final_qty = p.get('_rec_qty') or ([(p.get('_bm_avail', 0) * 0.6) | int, 1] | max) %}
+                            <button onclick="syncRestockItem('{{ p.id }}', {{ _crit_dt_final_qty }}, this)"
                                     class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
                                 Sync BM
                             </button>
@@ -1680,10 +1684,13 @@ function _setFullMsg(itemId, msg, cls) {
         el.textContent = msg; el.className = cls;
     });
 }
-window.syncFullItem = function(itemId, bmQty, btn) {
+window.syncFullItem = function(itemId, finalQty, btn) {
+    // FIX 2026-08-08: finalQty ya viene calculado desde Jinja (_rec_qty si existe,
+    // si no el fallback *0.6) -- multiplicar aqui otra vez apilaba 2 capas de
+    // conservadurismo y el resultado casi siempre colapsaba a 1 unidad.
     btn.disabled = true;
     btn.textContent = 'Sincronizando...';
-    var safeQty = Math.floor(bmQty * 0.6);
+    var safeQty = Math.max(1, Math.floor(finalQty));
     fetch('/api/items/' + itemId + '/stock', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
@@ -1710,9 +1717,9 @@ window.syncFullItem = function(itemId, bmQty, btn) {
     });
 };
 
-// --- Restock: sync 60% of BM total ---
-function syncRestockItem(itemId, bmTotal, btn) {
-    var safeQty = Math.floor(bmTotal * 0.6);
+// --- Restock: sync finalQty (ya calculado en Jinja: _rec_qty o fallback *0.6) ---
+function syncRestockItem(itemId, finalQty, btn) {
+    var safeQty = Math.max(1, Math.floor(finalQty));
     btn.disabled = true;
     btn.textContent = '...';
     var msgEl = document.getElementById('restock-msg-' + itemId) || document.getElementById('restock-msg-d-' + itemId);
@@ -1902,9 +1909,9 @@ function bulkStockZeroRisk() {
 }
 
 
-// --- Activate: sync stock 60% + activate if paused ---
-function activateItem(itemId, bmTotal, status, btn, hasVariations) {
-    var safeQty = Math.max(1, Math.floor(bmTotal * 0.6));
+// --- Activate: sync finalQty (ya calculado en Jinja) + activate if paused ---
+function activateItem(itemId, finalQty, status, btn, hasVariations) {
+    var safeQty = Math.max(1, Math.floor(finalQty));
     btn.disabled = true;
     btn.textContent = '...';
     var msgEl = document.getElementById('act-msg-' + itemId) || document.getElementById('act-msg-d-' + itemId);
