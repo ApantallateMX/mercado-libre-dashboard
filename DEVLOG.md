@@ -7,6 +7,64 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-08 — FIX: barrido final de fuentes de datos duplicadas/independientes (raiz del patron "datos viejos")
+
+Jovan planteo la queja de fondo: "siempre me dices son datos viejos, algo
+atorado, no actualice, etc y siempre son los mismos problemas. Busca de
+raiz da una solucion definitiva." Correcto -- el patron real no era
+"cache viejo" repetido, sino que existian VARIAS fuentes independientes
+calculando lo mismo (o codigo muerto por colision de rutas) que se
+desincronizaban entre si. Se aprobo un barrido final (Explore agent) mas
+alla de Stock/Productos: Dashboard, Planning, Lanzador, stock_sync_multi,
+Amazon. Encontro 2 bugs activos graves + varios de menor prioridad.
+
+Corregidos hoy:
+
+1. **`metrics.py` -- ImportError activo en cada request**: `_bm_stock`
+   (renombrado a `_bm_stock_from_cache` en un cleanup anterior el mismo
+   dia) nunca se actualizo en este import diferido -- `/api/metrics/
+   low-stock-alerts` fallaba con 500 siempre. Corregido nombre + quitado
+   un `await` sobrante (la funcion es sincrona).
+2. **Colision de rutas `PUT /api/items/{item_id}/stock`**: FastAPI hace
+   match por orden de registro (primero gana); `app/api/items.py` ganaba
+   siempre y la version de `main.py` -- con proteccion BM-down,
+   eviccion inmediata de cache de alertas y auto-reactivacion -- era
+   100% codigo muerto. Se fusiono toda la logica en `items.py` (la que
+   realmente corre) y se elimino el duplicado de `main.py`.
+3. **`/api/dashboard/morning-briefing` leia una tabla de alertas legacy**
+   (`get_all_sync_alerts()`, ciclo de 4h ya reemplazado) en vez de
+   `_stock_issues_cache` (la fuente unificada real). Corregido.
+4. **Colision de rutas `GET /api/health/counts`** + bug adicional
+   encontrado en el camino: `app/api/health.py` gana la colision (misma
+   causa que el punto 2), pero devuelve `open_claims/unanswered_questions/
+   unread_messages` -- mientras que `base.html` (badge global de
+   notificaciones) y `dashboard.html` (franja de alertas del Dashboard)
+   fueron escritos contra los nombres del backend MUERTO de main.py
+   (`claims/questions/messages`). Resultado: **ambos elementos de UI
+   llevaban tiempo silenciosamente rotos** -- el badge nunca mostraba
+   numero, la franja nunca mostraba alertas -- sin importar cual de las
+   dos rutas "ganara". Se agregaron los nombres viejos como alias en la
+   respuesta de `health.py` (sin quitar los nuevos) y se elimino el
+   duplicado muerto de `main.py`.
+
+Pendiente (menor prioridad, documentado para retomar):
+- `_bm_amz_cache` en `amazon_products.py`: cache paralelo de stock BM del
+  lado Amazon, independiente del `_bm_stock_cache` de ML (7 sitios de uso).
+  Refactor mas grande, no urgente.
+- `stock_sync_multi._fetch_bm_avail()` no revisa frescura de
+  `_bm_bulk_gr_cache`/`_bm_bulk_all_cache` antes de llamar `get_bulk_stock()`
+  en vivo.
+- `planning_unlaunched` (`main.py`) sin TTL/cache en su scan en vivo de
+  `BinManagerClient().get_global_inventory()`.
+- `amazon_lanzar.py`: su gap-scan tiene su propio `get_bulk_stock()` sin
+  cache -- aceptable, solo anotado.
+
+Verificado: compile check limpio, smoke test local (rutas resuelven con
+302 auth-redirect, sin excepciones en logs), deploy Railway SUCCESS,
+`/api/diag/cache-health` 200 en produccion.
+
+---
+
 ## 2026-08-08 — FIX: auditoria completa del sistema de alertas de stock (ML+Amazon) -- 7 bugs reales corregidos
 
 Jovan reporto con screenshot una contradiccion obvia: el banner superior de
