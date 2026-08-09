@@ -5788,6 +5788,35 @@ _bm_bulk_loc47_all_cache: tuple[float, list] | None = None  # (timestamp, ALL ro
 _bm_bulk_loc68_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC68 = MTY (TVs ICB/ICC)
 _bm_bulk_loctj_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) LOC45+69+43+42 = Tijuana (TVs ICB/ICC)
 _bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (evita instancias concurrentes)
+
+# FIX 2026-08-09: Jovan senalo correctamente que el bulk de BM deberia ser
+# UNA sola llamada compartida por las 4 cuentas ML (ya lo es en el caso
+# normal, via el TTL de 900s arriba) -- el problema real era el caso malo:
+# cuando esa llamada compartida FALLA/se cuelga (BM lento), cada una de las
+# 4 cuentas del loop de prewarm reintentaba la MISMA llamada fallida en
+# cascada (hasta 5 tipos de bulk x hasta 90s cada uno x 4 cuentas = hasta
+# 30 min), porque _bm_is_down_now depende de un contador (_bm_health.
+# consecutive_failures) que un loop de health-check SEPARADO (cada 2 min)
+# puede resetear a 0 con su propio ping liviano, aunque el bulk pesado siga
+# fallando. Este tracker es especifico del bulk (no se mezcla con el health
+# check general) -- si un tipo de bulk fallo hace <3 min, las cuentas
+# siguientes en el MISMO ciclo de prewarm van directo a stale/vacio en vez
+# de volver a intentar y bloquear otros 90s cada una.
+_bm_bulk_last_fail_ts: dict = {}
+_BM_BULK_FAIL_COOLDOWN = 180.0  # 3 min
+
+
+def _bm_bulk_recently_failed(kind: str) -> bool:
+    ts = _bm_bulk_last_fail_ts.get(kind)
+    return bool(ts and (_time.time() - ts) < _BM_BULK_FAIL_COOLDOWN)
+
+
+def _bm_bulk_mark_failed(kind: str) -> None:
+    _bm_bulk_last_fail_ts[kind] = _time.time()
+
+
+def _bm_bulk_mark_ok(kind: str) -> None:
+    _bm_bulk_last_fail_ts.pop(kind, None)
 _bm_prev_bulk_sku_set: set = set()  # SKUs (clave BM normalizada) del bulk anterior — para detectar desapariciones
 _activate_suppressed: dict = {}     # {user_id_str: set(item_id_str)} — ítems ocultados de Activar, persistido en DB
 # Muestra de campos RAW del bulk (antes de slimming) — para diagnóstico de campos disponibles.
@@ -7126,11 +7155,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 _bulk_gr_rows = _bm_bulk_gr_cache[1]
                 _age_label = f"{round(_age_gr)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_gr >= 900 else "")
                 logger.info(f"[BM-CACHE] Reutilizando GR bulk cache ({_age_label})")
-        if _bulk_gr_rows is None:
+        if _bulk_gr_rows is None and _bm_bulk_recently_failed("gr") and _bm_bulk_gr_cache:
+            _bulk_gr_rows = _bm_bulk_gr_cache[1]
+            logger.info("[BM-CACHE] GR bulk fallo hace <3min -- usando stale sin reintentar")
+        elif _bulk_gr_rows is None:
             try:
                 _fresh_gr = await asyncio.wait_for(
                     bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
-                    timeout=270.0,
+                    timeout=90.0,
                 )
                 if _fresh_gr:
                     global _bm_bulk_raw_sample
@@ -7141,18 +7173,21 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bm_health["last_ok_ts"] = _time.time()
                     _bm_health["consecutive_failures"] = 0
                     _bulk_gr_rows = _fresh_gr
+                    _bm_bulk_mark_ok("gr")
                     logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas")
                 else:
                     # Fix B1: BM respondió sin excepción pero devolvió vacío/None — tratar como fallo.
                     # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
                     logger.warning("[BM-CACHE] GR bulk fetch devolvió vacío — fallback a stale cache")
                     _bulk_returned_empty = True  # señal para evitar retries individuales
+                    _bm_bulk_mark_failed("gr")
                     if _bm_bulk_gr_cache:
                         _bulk_gr_rows = _bm_bulk_gr_cache[1]
                         logger.warning(f"[BM-CACHE] GR usando stale ({len(_bulk_gr_rows)} rows) tras bulk vacío")
                     _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
             except Exception as _bulk_err:
                 logger.warning(f"[BM-CACHE] GR bulk fetch error: {_bulk_err} — usando stale")
+                _bm_bulk_mark_failed("gr")
                 # Si falla el fetch, intentar usar cache aunque sea antiguo
                 if _bm_bulk_gr_cache:
                     _bulk_gr_rows = _bm_bulk_gr_cache[1]
@@ -7172,58 +7207,79 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             if _bm_bulk_loc47_cache and (_time.time() - _bm_bulk_loc47_cache[0]) < _loc_ttl:
                 _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
                 logger.info(f"[BM-CACHE] Reutilizando LOC47 (CDMX) cache ({len(_bulk_loc47_rows)} rows)")
+            elif _bm_bulk_recently_failed("loc47") and _bm_bulk_loc47_cache:
+                _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
+                logger.info("[BM-CACHE] LOC47 fallo hace <3min -- usando stale sin reintentar")
             else:
                 try:
                     _fresh_l47 = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="47"),
-                        timeout=270.0,
+                        timeout=90.0,
                     )
                     if _fresh_l47:
                         _bm_bulk_loc47_cache = (_time.time(), _slim_bulk_rows(_fresh_l47))
                         _bulk_loc47_rows = _fresh_l47
+                        _bm_bulk_mark_ok("loc47")
                         logger.info(f"[BM-CACHE] LOC47 (CDMX) bulk OK: {len(_fresh_l47)} filas")
-                    elif _bm_bulk_loc47_cache:
-                        _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
+                    else:
+                        _bm_bulk_mark_failed("loc47")
+                        if _bm_bulk_loc47_cache:
+                            _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
                 except Exception as _le47:
                     logger.warning(f"[BM-CACHE] LOC47 bulk error: {_le47}")
+                    _bm_bulk_mark_failed("loc47")
                     if _bm_bulk_loc47_cache:
                         _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
             if _bm_bulk_loc68_cache and (_time.time() - _bm_bulk_loc68_cache[0]) < _loc_ttl:
                 _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
                 logger.info(f"[BM-CACHE] Reutilizando LOC68 (MTY) cache ({len(_bulk_loc68_rows)} rows)")
+            elif _bm_bulk_recently_failed("loc68") and _bm_bulk_loc68_cache:
+                _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
+                logger.info("[BM-CACHE] LOC68 fallo hace <3min -- usando stale sin reintentar")
             else:
                 try:
                     _fresh_l68 = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="68"),
-                        timeout=270.0,
+                        timeout=90.0,
                     )
                     if _fresh_l68:
                         _bm_bulk_loc68_cache = (_time.time(), _slim_bulk_rows(_fresh_l68))
                         _bulk_loc68_rows = _fresh_l68
+                        _bm_bulk_mark_ok("loc68")
                         logger.info(f"[BM-CACHE] LOC68 (MTY) bulk OK: {len(_fresh_l68)} filas")
-                    elif _bm_bulk_loc68_cache:
-                        _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
+                    else:
+                        _bm_bulk_mark_failed("loc68")
+                        if _bm_bulk_loc68_cache:
+                            _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
                 except Exception as _le68:
                     logger.warning(f"[BM-CACHE] LOC68 bulk error: {_le68}")
+                    _bm_bulk_mark_failed("loc68")
                     if _bm_bulk_loc68_cache:
                         _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
             if _bm_bulk_loctj_cache and (_time.time() - _bm_bulk_loctj_cache[0]) < _loc_ttl:
                 _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
                 logger.info(f"[BM-CACHE] Reutilizando LOC-TJ (45,69,43,42) cache ({len(_bulk_loctj_rows)} rows)")
+            elif _bm_bulk_recently_failed("loctj") and _bm_bulk_loctj_cache:
+                _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
+                logger.info("[BM-CACHE] LOC-TJ fallo hace <3min -- usando stale sin reintentar")
             else:
                 try:
                     _fresh_ltj = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="45,69,43,42"),
-                        timeout=270.0,
+                        timeout=90.0,
                     )
                     if _fresh_ltj:
                         _bm_bulk_loctj_cache = (_time.time(), _slim_bulk_rows(_fresh_ltj))
                         _bulk_loctj_rows = _fresh_ltj
+                        _bm_bulk_mark_ok("loctj")
                         logger.info(f"[BM-CACHE] LOC-TJ bulk OK: {len(_fresh_ltj)} filas")
-                    elif _bm_bulk_loctj_cache:
-                        _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
+                    else:
+                        _bm_bulk_mark_failed("loctj")
+                        if _bm_bulk_loctj_cache:
+                            _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
                 except Exception as _letj:
                     logger.warning(f"[BM-CACHE] LOC-TJ bulk error: {_letj}")
+                    _bm_bulk_mark_failed("loctj")
                     if _bm_bulk_loctj_cache:
                         _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
 
@@ -7237,24 +7293,30 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bulk_all_rows = _bm_bulk_all_cache[1]
                     _age_label_all = f"{round(_age_all)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_all >= 900 else "")
                     logger.info(f"[BM-CACHE] Reutilizando ALL bulk cache ({_age_label_all})")
-            if _bulk_all_rows is None:
+            if _bulk_all_rows is None and _bm_bulk_recently_failed("all") and _bm_bulk_all_cache:
+                _bulk_all_rows = _bm_bulk_all_cache[1]
+                logger.info("[BM-CACHE] ALL bulk fallo hace <3min -- usando stale sin reintentar")
+            elif _bulk_all_rows is None:
                 try:
                     _fresh_all = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
-                        timeout=270.0,
+                        timeout=90.0,
                     )
                     if _fresh_all:
                         _slimmed_all = _slim_bulk_rows(_fresh_all)
                         _bm_bulk_all_cache = (_time.time(), _slimmed_all)
                         _bulk_all_rows = _slimmed_all
+                        _bm_bulk_mark_ok("all")
                         logger.info(f"[BM-CACHE] ALL bulk fetch OK: {len(_fresh_all)} filas")
                     else:
                         # Fix B2: mismo caso que GR — bulk vacío sin excepción → stale fallback
                         logger.warning("[BM-CACHE] ALL bulk fetch devolvió vacío — fallback a stale cache")
+                        _bm_bulk_mark_failed("all")
                         if _bm_bulk_all_cache:
                             _bulk_all_rows = _bm_bulk_all_cache[1]
                 except Exception as _bulk_err:
                     logger.warning(f"[BM-CACHE] ALL bulk fetch error: {_bulk_err} — usando stale")
+                    _bm_bulk_mark_failed("all")
                     if _bm_bulk_all_cache:
                         _bulk_all_rows = _bm_bulk_all_cache[1]
 
