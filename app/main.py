@@ -5166,6 +5166,50 @@ async def items_no_stock_redirect(request: Request):
     return RedirectResponse("/partials/products-stock-issues", status_code=302)
 
 
+_STOCK_LIST_KEYS = ("restock", "oversell_risk", "activate", "critical", "full_no_stock",
+                    "imbalanced", "stagnant", "price_risk", "no_bm_sku")
+
+
+def _refresh_bm_avail_live(ctx: dict) -> None:
+    """FIX 2026-08-09 (Jovan reporto SHIL000026 mostrando 623 en 'Activar'
+    cuando _bm_stock_cache -- la fuente unica de verdad -- ya tenia 2 desde
+    hacia rato; exigio "solucion definitiva", no esperar al proximo prewarm).
+
+    Causa raiz: las 9 listas de _stock_issues_cache son una FOTO tomada en el
+    momento del prewarm (cada ~15 min) -- _bm_avail/_bm_avail_raw quedan
+    congelados en cada dict de producto hasta el siguiente ciclo completo.
+    Si _bm_stock_cache se autocorrige entre ciclos (ver _fetch_activate_wh),
+    la lista ya construida NO se enteraba y seguia mostrando el valor viejo
+    aunque la cache real ya estuviera bien.
+
+    Este helper corre en cada request (antes de renderizar, no antes de
+    guardar en cache) y refresca cada item contra _bm_stock_cache en memoria
+    -- sin llamadas a BM, sin esperar nada. Solo AJUSTA A LA BAJA _bm_avail
+    (nunca lo sube por encima del nuevo raw) para no reintroducir riesgo de
+    sobreventa si el stock real bajo desde el prewarm; el reparto por-cuenta
+    ya calculado se conserva mientras siga siendo <= el nuevo raw."""
+    for _lk in _STOCK_LIST_KEYS:
+        for p in ctx.get(_lk, None) or []:
+            sku = p.get("sku", "")
+            if not sku:
+                continue
+            entry = _bm_stock_cache.get(normalize_to_bm_sku(sku))
+            if not entry:
+                continue
+            live_raw = entry[1].get("avail_total")
+            if live_raw is None or p.get("_bm_avail_raw") == live_raw:
+                continue
+            p["_bm_avail_raw"] = live_raw
+            p["_bm_avail"] = min(int(p.get("_bm_avail") or 0), live_raw) if p.get("_bm_avail") is not None else live_raw
+            p["_bm_reserved"] = entry[1].get("reserved_total", p.get("_bm_reserved", 0))
+            # Desglose MTY/CDMX/TJ vive en la misma entrada de cache -- si el
+            # raw quedo desfasado, el desglose tambien (misma foto congelada).
+            if p.get("_bm_wh_fetched"):
+                p["_bm_mty"]  = entry[1].get("mty", p.get("_bm_mty", 0))
+                p["_bm_cdmx"] = entry[1].get("cdmx", p.get("_bm_cdmx", 0))
+                p["_bm_tj"]   = entry[1].get("tj", p.get("_bm_tj", 0))
+
+
 @app.get("/partials/products-stock-issues", response_class=HTMLResponse)
 async def products_stock_issues_partial(request: Request, threshold: int = 10):
     """Stock tab: Reabastecer + Riesgo + Activar. Resultado cacheado 5 min."""
@@ -5193,6 +5237,7 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         if entry:
             _data_age_s = _time.time() - entry[0]
             ctx = await _add_orphan_ctx(entry[1].copy())
+            _refresh_bm_avail_live(ctx)
             # Stale banner solo si datos tienen más de 10 min — si no, todo perfecto
             ctx["stale"]        = _data_age_s > 600
             ctx["data_age_min"] = int(_data_age_s // 60)
