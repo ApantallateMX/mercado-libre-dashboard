@@ -1065,6 +1065,26 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: stock_issues_snapshot — foto en disco de _stock_issues_cache
+        # (memoria), tomada al final de cada ciclo de prewarm exitoso.
+        # FIX 2026-08-09: Jovan reporto (varias veces, con frustracion
+        # creciente) que /items->Stock mostraba "Calculando..." cada vez que
+        # el proceso se reiniciaba (cada deploy) aunque el sistema YA tuviera
+        # la informacion calculada minutos antes -- _stock_issues_cache es un
+        # dict en memoria, se vacia por completo en cada restart, sin ningun
+        # respaldo. Esta tabla permite recargar la ULTIMA version buena al
+        # arrancar el proceso, antes de que corra el primer prewarm en vivo --
+        # se sirve de inmediato (con el banner "stale" normal si tiene >10min)
+        # en vez de la pantalla de carga vacia.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_issues_snapshot (
+                cache_key   TEXT PRIMARY KEY,
+                ts          REAL NOT NULL DEFAULT 0,
+                data_json   TEXT NOT NULL DEFAULT '{}'
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_sku_master — maestro único de BM (fusiona bm_product_catalog
         # + bm_stock_snapshot). Fuente única de verdad para alertas, sugerencias
         # y lanzamientos. Dos timestamps porque título/retail/costo se refrescan
@@ -1710,6 +1730,37 @@ async def get_bm_catalog_last_sync() -> float:
             row = await cur.fetchone()
     val = row[0] if row else None
     return float(val) if val else 0.0
+
+
+async def save_stock_issues_snapshot(cache_key: str, ts: float, data: dict) -> None:
+    """Persiste una entrada de _stock_issues_cache a disco -- ver comentario de
+    la tabla stock_issues_snapshot en init_db(). Best-effort: se llama al final
+    de cada ciclo de prewarm exitoso, nunca debe tumbar el prewarm si falla."""
+    import json as _json
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "INSERT INTO stock_issues_snapshot (cache_key, ts, data_json) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET ts=excluded.ts, data_json=excluded.data_json",
+            (cache_key, ts, _json.dumps(data)),
+        )
+        await db.commit()
+
+
+async def load_all_stock_issues_snapshots() -> dict:
+    """Carga TODAS las entradas guardadas -- usado una sola vez al arrancar el
+    proceso para repoblar _stock_issues_cache antes de que corra el primer
+    prewarm en vivo. Retorna {cache_key: (ts, data)}."""
+    import json as _json
+    result = {}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT cache_key, ts, data_json FROM stock_issues_snapshot")
+        for row in await cur.fetchall():
+            try:
+                result[row["cache_key"]] = (row["ts"], _json.loads(row["data_json"]))
+            except Exception:
+                continue
+    return result
 
 
 async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
