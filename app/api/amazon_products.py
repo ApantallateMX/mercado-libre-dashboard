@@ -2445,14 +2445,21 @@ async def amazon_fulfillment_action(sku: str, body: FulfillmentActionBody, reque
 @router.get("/products/stock", response_class=HTMLResponse)
 async def amazon_products_stock_alerts(request: Request):
     """
-    Alertas de stock Amazon — 7 categorías BM-correlacionadas (igual que ML):
+    Alertas de stock Amazon — 7 categorías BM-correlacionadas (igual que ML)
+    + 1 categoría informativa/de auditoría:
     - Sin Stock FBA: FBA=0, BM=0 también
     - Reabastecer:   FBA=0, BM>0 → enviar a FBA
-    - Riesgo Sobreventa: FBA > BM disponible → riesgo de oversell
+    - Riesgo Sobreventa: cantidad PUBLICADA en el listing FBM > BM disponible
+      → sobreventa real y accionable (solo aplica a FBM, el stock que
+      controlamos nosotros — Amazon controla el stock FBA/FLX, no nosotros)
     - Stock Bajo:    FBA 1–10 uds
     - Restock Urgente: <14 días supply según velocidad
     - Stock Crítico BM: BM < 10 uds
     - Estancado:     BM>0, 0 ventas 30d, FBA>0
+    - Discrepancia BM vs FBA (informativa, NO es riesgo): stock físico en FBA/FLX
+      > BM disponible. Es el resultado NORMAL de haber enviado stock a FBA
+      (deja de estar en BM) — sirve solo para auditar si BM decrementó bien
+      al momento del envío, no requiere ninguna acción.
     """
     client = await get_amazon_client()
     if not client:
@@ -2482,6 +2489,7 @@ async def amazon_products_stock_alerts(request: Request):
                 "status":  _listing_status(summaries),
                 "price":   price,
                 "channel": _fulfillment_channel_of(item),
+                "qty":     _parse_fba_stock(item.get("fulfillmentAvailability", [])),
             }
 
         # Construir lista unificada para enriquecer con BM
@@ -2519,17 +2527,52 @@ async def amazon_products_stock_alerts(request: Request):
                 "channel":    listing.get("channel", "FBA"),
             })
 
-        # Enriquecer con BM (bm_avail, bm_reserved, bm_mty, bm_cdmx, bm_tj, _bm_retail_ph)
-        await _enrich_bm_amz(all_items, timeout_s=8.0)
+        # ── Lista aparte para Riesgo Sobreventa real (FBM) ───────────────────
+        # Los SKU FBM normalmente NO aparecen en fba_summaries (no tienen stock
+        # físico en un FC de Amazon), así que sin este bloque quedan totalmente
+        # fuera del análisis de esta página. La comparación correcta para ellos
+        # es qty PUBLICADA en el listing vs BM disponible — ese es el único
+        # stock que controlamos y podemos corregir hoy vía API (set_qty).
+        fbm_items: list = []
+        for _sku, _listing in listings_idx.items():
+            if _listing.get("channel") != "FBM":
+                continue
+            _sales     = sku_sales.get(_sku, {"units": 0, "revenue": 0.0})
+            _units_30d = _sales["units"]
+            _vel_dia   = _units_30d / 30.0
+            _asin      = _listing.get("asin") or ""
+            _sc_url    = (
+                f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={_asin}"
+                if _asin else "https://sellercentral.amazon.com.mx/inventory"
+            )
+            fbm_items.append({
+                "sku":       _sku,
+                "asin":      _asin,
+                "title":     _listing.get("title") or _sku,
+                "qty":       int(_listing.get("qty") or 0),
+                "units_30d": _units_30d,
+                "vel_dia":   round(_vel_dia, 2) if _vel_dia > 0 else None,
+                "sc_url":    _sc_url,
+                "price":     _listing.get("price", 0.0),
+                "channel":   "FBM",
+            })
 
-        # ── Clasificar en 7 categorías ───────────────────────────────────────
-        sin_stock        = []
-        reabastecer      = []
+        # Enriquecer con BM en UNA sola llamada para all_items+fbm_items (bm_avail,
+        # bm_reserved, bm_mty, bm_cdmx, bm_tj, _bm_retail_ph) -- FBA y FBM son
+        # listings disjuntos (un SKU no está en ambas listas a la vez), así que
+        # separarlo en 2 llamadas solo duplicaba el timeout/latencia contra BM
+        # sin reducir el trabajo real; BM ya está limitado a 1 sesión a la vez.
+        await _enrich_bm_amz(all_items + fbm_items, timeout_s=8.0)
+
+        # ── Clasificar en 7 categorías de alerta + 1 informativa ─────────────
+        sin_stock         = []
+        reabastecer       = []
         riesgo_sobreventa = []
-        stock_bajo       = []
-        restock_urgente  = []
-        stock_critico    = []
-        estancado        = []
+        stock_bajo        = []
+        restock_urgente   = []
+        stock_critico     = []
+        estancado         = []
+        discrepancia_bm_fba = []
 
         for item in all_items:
             fulfillable  = item["fulfillable"]
@@ -2561,15 +2604,17 @@ async def amazon_products_stock_alerts(request: Request):
                     item["sugeridas"]   = max(0, round(vel_v * 60) - fulfillable - item["inbound"])
                     restock_urgente.append(item)
 
-            # Riesgo Sobreventa: FBA > BM disponible (incluye BM=0 —
-            # antes este caso quedaba invisible: no entraba aquí porque
-            # exigía bm_avail>0, y no entraba en sin_stock/reabastecer
-            # porque esos exigen fulfillable==0. Vendible en Amazon con
-            # BM=0 es el caso más grave de sobreventa, no uno a ignorar.)
-            if fulfillable > 0 and fulfillable > bm_avail:
+            # Discrepancia BM vs FBA (informativa, NO es riesgo): fulfillable es
+            # stock YA físico en Amazon, fuera del control de BM. Que sea mayor
+            # que bm_avail es el resultado NORMAL de haber enviado a FBA (el
+            # stock salió de BM), no un riesgo de sobreventa. Solo audita si BM
+            # decrementó bien al momento del envío. Se filtra a canal FBA/FLX
+            # (channel=="FBA" según _fulfillment_channel_of) — para FBM la
+            # comparación real vive en Riesgo Sobreventa, más abajo.
+            if item.get("channel") == "FBA" and fulfillable > 0 and fulfillable > bm_avail:
                 item["gap_units"] = fulfillable - bm_avail
                 item["bm_zero"] = (bm_avail == 0)
-                riesgo_sobreventa.append(item)
+                discrepancia_bm_fba.append(item)
 
             # Stock Crítico BM: BM > 0 pero < 10
             if 0 < bm_avail < 10:
@@ -2579,6 +2624,17 @@ async def amazon_products_stock_alerts(request: Request):
             if bm_avail > 0 and units_30d == 0 and fulfillable > 0:
                 estancado.append(item)
 
+        # Riesgo Sobreventa real: qty PUBLICADA (FBM) > BM disponible. Único
+        # caso donde la sobreventa es accionable — nosotros controlamos ese
+        # stock (vía set_qty), a diferencia de FBA/FLX que controla Amazon.
+        for item in fbm_items:
+            qty_pub  = item["qty"]
+            bm_avail = int(item.get("bm_avail") or 0)
+            if qty_pub > 0 and qty_pub > bm_avail:
+                item["gap_units"] = qty_pub - bm_avail
+                item["bm_zero"] = (bm_avail == 0)
+                riesgo_sobreventa.append(item)
+
         # Ordenar
         sin_stock.sort(key=lambda x: x["title"])
         reabastecer.sort(key=lambda x: -(x.get("bm_avail") or 0))
@@ -2587,10 +2643,12 @@ async def amazon_products_stock_alerts(request: Request):
         restock_urgente.sort(key=lambda x: x.get("dias_supply", 9999))
         stock_critico.sort(key=lambda x: x.get("bm_avail") or 0)
         estancado.sort(key=lambda x: -(x.get("bm_avail") or 0))
+        discrepancia_bm_fba.sort(key=lambda x: -(x.get("gap_units") or 0))
 
         # Dedup por SKU único — un mismo SKU puede caer en varias categorías
         # (ej. Stock Bajo + Riesgo Sobreventa a la vez) y antes se contaba
-        # doble en "Total Alertas".
+        # doble en "Total Alertas". Discrepancia BM vs FBA es informativa, NO
+        # una alerta accionable, así que no cuenta hacia total_alertas.
         _alert_skus: set = set()
         for _lst in (sin_stock, reabastecer, riesgo_sobreventa, stock_bajo,
                      restock_urgente, stock_critico, estancado):
@@ -2599,23 +2657,25 @@ async def amazon_products_stock_alerts(request: Request):
         total_alertas = len(_alert_skus)
 
         ctx = {
-            "sin_stock":         sin_stock,
-            "reabastecer":       reabastecer,
-            "riesgo_sobreventa": riesgo_sobreventa,
-            "stock_bajo":        stock_bajo,
-            "restock_urgente":   restock_urgente,
-            "stock_critico":     stock_critico,
-            "estancado":         estancado,
-            "total_alertas":     total_alertas,
-            "sin_stock_count":   len(sin_stock),
-            "reabastecer_count": len(reabastecer),
-            "riesgo_count":      len(riesgo_sobreventa),
-            "bajo_count":        len(stock_bajo),
-            "urgente_count":     len(restock_urgente),
-            "critico_count":     len(stock_critico),
-            "estancado_count":   len(estancado),
-            "nickname":          client.nickname,
-            "marketplace":       client.marketplace_name,
+            "sin_stock":           sin_stock,
+            "reabastecer":         reabastecer,
+            "riesgo_sobreventa":   riesgo_sobreventa,
+            "stock_bajo":          stock_bajo,
+            "restock_urgente":     restock_urgente,
+            "stock_critico":       stock_critico,
+            "estancado":           estancado,
+            "discrepancia_bm_fba": discrepancia_bm_fba,
+            "total_alertas":       total_alertas,
+            "sin_stock_count":     len(sin_stock),
+            "reabastecer_count":   len(reabastecer),
+            "riesgo_count":        len(riesgo_sobreventa),
+            "bajo_count":          len(stock_bajo),
+            "urgente_count":       len(restock_urgente),
+            "critico_count":       len(stock_critico),
+            "estancado_count":     len(estancado),
+            "discrepancia_count":  len(discrepancia_bm_fba),
+            "nickname":            client.nickname,
+            "marketplace":         client.marketplace_name,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_stock.html", ctx)
 

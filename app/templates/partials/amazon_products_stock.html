@@ -33,7 +33,7 @@
          class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Riesgo Sobreventa</p>
         <p class="text-2xl font-bold text-red-600">{{ riesgo_count }}</p>
-        <p class="text-[10px] text-gray-400">FBA > BM disponible</p>
+        <p class="text-[10px] text-gray-400">FBM publicado > BM disponible</p>
     </div>
 
     <div onclick="document.getElementById('sec-stock-bajo').scrollIntoView({behavior:'smooth'})"
@@ -158,7 +158,7 @@
             <span class="text-lg">🔴</span>
             <div>
                 <h3 class="text-sm font-bold text-red-800">Riesgo Sobreventa</h3>
-                <p class="text-xs text-red-600">FBA reporta más stock que BM disponible — riesgo de oversell</p>
+                <p class="text-xs text-red-600">FBM: cantidad publicada en Amazon es mayor que el disponible en BM — sobreventa real, accionable hoy</p>
             </div>
         </div>
         <span class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">{{ riesgo_sobreventa|length }} SKUs</span>
@@ -168,7 +168,7 @@
             <thead class="bg-red-50/50">
                 <tr class="text-xs text-red-700 text-left border-b border-red-100">
                     <th class="py-2 px-4 font-medium">Producto / SKU</th>
-                    <th class="py-2 px-3 font-medium text-right">FBA</th>
+                    <th class="py-2 px-3 font-medium text-right">Publicado</th>
                     <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
                     <th class="py-2 px-3 font-medium text-right">Gap</th>
                     <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
@@ -188,7 +188,7 @@
                         </div>
                     </td>
                     <td class="py-3 px-3 text-right">
-                        <span class="text-sm font-bold text-gray-700">{{ item.fulfillable }}</span>
+                        <span class="text-sm font-bold text-gray-700">{{ item.qty }}</span>
                     </td>
                     <td class="py-3 px-3 text-right">
                         <span class="text-sm font-bold text-red-600">{{ item.bm_avail or 0 }}</span>
@@ -563,6 +563,61 @@
 {% endif %}
 
 {% endif %}
+
+<!-- ─── DISCREPANCIA BM vs FBA (informativa — NO es riesgo, no requiere acción) ── -->
+{% if discrepancia_bm_fba %}
+<div id="sec-discrepancia" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-sky-300">
+    <div class="px-4 py-3 bg-sky-50 flex items-center justify-between border-b border-sky-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">ℹ️</span>
+            <div>
+                <h3 class="text-sm font-bold text-sky-800">Discrepancia BM vs FBA <span class="font-normal text-sky-500">(informativa)</span></h3>
+                <p class="text-xs text-sky-600">FBA tiene más stock físico que BM — normal tras enviar a FBA (el stock salió de BM). Solo para auditar el decremento, no es un riesgo ni requiere sincronizar nada.</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-sky-400 text-white text-xs font-bold rounded-full">{{ discrepancia_bm_fba|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-sky-50/50">
+                <tr class="text-xs text-sky-700 text-left border-b border-sky-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">FBA (físico)</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right">Diferencia</th>
+                    <th class="py-2 px-3 font-medium text-center">Ver</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-discrepancia" class="divide-y divide-sky-50">
+                {% for item in discrepancia_bm_fba %}
+                <tr class="hover:bg-sky-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}</td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.bm_avail or 0 }}</td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-bold rounded-full">+{{ item.gap_units or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-sky-300 hover:bg-sky-400 text-white text-xs font-medium rounded-lg transition">
+                            Ver →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-discrepancia" class="border-t border-sky-100 bg-sky-50/30"></div>
+</div>
+{% endif %}
+
 {% endif %}
 
 <script>
@@ -643,5 +698,6 @@ window._amzSyncBmStock = function(btn) {
     amzPaginate('amz-tbody-critico',      'amz-pager-critico');
     amzPaginate('amz-tbody-estancado',    'amz-pager-estancado');
     amzPaginate('amz-tbody-sin-stock',    'amz-pager-sin-stock');
+    amzPaginate('amz-tbody-discrepancia', 'amz-pager-discrepancia');
 })();
 </script>
