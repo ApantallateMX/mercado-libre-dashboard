@@ -20666,14 +20666,27 @@ async def amazon_reimbursements_api(
 ):
     """Reembolsos FBA ya aprobados por Amazon (inventario perdido/dañado en
     almacén, etc — idea tomada de Helium10 Managed Refund Service, aquí se
-    detecta gratis con el reporte que Amazon ya expone). V1: solo muestra lo
-    ya aprobado — no cruza contra Inventory Ledger para detectar pérdidas
-    aún no reembolsadas (pendiente, ver amazon_client.get_reimbursements_report)."""
+    detecta gratis con el reporte que Amazon ya expone).
+
+    v2 (2026-08-08): cruza devoluciones FBA (get_returns_report) contra
+    reembolsos ya aprobados (get_reimbursements_report) por (order_id, sku).
+    Cualquier devolución con >45 días sin un reembolso correspondiente entra
+    a "unclaimed" -- candidata a revisar/reclamar manualmente en Seller
+    Central. Es un heurístico (no toda devolución es responsabilidad de
+    Amazon -- ej. UNWANTED_ITEM nunca genera reembolso legítimo), NO una
+    lista de reclamos garantizados; se muestra como "candidatas a revisar"."""
     sid = seller_id.strip()
     if not sid:
-        return {"error": "No hay cuenta Amazon activa", "rows": [], "summary": {}}
+        return {"error": "No hay cuenta Amazon activa", "rows": [], "summary": {}, "unclaimed": [], "unclaimed_count": 0}
     try:
-        items = await _fetch_amazon_reimbursements_cached(sid, days)
+        # Ventana de reembolsos más ancha que la de devoluciones -- el
+        # reembolso llega DESPUÉS de la devolución, con el mismo días=days
+        # para ambos se generaban falsos "unclaimed" cerca del borde de la
+        # ventana (devolución sí tiene reembolso, pero fuera del rango).
+        items, returns = await asyncio.gather(
+            _fetch_amazon_reimbursements_cached(sid, days + 60),
+            _fetch_amazon_returns_report_cached(sid, days),
+        )
         rows = sorted(items, key=lambda r: r.get("approval_date", ""), reverse=True)
         for r in rows:
             r["reason_label"] = _amz_reason_label(r.get("reason", ""))
@@ -20687,9 +20700,31 @@ async def amazon_reimbursements_api(
             "total_amount": round(total_amount, 2),
             "by_reason": {k: round(v, 2) for k, v in by_reason.items()},
         }
-        return {"days": days, "rows": rows, "summary": summary}
+
+        from datetime import datetime as _dtu, timedelta as _tdu
+        _reimb_keys = {(r.get("order_id", ""), r.get("sku", "")) for r in items}
+        _cutoff = _dtu.utcnow() - _tdu(days=45)
+        unclaimed = []
+        for ret in returns:
+            key = (ret.get("order_id", ""), ret.get("sku", ""))
+            if key in _reimb_keys:
+                continue
+            try:
+                ret_date = _dtu.strptime((ret.get("return_date") or "")[:10], "%Y-%m-%d")
+            except (ValueError, TypeError):
+                continue
+            if ret_date < _cutoff:
+                ret["reason_label"] = _amz_reason_label(ret.get("reason", ""))
+                ret["days_since_return"] = (_dtu.utcnow() - ret_date).days
+                unclaimed.append(ret)
+        unclaimed.sort(key=lambda r: r.get("days_since_return", 0), reverse=True)
+
+        return {
+            "days": days, "rows": rows, "summary": summary,
+            "unclaimed": unclaimed, "unclaimed_count": len(unclaimed),
+        }
     except Exception as e:
-        return {"error": str(e), "rows": [], "summary": {}}
+        return {"error": str(e), "rows": [], "summary": {}, "unclaimed": [], "unclaimed_count": 0}
 
 
 def _amz_thread_key(reply_to_addr: str) -> str:

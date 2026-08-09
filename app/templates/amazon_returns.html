@@ -133,6 +133,18 @@
     </div>
 </div>
 
+<!-- Devoluciones sin reembolso >45 dias -- candidatas a revisar/reclamar manualmente -->
+<div id="amz-ret-unclaimed-wrap" class="bg-white rounded-lg shadow mb-6" style="display:none">
+    <div class="px-6 py-3 flex items-center gap-2 border-b border-gray-100">
+        <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <h2 class="text-sm font-semibold text-gray-700">Devoluciones sin reembolso (&gt;45 días)</h2>
+        <span class="text-[10px] text-gray-400">— heurístico, no toda devolución es responsabilidad de Amazon; candidatas a revisar en Seller Central, no reclamos garantizados</span>
+    </div>
+    <div id="amz-ret-unclaimed" class="p-5"></div>
+</div>
+
 <a href="/amazon?tab=salud" class="flex items-center gap-1 text-xs text-teal-600 hover:text-teal-800 font-medium transition mb-6">
     ✉️ Mensajes de Compradores se movió a la pestaña Salud →
 </a>
@@ -388,8 +400,34 @@ function loadReimbursements() {
     var el = document.getElementById('amz-ret-reimbursements');
     fetch('/api/amazon/returns/reimbursements?' + _params())
         .then(function(r) { return r.json(); })
-        .then(function(data) { _renderReimbursements(data); })
+        .then(function(data) { _renderReimbursements(data); _renderUnclaimed(data); })
         .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
+}
+
+function _renderUnclaimed(data) {
+    var wrap = document.getElementById('amz-ret-unclaimed-wrap');
+    var el = document.getElementById('amz-ret-unclaimed');
+    var rows = data.unclaimed || [];
+    if (!rows.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    var summary = '<div class="mb-3 text-xs">' +
+        '<span class="font-bold text-amber-700 bg-amber-50 px-3 py-1 rounded-full">' + rows.length + ' devolucion(es) sin reembolso correspondiente</span></div>';
+    var table = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="text-left text-gray-500 border-b">' +
+        '<th class="py-2 pr-3">Devuelto</th><th class="py-2 pr-3">Días</th><th class="py-2 pr-3">Orden</th>' +
+        '<th class="py-2 pr-3">SKU / Producto</th><th class="py-2 pr-3">Razón</th><th class="py-2 pr-3 text-right">Cant.</th>' +
+        '</tr></thead><tbody>' + rows.map(function(r) {
+        return '<tr class="border-b border-gray-100 hover:bg-amber-50/40 align-top">' +
+            '<td class="py-2 pr-3 whitespace-nowrap text-gray-500">' + _escHtml(r.return_date) + '</td>' +
+            '<td class="py-2 pr-3 whitespace-nowrap font-semibold text-amber-600">' + r.days_since_return + 'd</td>' +
+            '<td class="py-2 pr-3 font-mono whitespace-nowrap">' + _escHtml(r.order_id) + '</td>' +
+            '<td class="py-2 pr-3"><span class="font-mono font-semibold">' + _escHtml(r.sku) + '</span><br>' +
+                '<span class="text-gray-400 truncate block max-w-[220px]">' + _escHtml(r.product_name) + '</span></td>' +
+            '<td class="py-2 pr-3 whitespace-nowrap">' + _escHtml(r.reason_label || r.reason) + '</td>' +
+            '<td class="py-2 pr-3 text-right">' + (r.quantity || 1) + '</td>' +
+            '</tr>';
+    }).join('') + '</tbody></table></div>';
+    el.innerHTML = summary + table;
 }
 
 function _renderReimbursements(data) {
