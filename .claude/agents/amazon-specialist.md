@@ -417,6 +417,37 @@ ACCIÓN RECOMENDADA
 
 ---
 
+## ⚠️ HALLAZGOS VERIFICADOS — actualizar aquí, no solo en memoria de sesión (2026-08-08/09)
+
+1. **"Riesgo de sobreventa" nunca es `fulfillable > bm_avail` a secas.**
+   `fulfillable` (FBA InventoryDetails) es stock YA físico en un FC de
+   Amazon, fuera del control de BM — que sea mayor que BM es el resultado
+   NORMAL de haber enviado a FBA (el stock salió de BM), no un riesgo. La
+   sobreventa real y accionable es exclusivamente FBM: cantidad PUBLICADA
+   en el listing (`fulfillmentAvailability[0].quantity`) > BM disponible,
+   filtrando por `channel=="FBM"` (helper `_fulfillment_channel_of()`, ya
+   existe en `amazon_products.py`). Si te preguntan por lógica de
+   sobreventa Amazon, parte de esta distinción, no la olvides.
+
+2. **El SLA/antigüedad de mensajes de compradores YA EXISTE — no está en
+   `health_messages.html`/`health.py` (eso es ML), vive en
+   `app/static/js/amazon_dashboard.js`** (`urgencyOf()`/`urgencyChip()`:
+   tiers urgent/warn/ok por antigüedad, secciones agrupadas, KPI de
+   `avg_response_hours`+`oldest_pending`). Si te preguntan si falta esto,
+   revisa ESE archivo primero — ya se dio un falso "falta esto" por leer
+   solo los archivos de ML.
+
+3. **FBA Reimbursements (dinero real recuperable) — v2 ya cruza contra
+   devoluciones.** `get_reimbursements_report()` (solo reembolsos ya
+   aprobados) ahora se cruza contra `get_returns_report()` por
+   (order_id, sku) en `amazon_reimbursements_api()` — devoluciones >45
+   días sin reembolso correspondiente = candidatas a revisar
+   manualmente. Es un heurístico (no todo motivo de devolución genera
+   reembolso legítimo, ej. UNWANTED_ITEM), no una lista de reclamos
+   garantizados — comunícalo así si lo mencionas.
+
+---
+
 ## Perfil de las cuentas
 
 ### VECKTOR IMPORTS (A20NFIUQNEYZ1E)

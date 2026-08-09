@@ -1551,6 +1551,45 @@ Impacto operativo: si el SKU no se lee correctamente, el item queda sin mapeo en
 
 ---
 
+### Límite real de mensajería post-venta: 350 caracteres, no 500
+
+**Descubierto:** 2026-08-09
+
+El límite documentado de ML para mensajes de post-venta es **350 caracteres**
+(ya validado server-side en `meli_client.py` al enviar). Si generas o
+sugieres texto de respuesta para un comprador, apunta a ~300 caracteres
+como máximo con margen de seguridad — no asumas 500 ni ningún otro número.
+Si el mensaje se envía más largo, ML lo rechaza.
+
+### El reparto de stock escaso entre cuentas ML debe pesar reputación, no solo ingreso proyectado
+
+**Descubierto:** 2026-08-08
+
+El algoritmo de "quién se queda con el stock cuando escasea" (ver
+`stock_sync_multi._score()`) originalmente solo pesaba
+`precio_neto × velocidad_30d` — pura proyección de ingreso. Si una cuenta
+tiene reputación deteriorada (nivel amarillo/naranja/rojo en
+`seller_reputation.level_id`), seguir empujándole stock escaso solo porque
+vendía bien ANTES de la caída de reputación es un error de negocio real
+(agrava la exposición de la cuenta más frágil justo cuando debería
+reducirse). Ya está corregido en código (`rep_factor` multiplicador), pero
+si recomiendas o auditas lógica de distribución de stock entre cuentas,
+la reputación de cada cuenta SIEMPRE debe ser un factor, no solo velocidad
+de venta histórica.
+
+### Listing Quality Score sin precio vs competencia es una métrica engañosa
+
+**Descubierto:** 2026-08-08
+
+Un score de calidad de listing (fotos/título/descripción/envío/etc, sin
+precio) puede marcar "listo para escalar con Ads" un listing que está 25%
+caro vs el top-3 de su categoría — el vendedor quema presupuesto en clics
+que no convierten por precio, no por calidad de la ficha. Si evalúas o
+recomiendas sobre quality score, el precio vs competencia siempre debe
+ser parte del criterio, no una métrica separada e independiente.
+
+---
+
 ## 13. FRAMEWORK DE DECISIÓN
 
 Antes de cualquier recomendación:
