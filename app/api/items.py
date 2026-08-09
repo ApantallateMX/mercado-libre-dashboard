@@ -463,18 +463,53 @@ async def update_price(item_id: str, data: PriceUpdate, request: Request):
 
 @router.put("/{item_id}/stock")
 async def update_stock(item_id: str, data: StockUpdate, request: Request):
-    """Actualiza el stock de un item."""
+    """Actualiza el stock de un item.
+
+    FIX 2026-08-08 (barrido final de fuentes duplicadas): esta ruta y
+    `main.py:update_item_stock_api` (mismo path `PUT /api/items/{id}/stock`)
+    eran DOS registros para el mismo endpoint -- FastAPI hace first-match-wins
+    por orden de registro, y como este router se incluye ANTES que el
+    decorador directo de main.py, ESTA versión siempre ganaba. La de
+    main.py (nunca ejecutada, código muerto) tenía protección BM-caído,
+    evicción quirúrgica del item de _stock_issues_cache (para que
+    desaparezca de las alertas de inmediato, no hasta el próximo prewarm
+    de ~15min), auto-reactivación si estaba pausado por sin-stock, y
+    limpieza de sync_alert -- nada de eso corría nunca. Se porta aquí y
+    se elimina el duplicado en main.py."""
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
 
+    # Protección BM caído: bloquear qty=0 cuando BM está confirmado down.
+    # Evita que un trabajador ponga listings en 0 basándose en alertas
+    # falsas generadas por datos stale de BM. qty>0 siempre se permite.
+    if data.quantity == 0 and _main_module._bm_is_confirmed_down():
+        await client.close()
+        raise HTTPException(
+            status_code=503,
+            detail="BinManager está caído. No se puede poner en 0 hasta que BM responda — las alertas pueden ser incorrectas.",
+        )
+
     try:
         result = await client.update_item_stock(item_id, data.quantity)
-        _invalidate_user_products_cache(str(client.user_id))
+        uid = str(client.user_id)
+        _invalidate_user_products_cache(uid)
         await _audit(request, "ml_stock_update", item_id, {"qty": data.quantity})
         asyncio.create_task(_token_store.save_item_change(
-            item_id, str(client.user_id), "stock", str(data.quantity), changed_by=_get_changed_by(request)
+            item_id, uid, "stock", str(data.quantity), changed_by=_get_changed_by(request)
         ))
+        asyncio.create_task(_token_store.update_ml_listing_qty(item_id, data.quantity))
+        asyncio.create_task(_main_module._safe_bg(
+            _token_store.save_item_sync(item_id, uid, data.quantity), "save_item_sync/update_stock"
+        ))
+        # Si el listing quedó pausado por out_of_stock, reactivarlo.
+        asyncio.create_task(_main_module._reactivate_if_oos_bg(item_id, uid))
+        # Evicción inmediata de _stock_issues_cache -- sin esto, el item
+        # seguía apareciendo en Reabastecer/Riesgo/Activar hasta el
+        # próximo prewarm (~15min) aunque el stock ya estuviera corregido.
+        _main_module._evict_item_from_alerts(uid, item_id)
+        if data.quantity == 0:
+            asyncio.create_task(_token_store.delete_sync_alert(uid, item_id))
         # me1_warning: MeLi acepto el PUT pero puede revertir — devolver 200 con flag warning
         if isinstance(result, dict) and result.get("_me1_warning"):
             from fastapi.responses import JSONResponse
@@ -498,6 +533,13 @@ async def update_stock(item_id: str, data: StockUpdate, request: Request):
         else:
             detail = str(body)
         raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
+    except ValueError as e:
+        # Item tiene variaciones y no se pudo resolver automáticamente --
+        # rechazar con flag explícito (el frontend ya evita este caso
+        # pre-chequeando has_variations, pero por robustez ante datos
+        # stale se preserva el flag en la respuesta).
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content={"ok": False, "has_variations": True, "detail": str(e)})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:

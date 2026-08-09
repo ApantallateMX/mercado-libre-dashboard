@@ -348,7 +348,14 @@ async def get_day_breakdown(date: str = Query(..., description="YYYY-MM-DD")):
 @router.get("/low-stock-alerts")
 async def get_low_stock_alerts(threshold: int = Query(5, description="Umbral de stock bajo")):
     """Top 10 SKUs más vendidos (últimos 30 días) con stock BM bajo."""
-    from app.api.productos import _bm_stock
+    # FIX 2026-08-08: _bm_stock ya no existe -- se renombró a
+    # _bm_stock_from_cache el mismo día (commit 638fb7a) al limpiar la
+    # llamada en vivo a BM de productos.py. Este import roto hacía que
+    # CUALQUIER request a este endpoint (widget "Alertas de Stock" del
+    # Dashboard) tronara con ImportError -- no era un dato viejo, era un
+    # 500 activo. _bm_stock_from_cache() es síncrona (lee _bm_stock_cache
+    # en memoria, sin llamadas HTTP), no async -- sin await abajo.
+    from app.api.productos import _bm_stock_from_cache
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -378,7 +385,7 @@ async def get_low_stock_alerts(threshold: int = Query(5, description="Umbral de 
         top_skus = sorted(sku_sales.items(), key=lambda x: x[1]["units"], reverse=True)[:10]
         results = []
         for sku, data in top_skus:
-            stock = await _bm_stock(sku)
+            stock = _bm_stock_from_cache(sku)
             avail = stock.get("avail", 0)
             velocity = data["units"] / 30
             days_rem = round(avail / velocity) if velocity > 0 else None

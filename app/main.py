@@ -12459,46 +12459,15 @@ async def suppress_activate_item(item_id: str, request: Request):
         await client.close()
 
 
-@app.put("/api/items/{item_id}/stock")
-async def update_item_stock_api(item_id: str, request: Request):
-    """Actualiza el stock de un item SIN variaciones.
-    Para items con variaciones, usa /api/items/{item_id}/sync-variation-stocks."""
-    client = await get_meli_client()
-    if not client:
-        return JSONResponse({"detail": "No autenticado"}, status_code=401)
-    try:
-        body = await request.json()
-        quantity = int(body.get("quantity", 0))
-        # Protección BM caído: bloquear qty=0 cuando BM está confirmado down.
-        # Evita que un trabajador ponga listings en 0 basándose en alertas falsas
-        # generadas por datos stale de BM. qty>0 siempre se permite (no hay riesgo).
-        if quantity == 0 and _bm_is_confirmed_down():
-            return JSONResponse({
-                "ok": False,
-                "bm_down": True,
-                "detail": "BinManager está caído. No se puede poner en 0 hasta que BM responda — las alertas pueden ser incorrectas.",
-            }, status_code=503)
-        result = await client.update_item_stock(item_id, quantity)
-        # Invalidar cache en memoria y actualizar DB para reflejar nuevo stock
-        uid = str(client.user_id)
-        for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
-            del _products_cache[k]
-        from app.services.token_store import update_ml_listing_qty as _update_qty
-        asyncio.create_task(_update_qty(item_id, quantity))
-        asyncio.create_task(_safe_bg(token_store.save_item_sync(item_id, uid, quantity), "save_item_sync/update_stock"))
-        # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
-        asyncio.create_task(_reactivate_if_oos_bg(item_id, uid))
-        _evict_item_from_alerts(uid, item_id)
-        if quantity == 0:
-            asyncio.create_task(token_store.delete_sync_alert(uid, item_id))
-        return {"ok": True, "quantity": quantity}
-    except ValueError as e:
-        # Item tiene variaciones — rechazar con mensaje claro
-        return JSONResponse({"ok": False, "has_variations": True, "detail": str(e)}, status_code=409)
-    except Exception as e:
-        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
-    finally:
-        await client.close()
+# FIX 2026-08-08 (barrido final de fuentes duplicadas): esta ruta
+# (`PUT /api/items/{item_id}/stock`) colisionaba con
+# `app/api/items.py::update_stock` -- el router de items.py se incluye
+# ANTES (main.py, app.include_router) que este decorador se registra, y
+# FastAPI hace first-match-wins por orden de registro, así que ESTA
+# versión nunca corría (código muerto desde que items.py adoptó el mismo
+# path). Su lógica (protección BM-caído, evicción inmediata de
+# _stock_issues_cache, auto-reactivación, delete_sync_alert) se portó a
+# app/api/items.py::update_stock -- ver ese archivo para la versión viva.
 
 
 @app.post("/api/items/{item_id}/sync-variation-stocks")
