@@ -913,6 +913,24 @@ async def ai_status():
     return {"available": _or_client.is_available()}
 
 
+def _title_case_ml(text: str) -> str:
+    """Red de seguridad server-side: garantiza Title Case aunque la IA no
+    siga bien la instruccion (visto en produccion: titulos generados todo
+    en minusculas). Preserva palabras ya en mayusculas (acronimos/modelos
+    tipo QLED, HDR, 4K, WiFi-como-viene) en vez de forzar Xxx en todas."""
+    words = text.split(" ")
+    result = []
+    for w in words:
+        if not w:
+            continue
+        # Ya tiene mayusculas mezcladas (acronimo, o modelo tipo "iPhone") -- no tocar
+        if any(c.isupper() for c in w[1:]) or (len(w) <= 4 and w.isupper()):
+            result.append(w)
+        else:
+            result.append(w[:1].upper() + w[1:].lower())
+    return " ".join(result)
+
+
 @router.post("/ai-improve")
 async def ai_improve(body: dict):
     """
@@ -940,6 +958,14 @@ async def ai_improve(body: dict):
     )
 
     if field == "title":
+        # FIX 2026-08-10: Jovan reporto (con screenshot) titulos generados todo
+        # en minusculas ("home depot decoracion navideña grinch...") y con
+        # unidades truncadas a media palabra ("36 pulga"). Causa raiz: la
+        # regla "SIN mayusculas innecesarias" quedaba ambigua justo al lado
+        # de un ejemplo en Mayuscula Inicial -- el modelo interpreto "sin
+        # mayusculas" literal (todo minusculas) en vez de "sin ALT/GRITOS".
+        # Se separa explicitamente capitalizacion de "no usar mayusculas
+        # como grito" y se prohibe truncar palabras/unidades a medias.
         prompt = f"""Genera exactamente 3 titulos SEO para Mercado Libre Mexico.
 
 PRODUCTO:
@@ -952,16 +978,25 @@ REGLAS CRITICAS (MeLi 2026):
 1. TITULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible.
    Formato: Marca + Tipo de producto + Tecnologia/Caracteristica clave + Tamaño/Capacidad.
    - SIN numero de modelo (va en ficha tecnica)
-   - SIN signos de puntuacion ni mayusculas innecesarias
+   - SIN signos de puntuacion (ni comas, ni guiones, ni parentesis)
+   - Capitalizacion: Mayuscula Inicial En Cada Palabra Significativa (Title
+     Case), igual que el ejemplo de abajo -- NUNCA todo en minusculas, NUNCA
+     TODO EN MAYUSCULAS (eso es "mayusculas innecesarias": usarlas como
+     grito, no la capitalizacion normal de cada palabra)
+   - NUNCA truncar una palabra o unidad a la mitad para ajustar el largo
+     (ej. "Pulga" en vez de "Pulgadas" esta PROHIBIDO) -- si no cabe con la
+     palabra completa, quita otra palabra menos esencial, nunca cortes una
+     palabra
    - SIN palabras como "nuevo", "oferta", "envio gratis"
    - Ejemplo correcto (57 chars): "Samsung Televisor QLED 4K Smart HDR 65 Pulgadas Google TV"
-   - Si queda corto, agrega: Smart, WiFi, Negro, 127V, para Casa, etc.
+   - Si queda corto, agrega: Smart, WiFi, Negro, 127V, Para Casa, etc.
 
-Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
+Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas, cada
+uno ya con la capitalizacion correcta (Title Case) aplicada."""
 
         try:
             raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model())
-            titles = [t.strip() for t in raw.strip().split("\n") if t.strip()]
+            titles = [_title_case_ml(t.strip()) for t in raw.strip().split("\n") if t.strip()]
             return {"titles": titles}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
