@@ -9,6 +9,7 @@ import os
 from typing import Optional
 
 import asyncio
+import json
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -406,6 +407,89 @@ class BinManagerClient:
         """
         result = await self._query_bm_stock(sku, conditions=conditions)
         return result[0] if result is not None else 0
+
+    async def get_existence_anywhere(self, sku: str) -> dict | None:
+        """Busca un SKU en CUALQUIER almacén/ubicación/condición — SIN restringir a
+        las reglas de "vendible" (47,62,68 + GR). Solo para paneles INFORMATIVOS
+        (ej. el modal de edición de ML mostrando "¿existe este producto en BM?") —
+        NUNCA usar este resultado para decidir cuánto publicar en ML ni ninguna
+        decisión de venta; esa lógica sigue usando get_stock_with_reserve() con
+        LOCATIONID fijo.
+
+        Usa GlobalStock_InventoryBySKU_Condition sin WAREHOUSEID/LOCATIONID/CONDITION
+        (null = sin filtro) — verificado en vivo 2026-08-10 contra SNMC000525 (40
+        uds reales en LocationID 42/Tijuana, encontradas sin especificar esa
+        ubicación).
+
+        Límite real confirmado (no se puede evitar con ninguna herramienta de BM
+        hoy): un SKU con catálogo real pero 0 stock/movimiento en TODOS los
+        almacenes devuelve la MISMA respuesta vacía que un SKU que nunca existió
+        — BM no valida contra el maestro de catálogo en este endpoint, solo hace
+        eco del SKU buscado. found_anywhere=False NO significa "no existe",
+        significa "sin stock registrado en ningún almacén ahora mismo".
+
+        Retorna None si falla la consulta (timeout/red — dato desconocido).
+        """
+        if not self._logged_in:
+            if not await self.login():
+                return None
+        url = f"{_BM_BASE}/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+        payload = {
+            "COMPANYID": 1, "SKU": sku,
+            "WAREHOUSEID": None, "LOCATIONID": None, "BINID": None,
+            "CONDITION": None, "FORINVENTORY": None, "SUPPLIERS": None,
+        }
+        try:
+            r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=20)
+            if self._session_expired(r):
+                self._logged_in = False
+                if not await self.login():
+                    return None
+                r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=20)
+                if self._session_expired(r):
+                    return None
+            if r.status_code != 200:
+                return None
+            data = r.json()
+        except Exception as e:
+            logger.warning(f"BinManager get_existence_anywhere error {sku}: {e}")
+            return None
+
+        row = data[0] if isinstance(data, list) and data else (data if isinstance(data, dict) else None)
+        if not row:
+            return {"sku": sku, "found_anywhere": False}
+
+        conditions_raw = row.get("Conditions_JSON")
+        if not conditions_raw:
+            return {"sku": sku, "found_anywhere": False}
+
+        try:
+            conditions = json.loads(conditions_raw) if isinstance(conditions_raw, str) else conditions_raw
+        except Exception:
+            return {"sku": sku, "found_anywhere": False}
+        if not conditions:
+            return {"sku": sku, "found_anywhere": False}
+
+        total = sum(int(c.get("TotalQty") or 0) for c in conditions)
+        by_condition = [
+            {"condition": c.get("Condition"), "qty": int(c.get("TotalQty") or 0)}
+            for c in conditions
+        ]
+        # SKUCondition_JSON (desglose por ubicación/serial) puede ser enorme en
+        # SKUs con muchas unidades (ej. TVs) — capar a las primeras 30 filas,
+        # nunca parsear todo a ciegas.
+        locations = []
+        for c in conditions:
+            for unit in (c.get("SKUCondition_JSON") or [])[:30]:
+                locations.append({
+                    "warehouse": unit.get("WarehouseName"),
+                    "location": unit.get("LocationName"),
+                    "qty": unit.get("TotalQty"),
+                })
+        return {
+            "sku": sku, "found_anywhere": total > 0,
+            "total_qty": total, "by_condition": by_condition, "locations": locations,
+        }
 
     async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68") -> tuple[int, int] | None:
         """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1.
