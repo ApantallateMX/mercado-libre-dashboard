@@ -9,7 +9,7 @@ import json
 import re
 import statistics
 from dataclasses import dataclass, field
-from urllib.parse import unquote, urlparse, parse_qs
+from urllib.parse import unquote, urlparse, parse_qs, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -236,6 +236,100 @@ async def scrape_product_page(url: str) -> dict:
     except Exception:
         pass
     return data
+
+
+# Patrones tipicos de assets que NO son fotos de producto (logos, iconos, pixeles de
+# tracking, sprites de UI) -- filtrar antes de mostrarle candidatos al usuario.
+_IMG_SKIP_PATTERNS = (
+    "logo", "icon", "sprite", "favicon", "pixel.gif", "pixel.png",
+    "spinner", "loading", "placeholder", "avatar", "badge", "1x1",
+)
+
+
+async def extract_page_images(url: str, max_images: int = 24) -> list[str]:
+    """Extrae URLs de imagenes candidatas de una pagina externa (2026-08-10,
+    pedido por Jovan: "pasarte el link donde estan las imagenes y tu las
+    tomes"). Reusa el mismo patron de fetch que scrape_product_page() --
+    JSON-LD primero (imagenes de producto estructuradas, mas confiables),
+    despues TODOS los <img> de la pagina como fallback/complemento (para
+    galerias que JSON-LD no captura completas), filtrando iconos/logos y
+    resolviendo URLs relativas a absolutas. Sin API de pago -- solo lectura
+    de la pagina que el propio usuario indica."""
+    found: list[str] = []
+    seen: set = set()
+
+    def _add(u: str):
+        if not u:
+            return
+        u = u.strip()
+        if not u or u in seen:
+            return
+        low = u.lower()
+        if any(p in low for p in _IMG_SKIP_PATTERNS):
+            return
+        if not low.startswith(("http://", "https://")):
+            return
+        seen.add(u)
+        found.append(u)
+
+    try:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": RESEARCH_USER_AGENT},
+            follow_redirects=True,
+            timeout=RESEARCH_TIMEOUT,
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return []
+            ctype = resp.headers.get("content-type", "")
+            if "html" not in ctype and "text" not in ctype:
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # 1) JSON-LD Product images (mas confiables — ya vienen curadas)
+            for script in soup.select('script[type="application/ld+json"]'):
+                try:
+                    ld = json.loads(script.string or "")
+                    items = ld if isinstance(ld, list) else [ld]
+                    for it in items:
+                        if it.get("@type") != "Product":
+                            continue
+                        img = it.get("image")
+                        imgs = img if isinstance(img, list) else ([img] if isinstance(img, str) else [])
+                        for i in imgs:
+                            _add(urljoin(url, i))
+                except Exception:
+                    continue
+
+            # 2) Open Graph / Twitter card
+            for sel in ('meta[property="og:image"]', 'meta[name="twitter:image"]'):
+                for tag in soup.select(sel):
+                    c = tag.get("content")
+                    if c:
+                        _add(urljoin(url, c))
+
+            # 3) Todos los <img> de la pagina — fallback/complemento para galerias
+            for img_tag in soup.find_all("img"):
+                src = img_tag.get("src") or img_tag.get("data-src") or img_tag.get("data-lazy-src")
+                if not src:
+                    continue
+                # Descartar imagenes obviamente chicas (iconos de UI) si el tag declara tamano
+                try:
+                    w = int(img_tag.get("width") or 0)
+                    h = int(img_tag.get("height") or 0)
+                    if 0 < w < 100 or 0 < h < 100:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+                _add(urljoin(url, src))
+                if len(found) >= max_images:
+                    break
+
+    except Exception:
+        return found
+
+    return found[:max_images]
 
 
 # ---------------------------------------------------------------------------

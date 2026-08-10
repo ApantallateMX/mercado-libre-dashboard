@@ -308,6 +308,24 @@
             <input type="text" id="edit-new-photo" placeholder="https://..." class="flex-1 border rounded px-3 py-2 text-sm">
             <button onclick="addPhotoToList()" class="bg-gray-200 text-gray-700 font-semibold px-3 py-2 rounded hover:bg-gray-300 text-sm">+</button>
         </div>
+
+        <!-- FIX 2026-08-10: Jovan pidio poder pasar el link de una pagina que
+             YA tiene fotos reales del producto (fabricante, Home Depot, etc.)
+             en vez de buscar/subir una por una -- sin API de pago, solo
+             leemos la pagina que el mismo indica y le mostramos candidatas. -->
+        <div class="mt-3 bg-purple-50 border border-purple-200 rounded-lg p-3">
+            <p class="text-xs font-semibold text-purple-700 mb-1">✦ Buscar fotos en una página externa</p>
+            <p class="text-xs text-gray-500 mb-2">Pega el link de la página del fabricante/tienda con fotos reales de este producto.</p>
+            <div class="flex gap-2">
+                <input type="text" id="edit-scrape-url" placeholder="https://www.homedepot.com/p/..."
+                       class="flex-1 border rounded px-3 py-2 text-sm">
+                <button id="btn-scrape-images" onclick="scrapeImagesFromUrl()"
+                        class="bg-purple-600 text-white font-semibold px-3 py-2 rounded hover:bg-purple-700 text-sm whitespace-nowrap">Buscar fotos</button>
+            </div>
+            <p id="scrape-images-msg" class="text-xs mt-1"></p>
+            <div id="scrape-images-grid" class="flex flex-wrap gap-2 mt-2"></div>
+        </div>
+
         <div class="flex items-center gap-2 mt-2">
             <button id="btn-save-photos" onclick="savePhotos('{{ item.id }}')"
                     class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar Fotos</button>
@@ -475,6 +493,52 @@ window.addPhotoToList = function() {
     document.getElementById('edit-new-photo').value = '';
     refreshPhotosGrid();
     updateChangeCounter();
+};
+
+window.scrapeImagesFromUrl = function() {
+    var urlInput = document.getElementById('edit-scrape-url');
+    var url = urlInput.value.trim();
+    var btn = document.getElementById('btn-scrape-images');
+    var msg = document.getElementById('scrape-images-msg');
+    var grid = document.getElementById('scrape-images-grid');
+    if (!url) return;
+    btn.disabled = true; btn.textContent = 'Buscando...';
+    msg.textContent = ''; grid.innerHTML = '';
+    fetch('/api/items/extract-images', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: url})
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+    .then(function(res) {
+        btn.disabled = false; btn.textContent = 'Buscar fotos';
+        if (!res.ok) { msg.textContent = 'Error: ' + (res.d.detail || 'no se pudo leer la página'); msg.className = 'text-xs mt-1 text-red-500'; return; }
+        var images = res.d.images || [];
+        if (!images.length) { msg.textContent = res.d.message || 'No se encontraron imágenes en esa página'; msg.className = 'text-xs mt-1 text-gray-400'; return; }
+        msg.textContent = images.length + ' imagen(es) encontrada(s) — clic para agregar:';
+        msg.className = 'text-xs mt-1 text-purple-600';
+        grid.innerHTML = images.map(function(imgUrl, idx) {
+            return '<img src="' + imgUrl + '" onclick="addScrapedPhoto(this)" data-img-url="' + imgUrl.replace(/"/g, '&quot;') + '" ' +
+                'class="w-16 h-16 rounded object-cover border-2 border-purple-200 cursor-pointer hover:border-purple-500 transition" ' +
+                'title="Clic para agregar esta foto" loading="lazy" onerror="this.style.display=\'none\'">';
+        }).join('');
+    })
+    .catch(function() {
+        btn.disabled = false; btn.textContent = 'Buscar fotos';
+        msg.textContent = 'Error de red al leer la página'; msg.className = 'text-xs mt-1 text-red-500';
+    });
+};
+
+window.addScrapedPhoto = function(imgEl) {
+    var url = imgEl.getAttribute('data-img-url');
+    if (!url) return;
+    _currentPhotos.push({source: url});
+    _photosModified = true;
+    refreshPhotosGrid();
+    updateChangeCounter();
+    imgEl.classList.add('opacity-30');
+    imgEl.onclick = null;
+    imgEl.title = 'Ya agregada';
 };
 
 function refreshPhotosGrid() {

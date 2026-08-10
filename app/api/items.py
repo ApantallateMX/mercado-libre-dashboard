@@ -474,6 +474,31 @@ async def get_inventory(web_sku: str):
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")
 
 
+class ExtractImagesBody(BaseModel):
+    url: str
+
+
+@router.post("/extract-images")
+async def extract_images(body: ExtractImagesBody):
+    """Extrae URLs de fotos candidatas de una pagina externa que el usuario
+    indica (2026-08-10, pedido por Jovan: en vez de pagar una API de busqueda
+    de imagenes, el pega el link de una pagina que YA tiene las fotos reales
+    del producto -- fabricante, Home Depot, Amazon, etc -- y las tomamos de
+    ahi). Solo lectura de la pagina externa, nada se sube a ML hasta que el
+    usuario elija cuales fotos agregar desde el modal."""
+    url = (body.url or "").strip()
+    if not url or not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL invalida — debe empezar con http:// o https://")
+    from app.services.product_researcher import extract_page_images
+    try:
+        images = await extract_page_images(url)
+        if not images:
+            return {"images": [], "message": "No se encontraron imagenes en esa pagina"}
+        return {"images": images}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Error leyendo la pagina: {str(e)}")
+
+
 @router.delete("/{item_id}")
 async def close_item(item_id: str, request: Request):
     """Cierra (finaliza) una publicacion de MeLi poniendo status=closed.
