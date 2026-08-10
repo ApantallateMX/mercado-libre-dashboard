@@ -92,7 +92,12 @@ window.loadListings = function() {
                 row += '<td class="py-3 px-3 text-right text-xs text-gray-600">' + (item.price ? '$' + Number(item.price).toLocaleString('es-MX') : '—') + '</td>';
                 row += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
                 row += '<td class="py-3 px-3 text-center">' +
-                    (item.item_id ? '<a href="https://www.mercadolibre.com.mx/p/' + item.item_id + '" target="_blank" class="text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">Ver en ML</a>' : '—') +
+                    (item.item_id ?
+                        '<div class="flex items-center justify-center gap-1.5">' +
+                        '<button onclick="openEditModal(\'' + item.item_id + '\')" class="text-xs bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 rounded px-2 py-0.5 font-semibold transition whitespace-nowrap">Arreglar</button>' +
+                        '<a href="https://www.mercadolibre.com.mx/p/' + item.item_id + '" target="_blank" class="text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">Ver en ML</a>' +
+                        '</div>'
+                    : '—') +
                     '</td>';
                 row += '</tr>';
                 return row;
@@ -113,7 +118,12 @@ window.loadListings = function() {
                         '<span>Precio ' + (item.price ? '<b class="text-gray-700">$' + Number(item.price).toLocaleString('es-MX') + '</b>' : '—') + '</span>' +
                     '</div>' +
                     '<div class="mt-1.5">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</div>' +
-                    (item.item_id ? '<a href="https://www.mercadolibre.com.mx/p/' + item.item_id + '" target="_blank" class="mt-2 inline-block text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-1 font-medium transition">Ver en ML</a>' : '') +
+                    (item.item_id ?
+                        '<div class="mt-2 flex items-center gap-1.5">' +
+                        '<button onclick="openEditModal(\'' + item.item_id + '\')" class="inline-block text-xs bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 rounded px-2 py-1 font-semibold transition">Arreglar</button>' +
+                        '<a href="https://www.mercadolibre.com.mx/p/' + item.item_id + '" target="_blank" class="inline-block text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-1 font-medium transition">Ver en ML</a>' +
+                        '</div>'
+                    : '') +
                 '</div>';
             });
 
