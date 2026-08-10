@@ -17821,6 +17821,19 @@ async def diag_buyer_messages_inspect(token: str = "", seller_id: str = "", samp
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/diag/trigger-prewarm")
+async def diag_trigger_prewarm(token: str = ""):
+    """Dispara _prewarm_caches() manualmente sin esperar a que un admin visite
+    Stock/Dashboard/Items — útil para verificar un fix justo después de un
+    deploy sin depender de tráfico orgánico."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if _prewarm_running:
+        return JSONResponse({"ok": True, "message": "Ya hay un prewarm corriendo — se encoló otro."})
+    asyncio.create_task(_prewarm_caches())
+    return JSONResponse({"ok": True, "message": "Prewarm disparado en background"})
+
+
 @app.get("/api/diag/trigger-feedback-sync")
 async def diag_trigger_feedback_sync(token: str = ""):
     """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al
