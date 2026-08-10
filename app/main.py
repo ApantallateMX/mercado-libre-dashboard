@@ -17823,6 +17823,10 @@ async def diag_prewarm_state(token: str = ""):
         "bm_stock_cache_total": len(_bm_stock_cache),
         "bulk_gr_age_s": round(now - _bm_bulk_gr_cache[0]) if _bm_bulk_gr_cache else None,
         "bulk_all_age_s": round(now - _bm_bulk_all_cache[0]) if _bm_bulk_all_cache else None,
+        "bulk_loctj_age_s": round(now - _bm_bulk_loctj_cache[0]) if _bm_bulk_loctj_cache else None,
+        "bulk_loctj_rows": len(_bm_bulk_loctj_cache[1]) if _bm_bulk_loctj_cache else 0,
+        "bulk_loc47_age_s": round(now - _bm_bulk_loc47_cache[0]) if _bm_bulk_loc47_cache else None,
+        "bulk_loc68_age_s": round(now - _bm_bulk_loc68_cache[0]) if _bm_bulk_loc68_cache else None,
     })
 
 
