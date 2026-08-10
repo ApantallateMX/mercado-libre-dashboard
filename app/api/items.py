@@ -132,19 +132,43 @@ async def _bm_warehouse_qty(sku: str) -> dict | None:
     if not base:
         return None
     entry = _cache.get(base.upper())
-    if not entry:
-        return None
-    _, data = entry
-    mty   = data.get("mty", 0)
-    cdmx  = data.get("cdmx", 0)
-    tj    = data.get("tj", 0)
-    avail = data.get("avail_total", 0)
-    if mty + cdmx + tj > 0 or avail > 0:
-        return {
-            "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
-            "AvailTotal": avail,
-            "WebSKU": sku, "ProductSKU": base,
-        }
+    if entry:
+        _, data = entry
+        mty   = data.get("mty", 0)
+        cdmx  = data.get("cdmx", 0)
+        tj    = data.get("tj", 0)
+        avail = data.get("avail_total", 0)
+        if mty + cdmx + tj > 0 or avail > 0:
+            return {
+                "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
+                "AvailTotal": avail,
+                "WebSKU": sku, "ProductSKU": base,
+            }
+    # FIX 2026-08-10: Jovan reporto (con screenshot de BM) SNMC000525 mostrando
+    # "SKU no encontrado en BinManager" cuando SI existe -- confirmado con
+    # binmanager-specialist: 40 unidades reales, pero en LocationID 42
+    # (Tijuana/MITIJ), excluida del stock vendible desde 2026-08-05. El SKU
+    # nunca entra a _bm_stock_cache (que solo indexa el bulk de 47/62/68), asi
+    # que el mensaje "no encontrado" es incorrecto -- deberia decir "existe,
+    # pero solo tiene stock en Tijuana (no vendible online)". Se agrega un
+    # fallback de solo-lectura contra el bulk de Tijuana YA CACHEADO en
+    # memoria (mismo bulk que ya se usa para el desglose MTY/CDMX/TJ de todos
+    # los SKUs, no una llamada nueva a BM) para distinguir "no existe" de
+    # "existe, solo en Tijuana".
+    _tj_cache = getattr(_main, "_bm_bulk_loctj_cache", None) if _main else None
+    if _tj_cache:
+        for _row in _tj_cache[1]:
+            _row_sku = (_row.get("SKU") or "").upper()
+            _row_base, _ = _get_base_and_type(_row_sku)
+            if _row_base == base.upper():
+                _tj_qty = int(_row.get("AvailableQTY") or 0)
+                if _tj_qty > 0:
+                    return {
+                        "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": _tj_qty,
+                        "AvailTotal": 0, "WebSKU": sku, "ProductSKU": base,
+                        "tj_only": True,
+                    }
+                break
     return None
 
 
@@ -408,9 +432,14 @@ async def get_inventory(web_sku: str):
     try:
         data = await _bm_warehouse_qty(web_sku)
         if data:
+            if data.get("tj_only"):
+                data["warning"] = (
+                    f"Existe en BinManager con {data['MainQtyTJ']} uds, pero SOLO en Tijuana "
+                    "(reabastecimiento, no vendible online) — 0 unidades vendibles en CDMX/MTY."
+                )
             return data
-        return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku,
-                "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
+        return {"error": "SKU no encontrado en BinManager (ni en ubicaciones vendibles ni en Tijuana)",
+                "WebSKU": web_sku, "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")
 
