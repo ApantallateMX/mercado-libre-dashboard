@@ -7309,9 +7309,17 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 logger.info("[BM-CACHE] LOC-TJ fallo hace <3min -- usando stale sin reintentar")
             else:
                 try:
+                    # timeout=150s (no 90s como GR/LOC47/LOC68): FIX 2026-08-10 —
+                    # LOC-TJ se pide DESPUÉS de GR+LOC47+LOC68 en la misma cadena
+                    # secuencial (mismo semáforo global), y el inventario real de
+                    # Tijuana es más grande (ahí vive el stock físico real, ver
+                    # project_bm_tijuana_exclusion.md) — más páginas de bulk que
+                    # paginar bajo la misma cola. Confirmado en logs de producción:
+                    # "[BM-CACHE] LOC-TJ bulk error: " (mensaje vacío = timeout) dos
+                    # veces mientras GR/LOC47/LOC68 sí completaban con el mismo límite.
                     _fresh_ltj = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="45,69,43,42"),
-                        timeout=90.0,
+                        timeout=150.0,
                     )
                     if _fresh_ltj:
                         _bm_bulk_loctj_cache = (_time.time(), _slim_bulk_rows(_fresh_ltj))
@@ -7344,9 +7352,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 logger.info("[BM-CACHE] ALL bulk fallo hace <3min -- usando stale sin reintentar")
             elif _bulk_all_rows is None:
                 try:
+                    # timeout=150s: FIX 2026-08-10 — mismo motivo que LOC-TJ arriba,
+                    # ALL se pide al final de la cadena secuencial (después de GR,
+                    # LOC47, LOC68 y LOC-TJ), acumulando espera de cola del semáforo
+                    # global antes de siquiera empezar su propia consulta.
                     _fresh_all = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
-                        timeout=90.0,
+                        timeout=150.0,
                     )
                     if _fresh_all:
                         _slimmed_all = _slim_bulk_rows(_fresh_all)
