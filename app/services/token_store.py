@@ -1064,24 +1064,27 @@ async def init_db():
                 updated_at     REAL NOT NULL DEFAULT 0
             )
         """)
+        # NOTA 2026-08-10: la tabla stock_issues_snapshot que iba aqui era un
+        # duplicado -- la tabla real (con esa misma finalidad, sobrevivir
+        # deploys) ya existe mas arriba como stock_issues_cache. Eliminada.
         # ─────────────────────────────────────────────────────────────────
-        # TABLA: stock_issues_snapshot — foto en disco de _stock_issues_cache
-        # (memoria), tomada al final de cada ciclo de prewarm exitoso.
-        # FIX 2026-08-09: Jovan reporto (varias veces, con frustracion
-        # creciente) que /items->Stock mostraba "Calculando..." cada vez que
-        # el proceso se reiniciaba (cada deploy) aunque el sistema YA tuviera
-        # la informacion calculada minutos antes -- _stock_issues_cache es un
-        # dict en memoria, se vacia por completo en cada restart, sin ningun
-        # respaldo. Esta tabla permite recargar la ULTIMA version buena al
-        # arrancar el proceso, antes de que corra el primer prewarm en vivo --
-        # se sirve de inmediato (con el banner "stale" normal si tiene >10min)
-        # en vez de la pantalla de carga vacia.
+        # TABLA: bm_bulk_cache_snapshot — foto en disco de los bulks CRUDOS de
+        # BM (_bm_bulk_gr_cache, _bm_bulk_all_cache, _bm_bulk_loctj_cache,
+        # _bm_bulk_loc47_cache, _bm_bulk_loc68_cache -- todos dict en memoria).
+        # FIX 2026-08-10: mismo problema que stock_issues_snapshot pero un
+        # nivel mas abajo -- cada deploy (y hoy hubo muchos) vacia estos bulks,
+        # y features que dependen de ellos (ej. fallback de Tijuana para
+        # "SKU no encontrado en BM", prellenado de Brand/Model) se quedan sin
+        # datos hasta que el prewarm los reconstruye desde cero, con multiples
+        # llamadas reales a BM de por medio -- puede tardar varios minutos por
+        # deploy. Persistir esto permite recargar la ultima version buena de
+        # inmediato al arrancar, igual que ya se hace con _bm_stock_cache.
         # ─────────────────────────────────────────────────────────────────
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS stock_issues_snapshot (
-                cache_key   TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS bm_bulk_cache_snapshot (
+                cache_name  TEXT PRIMARY KEY,
                 ts          REAL NOT NULL DEFAULT 0,
-                data_json   TEXT NOT NULL DEFAULT '{}'
+                data_json   TEXT NOT NULL DEFAULT '[]'
             )
         """)
         # ─────────────────────────────────────────────────────────────────
@@ -1732,35 +1735,14 @@ async def get_bm_catalog_last_sync() -> float:
     return float(val) if val else 0.0
 
 
-async def save_stock_issues_snapshot(cache_key: str, ts: float, data: dict) -> None:
-    """Persiste una entrada de _stock_issues_cache a disco -- ver comentario de
-    la tabla stock_issues_snapshot en init_db(). Best-effort: se llama al final
-    de cada ciclo de prewarm exitoso, nunca debe tumbar el prewarm si falla."""
-    import json as _json
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        await db.execute(
-            "INSERT INTO stock_issues_snapshot (cache_key, ts, data_json) VALUES (?, ?, ?) "
-            "ON CONFLICT(cache_key) DO UPDATE SET ts=excluded.ts, data_json=excluded.data_json",
-            (cache_key, ts, _json.dumps(data)),
-        )
-        await db.commit()
-
-
-async def load_all_stock_issues_snapshots() -> dict:
-    """Carga TODAS las entradas guardadas -- usado una sola vez al arrancar el
-    proceso para repoblar _stock_issues_cache antes de que corra el primer
-    prewarm en vivo. Retorna {cache_key: (ts, data)}."""
-    import json as _json
-    result = {}
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT cache_key, ts, data_json FROM stock_issues_snapshot")
-        for row in await cur.fetchall():
-            try:
-                result[row["cache_key"]] = (row["ts"], _json.loads(row["data_json"]))
-            except Exception:
-                continue
-    return result
+# NOTA 2026-08-10: save_stock_issues_snapshot()/load_all_stock_issues_snapshots()
+# YA EXISTIAN mas abajo en este archivo (tabla stock_issues_cache, no
+# stock_issues_snapshot) desde antes -- diagnostique mal el 2026-08-09 y agregue
+# un segundo par duplicado aqui con el mismo nombre pero tabla distinta. Python
+# resuelve al ULTIMO definido en el modulo, asi que estas nunca corrieron (dead
+# code inofensivo, pero confuso) -- las funciones reales que main.py siempre
+# llamo son las de mas abajo (buscar "stock_issues_cache helpers"). Se eliminan
+# aqui para no dejar 2 pares con el mismo nombre en el codigo.
 
 
 async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
@@ -3771,6 +3753,47 @@ async def load_all_stock_issues_snapshots() -> dict:
         except Exception:
             pass
     return result
+
+
+# ─── bm_bulk_cache_snapshot helpers ──────────────────────────────────────────
+# FIX 2026-08-10: los bulks crudos de BM (_bm_bulk_gr_cache, _bm_bulk_all_cache,
+# _bm_bulk_loctj_cache, _bm_bulk_loc47_cache, _bm_bulk_loc68_cache) no tenian
+# NINGUN respaldo en disco (a diferencia de _bm_stock_cache y stock_issues_cache,
+# que si sobreviven deploys) -- verificado que esto es nuevo, no un duplicado de
+# algo que ya existiera (aprendiendo del error de arriba).
+
+async def save_bm_bulk_cache(cache_name: str, ts: float, rows: list) -> None:
+    """Persiste un bulk crudo de BM a disco. Best-effort -- nunca debe tumbar
+    el prewarm si falla."""
+    import json as _json
+    try:
+        data_str = _json.dumps(rows, default=str, ensure_ascii=False)
+    except Exception:
+        return
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO bm_bulk_cache_snapshot (cache_name, ts, data_json) VALUES (?, ?, ?)",
+            (cache_name, ts, data_str),
+        )
+        await db.commit()
+
+
+async def load_bm_bulk_cache(cache_name: str) -> tuple[float, list] | None:
+    """Carga un bulk crudo de BM desde disco -- usado al arrancar el proceso
+    para repoblar el cache en memoria antes de que corra el primer prewarm."""
+    import json as _json
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT ts, data_json FROM bm_bulk_cache_snapshot WHERE cache_name = ?", (cache_name,)
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    try:
+        return (float(row["ts"]), _json.loads(row["data_json"]))
+    except Exception:
+        return None
 
 
 # ─── return_flags helpers ────────────────────────────────────────────────────
