@@ -7114,11 +7114,21 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68 (MTY+CDMX+Cuautitlán, TJ excluida) — fuente única correcta.
                 # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
                 # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
-                # timeout=8s: cubre re-login interno (3-5s) + latencia normal. Antes era 25s —
-                # con BM lento por mantenimiento, 2 rondas × 25s = 50s → timeout de 90s en el tab.
+                # timeout=20s: FIX 2026-08-10 — get_stock_with_reserve()/_query_bm_stock() hace
+                # hasta 2 intentos internos de timeout=7s c/u, con hard-timeout real de _post()
+                # de 7+5=12s POR INTENTO (hasta 24s en el peor caso con reintento por sesión
+                # expirada). El valor anterior (8s) era MÁS CORTO que ese presupuesto interno,
+                # así que esta red de seguridad externa cancelaba la llamada casi siempre antes
+                # de que su propio mecanismo de reintento pudiera correr — confirmado en logs de
+                # producción: 101 fallas consecutivas con mensaje vacío (asyncio.TimeoutError)
+                # durante un solo ciclo de prewarm, mientras BM respondía con normalidad (Jovan
+                # verificó BM directamente). No usar 25s+ (valor histórico previo a este fix):
+                # con BM lento por mantenimiento, 2 rondas de 25s sumaban 50s y disparaban el
+                # timeout de 90s del tab en vivo — 20s da margen real sobre el presupuesto
+                # interno sin reintroducir ese problema.
                 _stock = await asyncio.wait_for(
                     bm_cli.get_stock_with_reserve(base, conditions=_bm_conditions_for_sku(sku)),
-                    timeout=8.0,
+                    timeout=20.0,
                 )
                 # _avail_ok=True: BM respondió (tuple) — dato verificado aunque sea (0,0) genuino.
                 # _avail_ok=False: retornó None (timeout/sesión) — no sabemos el stock real.
