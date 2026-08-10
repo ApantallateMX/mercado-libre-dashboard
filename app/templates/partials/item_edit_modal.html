@@ -943,9 +943,32 @@ window.editModalUploadClip = async function(itemId) {
         .then(function(r) { return r.json(); })
         .then(function(data) {
             document.getElementById('inventory-loading').classList.add('hidden');
+            // FIX 2026-08-10: prellenar BRAND/MODEL desde BM (fuente mas
+            // confiable que la IA adivinando) cuando el campo en ML esta
+            // vacio -- Jovan pidio priorizar el dato real de BM sobre lo que
+            // la IA sugiera para estos 2 atributos especificos.
+            ['BRAND', 'MODEL'].forEach(function(attrId) {
+                var bmVal = attrId === 'BRAND' ? data.Brand : data.Model;
+                if (!bmVal) return;
+                var inp = document.querySelector('[data-attr-id="' + attrId + '"]');
+                if (inp && !inp.value.trim()) {
+                    inp.value = bmVal;
+                    inp.classList.add('border-emerald-400', 'bg-emerald-50');
+                    inp.title = 'Prellenado desde BinManager';
+                }
+            });
             if (data.error) {
                 var errEl = document.getElementById('inventory-error');
                 errEl.textContent = data.error; errEl.classList.remove('hidden');
+                return;
+            }
+            if (data.catalog_only) {
+                var infoEl = document.getElementById('inventory-error');
+                if (infoEl) {
+                    infoEl.textContent = 'ℹ️ SKU registrado en BinManager (Brand/Model usados arriba), pero sin stock disponible en ninguna ubicación ahora mismo.';
+                    infoEl.className = 'text-xs text-blue-600 mt-1';
+                    infoEl.classList.remove('hidden');
+                }
                 return;
             }
             var tj = data.MainQtyTJ || 0;

@@ -123,6 +123,25 @@ def _parse_wh_rows_items(rows):
     return mty, cdmx, tj
 
 
+def _bm_catalog_brand_model(main_mod, base: str) -> dict:
+    """Busca Brand/Model en los bulks ya cacheados en memoria (GR/ALL/TJ) --
+    sin llamadas nuevas a BM. FIX 2026-08-10: Jovan pidio priorizar el
+    Brand/Model REAL de BM sobre lo que la IA adivine para esos atributos
+    (la IA a veces sugiere algo distinto a lo que BM ya sabe con certeza)."""
+    for _cache_name in ("_bm_bulk_gr_cache", "_bm_bulk_all_cache", "_bm_bulk_loctj_cache"):
+        _c = getattr(main_mod, _cache_name, None) if main_mod else None
+        if not _c:
+            continue
+        for _row in _c[1]:
+            _row_base, _ = _get_base_and_type((_row.get("SKU") or "").upper())
+            if _row_base == base:
+                _brand = (_row.get("Brand") or "").strip()
+                _model = (_row.get("Model") or "").strip()
+                if _brand or _model:
+                    return {"Brand": _brand, "Model": _model}
+    return {}
+
+
 async def _bm_warehouse_qty(sku: str) -> dict | None:
     """Stock BM desde caché en memoria (prewarm). Sin llamadas HTTP."""
     import sys as _sys
@@ -131,6 +150,7 @@ async def _bm_warehouse_qty(sku: str) -> dict | None:
     base, _ = _get_base_and_type(sku)
     if not base:
         return None
+    _bm_catalog = _bm_catalog_brand_model(_main, base.upper())
     entry = _cache.get(base.upper())
     if entry:
         _, data = entry
@@ -143,6 +163,7 @@ async def _bm_warehouse_qty(sku: str) -> dict | None:
                 "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
                 "AvailTotal": avail,
                 "WebSKU": sku, "ProductSKU": base,
+                **_bm_catalog,
             }
     # FIX 2026-08-10: Jovan reporto (con screenshot de BM) SNMC000525 mostrando
     # "SKU no encontrado en BinManager" cuando SI existe -- confirmado con
@@ -167,8 +188,17 @@ async def _bm_warehouse_qty(sku: str) -> dict | None:
                         "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": _tj_qty,
                         "AvailTotal": 0, "WebSKU": sku, "ProductSKU": base,
                         "tj_only": True,
+                        **_bm_catalog,
                     }
                 break
+    if _bm_catalog:
+        # Ni sellable ni Tijuana tienen stock, pero SI conocemos Brand/Model
+        # por catalogo -- util para prellenar atributos aunque no haya stock.
+        return {
+            "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0, "AvailTotal": 0,
+            "WebSKU": sku, "ProductSKU": base, "catalog_only": True,
+            **_bm_catalog,
+        }
     return None
 
 
