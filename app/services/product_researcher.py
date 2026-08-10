@@ -332,6 +332,59 @@ async def extract_page_images(url: str, max_images: int = 24) -> list[str]:
     return found[:max_images]
 
 
+async def search_product_images(query: str, max_images: int = 8) -> list[str]:
+    """Busca fotos candidatas de un producto POR TEXTO (marca+modelo o titulo),
+    sin usuario pegando ningun link. Version ligera de research_product() --
+    mismo mecanismo (DuckDuckGo + scrapeo de las paginas encontradas), pero
+    SOLO la parte de imagenes, sin precio/categoria/descripcion/family_name
+    que no aplican al modal de edicion de un listing YA EXISTENTE.
+
+    Gratis: DuckDuckGo HTML no cobra por busqueda; el scrapeo es lectura
+    normal de paginas publicas (mismo patron que scrape_product_page()).
+    2026-08-10, pedido por Jovan: reusar lo que YA funciona en el Wizard de
+    nueva publicacion (sku_inventory.py -> research_product()) en vez de
+    depender solo de que el usuario pegue un link a mano.
+
+    Retorna [] si no encuentra nada -- el caller debe avisar que las fotos
+    son "de referencia" y deben verificarse antes de usarlas (mismo warning
+    que ya tiene research_product())."""
+    results = await search_duckduckgo(f"{query} ficha tecnica producto")
+    if not results:
+        return []
+
+    skip_domains = {"mercadolibre", "mercadoshops", "youtube", "facebook",
+                     "twitter", "instagram", "tiktok"}
+    urls_to_scrape = []
+    for r in results:
+        if len(urls_to_scrape) >= RESEARCH_MAX_PAGES + 2:
+            break
+        url = r.get("url", "")
+        parsed = urlparse(url)
+        if any(d in parsed.netloc for d in skip_domains):
+            continue
+        if url.lower().endswith(".pdf"):
+            continue
+        urls_to_scrape.append(url)
+    if not urls_to_scrape:
+        return []
+
+    scraped = await asyncio.gather(
+        *[scrape_product_page(u) for u in urls_to_scrape], return_exceptions=True
+    )
+    images: list[str] = []
+    seen: set = set()
+    for page in scraped:
+        if not isinstance(page, dict):
+            continue
+        for img_url in page.get("images", []):
+            if img_url and isinstance(img_url, str) and img_url.startswith("http") and img_url not in seen:
+                seen.add(img_url)
+                images.append(img_url)
+                if len(images) >= max_images:
+                    return images
+    return images
+
+
 # ---------------------------------------------------------------------------
 # MeLi competitor analysis
 # ---------------------------------------------------------------------------

@@ -532,6 +532,31 @@ async def extract_images(body: ExtractImagesBody):
         raise HTTPException(status_code=502, detail=f"Error leyendo la pagina: {str(e)}")
 
 
+class SearchImagesBody(BaseModel):
+    query: str
+
+
+@router.post("/search-images")
+async def search_images(body: SearchImagesBody):
+    """Busca fotos candidatas de un producto POR TEXTO (titulo o marca+modelo),
+    sin que el usuario tenga que pegar ningun link (2026-08-10, pedido por
+    Jovan: reusar el mismo mecanismo gratuito -- DuckDuckGo + scrapeo -- que
+    YA usa el Wizard de nueva publicacion en research_product(), en vez de
+    depender solo de la busqueda manual por URL de arriba). Solo lectura,
+    sin costo de API, nada se sube a ML hasta que el usuario elija fotos."""
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query requerido")
+    from app.services.product_researcher import search_product_images
+    try:
+        images = await search_product_images(query)
+        if not images:
+            return {"images": [], "message": "No se encontraron imagenes para esa busqueda"}
+        return {"images": images}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Error buscando imagenes: {str(e)}")
+
+
 @router.delete("/{item_id}")
 async def close_item(item_id: str, request: Request):
     """Cierra (finaliza) una publicacion de MeLi poniendo status=closed.
