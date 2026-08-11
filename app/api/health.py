@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel
 from app.services.meli_client import get_meli_client, MeliApiError
 from app.services import token_store as _ts
@@ -159,6 +159,7 @@ class ClaimResponse(BaseModel):
 class MessageRequest(BaseModel):
     text: str
     account_id: str = ""  # opcional — solo lo manda la bandeja unificada "Todas las cuentas"
+    attachments: list[str] = []  # ids devueltos por /upload-attachment (fotos, guías de devolución)
 
 
 @router.get("/summary")
@@ -430,6 +431,31 @@ async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: 
         await client.close()
 
 
+@router.post("/messages/{pack_id}/upload-attachment")
+async def upload_message_attachment(pack_id: str, account_id: str = Query(""), file: UploadFile = File(...)):
+    """Sube una foto o guía de devolución para adjuntarla a un mensaje --
+    pedido de Jovan 2026-08-11. Solo sube el archivo a ML (no le llega a
+    ningún comprador todavía); devuelve el id que /send debe mandar en
+    attachments=[...]. No se persiste en disco, solo vive en memoria."""
+    client = await get_meli_client(user_id=account_id or None)
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Archivo vacío")
+        attachment_id = await client.upload_message_attachment(
+            file.filename or "adjunto", data, file.content_type or "application/octet-stream",
+        )
+        if not attachment_id:
+            raise HTTPException(status_code=502, detail="Mercado Libre no devolvió un id de adjunto")
+        return {"id": attachment_id, "filename": file.filename}
+    except MeliApiError as e:
+        raise HTTPException(status_code=e.status_code or 400, detail=str(e))
+    finally:
+        await client.close()
+
+
 @router.post("/messages/{pack_id}/send")
 async def send_message(pack_id: str, body: MessageRequest, request: Request):
     """Enviar mensaje en una conversacion. account_id (opcional) permite
@@ -440,7 +466,7 @@ async def send_message(pack_id: str, body: MessageRequest, request: Request):
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
-        result = await client.send_message(pack_id, body.text)
+        result = await client.send_message(pack_id, body.text, attachments=body.attachments or None)
         # FIX 2026-08-09: Jovan reporto con screenshot que una conversacion ya
         # respondida seguia apareciendo "Pendiente" en la bandeja -- el envio
         # nunca marcaba la conversacion como resuelta, se quedaba asi hasta el

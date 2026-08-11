@@ -877,17 +877,36 @@ window.sendChatMessage = function(packId, accountId) {
     if (!text) return;
     var btn = document.getElementById('btn-msg-' + packId);
     var msgEl = document.getElementById('msg-status-' + packId);
+    var fileInput = document.getElementById('msg-file-' + packId);
+    var file = (fileInput && fileInput.files && fileInput.files[0]) || null;
     btn.disabled = true; btn.textContent = 'Enviando...'; msgEl.textContent = '';
-    fetch('/api/health/messages/' + packId + '/send', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text: text, account_id: accountId || ''})
+
+    // FIX 2026-08-11: Jovan pidio poder adjuntar fotos/guias de devolucion.
+    // ML requiere subir el archivo primero (POST /messages/attachments) y
+    // luego referenciar el id devuelto en el envio del mensaje -- no es un
+    // solo paso como en Amazon (que ya lo tenia via email/multipart).
+    var uploadStep = file
+        ? fetch('/api/health/messages/' + packId + '/upload-attachment?account_id=' + encodeURIComponent(accountId || ''), {
+              method: 'POST', body: (function() { var fd = new FormData(); fd.append('file', file); return fd; })(),
+          }).then(function(r) {
+              if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || 'No se pudo subir el archivo'); });
+              return r.json();
+          }).then(function(d) { return [d.id]; })
+        : Promise.resolve([]);
+
+    uploadStep.then(function(attachmentIds) {
+        return fetch('/api/health/messages/' + packId + '/send', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: text, account_id: accountId || '', attachments: attachmentIds})
+        });
     })
     .then(function(r) {
         if (r.ok) {
             msgEl.textContent = 'Mensaje enviado'; msgEl.className = 'text-xs text-green-600 mt-1';
             btn.disabled = false; btn.textContent = 'Enviar';
-            window._appendSentMessageBubble(packId, text);
+            window._appendSentMessageBubble(packId, text + (file ? ' 📎 ' + file.name : ''));
             textarea.value = '';
+            if (fileInput) fileInput.value = '';
         } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
     })
     .catch(function(e) {

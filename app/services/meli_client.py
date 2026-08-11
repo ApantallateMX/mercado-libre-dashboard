@@ -1224,7 +1224,7 @@ class MeliClient:
             "mark_as_read": "false",
         })
 
-    async def send_message(self, pack_id: str, text: str) -> dict:
+    async def send_message(self, pack_id: str, text: str, attachments: list | None = None) -> dict:
         """Envia un mensaje en una conversacion. Requiere el mismo query param
         ?tag=post_sale que get_message_thread() -- sin él, ML responde
         "resource not found" en el POST (encontrado 2026-08-05).
@@ -1336,6 +1336,8 @@ class MeliClient:
                 payload["to"] = {"user_id": int(buyer_id)}
             except (TypeError, ValueError):
                 payload["to"] = {"user_id": buyer_id}
+        if attachments:
+            payload["attachments"] = attachments
 
         try:
             return await self.post(
@@ -1349,6 +1351,23 @@ class MeliClient:
                 f"body_ml={_e_sm.body!r} texto_enviado={clean_text!r}"
             )
             raise
+
+    async def upload_message_attachment(self, filename: str, data: bytes, content_type: str) -> str:
+        """Sube un archivo para adjuntarlo a un mensaje de mensajeria post-venta
+        (fotos, guías de devolución, etc. -- pedido de Jovan 2026-08-11). Devuelve
+        el id que asigna ML (ej. "391393176_<uuid>.png"), que luego se manda en
+        send_message(attachments=[...]). Verificado en vivo 2026-08-11: la
+        respuesta real es {"id": "..."}, NO {"filename": ...} como en la
+        documentación pública -- este paso solo sube el archivo a ML, no le
+        llega a ningún comprador hasta que se referencia en un send_message."""
+        await self._refresh_token_if_needed()
+        files = {"file": (filename, data, content_type or "application/octet-stream")}
+        resp = await self._request(
+            "POST", "/messages/attachments",
+            params={"tag": "post_sale", "site_id": "MLM"},
+            files=files,
+        )
+        return resp.get("id", "") or resp.get("filename", "")
 
     # === Questions (gestionar) ===
 
