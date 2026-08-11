@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 (cont. 6) — FIX DEFINITIVO: "No leídos" de ML nunca bajaba aunque ya respondiéramos
+
+Jovan reportó, molesto, un caso nuevo (pack 2000014458358269, BLOWTECHNOLOGIES,
+comprador Adolfo Loeza) que ML marcaba "1 no leído" hace 50 min y la app
+mostraba "0" -- exigió una solución definitiva, no más backfills manuales.
+
+Investigando ESTE caso puntual se encontró que ya estaba correctamente
+indexado (ya habíamos respondido, `last_message_from: seller`) -- no era un
+problema de indexado tardío como los de hoy más temprano. La causa real,
+mucho más de fondo: cada mensaje de ML trae `message_date.read` (null = no
+leído por el vendedor). `get_message_thread()` SIEMPRE llama con
+`mark_as_read=false` en TODO el código -- responder un mensaje vía API
+**nunca** le dice a ML que ya se leyó. Verificado en vivo: forzar
+`mark_as_read=true` cambió el campo de `null` a un timestamp real al
+instante. Sin este cambio, "No leídos" de ML solo baja si alguien abre la
+conversación directo en mercadolibre.com -- nunca al responder desde
+ninguna app externa (la nuestra incluida, hasta ahora).
+
+Fix: `get_message_thread()` acepta `mark_as_read` (default False, los loops
+de fondo/diag no cambian). `_fetch_enriched_ml_conversations` (la función
+que renderiza la pestaña Mensajes para un humano) ahora llama con
+`mark_as_read=True` -- abrir Mensajes en la app ya tiene el mismo efecto que
+abrirlo en el sitio de ML. Esto es la causa real detrás de buena parte del
+patrón "ML muestra más que nosotros" de toda la sesión de hoy, no solo del
+caso de Adolfo.
+
+---
+
 ## 2026-08-11 (cont. 5) — FEAT: adjuntar fotos/guías de devolución al responder mensajes (ML + Amazon)
 
 Jovan pidió poder mandar fotos o guías de devolución a compradores desde
