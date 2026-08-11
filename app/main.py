@@ -18081,15 +18081,16 @@ async def diag_buyer_messages_inspect(token: str = "", seller_id: str = "", samp
 
 
 @app.get("/api/diag/trigger-prewarm")
-async def diag_trigger_prewarm(token: str = ""):
+async def diag_trigger_prewarm(token: str = "", user_id: str = ""):
     """Dispara _prewarm_caches() manualmente sin esperar a que un admin visite
     Stock/Dashboard/Items — útil para verificar un fix justo después de un
-    deploy sin depender de tráfico orgánico."""
+    deploy sin depender de tráfico orgánico. user_id opcional para apuntar
+    a una cuenta específica (default: cuenta por defecto del ContextVar)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if _prewarm_running:
         return JSONResponse({"ok": True, "message": "Ya hay un prewarm corriendo — se encoló otro."})
-    asyncio.create_task(_prewarm_caches())
+    asyncio.create_task(_prewarm_caches(user_id=user_id or None))
     return JSONResponse({"ok": True, "message": "Prewarm disparado en background"})
 
 
