@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 (cont.) — FIX: UI de enviar mensaje no se actualizaba + busqueda de Mensajes rota + PARTE 3 automatizada
+
+Continuacion de la sesion de mensajes ML de mas arriba, con casos nuevos que
+reporto Jovan sobre la marcha:
+
+1. **Enviar mensaje no actualizaba la platica ni el badge "Pendiente" en
+   pantalla** (`app/templates/health.html` `sendChatMessage`): el backend ya
+   guardaba y marcaba resuelta la conversacion (fix previo 2026-08-09), pero
+   el usuario seguia viendo el estado de antes del envio hasta recargar la
+   pagina completa. Se agrega la burbuja del mensaje enviado y se actualiza
+   el badge del lado del cliente sin esperar un reload.
+
+2. **Busqueda de "Mensajes" (por orden/comprador/producto) solo buscaba
+   dentro de la pagina chica ya cargada** (20-50 filas mas pendientes/
+   recientes), nunca contra el historico completo de la cuenta. Una
+   conversacion vieja y ya respondida (ej. orden de 25 dias) nunca aparecia
+   sin importar que el numero estuviera bien escrito. `get_message_index()`
+   ahora acepta `q` y filtra pack_id/order_id/texto via SQL contra TODO el
+   historico; comprador/producto (no viven en la tabla) siguen buscandose
+   solo en la pagina normal, para no regresar ese caso puntual.
+
+3. **Caso "orden vieja (meses) que nunca se indexo, de repente recibe un
+   mensaje nuevo"** — confirmado con 2 casos reales del mismo dia (uno de
+   ellos una orden de FEBRERO, 6 meses atras). Ni la PARTE 1 (ordenes
+   creadas <4 dias) ni la PARTE 2 (packs YA indexados, <21 dias) de los
+   loops automaticos de mensajes cubren este caso -- queda invisible
+   indefinidamente hasta que alguien lo reporta. Se agrega:
+   - `/api/diag/ml-force-index-pack` — indexa un pack puntual al momento
+     (usado para resolver los 2 casos reales de hoy).
+   - **PARTE 3** (`_ml_messages_wide_backfill_loop`) — barrido automatico
+     lento, 1x/dia, ventana de 180 dias, las 4 cuentas. Decision de Jovan:
+     "recomiendo algo automatizado" en vez de depender de reportes manuales.
+
+**Nota aparte, NO es un bug**: se confirmo con datos reales que "No leídos"
+de ML y nuestro "Pendiente" miden cosas distintas -- ML marca "no leído"
+segun si alguien ABRIO esa notificacion dentro de su propio panel, no segun
+si ya se respondio. Un caso real (Tania Melissa Olvera) ya tenia nuestra
+respuesta correctamente registrada (`last_message_from: seller`) pero ML
+seguia mostrandolo "no leído" porque nadie lo abrio del lado de ML. No hay
+endpoint de ML para replicar ese marcado -- no se puede igualar 1:1.
+
+---
+
 ## 2026-08-11 — FIX: mensajes ML de ordenes con reembolso parcial invisibles en el indice (las 4 cuentas)
 
 Jovan reporto que ML Seller Central mostraba "4 no leidos" para BLOWTECHNOLOGIES
