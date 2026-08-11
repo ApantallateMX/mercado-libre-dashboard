@@ -6184,16 +6184,26 @@ async def _bm_master_sync_once_inner():
             "verified": True,
         })
 
+    # FIX 2026-08-10: escribir los matches de bulk YA (en memoria, milisegundos)
+    # en vez de esperar a que termine TODA la reconciliación de misses (hasta
+    # 150 x 15s = 37.5 min peor caso) para guardar cualquier cosa. Con la
+    # escritura única al final, un ciclo bajo contención real dejaba
+    # verified_skus en 0 durante toda la espera aunque miles de filas ya
+    # estuvieran listas — sin señal de progreso real para verificar Fase C.
+    if to_write:
+        await token_store.upsert_bm_stock_full_batch(to_write)
+        logger.info(f"[BM-MASTER-SYNC] {len(to_write)} SKUs de bulk escritos (fase rápida) — reconciliando {len(misses)} misses ahora")
+
     # Reconciliación de misses — UNA sola vez para TODO el universo (no 4x).
     # BM omite del bulk los SKUs con 0 stock — "no está en el bulk" no es
     # igual a "no existe". Cap de seguridad por ciclo: si hay muchos misses
     # (bulk recién reseteado tras un restart), se completan gradualmente en
     # ciclos siguientes en vez de bloquear todo el ciclo actual.
     _MAX_MISS_PER_CYCLE = 150
+    _reconciled_rows: list[dict] = []
     if misses:
         from app.services.binmanager_client import get_shared_bm as _gsbm_master
         bm_cli = await _gsbm_master()
-        _reconciled = 0
         for base_u in misses[:_MAX_MISS_PER_CYCLE]:
             try:
                 stock = await asyncio.wait_for(
@@ -6203,18 +6213,17 @@ async def _bm_master_sync_once_inner():
             except Exception:
                 stock = None
             if stock is not None:
-                to_write.append({
+                _reconciled_rows.append({
                     "sku": base_u, "available_qty": stock[0], "reserve_qty": stock[1],
                     "total_qty": 0, "no_vendible_qty": 0, "mty_qty": 0, "cdmx_qty": 0, "tj_qty": 0,
                     "verified": True,
                 })
-                _reconciled += 1
             await asyncio.sleep(0.3)
-        logger.info(f"[BM-MASTER-SYNC] {_reconciled}/{min(len(misses), _MAX_MISS_PER_CYCLE)} misses reconciliados este ciclo (de {len(misses)} totales)")
+        if _reconciled_rows:
+            await token_store.upsert_bm_stock_full_batch(_reconciled_rows)
+        logger.info(f"[BM-MASTER-SYNC] {len(_reconciled_rows)}/{min(len(misses), _MAX_MISS_PER_CYCLE)} misses reconciliados este ciclo (de {len(misses)} totales)")
 
-    if to_write:
-        await token_store.upsert_bm_stock_full_batch(to_write)
-    logger.info(f"[BM-MASTER-SYNC] Ciclo completo: {len(to_write)}/{len(skus)} SKUs escritos a bm_sku_master")
+    logger.info(f"[BM-MASTER-SYNC] Ciclo completo: {len(to_write) + len(_reconciled_rows)}/{len(skus)} SKUs escritos a bm_sku_master")
 
 
 async def _bm_master_sync_loop():
