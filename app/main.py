@@ -726,6 +726,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_bmc.poll_loop())
     asyncio.create_task(_ml_messages_new_orders_scan_loop())
     asyncio.create_task(_ml_messages_index_refresh_loop())
+    asyncio.create_task(_ml_messages_wide_backfill_loop())
     asyncio.create_task(token_store.feedback_sync_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
@@ -25325,6 +25326,52 @@ async def _ml_messages_index_refresh_loop() -> None:
         except Exception as _e:
             logger.warning(f"[ML-MSG-REFRESH-INDEX] error general: {_e}")
         await asyncio.sleep(240)
+
+
+async def _ml_messages_wide_backfill_loop() -> None:
+    """Respaldo lento (1x/día) PARTE 3 -- cubre el caso que ni PARTE 1
+    (_ml_messages_new_orders_scan_loop, solo órdenes creadas <4 días) ni
+    PARTE 2 (_ml_messages_index_refresh_loop, solo packs YA indexados)
+    alcanzan: una orden vieja (meses) que NUNCA se indexó porque nunca tuvo
+    mensajes, y de repente recibe uno nuevo. Caso real 2026-08-11: orden de
+    febrero (6 meses), comprador escribió por primera vez, invisible hasta
+    indexarla a mano vía /api/diag/ml-force-index-pack.
+
+    Ventana de 180 días (6 meses) — cubre el caso real observado sin escanear
+    hacia atrás indefinidamente. Reusa _ml_messages_scan_and_index (misma
+    función del backfill manual), paginando sola hasta agotar la ventana."""
+    await asyncio.sleep(600)
+    while True:
+        try:
+            from datetime import datetime as _dt_wb, timedelta as _td_wb
+            date_to = _dt_wb.utcnow().strftime("%Y-%m-%d")
+            date_from = (_dt_wb.utcnow() - _td_wb(days=180)).strftime("%Y-%m-%d")
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if not uid:
+                    continue
+                client = await get_meli_client(user_id=uid)
+                if not client:
+                    continue
+                try:
+                    offset, total_scanned, total_indexed = 0, 0, 0
+                    while True:
+                        scanned, indexed, offset, remaining = await _ml_messages_scan_and_index(
+                            client, date_from, date_to, max_orders=300, start_offset=offset,
+                        )
+                        total_scanned += scanned
+                        total_indexed += indexed
+                        if remaining <= 0 or scanned == 0:
+                            break
+                    logger.info(f"[ML-MSG-WIDE-BACKFILL] cuenta={uid} ordenes={total_scanned} actualizadas={total_indexed}")
+                except Exception as _e:
+                    logger.warning(f"[ML-MSG-WIDE-BACKFILL] error cuenta={uid}: {_e}")
+                finally:
+                    await client.close()
+        except Exception as _e:
+            logger.warning(f"[ML-MSG-WIDE-BACKFILL] error general: {_e}")
+        await asyncio.sleep(86400)
 
 
 @app.get("/api/diag/backfill-ml-messages-index")
