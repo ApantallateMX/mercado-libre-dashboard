@@ -6251,16 +6251,21 @@ async def _bm_master_sync_once_inner():
 
 async def _bm_master_sync_loop():
     """Loop de fondo independiente de cuentas — Fase B. Arranca a los 3 min
-    (deja que el pipeline viejo haga su primer bulk fetch) y corre cada 10
-    min — desfasado del ciclo viejo (15 min) para no competir exactamente al
-    mismo tiempo por el semáforo global de BM."""
+    (deja que el pipeline viejo haga su primer bulk fetch).
+    FIX 2026-08-11 (pedido por Jovan: acelerar convergencia sin aumentar
+    carga por ráfaga hacia BM): antes esperaba 600s fijos entre ciclos sin
+    importar cuánto tardó el anterior -- con un ciclo típico de ~1-3 min,
+    eso dejaba 7-9 min de tiempo muerto sin razón. Bajado a 120s -- el
+    ritmo DENTRO de cada ciclo (150 SKUs máx, 0.3s de pausa entre cada
+    llamada, mismo semáforo global de 1) no cambia en absoluto, solo se
+    repite con más frecuencia."""
     await asyncio.sleep(180)
     while True:
         try:
             await _bm_master_sync_once()
         except Exception as e:
             logger.error(f"[BM-MASTER-SYNC] Error inesperado: {e}")
-        await asyncio.sleep(600)
+        await asyncio.sleep(120)
 
 
 async def _bm_verify_sku_direct(bm_cli, sku: str) -> dict | None:
