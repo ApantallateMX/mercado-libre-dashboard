@@ -24776,6 +24776,31 @@ async def diag_ml_order_message_truth(token: str = "", account_id: str = "", ord
         await client.close()
 
 
+@app.get("/api/diag/ml-raw-index-row")
+async def diag_ml_raw_index_row(token: str = "", pack_id: str = ""):
+    """Dump crudo de TODAS las filas de ml_messages_index que coincidan con
+    este pack_id, SIN NINGUN filtro/WHERE de negocio -- para descartar
+    mismatches de tipo/formato en account_id o last_message_from cuando un
+    pack recién force-indexado no aparece en ninguna consulta filtrada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not pack_id:
+        return JSONResponse({"error": "pack_id requerido"}, status_code=400)
+    import aiosqlite as _aio_raw
+    async with _aio_raw.connect(token_store.DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_raw.Row
+        rows = await (await db.execute(
+            "SELECT * FROM ml_messages_index WHERE pack_id = ?", (pack_id,),
+        )).fetchall()
+        views = await (await db.execute(
+            "SELECT * FROM ml_message_views WHERE pack_id = ?", (pack_id,),
+        )).fetchall()
+    return {
+        "index_rows": [dict(r) for r in rows],
+        "view_rows": [dict(r) for r in views],
+    }
+
+
 @app.get("/api/diag/ml-force-index-pack")
 async def diag_ml_force_index_pack(token: str = "", account_id: str = "", pack_id: str = "", order_id: str = ""):
     """Indexa YA un pack puntual encontrado 'invisible' via ml-order-message-truth
