@@ -25068,37 +25068,30 @@ async def diag_ml_pending_list(token: str = "", account_id: str = "", live_check
     pendientes que ya no existían en Mercado Libre -- resultaron ser
     conversaciones bloqueadas/movidas a Reclamos (mediación, orden cancelada).
     live_check=1: para hasta 400 packs, compara contra el thread real de ML
-    (conversation_status + último mensaje)."""
+    (conversation_status + último mensaje).
+
+    FIX 2026-08-11: usaba get_message_index(..., limit=1000) -- con el
+    histórico creciendo a 9,436 filas (barrido de 180 días, PARTE 3) el
+    bucket de 'buyer + no resuelto' pudo superar 1,000, cortando
+    conversaciones viejas antes de llegar aquí (caso real: Carlos Gerardo
+    Meza, 9 de agosto). Ahora usa get_all_pending_candidates(), sin límite."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not account_id:
         return JSONResponse({"error": "account_id requerido"}, status_code=400)
-    rows, total = await token_store.get_message_index(account_id, offset=0, limit=1000)
-    pack_ids = [r["pack_id"] for r in rows]
+    candidate_rows = await token_store.get_all_pending_candidates(account_id)
+    pack_ids = [r["pack_id"] for r in candidate_rows]
     views = await token_store.get_message_views(pack_ids, account_id) if pack_ids else {}
+    _, total = await token_store.get_message_index(account_id, offset=0, limit=1)
 
-    def _iso_to_ts_local(iso_date):
-        if not iso_date:
-            return 0.0
-        try:
-            return datetime.fromisoformat(iso_date.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            return 0.0
-
-    pending = []
-    for r in rows:
-        if r["last_message_from"] != "buyer":
-            continue
-        vi = views.get(r["pack_id"])
-        resolved_info = vi if vi and vi.get("status") == "resolved" else None
-        reopened = bool(resolved_info and _iso_to_ts_local(r["last_message_date"]) > (resolved_info.get("viewed_at") or 0))
-        already_resolved = bool(resolved_info) and not reopened
-        if not already_resolved:
-            pending.append({
-                "pack_id": r["pack_id"], "order_id": r["order_id"],
-                "last_message_date": r["last_message_date"], "last_message_text": (r["last_message_text"] or "")[:80],
-                "view_info": vi,
-            })
+    pending = [
+        {
+            "pack_id": r["pack_id"], "order_id": r["order_id"],
+            "last_message_date": r["last_message_date"], "last_message_text": (r["last_message_text"] or "")[:80],
+            "view_info": views.get(r["pack_id"]),
+        }
+        for r in candidate_rows
+    ]
 
     if live_check:
         client = await get_meli_client(user_id=account_id)

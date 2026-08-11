@@ -2582,6 +2582,42 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
     return [dict(r) for r in rows], total
 
 
+async def get_all_pending_candidates(account_id: str) -> list:
+    """Todas las conversaciones 'buyer + no resuelto/reabierto' de una cuenta,
+    SIN el LIMIT de paginación de get_message_index() -- usado por el KPI real
+    (_count_ml_pending_excluding_blocked) y por el diag de pendientes.
+
+    Bug real 2026-08-11: ambos llamaban get_message_index(..., limit=1000).
+    Mientras el histórico total era ~2,300 filas eso alcanzaba de sobra, pero
+    tras el barrido automático de 180 días (PARTE 3) el histórico de
+    BLOWTECHNOLOGIES creció a 9,436 -- de repente pudo haber más de 1,000
+    conversaciones con last_message_from='buyer' (cualquier orden vieja que
+    terminó con un "gracias" del comprador sin marcar resuelto entra en ese
+    bucket), y las más viejas quedaban cortadas por el LIMIT antes de que la
+    lógica de bloqueado/reabierto siquiera las viera. Caso real: Carlos
+    Gerardo Meza (9 de agosto) desaparecía del conteo pese a estar indexado
+    correctamente. Filtrar por last_message_from='buyer' en el WHERE (no
+    como criterio de orden) reduce el universo real a un pequeño porcentaje
+    del total -- no necesita paginación."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT idx.pack_id, idx.order_id, idx.last_message_from, idx.last_message_text,
+                       idx.last_message_date, idx.total_messages
+                FROM ml_messages_index idx
+                LEFT JOIN ml_message_views v
+                    ON v.pack_id = idx.pack_id AND v.account_id = idx.account_id
+                WHERE idx.account_id = ? AND idx.last_message_from = 'buyer'
+                  AND (
+                      COALESCE(v.status, '') != 'resolved'
+                      OR CAST(strftime('%s', substr(idx.last_message_date, 1, 19)) AS REAL) > COALESCE(v.viewed_at, 0)
+                  )
+                ORDER BY idx.last_message_date DESC""",
+            (account_id,),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
 async def log_sent_message(pack_id: str, account_id: str, sent_by: str, text: str) -> None:
     """Registra quién envió un mensaje ML desde la app -- ver ml_message_sent_log
     arriba. Llamado por send_message (health.py) justo después de un envío

@@ -42,32 +42,19 @@ async def _count_ml_pending_excluding_blocked(client) -> int:
     nuestro índice local desactualizado. No se puede filtrar esto con una
     query SQL pura (el estado bloqueado solo existe en vivo en ML), así que
     se hace un chequeo en vivo acotado con caché de 10 min para no golpear
-    la API de ML en cada poll."""
+    la API de ML en cada poll.
+
+    FIX 2026-08-11: usaba get_message_index(acc, offset=0, limit=1000) y
+    re-filtraba en Python -- con el histórico creciendo a 9,436 filas
+    (barrido automático de 180 días, PARTE 3) el bucket de 'buyer + no
+    resuelto' pudo superar 1,000, cortando conversaciones viejas ANTES de
+    que esta función las viera (caso real: Carlos Gerardo Meza, 9 de
+    agosto, indexado correctamente pero ausente del conteo). Ahora usa
+    get_all_pending_candidates(), que filtra por last_message_from='buyer'
+    en el WHERE de SQL -- sin el límite de paginación."""
     import time as _t
     acc = str(client.user_id)
-    rows, _total = await _ts.get_message_index(acc, offset=0, limit=1000)
-    views = await _ts.get_message_views([r["pack_id"] for r in rows], acc) if rows else {}
-
-    from datetime import datetime as _dt
-
-    def _iso_ts(iso_date):
-        if not iso_date:
-            return 0.0
-        try:
-            return _dt.fromisoformat(iso_date.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            return 0.0
-
-    candidates = []
-    for r in rows:
-        if r["last_message_from"] != "buyer":
-            continue
-        vi = views.get(r["pack_id"])
-        resolved_info = vi if vi and vi.get("status") == "resolved" else None
-        reopened = bool(resolved_info and _iso_ts(r["last_message_date"]) > (resolved_info.get("viewed_at") or 0))
-        already_resolved = bool(resolved_info) and not reopened
-        if not already_resolved:
-            candidates.append(r["pack_id"])
+    candidates = [r["pack_id"] for r in await _ts.get_all_pending_candidates(acc)]
 
     now = _t.time()
     to_check = [
