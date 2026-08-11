@@ -25123,6 +25123,20 @@ async def diag_ml_pending_list(token: str = "", account_id: str = "", live_check
     return {"account_id": account_id, "total_indexed": total, "pending_count": len(pending), "pending": pending}
 
 
+@app.get("/api/diag/ml-sent-log-lookup")
+async def diag_ml_sent_log_lookup(token: str = "", account_id: str = "", pack_id: str = ""):
+    """Consulta quien (que usuario del dashboard) envio cada mensaje de un
+    pack via nuestra app -- ver ml_message_sent_log. Vacio = ese mensaje no
+    se mando desde la app (directo en ML, o de antes de que existiera esta
+    tabla, 2026-08-11)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id:
+        return JSONResponse({"error": "account_id y pack_id requeridos"}, status_code=400)
+    log = await token_store.get_sent_by_log([pack_id], account_id)
+    return {"pack_id": pack_id, "entries": log.get(pack_id, [])}
+
+
 @app.get("/api/diag/ml-message-raw-dump")
 async def diag_ml_message_raw_dump(token: str = "", account_id: str = "", pack_id: str = ""):
     """Dump SIN filtrar de los últimos mensajes de un pack -- todos los campos
