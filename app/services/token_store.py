@@ -262,6 +262,27 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_ml_messages_index_account
             ON ml_messages_index (account_id, last_message_date)
         """)
+        # Firma de quién respondió cada mensaje ML (2026-08-11) -- ML no
+        # distingue empleados, solo sabe que respondió "la cuenta". Jovan
+        # reportó (y ya lo había pedido antes) que necesita ver qué persona
+        # de su equipo contestó cada conversación. Se llena en send_message
+        # (health.py) al momento de enviar; solo cubre mensajes enviados
+        # desde la app de aquí en adelante -- no hay forma de saber quién
+        # mandó algo directo desde ML o antes de este cambio.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_message_sent_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                pack_id    TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                sent_by    TEXT NOT NULL,
+                sent_at    REAL NOT NULL,
+                text       TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ml_message_sent_log_pack
+            ON ml_message_sent_log (pack_id, account_id)
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bm_gap_scan_status (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -2559,6 +2580,40 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
             params + [limit, offset],
         )).fetchall()
     return [dict(r) for r in rows], total
+
+
+async def log_sent_message(pack_id: str, account_id: str, sent_by: str, text: str) -> None:
+    """Registra quién envió un mensaje ML desde la app -- ver ml_message_sent_log
+    arriba. Llamado por send_message (health.py) justo después de un envío
+    exitoso. Best-effort: nunca debe tumbar el envío ya confirmado por ML."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "INSERT INTO ml_message_sent_log (pack_id, account_id, sent_by, sent_at, text) VALUES (?, ?, ?, ?, ?)",
+            (pack_id, account_id, sent_by, _t.time(), text[:500]),
+        )
+        await db.commit()
+
+
+async def get_sent_by_log(pack_ids: list, account_id: str) -> dict:
+    """Retorna dict {pack_id: [{sent_by, sent_at, text}, ...]} para los
+    pack_ids dados -- se cruzan por texto contra los mensajes del hilo en
+    vivo (ver _fetch_enriched_ml_conversations, main.py) porque ML no expone
+    ningún id de mensaje estable para hacer join directo."""
+    if not pack_ids:
+        return {}
+    placeholders = ",".join("?" * len(pack_ids))
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"SELECT pack_id, sent_by, sent_at, text FROM ml_message_sent_log "
+            f"WHERE pack_id IN ({placeholders}) AND account_id = ? ORDER BY sent_at",
+            list(pack_ids) + [account_id],
+        )).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["pack_id"], []).append(dict(r))
+    return out
 
 
 

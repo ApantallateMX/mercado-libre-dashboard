@@ -10573,6 +10573,14 @@ async def _fetch_enriched_ml_conversations(
         _views_map = await token_store.get_message_views(_pack_ids_for_views, _acc_for_views) if _pack_ids_for_views else {}
     except Exception:
         _views_map = {}
+    # Firma de quién respondió -- ML no distingue empleados, solo "la cuenta".
+    # Jovan lo pidió (de nuevo) 2026-08-11. Solo cubre envíos hechos desde la
+    # app (ver send_message, health.py) -- se cruza por texto exacto contra
+    # el hilo en vivo porque ML no da ningún id de mensaje estable.
+    try:
+        _sent_by_log = await token_store.get_sent_by_log(_pack_ids_for_views, _acc_for_views) if _pack_ids_for_views else {}
+    except Exception:
+        _sent_by_log = {}
 
     def _iso_to_ts(iso_date: str) -> float:
         if not iso_date:
@@ -10605,6 +10613,7 @@ async def _fetch_enriched_ml_conversations(
         if row["last_message_date"]:
             last_elapsed, _ = _elapsed_str(row["last_message_date"])
 
+        _sent_by_candidates = list(_sent_by_log.get(row["pack_id"], []))
         enriched_msgs = []
         for m in last_5:
             from_id = str(m.get("from", {}).get("user_id", ""))
@@ -10626,12 +10635,19 @@ async def _fetch_enriched_ml_conversations(
             ]
             if not text and not attachments:
                 text = "-"
-            enriched_msgs.append(SimpleNamespace(text=text, is_seller=is_seller, time=msg_time, attachments=attachments))
+            sent_by = ""
+            if is_seller and text and text != "-":
+                for _i, _cand in enumerate(_sent_by_candidates):
+                    if _cand["text"] == text[:500]:
+                        sent_by = _cand["sent_by"]
+                        _sent_by_candidates.pop(_i)  # no reusar la misma firma si el texto se repite
+                        break
+            enriched_msgs.append(SimpleNamespace(text=text, is_seller=is_seller, time=msg_time, attachments=attachments, sent_by=sent_by))
         # El thread en vivo puede fallar (rate limit, pack viejo) — usar el
         # resumen ya indexado como respaldo en vez de mostrar la tarjeta vacía.
         if not enriched_msgs and row["last_message_text"]:
             enriched_msgs = [SimpleNamespace(
-                text=row["last_message_text"], is_seller=not last_from_buyer, time="", attachments=[],
+                text=row["last_message_text"], is_seller=not last_from_buyer, time="", attachments=[], sent_by="",
             )]
 
         order_ctx = order_context_map.get(row["order_id"], {})

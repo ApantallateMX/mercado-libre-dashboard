@@ -59,7 +59,8 @@
     <div class="msg-conv-card border border-gray-200 rounded-lg overflow-hidden {{ 'border-l-4 border-l-yellow-400' if conv.needs_response else '' }}"
          id="msg-card-{{ conv.pack_id }}"
          data-account-id="{{ conv.account_id }}"
-         data-needs-response="{{ 'true' if conv.needs_response else 'false' }}">
+         data-needs-response="{{ 'true' if conv.needs_response else 'false' }}"
+         data-current-user="{{ conv.current_user }}">
 
         <!-- Header -->
         <div class="p-4 pb-2">
@@ -151,7 +152,7 @@
                      data-msg-role="{{ 'seller' if m.is_seller else 'buyer' }}"
                      data-msg-text="{{ m.text }}">
                     <p class="text-xs font-medium {{ 'text-blue-100' if m.is_seller else 'text-gray-500' }} mb-0.5">
-                        {{ 'Tu' if m.is_seller else 'Comprador' }}{{ ' ' + m.time if m.time else '' }}
+                        {% if m.is_seller %}{{ m.sent_by if m.sent_by else 'Tu' }}{% else %}Comprador{% endif %}{{ ' ' + m.time if m.time else '' }}
                     </p>
                     {% if m.text and m.text != '-' %}{{ m.text }}{% endif %}
                     {% for att in (m.attachments or []) %}

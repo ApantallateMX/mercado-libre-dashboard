@@ -453,6 +453,10 @@ async def send_message(pack_id: str, body: MessageRequest, request: Request):
             user = getattr(request.state, "dashboard_user", {}) or {}
             username = user.get("sub") or user.get("name") or "?"
             await _ts.update_message_view_status(pack_id, acc, "resolved", viewed_by=username)
+            # FIX 2026-08-11: Jovan pidio (de nuevo, ya lo habia pedido antes)
+            # poder ver que persona de su equipo respondio cada mensaje -- ML
+            # no distingue empleados, solo sabe que respondio "la cuenta".
+            await _ts.log_sent_message(pack_id, acc, username, body.text)
         except Exception:
             pass  # best-effort -- nunca debe tumbar el envio ya exitoso
         return result

@@ -908,6 +908,13 @@ window._appendSentMessageBubble = function(packId, text) {
         var now = new Date();
         var hh = String(now.getHours()).padStart(2, '0');
         var mm = String(now.getMinutes()).padStart(2, '0');
+        // FIX 2026-08-11: Jovan pidio (de nuevo) ver quien de su equipo
+        // respondio cada mensaje. El backend ya guarda la firma real al
+        // enviar (send_message, health.py) -- aqui solo se refleja de
+        // inmediato usando el usuario logueado actual, leido del propio
+        // card (data-current-user, health_messages.html).
+        var card0 = document.getElementById('msg-card-' + packId);
+        var currentUser = (card0 && card0.getAttribute('data-current-user')) || '';
 
         var row = document.createElement('div');
         row.className = 'flex justify-end';
@@ -918,7 +925,7 @@ window._appendSentMessageBubble = function(packId, text) {
 
         var label = document.createElement('p');
         label.className = 'text-xs font-medium text-blue-100 mb-0.5';
-        label.textContent = 'Tu ' + hh + ':' + mm;
+        label.textContent = (currentUser || 'Tu') + ' ' + hh + ':' + mm;
         bubble.appendChild(label);
         bubble.appendChild(document.createTextNode(text));
 
