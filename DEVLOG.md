@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 (cont. 3) — FIX: conversaciones reabiertas invisibles + filtro Pendientes + FEAT firma por empleado
+
+1. **`get_message_index()` no detectaba conversaciones reabiertas para
+   ordenar la pagina** -- el ORDER BY solo miraba `status != 'resolved'`,
+   sin comparar fechas. Una conversacion marcada resuelta que el comprador
+   reabrio despues (escribio de nuevo) se enterraba entre miles de filas
+   mas recientes -- el badge (que si compara fechas en Python) la contaba
+   bien, pero la lista con "Pendientes" activo mostraba vacio. Caso real
+   verificado: resuelta 4-ago, reabierta 10-ago (pack 2000013983536133,
+   BLOWTECHNOLOGIES). Ahora el ORDER BY tambien compara
+   `last_message_date > viewed_at` via SQL (`strftime`).
+
+2. **"Todas las cuentas"/busqueda/limpiar busqueda no reaplicaban el
+   filtro "Pendientes"** tras el swap de htmx -- mostraba TODOS los
+   mensajes (respondidos o no) aunque el boton se viera "Pendientes"
+   seleccionado (el template siempre lo renderiza asi por default, pero el
+   filtro real es JS del lado del cliente que nunca se reinvocaba tras el
+   swap). Se agrega `window._reapplyMsgFilter()` a los 3 flujos.
+
+3. **FEAT: firma de quien respondio cada mensaje** (Jovan: "esto ya lo
+   habia requerido..." -- pedido repetido, no implementado la primera vez).
+   ML no distingue empleados, solo sabe que respondio "la cuenta" -- nueva
+   tabla `ml_message_sent_log` registra quien envia cada mensaje desde la
+   app (`send_message`, health.py); se muestra cruzando por texto exacto
+   contra el hilo en vivo. Solo cubre envios hechos desde la app de aqui en
+   adelante, no retroactivo ni mensajes mandados directo desde ML.
+
+---
+
 ## 2026-08-11 (cont.) — FIX: UI de enviar mensaje no se actualizaba + busqueda de Mensajes rota + PARTE 3 automatizada
 
 Continuacion de la sesion de mensajes ML de mas arriba, con casos nuevos que
