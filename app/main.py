@@ -6234,6 +6234,16 @@ async def _bm_master_sync_once_inner():
         priority_misses = await token_store.get_reconciliation_priority_skus(misses, _MAX_MISS_PER_CYCLE)
         from app.services.binmanager_client import get_shared_bm as _gsbm_master
         bm_cli = await _gsbm_master()
+        # FIX 2026-08-11 (Jovan: "llevamos mas de 1 dia y no puedas terminar"):
+        # un SKU que BM nunca reconoce (descontinuado, mal capturado, etc.)
+        # jamas entraba a bm_sku_master -- get_reconciliation_priority_skus lo
+        # trataba como "nunca visto" (prioridad maxima) CADA ciclo, para
+        # siempre, bloqueando el avance hacia el resto del universo. Mismo
+        # patron de bug que el fix anterior de misses[:150] estable, pero para
+        # fallos permanentes en vez de exito. Ahora se registra el intento
+        # fallido con verified=False -- cae a la cola de "no verificado, mas
+        # antiguo primero" y rota de forma justa con los demas.
+        _still_missing_rows: list[dict] = []
         for base_u in priority_misses:
             try:
                 stock = await asyncio.wait_for(
@@ -6248,10 +6258,21 @@ async def _bm_master_sync_once_inner():
                     "total_qty": 0, "no_vendible_qty": 0, "mty_qty": 0, "cdmx_qty": 0, "tj_qty": 0,
                     "verified": True,
                 })
+            else:
+                _still_missing_rows.append({
+                    "sku": base_u, "available_qty": 0, "reserve_qty": 0,
+                    "total_qty": 0, "no_vendible_qty": 0, "mty_qty": 0, "cdmx_qty": 0, "tj_qty": 0,
+                    "verified": False,
+                })
             await asyncio.sleep(0.3)
         if _reconciled_rows:
             await token_store.upsert_bm_stock_full_batch(_reconciled_rows)
-        logger.info(f"[BM-MASTER-SYNC] {len(_reconciled_rows)}/{min(len(misses), _MAX_MISS_PER_CYCLE)} misses reconciliados este ciclo (de {len(misses)} totales)")
+        if _still_missing_rows:
+            await token_store.upsert_bm_stock_full_batch(_still_missing_rows)
+        logger.info(
+            f"[BM-MASTER-SYNC] {len(_reconciled_rows)}/{min(len(misses), _MAX_MISS_PER_CYCLE)} misses reconciliados "
+            f"({len(_still_missing_rows)} siguen sin encontrarse en BM, marcados para rotar) de {len(misses)} totales"
+        )
 
     logger.info(f"[BM-MASTER-SYNC] Ciclo completo: {len(to_write) + len(_reconciled_rows)}/{len(skus)} SKUs escritos a bm_sku_master")
 
