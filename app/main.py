@@ -18096,7 +18096,7 @@ async def diag_paused_with_stock(account_id: str = "", token: str = ""):
         db.row_factory = _aio_pws.Row
         rows = await (await db.execute(
             "SELECT item_id, sku, base_sku, title, is_full FROM ml_listings "
-            "WHERE account_id = ? AND status = 'paused' AND available_quantity = 0",
+            "WHERE account_id = ? AND status = 'paused' AND available_qty = 0",
             (account_id,),
         )).fetchall()
     paused = [dict(r) for r in rows]
