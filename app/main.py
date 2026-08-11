@@ -5576,6 +5576,19 @@ async def _get_all_products_cached(client, include_paused=False, include_all=Fal
                             try:
                                 body = _json.loads(dj)
                                 if body.get("id"):
+                                    # FIX 2026-08-11: data_json es un snapshot que solo se
+                                    # refresca completo cada 10min (incremental) o 6h (full) --
+                                    # pero available_qty en la columna plana se actualiza cada
+                                    # 3 min por run_ml_qty_sync()/update_ml_qty_batch(), que
+                                    # SOLO toca la columna, nunca el blob. Sin esto, "products"
+                                    # podía traer un available_quantity viejo/!= 0 para items
+                                    # que la columna plana YA sabe que están en 0 -- excluyéndolos
+                                    # en silencio del filtro "activate" (que exige ==0) aunque
+                                    # BM ya confirmara stock real disponible para reactivar.
+                                    # Confirmado en vivo: 241+ candidatos reales de la cuenta
+                                    # 292395685 desaparecían por este desfase.
+                                    body["available_quantity"] = r.get("available_qty", body.get("available_quantity"))
+                                    body["status"] = r.get("status", body.get("status"))
                                     products_from_db.append(body)
                             except Exception:
                                 pass
@@ -6589,22 +6602,6 @@ async def _prewarm_caches(user_id: str = None):
                 # el bulk diga >0 — bulk de BM puede devolver phantom stock (bug BM server-side).
                 activate = [p for p in products if p.get("status") == "paused" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
                 activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
-                # DEBUG TEMPORAL 2026-08-11 -- trazar por qué SNTV005554 (y otros
-                # candidatos confirmados por /api/diag/paused-with-stock) no llegan
-                # a la lista activate para user 292395685. Quitar tras diagnosticar.
-                if str(client.user_id) == "292395685":
-                    for _dp in products:
-                        if _dp.get("sku", "").startswith("SNTV005554"):
-                            logger.info(
-                                f"[DEBUG-ACTIVATE] id={_dp.get('id')} sku={_dp.get('sku')} "
-                                f"status={_dp.get('status')} avail_qty={_dp.get('available_quantity')} "
-                                f"_bm_avail={_dp.get('_bm_avail')} _bm_avail_raw={_dp.get('_bm_avail_raw')} "
-                                f"is_full={_dp.get('is_full')} in_restock_ids={_dp.get('id') in restock_ids} "
-                                f"in_synced={_dp.get('id') in _synced_ids} "
-                                f"in_suppress={str(_dp.get('id')) in _uid_suppress} "
-                                f"verified_zero={_bm_avail_verified_zero(_dp.get('sku', ''))} "
-                                f"bulk_ok={_bm_bulk_ok(_dp.get('sku', ''))}"
-                            )
                 critical = [
                     p for p in products
                     if p.get("status") == "active"
