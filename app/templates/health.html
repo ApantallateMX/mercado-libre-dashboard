@@ -875,13 +875,59 @@ window.sendChatMessage = function(packId, accountId) {
     .then(function(r) {
         if (r.ok) {
             msgEl.textContent = 'Mensaje enviado'; msgEl.className = 'text-xs text-green-600 mt-1';
-            textarea.value = ''; btn.disabled = false; btn.textContent = 'Enviar';
+            btn.disabled = false; btn.textContent = 'Enviar';
+            window._appendSentMessageBubble(packId, text);
+            textarea.value = '';
         } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
     })
     .catch(function(e) {
         msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'text-xs text-red-600 mt-1';
         btn.disabled = false; btn.textContent = 'Enviar';
     });
+};
+
+// FIX 2026-08-11: Jovan reporto con capturas que tras "Enviar" el mensaje SI
+// se guardaba (confirmado "Mensaje enviado") pero la platica arriba y el
+// badge "Pendiente" se quedaban con el estado de antes hasta recargar la
+// pagina completa -- sendChatMessage nunca tocaba el DOM del hilo. Se agrega
+// la burbuja del lado del cliente y se oculta "Pendiente" (el backend ya
+// marca la conversacion resuelta al enviar, ver health.py send_message).
+window._appendSentMessageBubble = function(packId, text) {
+    var container = document.getElementById('conv-messages-' + packId);
+    if (container) {
+        var now = new Date();
+        var hh = String(now.getHours()).padStart(2, '0');
+        var mm = String(now.getMinutes()).padStart(2, '0');
+
+        var row = document.createElement('div');
+        row.className = 'flex justify-end';
+        var bubble = document.createElement('div');
+        bubble.className = 'max-w-[80%] rounded-lg px-3 py-2 text-sm bg-blue-500 text-white';
+        bubble.setAttribute('data-msg-role', 'seller');
+        bubble.setAttribute('data-msg-text', text);
+
+        var label = document.createElement('p');
+        label.className = 'text-xs font-medium text-blue-100 mb-0.5';
+        label.textContent = 'Tu ' + hh + ':' + mm;
+        bubble.appendChild(label);
+        bubble.appendChild(document.createTextNode(text));
+
+        row.appendChild(bubble);
+        container.appendChild(row);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    var pendingBadge = document.getElementById('msg-pending-badge-' + packId);
+    if (pendingBadge) pendingBadge.remove();
+
+    var card = document.getElementById('msg-card-' + packId);
+    if (card) { card.classList.remove('border-l-yellow-400'); card.classList.remove('border-l-4'); }
+
+    var viewBadge = document.getElementById('msg-view-badge-' + packId);
+    if (viewBadge) {
+        viewBadge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700';
+        viewBadge.textContent = '✓ Resuelto';
+    }
 };
 
 window.respondClaim = function(claimId) {
