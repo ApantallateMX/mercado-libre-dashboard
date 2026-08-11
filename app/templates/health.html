@@ -761,12 +761,22 @@ window._msgBaseUrl = function() {
     return isUnified ? '/partials/health-messages-unified' : '/partials/health-messages';
 };
 
+// FIX 2026-08-11: Jovan reporto que "Todas las cuentas" mostraba TODOS los
+// mensajes (respondidos o no) en vez de solo pendientes. El botón "Pendientes"
+// siempre se re-renderiza como activo (default del template, health_messages.html),
+// pero el filtro en si es puro JS del lado del cliente (ver filterMessages) que
+// solo se aplicaba en la carga inicial de la pestaña -- nunca se reaplicaba tras
+// cambiar de cuenta/buscar/limpiar busqueda, así que las tarjetas nuevas se
+// quedaban todas visibles sin importar needs_response, aunque el botón se
+// siguiera viendo "Pendientes" seleccionado.
+window._reapplyMsgFilter = function() { window.filterMessages('pending'); };
+
 window.setMsgScope = function(scope) {
     var url = (scope === 'all') ? '/partials/health-messages-unified' : '/partials/health-messages';
     if (window.switchHealthTab) {
         window.switchHealthTab('messages', url);
     } else {
-        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
+        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'}).then(window._reapplyMsgFilter);
     }
 };
 
@@ -777,7 +787,7 @@ window.searchMessages = function(e) {
     if (window.switchHealthTab) {
         window.switchHealthTab('messages', url);
     } else {
-        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
+        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'}).then(window._reapplyMsgFilter);
     }
 };
 
@@ -786,7 +796,7 @@ window.clearMsgSearch = function() {
     if (window.switchHealthTab) {
         window.switchHealthTab('messages', url);
     } else {
-        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
+        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'}).then(window._reapplyMsgFilter);
     }
 };
 

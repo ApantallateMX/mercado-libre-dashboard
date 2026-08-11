@@ -2517,7 +2517,15 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
     misma página (20-50 filas) y filtraba el texto DESPUÉS, así que una
     conversación vieja y ya respondida (fuera de esa página chica) nunca
     aparecía sin importar que el número de orden estuviera bien escrito.
-    Jovan reportó 2026-08-11 con un caso real (orden de hace 25 días)."""
+    Jovan reportó 2026-08-11 con un caso real (orden de hace 25 días).
+
+    El ORDER BY también compara last_message_date contra v.viewed_at (no solo
+    status != 'resolved') -- caso real 2026-08-11: conversación marcada
+    'resuelta' el 4 de agosto que el comprador reabrió el 10 (escribió de
+    nuevo) se quedaba enterrada entre miles de filas más recientes porque
+    status seguía siendo 'resolved' en la tabla; el badge (que sí hace este
+    mismo chequeo de fecha en Python, ver _count_ml_pending_excluding_blocked)
+    la contaba bien pero la lista nunca la mostraba en ninguna página."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         where = "WHERE idx.account_id = ?"
@@ -2542,8 +2550,10 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
                     ON v.pack_id = idx.pack_id AND v.account_id = idx.account_id
                 {where}
                 ORDER BY
-                    CASE WHEN idx.last_message_from = 'buyer' AND COALESCE(v.status, '') != 'resolved'
-                         THEN 0 ELSE 1 END,
+                    CASE WHEN idx.last_message_from = 'buyer' AND (
+                             COALESCE(v.status, '') != 'resolved'
+                             OR CAST(strftime('%s', substr(idx.last_message_date, 1, 19)) AS REAL) > COALESCE(v.viewed_at, 0)
+                         ) THEN 0 ELSE 1 END,
                     idx.last_message_date DESC
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
