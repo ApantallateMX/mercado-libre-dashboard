@@ -6381,22 +6381,6 @@ async def _prewarm_caches(user_id: str = None):
                 _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
                 _apply_bundle_stock_override(products, _bundles)
 
-                # DEBUG TEMPORAL 2026-08-11 (ronda 2) -- verificar si el fix de
-                # available_quantity stale resolvió el caso real. Quitar tras diagnosticar.
-                if str(client.user_id) == "292395685":
-                    _dbg_found = 0
-                    for _dp in products:
-                        if _dp.get("sku", "").startswith("SNTV005554"):
-                            _dbg_found += 1
-                            logger.info(
-                                f"[DEBUG-ACTIVATE2] id={_dp.get('id')} sku={_dp.get('sku')} "
-                                f"status={_dp.get('status')} avail_qty={_dp.get('available_quantity')} "
-                                f"in_bm_candidates={_dp in bm_candidates} "
-                                f"_bm_avail={_dp.get('_bm_avail')} has_bm_avail_key={'_bm_avail' in _dp}"
-                            )
-                    if _dbg_found == 0:
-                        logger.info(f"[DEBUG-ACTIVATE2] SNTV005554 NO aparece en products (total={len(products)}) para uid=292395685")
-
                 # Helper: SKU bulk-verificado en ESTE ciclo de prewarm (ts > 0).
                 # Entradas cargadas de DB (ts = 0.0) pueden tener stock obsoleto.
                 # Las alertas SOLO usan datos confirmados por el bulk actual.
@@ -6616,8 +6600,15 @@ async def _prewarm_caches(user_id: str = None):
                 restock_ids = {p["id"] for p in restock}
                 # _bm_avail_verified_zero: si per-SKU verificó 0 recientemente, no incluir aunque
                 # el bulk diga >0 — bulk de BM puede devolver phantom stock (bug BM server-side).
-                activate = [p for p in products if p.get("status") == "paused" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
-                activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
+                # FIX 2026-08-11 (pedido por Jovan): usar _bm_avail_raw (stock crudo BM), NO
+                # _bm_avail (ajustado por el colchón de seguridad de reparto entre cuentas,
+                # safety_buffer_units=2 por default). Con SKUs de stock muy bajo (1-3 uds),
+                # el colchón dejaba _bm_avail en 0 aunque BM sí tuviera unidades reales sin
+                # asignar a ninguna cuenta — "Activar" es solo una señal de oportunidad, no
+                # una asignación firme de cuánto publicar (esa sigue usando _bm_avail con
+                # colchón normalmente, sin cambios aquí).
+                activate = [p for p in products if p.get("status") == "paused" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail_raw") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
+                activate.sort(key=lambda x: x.get("_bm_avail_raw", 0), reverse=True)
                 critical = [
                     p for p in products
                     if p.get("status") == "active"
