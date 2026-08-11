@@ -10504,7 +10504,7 @@ async def health_search_partial(
 
 async def _fetch_enriched_ml_conversations(
     client, seller_id: str, offset: int, limit: int, date_from: str, date_to: str,
-    account_id: str = "", account_nickname: str = "",
+    account_id: str = "", account_nickname: str = "", q: str = "",
 ) -> tuple:
     """Trae y enriquece conversaciones de UNA cuenta ML. Reescrito 2026-08-04:
     la LISTA de conversaciones ahora viene de ml_messages_index (índice local
@@ -10516,7 +10516,7 @@ async def _fetch_enriched_ml_conversations(
     (barato — acotado a `limit`, no a cientos de órdenes).
     Retorna (enriched, total) — total real para pagination correcta."""
     index_rows, total = await token_store.get_message_index(
-        seller_id, offset=offset, limit=limit, date_from=date_from, date_to=date_to,
+        seller_id, offset=offset, limit=limit, date_from=date_from, date_to=date_to, q=q,
     )
 
     sem_th = asyncio.Semaphore(10)
@@ -10698,25 +10698,36 @@ async def health_messages_partial(
         df = None
         dt = None
         seller_id = str(client.user_id)
+        q_clean = (q or "").strip()
         try:
-            enriched, real_total = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
-            paging = {"total": real_total, "offset": offset, "limit": limit}
+            if q_clean:
+                # FIX 2026-08-11: buscar pack_id/order_id/texto CONTRA TODO EL
+                # HISTORICO via SQL (ver get_message_index), no solo la pagina
+                # chica que ya se hubiera traido -- Jovan reporto un caso real
+                # (orden de hace 25 dias) que la busqueda nunca encontraba
+                # porque no vivia en la primera pagina por defecto.
+                matched, _mt = await _fetch_enriched_ml_conversations(client, seller_id, 0, 50, df, dt, q=q_clean)
+                # Comprador/producto no viven en ml_messages_index (se piden
+                # en vivo por orden) -- se preserva la busqueda de la pagina
+                # normal para esos dos campos, para no regresar ese caso.
+                page, real_total = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
+                seen_packs = {c.pack_id for c in matched}
+                q_lower = q_clean.lower()
+                extra = [
+                    c for c in page
+                    if c.pack_id not in seen_packs
+                    and (q_lower in (c.order_buyer or "").lower() or q_lower in (c.order_product or "").lower())
+                ]
+                enriched = matched + extra
+                paging = {"total": len(enriched), "offset": 0, "limit": limit}
+            else:
+                enriched, real_total = await _fetch_enriched_ml_conversations(client, seller_id, offset, limit, df, dt)
+                paging = {"total": real_total, "offset": offset, "limit": limit}
         except Exception:
             enriched = []
             paging = {"total": 0, "offset": 0, "limit": limit}
 
         enriched = _sort_ml_conversations(enriched)
-
-        # Búsqueda por orden, comprador o producto
-        q_clean = (q or "").strip().lower()
-        if q_clean:
-            enriched = [
-                c for c in enriched
-                if q_clean in str(c.order_id).lower()
-                or q_clean in str(c.pack_id).lower()
-                or q_clean in (c.order_buyer or "").lower()
-                or q_clean in (c.order_product or "").lower()
-            ]
 
         # Enriquecer con quién abrió/tomó cada conversación
         _du = getattr(request.state, "dashboard_user", {}) or {}
@@ -10764,6 +10775,8 @@ async def health_messages_unified_partial(
     accounts = await token_store.get_all_tokens()
     sem_ml = asyncio.Semaphore(3)
 
+    q_clean = (q or "").strip()
+
     async def _for_account(acc):
         async with sem_ml:
             uid = acc.get("user_id", "")
@@ -10772,6 +10785,24 @@ async def health_messages_unified_partial(
             if not cli:
                 return []
             try:
+                if q_clean:
+                    # FIX 2026-08-11: mismo criterio que health_messages_partial
+                    # -- pack_id/order_id/texto contra todo el historico de
+                    # CADA cuenta, no solo el top-30 que ya se hubiera traido.
+                    matched, _mt = await _fetch_enriched_ml_conversations(
+                        cli, uid, 0, 50, df, dt, account_id=uid, account_nickname=nick, q=q_clean,
+                    )
+                    page, _t = await _fetch_enriched_ml_conversations(
+                        cli, uid, 0, 30, df, dt, account_id=uid, account_nickname=nick,
+                    )
+                    seen_packs = {c.pack_id for c in matched}
+                    q_lower = q_clean.lower()
+                    extra = [
+                        c for c in page
+                        if c.pack_id not in seen_packs
+                        and (q_lower in (c.order_buyer or "").lower() or q_lower in (c.order_product or "").lower())
+                    ]
+                    return matched + extra
                 convs, _t = await _fetch_enriched_ml_conversations(cli, uid, 0, 30, df, dt, account_id=uid, account_nickname=nick)
                 return convs
             except Exception:
@@ -10786,16 +10817,6 @@ async def health_messages_unified_partial(
             enriched.extend(r)
 
     enriched = _sort_ml_conversations(enriched)
-
-    q_clean = (q or "").strip().lower()
-    if q_clean:
-        enriched = [
-            c for c in enriched
-            if q_clean in str(c.order_id).lower()
-            or q_clean in str(c.pack_id).lower()
-            or q_clean in (c.order_buyer or "").lower()
-            or q_clean in (c.order_product or "").lower()
-        ]
 
     _du = getattr(request.state, "dashboard_user", {}) or {}
     _current_user = _du.get("sub") or _du.get("name") or "?"

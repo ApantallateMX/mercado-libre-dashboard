@@ -2500,7 +2500,7 @@ async def upsert_message_index(pack_id: str, account_id: str, order_id: str,
 
 
 async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
-                             date_from: str = "", date_to: str = "") -> tuple:
+                             date_from: str = "", date_to: str = "", q: str = "") -> tuple:
     """Lista conversaciones indexadas de UNA cuenta. Pendientes reales primero
     (último mensaje del comprador y no resuelto), luego por fecha más reciente.
     Retorna (rows, total) — total antes de paginar, para 'X de Y'.
@@ -2510,7 +2510,14 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
     (offset=0, limit=20) si hubo 20+ conversaciones más recientes desde
     entonces, aunque el KPI de pendientes (que no pagina) sí lo contara.
     Jovan reportó 2026-08-06 que el KPI marcaba pendientes reales que la
-    lista nunca mostraba en ninguna página visible por default."""
+    lista nunca mostraba en ninguna página visible por default.
+
+    q: búsqueda por pack_id/order_id/texto del último mensaje CONTRA TODO EL
+    HISTÓRICO de la cuenta -- antes health_messages_partial() traía solo esta
+    misma página (20-50 filas) y filtraba el texto DESPUÉS, así que una
+    conversación vieja y ya respondida (fuera de esa página chica) nunca
+    aparecía sin importar que el número de orden estuviera bien escrito.
+    Jovan reportó 2026-08-11 con un caso real (orden de hace 25 días)."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         where = "WHERE idx.account_id = ?"
@@ -2521,6 +2528,10 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
         if date_to:
             where += " AND idx.last_message_date <= ?"
             params.append(date_to + "T23:59:59")
+        if q:
+            where += " AND (idx.pack_id LIKE ? OR idx.order_id LIKE ? OR idx.last_message_text LIKE ?)"
+            like_term = f"%{q}%"
+            params.extend([like_term, like_term, like_term])
         cur = await db.execute(f"SELECT COUNT(*) AS n FROM ml_messages_index idx {where}", params)
         total = (await cur.fetchone())["n"]
         rows = await (await db.execute(
