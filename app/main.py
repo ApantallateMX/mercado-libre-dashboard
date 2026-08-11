@@ -6199,12 +6199,22 @@ async def _bm_master_sync_once_inner():
     # igual a "no existe". Cap de seguridad por ciclo: si hay muchos misses
     # (bulk recién reseteado tras un restart), se completan gradualmente en
     # ciclos siguientes en vez de bloquear todo el ciclo actual.
+    #
+    # FIX 2026-08-10 (pedido por Jovan: "todos los SKUs deben ser prioridad,
+    # que no se quede nada sin bajar"): el orden de un set() de Python es
+    # estable dentro del mismo proceso corriendo — sin priorizar, misses[:150]
+    # devolvía SIEMPRE el mismo primer lote cada ciclo mientras el proceso no
+    # se reiniciara, sin avanzar nunca hacia el resto. get_reconciliation_
+    # priority_skus() prioriza primero los nunca vistos, luego los mas
+    # antiguos — garantiza cobertura completa del universo con el tiempo,
+    # MISMO volumen de llamadas a BM por ciclo (no aumenta la carga).
     _MAX_MISS_PER_CYCLE = 150
     _reconciled_rows: list[dict] = []
     if misses:
+        priority_misses = await token_store.get_reconciliation_priority_skus(misses, _MAX_MISS_PER_CYCLE)
         from app.services.binmanager_client import get_shared_bm as _gsbm_master
         bm_cli = await _gsbm_master()
-        for base_u in misses[:_MAX_MISS_PER_CYCLE]:
+        for base_u in priority_misses:
             try:
                 stock = await asyncio.wait_for(
                     bm_cli.get_stock_with_reserve(base_u, conditions=_bm_conditions_for_sku(base_u)),
