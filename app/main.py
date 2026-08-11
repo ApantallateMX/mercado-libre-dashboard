@@ -24986,7 +24986,7 @@ async def diag_ml_pending_list(token: str = "", account_id: str = "", live_check
     vs el estado real en ML). Jovan reportó 2026-08-06 que el KPI marcaba
     pendientes que ya no existían en Mercado Libre -- resultaron ser
     conversaciones bloqueadas/movidas a Reclamos (mediación, orden cancelada).
-    live_check=1: para hasta 5 packs, compara contra el thread real de ML
+    live_check=1: para hasta 50 packs, compara contra el thread real de ML
     (conversation_status + último mensaje)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
@@ -25023,7 +25023,7 @@ async def diag_ml_pending_list(token: str = "", account_id: str = "", live_check
         client = await get_meli_client(user_id=account_id)
         if client:
             try:
-                for p in pending[:5]:
+                for p in pending[:50]:
                     try:
                         thread = await client.get_message_thread(p["pack_id"])
                         msgs = thread.get("messages") or []
