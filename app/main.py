@@ -6623,10 +6623,14 @@ async def _prewarm_caches(user_id: str = None):
                 full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 # GAP 7: Inventario estancado — stock en ambos lados pero 0 ventas en 30d
+                # FIX 2026-08-11 (mismo criterio que Activar, pedido por Jovan): usa
+                # _bm_avail_raw, no _bm_avail — Estancado es señal de atención, no
+                # asignación firme; un SKU de 1-3 uds sin ventas no debe esconderse
+                # solo porque el colchón de reparto entre cuentas lo deja en 0.
                 stagnant = [
                     p for p in products
                     if p.get("status") == "active"
-                    and (p.get("_bm_avail") or 0) > 0
+                    and (p.get("_bm_avail_raw") or 0) > 0
                     and p.get("available_quantity", 0) > 0
                     and p.get("units", 0) == 0
                     and not p.get("is_full")
@@ -6635,7 +6639,7 @@ async def _prewarm_caches(user_id: str = None):
                     and _bm_bulk_ok(p.get("sku", ""))
                 ]
                 stagnant.sort(
-                    key=lambda x: (x.get("_bm_avail") or 0) * (x.get("price") or 1),
+                    key=lambda x: (x.get("_bm_avail_raw") or 0) * (x.get("price") or 1),
                     reverse=True
                 )
 
