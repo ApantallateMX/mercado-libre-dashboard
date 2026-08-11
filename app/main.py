@@ -6372,10 +6372,17 @@ async def _prewarm_caches(user_id: str = None):
                 # Entradas cargadas de DB (ts = 0.0) pueden tener stock obsoleto.
                 # Las alertas SOLO usan datos confirmados por el bulk actual.
                 def _bm_bulk_ok(sku: str) -> bool:
+                    # FIX 2026-08-11: solo chequeaba el timestamp (ts>0), no el
+                    # flag _v -- una llamada individual que truena por timeout
+                    # (_store_empty) guarda un timestamp real con avail_total=0
+                    # pero SIN _v (o _v=False), y antes eso se leia igual que
+                    # "BM confirmo 0 stock real". Encontrado en vivo 2026-08-11
+                    # via binmanager-specialist: excluia candidatos reales de
+                    # "Activar" que solo fallaron por timeout, no por stock=0.
                     if not sku:
                         return False
                     _e = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-                    return _e is not None and _e[0] > 0.0
+                    return _e is not None and _e[0] > 0.0 and bool(_e[1].get("_v"))
 
                 # Recomendación inteligente de qty a sincronizar por velocidad de ventas.
                 # Fórmula: stock para 14 días al ritmo actual, acotado a la cuota asignada.
@@ -7817,36 +7824,37 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                             return
                         _bulk_miss_retry_running = True
                         try:
-                            _mlog.info(f"[BM-BULK] Retry per-SKU para {len(miss_skus)} bulk misses (ts=0 o stale>0)")
+                            # FIX 2026-08-11 (pedido por Jovan): para SKUs NO-TV, confiar
+                            # directamente en "no aparece en el bulk vendible = 0 stock"
+                            # SIN verificar 1-por-1 contra BM. Las condiciones ICB/ICC que
+                            # justifican una verificación aparte SOLO aplican a TVs (SNTV*),
+                            # que ya se manejan aparte en _fetch_tv_wh_breakdown -- este
+                            # _miss_list ya las excluye (línea de arriba). Verificar cada
+                            # SKU individualmente aquí (await _wh_phase, hasta 50 × ~20s)
+                            # es lo que generó la cola de decenas de minutos y dejó las
+                            # alertas caídas para las 4 cuentas el 2026-08-11 cuando BM
+                            # respondía lento (14-19s/llamada) -- sin aportar más certeza
+                            # real que la que ya da la ausencia en el bulk.
                             _db_updates = []
                             for _msku in miss_skus:
-                                await _wh_phase(_msku, _track_progress=False)
                                 _bk = normalize_to_bm_sku(_msku)
-                                _bm_entry = _bm_stock_cache.get(_bk)
-                                if _bm_entry:
-                                    # Siempre actualizar DB — avail puede ser 0 (BM confirmó sin stock)
-                                    # o >0 (tiene stock real). NUNCA borrar: los SKUs persisten en el
-                                    # sistema, solo cambia la cantidad. Si BM falló, Fix A en _store_wh
-                                    # preservó el valor anterior → guardamos ese valor sin sobrescribir.
-                                    _db_updates.append((_bk, _bm_entry[1], _bm_entry[0]))
-                                else:
-                                    # Edge case: _wh_phase no pudo guardar en cache (raro).
-                                    # Actualizar DB a 0 explícito en lugar de borrar el SKU.
-                                    _db_updates.append((_bk, {
-                                        "avail_total": 0, "reserved_total": 0, "mty": 0,
-                                        "cdmx": 0, "tj": 0, "total": 0, "no_vendible": 0,
-                                        "_v": False,
-                                    }, _time.time()))
-                                await asyncio.sleep(1)
+                                _existing = _bm_stock_cache.get(_bk)
+                                # Mismo guard que _store_wh/_store_empty: si ya había un
+                                # valor verificado>0, no lo pisamos con el 0 inferido.
+                                if _existing and _existing[1].get("_v") and _existing[1].get("avail_total", 0) > 0:
+                                    continue
+                                _inv = {
+                                    "mty": 0, "cdmx": 0, "tj": 0, "total": 0,
+                                    "avail_total": 0, "reserved_total": 0, "no_vendible": 0,
+                                    "_v": True,  # confiamos en la ausencia del bulk como fuente
+                                    "_wh_fetched": False,
+                                }
+                                _bm_stock_cache[_bk] = (_time.time(), _inv)
+                                _db_updates.append((_bk, _inv, _time.time()))
                             if _db_updates:
                                 try:
                                     await token_store.upsert_bm_stock_batch(_db_updates)
-                                    _n_zero = sum(1 for _, _d, _ in _db_updates
-                                                  if not (_d.get("avail_total") or 0))
-                                    _mlog.info(
-                                        f"[BM-BULK] Bulk-miss retry: {len(_db_updates)} SKUs actualizados "
-                                        f"({_n_zero} en 0, {len(_db_updates) - _n_zero} con stock)"
-                                    )
+                                    _mlog.info(f"[BM-BULK] Bulk-miss: {len(_db_updates)} SKUs marcados en 0 por ausencia de bulk (sin verificación individual)")
                                 except Exception as _e_db:
                                     _mlog.warning(f"[BM-BULK] Error upsert DB: {_e_db}")
                             _mlog.info(f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs")
