@@ -6221,13 +6221,13 @@ async def _bm_master_sync_once_inner():
     # priority_skus() prioriza primero los nunca vistos, luego los mas
     # antiguos — garantiza cobertura completa del universo con el tiempo,
     # MISMO volumen de llamadas a BM por ciclo (no aumenta la carga).
-    # FIX 2026-08-11 (pedido por Jovan, calando): subido de 150 a 500 para
-    # acelerar convergencia. Riesgo conocido y aceptado: si BM tiene un
-    # episodio lento, un ciclo puede tardar mucho mas en terminar (hasta
-    # ~2h peor caso vs ~38min con 150) reteniendo el semaforo global mas
-    # tiempo -- vigilar /api/diag/prewarm-state y /api/diag/bm-master-status
-    # si vuelve a verse contencion como la del incidente de hoy.
-    _MAX_MISS_PER_CYCLE = 500
+    # REVERTIDO 2026-08-11: se probo 500 (pedido por Jovan, "calalo") pero
+    # ~10 min despues _stock_issues_cache aparecio vacio para las 4 cuentas
+    # y bm_health.latency_ms subio a 15.4s -- misma firma del incidente de
+    # ese mismo dia. Revertido a 150 (valor ya probado sin ese problema) por
+    # seguridad -- el intervalo de ciclo mas corto (120s, ver _bm_master_
+    # sync_loop) se queda igual, esa parte no mostro riesgo.
+    _MAX_MISS_PER_CYCLE = 150
     _reconciled_rows: list[dict] = []
     if misses:
         priority_misses = await token_store.get_reconciliation_priority_skus(misses, _MAX_MISS_PER_CYCLE)
