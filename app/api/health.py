@@ -357,7 +357,7 @@ async def take_message(pack_id: str, request: Request, account_id: str = Query("
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         user = getattr(request.state, "dashboard_user", {}) or {}
-        username = user.get("sub") or user.get("name") or "?"
+        username = user.get("display_name") or user.get("username") or "?"
         acc = account_id or str(client.user_id)
         await _ts.take_message(pack_id, acc, username)
         await _log_history(request, username, "ml_message_take", pack_id, {"account_id": acc})
@@ -382,7 +382,7 @@ async def update_message_status(pack_id: str, body: MessageStatusRequest, reques
     try:
         acc = body.account_id or str(client.user_id)
         user = getattr(request.state, "dashboard_user", {}) or {}
-        username = user.get("sub") or user.get("name") or "?"
+        username = user.get("display_name") or user.get("username") or "?"
         await _ts.update_message_view_status(pack_id, acc, body.status, viewed_by=username)
         await _log_history(request, username, "ml_message_status", pack_id, {"account_id": acc, "status": body.status})
         return {"ok": True, "status": body.status}
@@ -398,7 +398,7 @@ async def take_claim(claim_id: str, request: Request):
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         user = getattr(request.state, "dashboard_user", {}) or {}
-        username = user.get("sub") or user.get("name") or "?"
+        username = user.get("display_name") or user.get("username") or "?"
         account_id = str(client.user_id)
         await _ts.take_claim(claim_id, account_id, username)
         await _log_history(request, username, "ml_claim_take", f"claim:{claim_id}", {"account_id": account_id})
@@ -423,7 +423,7 @@ async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: 
         account_id = str(client.user_id)
         await _ts.update_claim_view_status(claim_id, account_id, body.status)
         user = getattr(request.state, "dashboard_user", {}) or {}
-        username = user.get("sub") or user.get("name") or "?"
+        username = user.get("display_name") or user.get("username") or "?"
         await _log_history(request, username, "ml_claim_status", f"claim:{claim_id}", {"account_id": account_id, "status": body.status})
         return {"ok": True, "status": body.status}
     finally:
@@ -451,7 +451,7 @@ async def send_message(pack_id: str, body: MessageRequest, request: Request):
         try:
             acc = body.account_id or str(client.user_id)
             user = getattr(request.state, "dashboard_user", {}) or {}
-            username = user.get("sub") or user.get("name") or "?"
+            username = user.get("display_name") or user.get("username") or "?"
             await _ts.update_message_view_status(pack_id, acc, "resolved", viewed_by=username)
             # FIX 2026-08-11: Jovan pidio (de nuevo, ya lo habia pedido antes)
             # poder ver que persona de su equipo respondio cada mensaje -- ML
@@ -525,6 +525,6 @@ async def update_feedback_status(feedback_id: int, body: FeedbackStatusRequest, 
     if not ok:
         raise HTTPException(status_code=404, detail="No encontrado")
     user = getattr(request.state, "dashboard_user", {}) or {}
-    username = user.get("sub") or user.get("name") or "?"
+    username = user.get("display_name") or user.get("username") or "?"
     await _log_history(request, username, f"{body.platform}_feedback_status", f"feedback:{feedback_id}", {"status": body.status})
     return {"ok": True, "status": body.status}

@@ -10047,7 +10047,7 @@ async def health_claims_partial(
 
         # Attach view tracking info to each claim
         _du = getattr(request.state, "dashboard_user", {}) or {}
-        _current_user = _du.get("sub") or _du.get("name") or "?"
+        _current_user = _du.get("display_name") or _du.get("username") or "?"
         _claim_ids = [str(c.id) for c in enriched if c.id]
         _claim_views = await token_store.get_claim_views(_claim_ids, str(client.user_id))
         for c in enriched:
@@ -10748,7 +10748,7 @@ async def health_messages_partial(
 
         # Enriquecer con quién abrió/tomó cada conversación
         _du = getattr(request.state, "dashboard_user", {}) or {}
-        _current_user = _du.get("sub") or _du.get("name") or "?"
+        _current_user = _du.get("display_name") or _du.get("username") or "?"
         _pack_ids = [str(c.pack_id) for c in enriched if c.pack_id]
         try:
             _views_map = await token_store.get_message_views(_pack_ids, seller_id)
@@ -10836,7 +10836,7 @@ async def health_messages_unified_partial(
     enriched = _sort_ml_conversations(enriched)
 
     _du = getattr(request.state, "dashboard_user", {}) or {}
-    _current_user = _du.get("sub") or _du.get("name") or "?"
+    _current_user = _du.get("display_name") or _du.get("username") or "?"
     # get_message_views es por-cuenta — se agrupan los pack_ids por account_id y se piden por separado
     _by_account: dict = {}
     for c in enriched:
