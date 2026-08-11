@@ -1217,11 +1217,21 @@ class MeliClient:
             "paging": {"total": total_convs, "offset": offset, "limit": limit},
         }
 
-    async def get_message_thread(self, pack_id: str) -> dict:
-        """Obtiene un thread de mensajes."""
+    async def get_message_thread(self, pack_id: str, mark_as_read: bool = False) -> dict:
+        """Obtiene un thread de mensajes.
+
+        mark_as_read: CRITICO -- verificado en vivo 2026-08-11 que cada mensaje
+        trae message_date.read (null = no leido en ML). Responder via API NUNCA
+        marca el mensaje del comprador como leido del lado de ML -- solo
+        cambia si alguien abre la conversacion directo en el sitio de ML, o si
+        se llama este mismo endpoint con mark_as_read=true. Por eso "No leídos"
+        de ML nunca bajaba aunque ya hubieramos respondido desde la app. Default
+        False a proposito -- los loops de fondo (indexado, refresh) NO deben
+        marcar nada como leido, solo cuando un humano abre la pestaña Mensajes
+        (ver _fetch_enriched_ml_conversations, main.py)."""
         return await self.get(f"/messages/packs/{pack_id}/sellers/{self.user_id}", params={
             "tag": "post_sale",
-            "mark_as_read": "false",
+            "mark_as_read": "true" if mark_as_read else "false",
         })
 
     async def send_message(self, pack_id: str, text: str, attachments: list | None = None) -> dict:

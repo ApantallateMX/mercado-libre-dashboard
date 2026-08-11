@@ -10524,7 +10524,11 @@ async def _fetch_enriched_ml_conversations(
     async def _fetch_thread(row):
         async with sem_th:
             try:
-                r = await client.get_message_thread(row["pack_id"])
+                # mark_as_read=True: esta funcion SOLO se llama al renderizar
+                # la pestaña Mensajes para un humano -- ver docstring de
+                # get_message_thread (meli_client.py). Root cause real de
+                # "No leídos" de ML nunca bajando aunque ya respondiamos.
+                r = await client.get_message_thread(row["pack_id"], mark_as_read=True)
                 return row["pack_id"], r.get("messages", []), r.get("conversation_status") or {}
             except Exception:
                 return row["pack_id"], [], {}
