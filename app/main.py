@@ -25092,12 +25092,18 @@ async def _ml_messages_scan_and_index(client, date_from: str, date_to: str,
     ml_messages_index con la última conversación de cada pack. Compartido por
     el backfill manual (diag) y por _ml_messages_new_orders_scan_loop (respaldo
     periódico del webhook topic 'messages' — ver esa función para el porqué).
-    Retorna (orders_scanned, conversations_indexed, next_offset, remaining)."""
+    Retorna (orders_scanned, conversations_indexed, next_offset, remaining).
+
+    Usa /orders/search (NO /orders/search/recent) — confirmado 2026-08-11 que
+    /recent omite órdenes con status partially_refunded (y probablemente otros
+    de reembolso/cancelación), justo las que generan los mensajes post-venta
+    más sensibles (reclamos de producto dañado). Con /recent esas conversaciones
+    quedaban invisibles en el índice de forma silenciosa y permanente."""
     orders_batch = []
     offset = start_offset
     total_available = 0
     while len(orders_batch) < max_orders:
-        page = await client.get("/orders/search/recent", params={
+        page = await client.get("/orders/search", params={
             "seller": client.user_id, "limit": 50, "offset": offset,
             "sort": "date_desc",
             "order.date_created.from": f"{date_from}T00:00:00.000-00:00",
