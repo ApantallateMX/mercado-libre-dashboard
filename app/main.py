@@ -25063,6 +25063,20 @@ async def diag_ml_item_stock_fix(token: str = "", account_id: str = "", item_id:
         await client.close()
 
 
+@app.get("/api/diag/ml-message-reopen")
+async def diag_ml_message_reopen(token: str = "", account_id: str = "", pack_id: str = ""):
+    """Reabre a mano un pack marcado 'resuelto' sin que se haya mandado una
+    respuesta real -- pedido de Jovan 2026-08-11 (casos reales: Daniel Balam,
+    Jose Raygoza, Carlos Gerardo Meza, todos marcados 'resuelto' antes del
+    fix de firma con viewed_by='?', ML sigue mostrandolos 'sin responder')."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id:
+        return JSONResponse({"error": "account_id y pack_id requeridos"}, status_code=400)
+    await token_store.update_message_view_status(pack_id, account_id, "pending", viewed_by="reabierto-manual")
+    return {"pack_id": pack_id, "reabierto": True}
+
+
 @app.get("/api/diag/ml-message-mark-resolved-test")
 async def diag_ml_message_mark_resolved_test(token: str = "", account_id: str = "", pack_id: str = ""):
     """DIAG con efecto real: llama EXACTAMENTE la misma función que usa
