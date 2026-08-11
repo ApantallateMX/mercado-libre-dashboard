@@ -6221,7 +6221,13 @@ async def _bm_master_sync_once_inner():
     # priority_skus() prioriza primero los nunca vistos, luego los mas
     # antiguos — garantiza cobertura completa del universo con el tiempo,
     # MISMO volumen de llamadas a BM por ciclo (no aumenta la carga).
-    _MAX_MISS_PER_CYCLE = 150
+    # FIX 2026-08-11 (pedido por Jovan, calando): subido de 150 a 500 para
+    # acelerar convergencia. Riesgo conocido y aceptado: si BM tiene un
+    # episodio lento, un ciclo puede tardar mucho mas en terminar (hasta
+    # ~2h peor caso vs ~38min con 150) reteniendo el semaforo global mas
+    # tiempo -- vigilar /api/diag/prewarm-state y /api/diag/bm-master-status
+    # si vuelve a verse contencion como la del incidente de hoy.
+    _MAX_MISS_PER_CYCLE = 500
     _reconciled_rows: list[dict] = []
     if misses:
         priority_misses = await token_store.get_reconciliation_priority_skus(misses, _MAX_MISS_PER_CYCLE)
