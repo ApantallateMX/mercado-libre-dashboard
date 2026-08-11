@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 (cont. 5) — FEAT: adjuntar fotos/guías de devolución al responder mensajes (ML + Amazon)
+
+Jovan pidió poder mandar fotos o guías de devolución a compradores desde
+Mensajes -- send_message (ML) solo mandaba texto. Investigando se encontró
+que **Amazon ya lo tenía completo** (backend `send_reply`/`amazon_buyer_message_reply`
++ input de archivo en `amazon_dashboard.js` línea 3236) -- solo faltaba en ML.
+
+**ML**: flujo de 2 pasos (ML lo requiere así, a diferencia de Amazon que es
+un solo POST multipart por email):
+1. Subir el archivo (`meli_client.upload_message_attachment` →
+   `POST /messages/attachments?tag=post_sale&site_id=MLM`) -- verificado en
+   vivo contra la API real: la respuesta es `{"id": "..."}`, NO `{"filename":
+   ...}` como dice la documentación pública de ML.
+2. Mandar ese id en `attachments=[...]` al enviar el mensaje
+   (`send_message`, ahora acepta el parámetro).
+
+Nuevo endpoint `/api/health/messages/{pack_id}/upload-attachment` + input de
+archivo en `health_messages.html` (mismo patrón que Amazon). Verificado en
+vivo el paso de subida (no le llega nada a ningún comprador); el paso de
+envío con el adjunto ya referenciado no se probó contra un comprador real --
+pendiente de que Jovan lo confirme en su primer uso.
+
+---
+
 ## 2026-08-11 (cont. 4) — FIX: "quién tomó/resolvió/respondió" mostraba "?" desde 2026-08-09
 
 Al probar la firma nueva de mensajes, Jovan reportó que su respuesta se veía
