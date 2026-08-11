@@ -18091,8 +18091,9 @@ async def diag_paused_with_stock(account_id: str = "", token: str = ""):
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not account_id:
         return JSONResponse({"error": "account_id requerido"}, status_code=400)
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    import aiosqlite as _aio_pws
+    async with _aio_pws.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_pws.Row
         rows = await (await db.execute(
             "SELECT item_id, sku, base_sku, title, is_full FROM ml_listings "
             "WHERE account_id = ? AND status = 'paused' AND available_quantity = 0",
