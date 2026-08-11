@@ -18080,6 +18080,46 @@ async def diag_trigger_prewarm(token: str = ""):
     return JSONResponse({"ok": True, "message": "Prewarm disparado en background"})
 
 
+@app.get("/api/diag/paused-with-stock")
+async def diag_paused_with_stock(account_id: str = "", token: str = ""):
+    """Diagnóstico 2026-08-11: cuenta cuántos listings PAUSADOS con
+    available_quantity=0 tiene una cuenta, y cuántos de esos SKUs tienen
+    stock real disponible en BM ahora mismo (según _bm_stock_cache) --
+    responde directo "¿el 0 de Oportunidad Activar es real o hay
+    candidatos que se están perdiendo?" sin especular."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT item_id, sku, base_sku, title, is_full FROM ml_listings "
+            "WHERE account_id = ? AND status = 'paused' AND available_quantity = 0",
+            (account_id,),
+        )).fetchall()
+    paused = [dict(r) for r in rows]
+    with_bm_stock = []
+    zero_or_unverified = []
+    for p in paused:
+        base = normalize_to_bm_sku(p.get("base_sku") or p.get("sku") or "")
+        entry = _bm_stock_cache.get(base) if base else None
+        if entry and entry[1].get("_v") and (entry[1].get("avail_total") or 0) > 0:
+            with_bm_stock.append({**p, "bm_avail": entry[1].get("avail_total"), "verified": True})
+        else:
+            zero_or_unverified.append({
+                **p, "bm_avail": entry[1].get("avail_total") if entry else None,
+                "verified": bool(entry and entry[1].get("_v")), "in_cache": entry is not None,
+            })
+    return JSONResponse({
+        "account_id": account_id,
+        "total_paused_zero_qty": len(paused),
+        "with_real_bm_stock": len(with_bm_stock),
+        "sample_with_stock": with_bm_stock[:10],
+        "sample_zero_or_unverified": zero_or_unverified[:10],
+    })
+
+
 @app.get("/api/diag/trigger-bm-master-sync")
 async def diag_trigger_bm_master_sync(token: str = ""):
     """Dispara _bm_master_sync_once() manualmente — Fase B del rediseño
