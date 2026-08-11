@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 — FIX: mensajes ML de ordenes con reembolso parcial invisibles en el indice (las 4 cuentas)
+
+Jovan reporto que ML Seller Central mostraba "4 no leidos" para BLOWTECHNOLOGIES
+mientras la app mostraba "2". Investigando el caso concreto (Erick Jesus Maya,
+pack 2000013808236145, orden real 2000017213436544) se confirmo contra la API
+de ML en vivo que el mensaje existia y tenia actividad de hace <1h, pero
+`fila_en_nuestro_indice_que_matchea_ese_numero` era `null` incluso tras un
+backfill exhaustivo de 45 dias — la conversacion nunca habia entrado al
+indice.
+
+**Causa raiz**: `_ml_messages_scan_and_index` (compartida por
+`_ml_messages_new_orders_scan_loop` y el backfill manual) usaba
+`/orders/search/recent`. Ese endpoint omite ordenes con status
+`partially_refunded` (y probablemente otros de reembolso/cancelacion) —
+justo las que generan los mensajes post-venta mas sensibles (reclamos de
+producto dañado/incompleto, devoluciones). El bug es estructural, existe
+desde que se construyo este pipeline, no es una regresion de hoy.
+
+**Fix**: cambiar a `/orders/search` (mismo endpoint que ya usan otras partes
+del codigo para rangos de fecha, ej. planeacion). Verificado en local contra
+el caso real antes de deployar.
+
+**Efecto del backfill (45 dias, las 4 cuentas, tras el fix)** — cuantas
+conversaciones "buyer + no resuelto" habia invisibles, y cuantas siguen
+realmente activas hoy (no bloqueadas/movidas a Reclamos) segun chequeo en
+vivo contra ML:
+- BLOWTECHNOLOGIES: 42 candidatos nuevos → 12 activos reales, 30 ya bloqueados/en Reclamos
+- AUTOBOT MEXICO: 10 candidatos → 1 activo real, 9 bloqueados
+- LUTEMAMEXICO: 3 candidatos → 0 activos, 3 bloqueados
+- APANTALLATEMX: 14 candidatos → 0 activos, 14 bloqueados
+
+Es decir, buena parte del backlog historico recien descubierto ya estaba
+resuelto/movido a Reclamos en ML — solo nunca se habia visto localmente. El
+numero real de mensajes con reembolso que de verdad necesitaban atencion y
+estaban invisibles era mucho menor (~13 entre las 4 cuentas), pero el hueco
+en si es real y ahora esta cerrado hacia adelante (loop automatico de 10 min
+ya usa el endpoint correcto).
+
+Tambien se amplio `/api/diag/ml-pending-list?live_check=1` de 5 a 50 packs
+para poder verificar backlogs grandes sin tener que llamarlo repetidas veces.
+
+---
+
 ## 2026-08-09 — FIX: BM lento/cascada de reintentos, persistencia de stock_issues_cache, activacion sin historial, y borrado masivo inseguro removido
 
 Sesion de fixes reactivos en produccion, cada uno con verificacion real
