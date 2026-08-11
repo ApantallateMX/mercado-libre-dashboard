@@ -24755,6 +24755,45 @@ async def diag_ml_order_message_truth(token: str = "", account_id: str = "", ord
         await client.close()
 
 
+@app.get("/api/diag/ml-force-index-pack")
+async def diag_ml_force_index_pack(token: str = "", account_id: str = "", pack_id: str = "", order_id: str = ""):
+    """Indexa YA un pack puntual encontrado 'invisible' via ml-order-message-truth
+    (orden vieja, nunca escaneada por ningun loop automatico -- ninguno de los
+    dos respaldos cubre 'orden de hace meses que nunca se indexo y de repente
+    tiene un mensaje nuevo', solo _ml_refresh_indexed_pack (YA indexado, activo
+    <21 dias) o _ml_messages_new_orders_scan_loop (orden creada <4 dias). Caso
+    real 2026-08-11: orden de febrero, mensaje nuevo de hace 15h, invisible.
+    order_id opcional -- si no se manda, upsert_message_index preserva el que
+    ya hubiera en DB o lo deja vacío (fila nueva sin fila previa que preservar)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id or not pack_id:
+        return JSONResponse({"error": "account_id y pack_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        r = await client.get_message_thread(pack_id)
+        msgs = r.get("messages") or []
+        total_msgs = r.get("paging", {}).get("total", 0)
+        last = _ml_sort_messages_asc(msgs)[-1] if msgs else None
+        if not last:
+            return {"pack_id": pack_id, "indexado": False, "motivo": "sin mensajes en el thread"}
+        from_id = str(last.get("from", {}).get("user_id", ""))
+        last_from = "seller" if from_id == account_id else "buyer"
+        text_raw = last.get("text", "")
+        text = text_raw.get("plain", "") if isinstance(text_raw, dict) else str(text_raw or "")
+        last_date = _ml_msg_date(last)
+        await token_store.upsert_message_index(
+            pack_id=pack_id, account_id=account_id, order_id=order_id,
+            last_message_from=last_from, last_message_text=text[:500],
+            last_message_date=last_date, total_messages=total_msgs,
+        )
+        return {"pack_id": pack_id, "indexado": True, "last_message_from": last_from, "last_message_date": last_date}
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-message-caps")
 async def diag_ml_message_caps(token: str = "", account_id: str = "", pack_id: str = ""):
     """Consulta GET /messages/action_guide/packs/{pack_id}/caps_available?tag=post_sale --
