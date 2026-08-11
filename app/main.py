@@ -18102,21 +18102,59 @@ async def diag_paused_with_stock(account_id: str = "", token: str = ""):
     paused = [dict(r) for r in rows]
     with_bm_stock = []
     zero_or_unverified = []
+    ts_zero_but_verified = []  # FIX 2026-08-11: confirmar hipótesis ts=0.0 warm-start
     for p in paused:
         base = normalize_to_bm_sku(p.get("base_sku") or p.get("sku") or "")
         entry = _bm_stock_cache.get(base) if base else None
-        if entry and entry[1].get("_v") and (entry[1].get("avail_total") or 0) > 0:
+        if entry and entry[1].get("_v") and (entry[1].get("avail_total") or 0) > 0 and entry[0] > 0.0:
             with_bm_stock.append({**p, "bm_avail": entry[1].get("avail_total"), "verified": True})
+        elif entry and entry[1].get("_v") and (entry[1].get("avail_total") or 0) > 0 and entry[0] == 0.0:
+            ts_zero_but_verified.append({**p, "bm_avail": entry[1].get("avail_total")})
         else:
             zero_or_unverified.append({
                 **p, "bm_avail": entry[1].get("avail_total") if entry else None,
                 "verified": bool(entry and entry[1].get("_v")), "in_cache": entry is not None,
             })
+
+    # Replicar las DEMÁS condiciones del filtro real de "activate" (línea
+    # ~6590) sobre los candidatos con stock real -- para decir EXACTAMENTE
+    # cuál condición los excluye, en vez de solo confirmar que existen.
+    _synced_ids_probe = await token_store.get_recently_synced_ids(account_id, ttl_seconds=3600)
+    if account_id not in _activate_suppressed:
+        _activate_suppressed[account_id] = await token_store.get_activate_suppressed(account_id)
+    _uid_suppress_probe = _activate_suppressed.get(account_id, set())
+    would_pass = []
+    # bulk_ok ya está implícito en with_bm_stock (misma condición: ts>0 y _v
+    # True) -- no se re-chequea aquí, solo las condiciones que with_bm_stock
+    # NO cubre (is_full, synced, suppressed, verified_zero_recent).
+    blocked_by = {"is_full": 0, "synced_recently": 0, "suppressed": 0, "verified_zero_recent": 0}
+    for p in with_bm_stock:
+        item_id = p.get("item_id")
+        sku = p.get("sku", "")
+        if p.get("is_full"):
+            blocked_by["is_full"] += 1
+            continue
+        if item_id in _synced_ids_probe:
+            blocked_by["synced_recently"] += 1
+            continue
+        if str(item_id) in _uid_suppress_probe:
+            blocked_by["suppressed"] += 1
+            continue
+        if _bm_avail_verified_zero(sku):
+            blocked_by["verified_zero_recent"] += 1
+            continue
+        would_pass.append(p)
+
     return JSONResponse({
         "account_id": account_id,
         "total_paused_zero_qty": len(paused),
         "with_real_bm_stock": len(with_bm_stock),
+        "ts_zero_but_verified_count": len(ts_zero_but_verified),
+        "would_actually_pass_activate_filter": len(would_pass),
+        "blocked_by_condition": blocked_by,
+        "sample_would_pass": would_pass[:10],
         "sample_with_stock": with_bm_stock[:10],
+        "sample_ts_zero_but_verified": ts_zero_but_verified[:10],
         "sample_zero_or_unverified": zero_or_unverified[:10],
     })
 
