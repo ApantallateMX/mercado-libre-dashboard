@@ -1117,6 +1117,25 @@ async def init_db():
             await db.execute("ALTER TABLE bm_sku_master ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Migración 2026-08-10: columnas para que bm_sku_master sea la FUENTE
+        # UNICA de las alertas de stock (antes solo era snapshot de durabilidad
+        # -- ver project_bm_sku_master.md). mty/cdmx/tj: desglose por almacen
+        # (Transferencias Sugeridas + alertas TV). no_vendible_qty: unidades en
+        # revision/dañadas que BM reporta aparte. verified=1 significa "el ciclo
+        # de sync actual confirmo este dato contra BM" (0 = viene de un ciclo
+        # anterior, dato stale que un fetch fallido no debe pisar con ceros --
+        # mismo guard "Fix A" que ya existia en el pipeline viejo por-cuenta).
+        for _col, _ddl in (
+            ("mty_qty", "INTEGER NOT NULL DEFAULT 0"),
+            ("cdmx_qty", "INTEGER NOT NULL DEFAULT 0"),
+            ("tj_qty", "INTEGER NOT NULL DEFAULT 0"),
+            ("no_vendible_qty", "INTEGER NOT NULL DEFAULT 0"),
+            ("verified", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            try:
+                await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
+            except Exception:
+                pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_sku_changes — historial de cambios detectados en cada sync
         # (mismo dato que BM ya nos manda, no llamadas nuevas). Retail/costo:
@@ -1798,6 +1817,151 @@ async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
             )
         await db.commit()
     return len(rows)
+
+
+async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
+    """FIX 2026-08-10 — Fase B del rediseño "bm_sku_master como fuente unica"
+    (pedido por Jovan: 1 sola sincronizacion de BM en vez de 4 por-cuenta
+    redundantes, ver project_bm_sku_master.md y la auditoria del mismo dia).
+
+    Version completa de upsert_bm_stock_snapshot_batch() -- escribe TAMBIEN
+    el desglose mty/cdmx/tj, no_vendible y el flag verified. Usada
+    EXCLUSIVAMENTE por el nuevo job independiente _bm_master_sync_loop() en
+    main.py -- el pipeline viejo por-cuenta sigue usando la funcion original
+    sin tocarla, para no arriesgar las alertas ya en produccion mientras se
+    verifica el nuevo camino en paralelo (Fase C).
+
+    rows: list of {sku, available_qty, reserve_qty, total_qty, mty_qty,
+    cdmx_qty, tj_qty, no_vendible_qty, verified}. verified=1 = este ciclo
+    confirmo el dato contra BM; verified=0 = SKU no encontrado en el ciclo
+    actual (caller decide si igual lo manda con el ultimo valor conocido
+    para no perder el dato, o lo omite -- ver guard "bulk parece caido" en
+    el caller, mismo criterio que el pipeline viejo)."""
+    if not rows:
+        return 0
+    now = __import__("time").time()
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        skus = [r["sku"] for r in rows]
+        existing = {}
+        for i in range(0, len(skus), 500):
+            chunk = skus[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"SELECT sku, available_qty FROM bm_sku_master WHERE sku IN ({placeholders})", chunk
+            )
+            existing.update({r["sku"]: (r["available_qty"] or 0) for r in await cur.fetchall()})
+
+        changes = []
+        for r in rows:
+            sku = r["sku"]
+            if sku not in existing:
+                continue
+            old_avail = existing[sku]
+            new_avail = r.get("available_qty", 0) or 0
+            crossed_out = old_avail > 0 and new_avail <= 0
+            crossed_in = old_avail <= 0 and new_avail > 0
+            if crossed_out or crossed_in:
+                changes.append((sku, "available_qty", old_avail, new_avail, now, "bm_master_sync"))
+
+        await db.executemany(
+            """INSERT INTO bm_sku_master
+                   (sku, available_qty, reserve_qty, total_qty,
+                    mty_qty, cdmx_qty, tj_qty, no_vendible_qty, verified, stock_updated_at)
+               VALUES (:sku, :available_qty, :reserve_qty, :total_qty,
+                       :mty_qty, :cdmx_qty, :tj_qty, :no_vendible_qty, :verified, :updated_at)
+               ON CONFLICT(sku) DO UPDATE SET
+                   available_qty   = excluded.available_qty,
+                   reserve_qty     = excluded.reserve_qty,
+                   total_qty       = excluded.total_qty,
+                   mty_qty         = excluded.mty_qty,
+                   cdmx_qty        = excluded.cdmx_qty,
+                   tj_qty          = excluded.tj_qty,
+                   no_vendible_qty = excluded.no_vendible_qty,
+                   verified        = excluded.verified,
+                   stock_updated_at = excluded.stock_updated_at""",
+            [{
+                "sku": r["sku"],
+                "available_qty": r.get("available_qty", 0) or 0,
+                "reserve_qty": r.get("reserve_qty", 0) or 0,
+                "total_qty": r.get("total_qty", 0) or 0,
+                "mty_qty": r.get("mty_qty", 0) or 0,
+                "cdmx_qty": r.get("cdmx_qty", 0) or 0,
+                "tj_qty": r.get("tj_qty", 0) or 0,
+                "no_vendible_qty": r.get("no_vendible_qty", 0) or 0,
+                "verified": 1 if r.get("verified") else 0,
+                "updated_at": now,
+            } for r in rows],
+        )
+        if changes:
+            await db.executemany(
+                "INSERT INTO bm_sku_changes (sku, field, old_value, new_value, changed_at, source) VALUES (?,?,?,?,?,?)",
+                changes,
+            )
+        await db.commit()
+    return len(rows)
+
+
+async def get_all_known_base_skus() -> list[str]:
+    """Union de base_sku (ya normalizado, columna existente) de ml_listings +
+    amazon_listings, activos/pausados/inactivos -- el universo de SKUs que
+    el nuevo job independiente _bm_master_sync_loop() debe mantener
+    sincronizado en bm_sku_master. Sin llamadas a BM, solo SQLite local."""
+    out: set = set()
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "SELECT DISTINCT base_sku FROM ml_listings "
+            "WHERE base_sku != '' AND status IN ('active', 'paused', 'inactive')"
+        )
+        out.update(r[0] for r in await cur.fetchall() if r[0])
+        cur = await db.execute(
+            "SELECT DISTINCT base_sku FROM amazon_listings WHERE base_sku != ''"
+        )
+        out.update(r[0] for r in await cur.fetchall() if r[0])
+    return list(out)
+
+
+async def get_bm_master_sync_meta() -> dict:
+    """Estado del nuevo job independiente _bm_master_sync_loop() -- para el
+    diag de comparacion (Fase C) y para exponer 'hace cuanto se sincronizo'
+    sin depender del ciclo viejo por-cuenta."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT COUNT(*) AS n, SUM(verified) AS nv, MAX(stock_updated_at) AS last_ts FROM bm_sku_master"
+        )
+        row = await cur.fetchone()
+    return {
+        "total_skus": row["n"] or 0,
+        "verified_skus": row["nv"] or 0,
+        "last_sync_ts": row["last_ts"] or 0,
+    }
+
+
+async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
+    """Lee bm_sku_master para un set de SKUs normalizados -- SELECT puro, sin
+    llamadas a BM. Usado por el nuevo camino de alertas (Fase C) para hacer
+    el JOIN listings-vs-maestro en vez del merge en vivo que usa el pipeline
+    viejo. Retorna {sku: {available_qty, reserve_qty, total_qty, mty_qty,
+    cdmx_qty, tj_qty, no_vendible_qty, verified, stock_updated_at}}."""
+    if not skus:
+        return {}
+    out = {}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        uniq = list(set(skus))
+        for i in range(0, len(uniq), 500):
+            chunk = uniq[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""SELECT sku, available_qty, reserve_qty, total_qty, mty_qty, cdmx_qty,
+                           tj_qty, no_vendible_qty, verified, stock_updated_at
+                    FROM bm_sku_master WHERE sku IN ({placeholders})""",
+                chunk,
+            )
+            for r in await cur.fetchall():
+                out[r["sku"]] = dict(r)
+    return out
 
 
 async def get_bm_stock_snapshot_last_update() -> float:
