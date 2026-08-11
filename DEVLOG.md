@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 (cont. 4) — FIX: "quién tomó/resolvió/respondió" mostraba "?" desde 2026-08-09
+
+Al probar la firma nueva de mensajes, Jovan reportó que su respuesta se veía
+firmada como "? 12:16" en vez de su nombre. Causa: `user.get("sub") or
+user.get("name") or "?"` en `main.py`/`health.py` (9 lugares) -- ninguna de
+esas dos claves existe en el shape real de sesión (`user_store.get_session`
+retorna `id/username/display_name/role/...`, del JWT con claims
+`uid/username/dn/role/mcp/sec`). Bug foundational desde el fix de "Marcar
+resuelto" del 2026-08-09 -- SIEMPRE caía a "?", afectando Tomar, Marcar
+resuelto, Reabrir, reclamos, feedback, y ahora también la firma nueva.
+
+Nunca se detectó en pruebas locales porque `make_jwt2.py` (la herramienta
+oficial del proyecto para JWT local, ver CLAUDE.md regla #2) generaba un
+token con `{"sub": ..., "role": ...}` que por casualidad coincidía con el
+mismo bug -- las pruebas "pasaban" mostrando algo coherente sin ejercitar
+el camino real. Se corrige `make_jwt2.py` también, para simular una sesión
+real (`uid/username/dn/role/mcp/sec`) y que este tipo de bug sí se detecte
+en pruebas locales futuras.
+
+---
+
 ## 2026-08-11 (cont. 3) — FIX: conversaciones reabiertas invisibles + filtro Pendientes + FEAT firma por empleado
 
 1. **`get_message_index()` no detectaba conversaciones reabiertas para
