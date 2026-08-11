@@ -6381,6 +6381,22 @@ async def _prewarm_caches(user_id: str = None):
                 _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
                 _apply_bundle_stock_override(products, _bundles)
 
+                # DEBUG TEMPORAL 2026-08-11 (ronda 2) -- verificar si el fix de
+                # available_quantity stale resolvió el caso real. Quitar tras diagnosticar.
+                if str(client.user_id) == "292395685":
+                    _dbg_found = 0
+                    for _dp in products:
+                        if _dp.get("sku", "").startswith("SNTV005554"):
+                            _dbg_found += 1
+                            logger.info(
+                                f"[DEBUG-ACTIVATE2] id={_dp.get('id')} sku={_dp.get('sku')} "
+                                f"status={_dp.get('status')} avail_qty={_dp.get('available_quantity')} "
+                                f"in_bm_candidates={_dp in bm_candidates} "
+                                f"_bm_avail={_dp.get('_bm_avail')} has_bm_avail_key={'_bm_avail' in _dp}"
+                            )
+                    if _dbg_found == 0:
+                        logger.info(f"[DEBUG-ACTIVATE2] SNTV005554 NO aparece en products (total={len(products)}) para uid=292395685")
+
                 # Helper: SKU bulk-verificado en ESTE ciclo de prewarm (ts > 0).
                 # Entradas cargadas de DB (ts = 0.0) pueden tener stock obsoleto.
                 # Las alertas SOLO usan datos confirmados por el bulk actual.
