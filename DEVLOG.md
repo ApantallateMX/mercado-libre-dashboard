@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-11 (cont. 7) — Auditoría de Ads + margen real + fix endpoint muerto + motor de recomendaciones + bm_sku_master atascado resuelto
+
+**Auditoría de Ads** (especialista marketplace-ads-strategist, 2 sesiones):
+1. Sin acceso a métricas en vivo hoy (`/api/ads/*` requiere sesión de
+   dashboard, tokens locales expirados) -- honesto, no se inventaron cifras.
+2. Investigación de la documentación oficial de Mercado Ads: Product Ads es
+   100% lectura pública; Brand Ads tiene doc de escritura pero protegida con
+   contraseña; Display Ads es 100% manual, gestionado por el equipo
+   comercial de ML, nunca self-serve.
+3. **Hallazgo clave**: el código de escritura para Product Ads (pausar,
+   presupuesto, asignar SKUs) YA EXISTE desde feb-2026
+   (`meli_client.py:838-935`) pero está bloqueado porque la app "CLAUDE" no
+   está `certified` por ML -- no es un gap de código, es un permiso de
+   plataforma. Pendiente que Jovan revise la sección de certificación en el
+   Devcenter (no se puede confirmar desde afuera si es el Developer Partner
+   Program pesado o algo más ligero específico de Ads).
+
+**3 mejoras aprobadas por Jovan, implementadas y verificadas contra datos reales de BLOWTECHNOLOGIES:**
+
+1. **Ads cruzado con margen real** (`ads_performance_partial`, main.py):
+   antes clasificaba "TOP/MEDIO/BAJO" solo por ROAS/ACOS genérico, sin ver
+   si el SKU realmente deja utilidad. Ahora resuelve SKU real por item_id
+   (cache local), cruza contra costo de catálogo BM (`_bm_cost_cache`,
+   catálogo completo -- NO depende de stock actual como
+   `_enrich_with_bm_product_info`, que solo cubre SKUs con stock en el bulk)
+   y calcula margen neto real. Nuevos tiers QUEMA MARGEN/RIESGO/RENTABLE;
+   TOP/MEDIO/BAJO quedan como fallback visible en el tooltip cuando no se
+   pudo resolver SKU o costo. Verificado: margen real 56.7% en un item con
+   ACOS 4.9% → correctamente RENTABLE.
+
+2. **Fix endpoint muerto "Por Categoría"**: `GET /advertising/advertisers/
+   {adv}/product_ads/items` descontinuado por ML desde el 26-feb-2026 (404)
+   -- el `except Exception: break` lo tragaba en silencio, este tab mostraba
+   "0 categorías" sin ningún error visible desde esa fecha (~6 meses).
+   Migrado al endpoint que ya usan `get_ads_items`/`get_campaign_items`.
+   Verificado: ahora devuelve categorías reales con $20K-$226K de gasto/
+   ingresos en vez de vacío.
+
+3. **Motor de recomendaciones** (solo lectura, no ejecuta nada): banner con
+   los top 5 productos que más gasto queman por encima de su margen real,
+   con botón de pausar por item (reusa el flujo existente, bloqueado hoy por
+   la certificación de ML igual que el resto de escritura).
+
+---
+
 ## 2026-08-11 (cont. 6) — FIX DEFINITIVO: "No leídos" de ML nunca bajaba aunque ya respondiéramos
 
 Jovan reportó, molesto, un caso nuevo (pack 2000014458358269, BLOWTECHNOLOGIES,
