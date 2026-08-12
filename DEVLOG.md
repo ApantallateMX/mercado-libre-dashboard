@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont.) — FEAT: pestaña "Seguimiento" en Mensajes (ML + Amazon)
+
+Jovan pidió poder marcar un mensaje que YA se respondió pero al que le
+falta enviar algo después (guía de devolución, foto, un dato que no se
+tenía a la mano en el momento) — hoy esos casos se perdían entre los
+"Resueltos". Investigado primero con un agente Explore para no romper el
+mecanismo de filtrado ya existente (Pendientes/Todos) en ninguna de las
+dos plataformas.
+
+Nuevo estado `needs_followup`/`follow_up_note` en `ml_message_views`
+(3 columnas nuevas, ALTER TABLE con DEFAULT — mismo patrón que
+`ship_state_code`/`ship_zone`), **ortogonal** a `status`: un mensaje puede
+estar `resolved` y `needs_followup=1` al mismo tiempo, no son excluyentes.
+Como esa tabla ya se reusa con prefijos (`claim:` para reclamos, `amz:`
+para Amazon), el mismo cambio de esquema y las mismas funciones de
+`token_store.py` sirven para las 3 colas sin duplicar nada — solo se
+expuso el botón en Mensajes ML y Mensajes Amazon (no en Reclamos, no se
+pidió ahí).
+
+Piezas nuevas:
+- `token_store.set_message_followup()` + `get_message_index(only_followup=True)`
+  — esta última con su propia query (JOIN directo, sin depender del LIMIT
+  de paginación normal), porque un mensaje marcado para seguimiento suele
+  estar ya resuelto y podría quedar fuera de la primera página como pasó
+  antes con el bug de conversaciones reabiertas (2026-08-11).
+- ML: botón "🔖 Seguimiento" (con nota) / "✅ Ya se envió" en cada tarjeta
+  + pestaña nueva junto a Pendientes/Todos (`health_messages.html`,
+  `health.html`), endpoint `POST /api/health/messages/{pack_id}/followup`.
+- Amazon: mismo patrón en `amazon_dashboard.js`/`amazon_dashboard.html`,
+  endpoint `POST /api/amazon/buyer-messages/followup`. Cuidado encontrado
+  al diseñarlo: la bandeja Amazon normalmente solo trae `days=365` y
+  filtra por `only_pending` — un hilo resuelto+marcado se hubiera quedado
+  fuera si no se forzaba `full_history=True` en la vista Seguimiento
+  (mismo riesgo que ML, resuelto igual).
+
+Probado de punta a punta en local (marcar → aparece con la nota → "Ya se
+envió" → desaparece) para ambas plataformas antes de subir. Deploy
+Railway SUCCESS, verificado `/api/diag/cache-health` 200 en producción
+tras el deploy.
+
+---
+
 ## 2026-08-12 — OPERACION: rol RDT "Direct-to-Consumer Shipping" agregado a VektorClaude, pendiente aprobación de Amazon
 
 Retomado el pendiente de RDT (dirección de envío Amazon para zonas/
