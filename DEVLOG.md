@@ -7,6 +7,59 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont. 4) — FIX: Deals ML mostraba falsos "deal activo" + margen mal calculado
+
+Jovan reportó que Deals "no está funcionando de forma correcta" (sin
+detalles) y pidió meter especialistas a verificar mejores prácticas
+oficiales de ML. Se lanzaron 2 en paralelo: uno mapeó el código actual
+(`app/main.py`), otro (marketplace-ads-strategist) investigó la Central
+de Promociones oficial. Antes de tocar código se verificó EN VIVO contra
+las 4 cuentas reales (`get_promotion_items`) para confirmar cada hallazgo
+con datos reales, no solo teoría.
+
+**BUG 1 (causa raíz real, confirmado con datos reales):** el ciclo de vida
+de un ítem dentro de una promoción es `candidate → pending → started →
+finished`. "candidate" = elegible pero nunca aceptado — sin descuento
+corriendo (para DEAL/LIGHTNING ni siquiera trae `price`, solo un RANGO
+`min/max/suggested_discounted_price` para elegir). El código marcaba
+TODOS los ítems de una campaña "started" como deal activo sin mirar el
+status de cada ítem — verificado: la misma campaña DEAL "started" trae
+cientos de ítems "candidate" mezclados con los genuinamente activos.
+Fix: filtrar `item.get("status") == "started"` antes de construir el
+mapa de promos (`app/main.py`), y quitar "pending" del allowlist en
+`_enrich_with_promotions` (confirmado con datos reales: un LIGHTNING
+"pending" es un deal programado para el día siguiente, no corriendo hoy).
+
+**BUG 2:** `_margen_pct`/`_ganancia_est` se calculaban sobre `price`
+(precio de lista) en vez de `_promo_deal_price` (precio real del deal) —
+mismo tipo de bug que ya se corrigió en Ads (2026-08-11), aquí nunca se
+tocó. Consecuencia: la alerta "deal con margen negativo" nunca disparaba
+para un deal que de verdad pierde dinero. Verificado en local contra
+datos reales: pasó de no disparar (roto) a detectar 131 casos reales tras
+el fix. De paso se corrigió `_margen_real_pct` (aportación de ML,
+`_meli_contribution_mxn`) para la misma consistencia — ya existía
+calculado pero nunca se mostraba en ningún lado (código a medias, sin
+consumidor); se deja correcto por si se conecta a futuro.
+
+**BUG 3 (parcial):** de los 12 tipos de promoción de ML, faltaban 3:
+`PRICE_MATCHING`, `UNHEALTHY_STOCK`, `VOLUME`. Verificado con datos
+reales que PRICE_MATCHING y UNHEALTHY_STOCK sí tienen precio comparable
+(ML los cofinancia/calcula igual que SMART) — agregados a `_auto_types` y
+al mapa de colores. `VOLUME` y `SELLER_COUPON_CAMPAIGN` NO tienen un
+campo de precio simple (son por cantidad/cupón, confirmado con datos
+reales: `buy_quantity`/`discount_percentage` y `fixed_amount`) — se
+excluyen explícitamente del flujo de precio único en vez de generar filas
+con precio en blanco.
+
+**Descartado tras verificar:** el límite de descuento máximo (ML subió de
+70% a 80%) — el código ya decía "max 80%" (`products_deals.html:1025`),
+no había nada que corregir ahí.
+
+Deploy Railway SUCCESS, verificado en local contra datos reales de las 4
+cuentas antes de subir.
+
+---
+
 ## 2026-08-12 (cont. 3) — FIX DEFINITIVO: Stock tab colgado 7+ min — Fase D del rediseño bm_sku_master
 
 Jovan reportó (molesto, con screenshot) el Stock tab colgado en "Calculando
