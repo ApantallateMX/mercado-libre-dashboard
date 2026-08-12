@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont. 2) — FIX: Mensajes mostraba hora UTC (ML) / hora del navegador (Amazon), no CDMX real
+
+Jovan pidió confirmar qué horario se maneja en Mensajes -- "debemos trabajar
+con los mismos horarios de ML que son de CDMX". Investigado con un agente
+Explore antes de tocar nada: **ninguna de las dos plataformas anclaba la
+hora mostrada a CDMX**.
+
+- **ML**: `conv.date`/`msg.time` hacían slice literal del ISO8601 crudo que
+  manda `message_date` de la API (viene en UTC, mismo patrón confirmado que
+  `date_created` de órdenes) -- 6h adelantado, sin ninguna conversión. Caso
+  real encontrado al verificar: un mensaje a las 04:49 UTC (22:49 CDMX del
+  día anterior) se mostraba con la fecha del día siguiente -- error de
+  fecha real, no solo de hora. Fix: `_ml_msg_dt_mx()` (nuevo,
+  `app/main.py`), mismo ajuste -6h fijo que ya usa `_order_mx_date` para
+  órdenes (México eliminó el horario de verano en la mayoría del país
+  desde 2022, así que el offset es constante todo el año).
+- **Amazon**: `_amzMsgsFmtDate()` llamaba `toLocaleDateString` sin
+  `timeZone` -- usaba la zona configurada en la PC de quien abriera el
+  dashboard, no una fija. Dos personas en equipos distintos podían ver
+  horas distintas para el mismo mensaje. Fix: `timeZone:
+  'America/Mexico_City'` explícito.
+- El "hace Xh" de ambas plataformas ya calculaba bien (aritmética de
+  timestamps con offset/epoch UTC, no manipulación de texto) -- no se tocó,
+  no tenía el bug.
+
+Verificado en local contra datos reales antes de subir: el caso de cruce
+de medianoche (pack 2000014427962141, 04:49 UTC) pasó de mostrar "12 de
+agosto" a "11 de agosto" correctamente, y las horas de cada mensaje dentro
+del hilo (traídas en vivo de la API de ML) coinciden con el ajuste -6h.
+Deploy Railway SUCCESS, `/api/diag/cache-health` 200 en producción.
+
+---
+
 ## 2026-08-12 (cont.) — FEAT: pestaña "Seguimiento" en Mensajes (ML + Amazon)
 
 Jovan pidió poder marcar un mensaje que YA se respondió pero al que le
