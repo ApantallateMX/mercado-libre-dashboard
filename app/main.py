@@ -24534,6 +24534,89 @@ async def diag_exclusivebulbs_probe(token: str = ""):  # noqa
     return JSONResponse(result)
 
 
+@app.get("/api/diag/amazon-rdt-probe")
+async def diag_amazon_rdt_probe(token: str = "", seller_id: str = "A20NFIUQNEYZ1E"):  # noqa
+    """
+    Diagnóstico temporal: intenta createRestrictedDataToken (getOrderAddress)
+    contra una cuenta Amazon real, usando el refresh_token ACTUAL de la DB de
+    producción. Solo lectura -- no escribe nada. Para verificar si el rol
+    "Direct-to-Consumer Shipping" ya quedó activo tras agregarlo en Developer
+    Central y re-autorizar. Ver [[project_amazon_rdt_pending]].
+    """
+    _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    import httpx as _hx
+
+    LWA_URL = "https://api.amazon.com/auth/o2/token"
+    SP_BASE = "https://sellingpartnerapi-na.amazon.com"
+
+    acct = await token_store.get_amazon_account(seller_id)
+    if not acct:
+        return JSONResponse({"error": "cuenta no encontrada", "seller_id": seller_id}, status_code=404)
+
+    client_id     = acct.get("client_id", "")
+    client_secret = acct.get("client_secret", "")
+    refresh_token = acct.get("refresh_token", "")
+    result = {"seller_id": seller_id, "nickname": acct.get("nickname", "")}
+
+    if not refresh_token:
+        result["error"] = "refresh_token vacío"
+        return JSONResponse(result)
+
+    async with _hx.AsyncClient(timeout=20) as http:
+        lwa_resp = await http.post(LWA_URL, data={
+            "grant_type":    "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id":     client_id,
+            "client_secret": client_secret,
+        })
+        if lwa_resp.status_code != 200:
+            result["lwa_error"] = f"HTTP {lwa_resp.status_code}: {lwa_resp.text[:200]}"
+            return JSONResponse(result)
+        access_token = lwa_resp.json()["access_token"]
+
+        # Orden real más reciente de esta cuenta, para probar contra un AmazonOrderId válido
+        import aiosqlite
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT order_id FROM order_history WHERE platform='amazon' AND account_id=? ORDER BY id DESC LIMIT 1",
+                (acct.get("nickname", ""),),
+            )
+            row = await cur.fetchone()
+        order_id = row["order_id"] if row else None
+        result["order_id_used"] = order_id
+        if not order_id:
+            result["error"] = "sin orden reciente en order_history para esta cuenta"
+            return JSONResponse(result)
+
+        headers = {"x-amz-access-token": access_token, "Content-Type": "application/json"}
+        body = {
+            "restrictedResources": [{
+                "method": "GET",
+                "path": f"/orders/v0/orders/{order_id}/address",
+                "dataElements": ["buyerInfo", "shippingAddress"],
+            }]
+        }
+        rdt_resp = await http.post(f"{SP_BASE}/tokens/2021-03-01/restrictedDataToken", headers=headers, json=body)
+        result["rdt_status"] = rdt_resp.status_code
+        result["rdt_body"] = rdt_resp.text[:500]
+
+        if rdt_resp.status_code == 200:
+            rdt = rdt_resp.json().get("restrictedDataToken")
+            if rdt:
+                addr_resp = await http.get(
+                    f"{SP_BASE}/orders/v0/orders/{order_id}/address",
+                    headers={"x-amz-access-token": rdt},
+                )
+                result["address_status"] = addr_resp.status_code
+                result["address_body_preview"] = addr_resp.text[:200]
+
+    return JSONResponse(result)
+
+
 @app.get("/api/diag/refresh-ml-tokens")
 async def diag_refresh_ml_tokens(token: str = ""):
     """Fuerza re-seed de tokens ML. Solo accesible con diag token."""
