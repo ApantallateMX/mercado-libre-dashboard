@@ -7,6 +7,65 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont. 3) — FIX DEFINITIVO: Stock tab colgado 7+ min — Fase D del rediseño bm_sku_master
+
+Jovan reportó (molesto, con screenshot) el Stock tab colgado en "Calculando
+stock en background... 450s" para AUTOBOT MEX. En vivo se confirmó que no
+era lento — estaba genuinamente atorado en 0/1552 SKUs. Se reinició el
+servicio para desatorarlo de inmediato, y después Jovan pidió rediseñar de
+fondo todo el flujo BM→alertas (propuso un flujo de 4 pasos él mismo).
+
+**Investigación con 3 especialistas en paralelo** (mapeo de arquitectura +
+viabilidad técnica BM + validación de lógica de negocio) confirmó algo
+importante: ~70-80% de lo propuesto por Jovan YA estaba construido —
+`bm_sku_master` (maestro catálogo+stock, Fase B/C del rediseño de
+2026-08-10/11) corría en producción **en paralelo, sin conectarse nunca a
+las alertas reales**. Ese "cutover" pendiente (Fase D) es la causa raíz
+real del colgón: `_do_prewarm()` seguía esperando (await) inline hasta 5
+fetches bulk secuenciales a BM (90-150s c/u: GR+LOC47+LOC68+LOC-TJ+ALL)
+antes de poder calcular una sola alerta — si BM está lento, ese `await`
+se lleva al usuario con él.
+
+**Fix implementado** (`app/main.py`, commit `86e55b6`):
+1. Nueva `_bm_map_from_master()` — las 8 alertas de Stock (restock,
+   oversell_risk, activate, critical, full_no_stock, imbalanced, stagnant,
+   price_risk) ahora leen `bm_sku_master` (lectura local pura, JAMÁS llama
+   a BM), reusando `get_bm_master_rows_for_skus()` que ya existía sin
+   consumidor real. Solo confía en filas `verified=1` — mismo criterio
+   "mejor vacío que datos stale" que ya usaba el pipeline viejo.
+2. `_bm_bulk_ok()` ahora se basa en `bm_map` (ya filtrado por verified) en
+   vez de releer `_bm_stock_cache` directamente — necesario porque ese
+   cache ya no se llena de forma sincrónica con el cálculo de alertas.
+3. El refresco de los caches bulk de BM (que `_bm_master_sync_loop`
+   consume cada ~2 min) sigue disparándose desde `_do_prewarm()`, pero
+   ahora `asyncio.create_task()` (fire-and-forget) con guard
+   `_bm_bulk_refresh_running` — si BM está lento, corre en background sin
+   que ningún usuario lo espere.
+4. Circuit breaker en la cadena de bulk fetches: si el fetch fresco de GR
+   ya falló este ciclo, se saltan los intentos frescos de LOC47/68/TJ/ALL
+   en vez de intentarlos los 4 de todos modos (~90+90+90+150+150s peor
+   caso = exactamente el patrón del incidente).
+5. `/api/catalog/status` decía "domingo 9pm" (texto viejo) pero el sync
+   real corre a diario (3am MTY) desde hace tiempo — confirmado con Jovan
+   que diario está bien, solo se corrigió el texto/cálculo.
+
+**Descartado tras investigar más a fondo**: el "delta inmediato" para SKU
+nuevo no visto en catálogo (parte del plan original) no hizo falta
+construirlo aparte — `get_reconciliation_priority_skus()` (ya existente)
+prioriza "nunca visto en bm_sku_master" como máxima prioridad, y el ciclo
+de `_bm_master_sync_loop` corre cada ~2 min (no semanal) — el hueco que
+preocupaba ya estaba cerrado por diseño existente, agregar algo nuevo solo
+habría reintroducido riesgo de llamar a BM en vivo desde las alertas.
+
+Verificado antes de subir: local con BM real (login OK, bulk GR/LOC47/LOC68
+OK, bm_master_sync verificó 1616 SKUs, Stock tab respondió en ~1.2s en vez
+de colgarse) y contra producción (`/api/diag/bm-master-compare`: 100% de
+coincidencias, 0 discrepancias, antes y después del deploy). Post-deploy:
+las 4 cuentas ML con `stock_issues_cache` fresco (2-3 min de antigüedad)
+sin que nadie tuviera que esperar un solo prewarm colgado.
+
+---
+
 ## 2026-08-12 (cont. 2) — FIX: Mensajes mostraba hora UTC (ML) / hora del navegador (Amazon), no CDMX real
 
 Jovan pidió confirmar qué horario se maneja en Mensajes -- "debemos trabajar
