@@ -5414,8 +5414,11 @@ _bm_cost_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, cost_usd)
 async def _sync_bm_product_catalog(source: str = "auto") -> int:
     """Descarga LastRetailPricePurchaseHistory para todos los SKUs de BM via
     ConfColumns_Conditions_Excel. 1 sola llamada, ~8,786 SKUs, 97% cobertura LRPPH.
-    Corre 1x/semana (domingo 9pm Monterrey). Guarda en DB + actualiza _bm_retail_ph_cache.
-    Retorna cantidad de SKUs guardados en DB.
+    Corre 1x/día (3am Monterrey) — ver _weekly_catalog_sync() más abajo; el
+    nombre quedó de cuando era semanal, la cadencia real es diaria desde hace
+    tiempo (confirmado con Jovan 2026-08-12: diario está bien, se queda así).
+    Guarda en DB + actualiza _bm_retail_ph_cache. Retorna cantidad de SKUs
+    guardados en DB.
     """
     global _bm_retail_ph_cache, _catalog_sync_running, _catalog_sync_history, _catalog_sync_task
     if _catalog_sync_running:
@@ -5893,6 +5896,15 @@ _bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (
 _activate_wh_running: bool = False
 _bulk_miss_retry_running: bool = False
 _bm_master_sync_running: bool = False  # evita instancias concurrentes de _bm_master_sync_once (trigger manual + loop de 10min)
+# FIX 2026-08-12: incidente real -- el Stock tab se colgo 7+ min (0/1552 SKUs)
+# porque _do_prewarm() esperaba (await) inline el refresco de _bm_bulk_*_cache
+# (hasta 5 fetches secuenciales de 90-150s c/u si BM esta lento) ANTES de poder
+# calcular ninguna alerta. Las alertas ahora leen bm_sku_master (lectura local,
+# sincronizado por _bm_master_sync_loop) -- el refresco de los bulks se lanza
+# en background (fire-and-forget) y este guard evita que 4 cuentas disparen
+# 4 instancias concurrentes del mismo refresco (mismo patron de bug que
+# _activate_wh_running arriba).
+_bm_bulk_refresh_running: bool = False
 
 # FIX 2026-08-09: Jovan senalo correctamente que el bulk de BM deberia ser
 # UNA sola llamada compartida por las 4 cuentas ML (ya lo es en el caso
@@ -6440,7 +6452,29 @@ async def _prewarm_caches(user_id: str = None):
                 # la deduplicación por normalize_to_bm_sku garantiza 1 sola consulta BM por SKU.
                 _prewarm_progress["total"] = len(set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates))
                 _prewarm_progress["started_at"] = _time.time()
-                bm_map = await _get_bm_stock_cached(bm_candidates, retry_stale=True)
+                # FIX 2026-08-12 (incidente real: Stock tab colgado 7+ min en 0/1552,
+                # ver DEVLOG): las alertas ya NO esperan (await) el refresco de BM en
+                # vivo -- leen bm_sku_master, ya sincronizado en background por
+                # _bm_master_sync_loop. El refresco de los caches bulk (_bm_bulk_*_cache,
+                # que ese loop consume) se sigue disparando aquí, pero fire-and-forget:
+                # si BM está lento (hasta 5 fetches secuenciales de 90-150s c/u), el
+                # usuario ya no lo espera -- la próxima vez que corra este ciclo con
+                # datos frescos, bm_sku_master ya los tendrá.
+                global _bm_bulk_refresh_running
+                if not _bm_bulk_refresh_running:
+                    _bm_bulk_refresh_running = True
+
+                    async def _bg_bulk_refresh(_candidates=bm_candidates):
+                        global _bm_bulk_refresh_running
+                        try:
+                            await _get_bm_stock_cached(_candidates, retry_stale=True)
+                        except Exception as _bg_err:
+                            logger.warning(f"[BM-BULK-REFRESH] Error en background: {_bg_err}")
+                        finally:
+                            _bm_bulk_refresh_running = False
+
+                    asyncio.create_task(_bg_bulk_refresh())
+                bm_map = await _bm_map_from_master(bm_candidates)
                 # Cargar regla de distribución para esta cuenta (si existe)
                 _dist_rule = await token_store.get_distribution_rule(str(client.user_id))
                 _dist_settings = await token_store.get_distribution_settings() if _dist_rule else None
@@ -6448,21 +6482,17 @@ async def _prewarm_caches(user_id: str = None):
                 _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
                 _apply_bundle_stock_override(products, _bundles)
 
-                # Helper: SKU bulk-verificado en ESTE ciclo de prewarm (ts > 0).
-                # Entradas cargadas de DB (ts = 0.0) pueden tener stock obsoleto.
-                # Las alertas SOLO usan datos confirmados por el bulk actual.
+                # Helper: SKU con dato de stock CONFIRMADO -- las alertas solo
+                # usan SKUs con dato real, nunca "sin dato" tratado como 0.
+                # FIX 2026-08-12: antes leía _bm_stock_cache (poblado por el
+                # fetch en vivo a BM que YA NO se espera aquí, ver arriba --
+                # correrlo en background significa que ese cache puede seguir
+                # vacío/viejo en el momento exacto de este cálculo). bm_map
+                # viene de _bm_map_from_master(), que YA filtró por
+                # verified=1 de bm_sku_master -- estar en bm_map ES la prueba
+                # de "dato confirmado", no hace falta releer otro cache.
                 def _bm_bulk_ok(sku: str) -> bool:
-                    # FIX 2026-08-11: solo chequeaba el timestamp (ts>0), no el
-                    # flag _v -- una llamada individual que truena por timeout
-                    # (_store_empty) guarda un timestamp real con avail_total=0
-                    # pero SIN _v (o _v=False), y antes eso se leia igual que
-                    # "BM confirmo 0 stock real". Encontrado en vivo 2026-08-11
-                    # via binmanager-specialist: excluia candidatos reales de
-                    # "Activar" que solo fallaron por timeout, no por stock=0.
-                    if not sku:
-                        return False
-                    _e = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-                    return _e is not None and _e[0] > 0.0 and bool(_e[1].get("_v"))
+                    return bool(sku) and sku in bm_map
 
                 # Recomendación inteligente de qty a sincronizar por velocidad de ventas.
                 # Fórmula: stock para 14 días al ritmo actual, acotado a la cuota asignada.
@@ -7225,6 +7255,66 @@ async def _fetch_tv_wh_breakdown():
         _bm_tv_loc_running = False
 
 
+async def _bm_map_from_master(products: list, sku_key: str = "sku") -> dict:
+    """Construye el mismo shape que _get_bm_stock_cached (bm_map, para
+    _apply_bm_stock) pero leyendo bm_sku_master -- lectura local pura,
+    JAMAS llama a BM. Fase D del rediseño bm_sku_master (2026-08-12,
+    pedido explícito de Jovan tras el incidente donde el Stock tab se
+    colgó 7+ min esperando bulk fetches secuenciales a BM antes de poder
+    calcular una sola alerta).
+
+    Solo confía en filas verified=1 (el ciclo de sync más reciente
+    confirmó ese dato contra BM) -- mismo criterio "mejor vacío que datos
+    stale" que ya usaba el pipeline viejo (_bm_bulk_ok/Fix A): un SKU sin
+    verificar todavía no genera bm_avail=None (sin alerta), nunca un 0
+    falso. El refresco real de bm_sku_master corre de forma
+    INDEPENDIENTE (_bm_master_sync_loop, cada ~2 min) -- esta función no
+    dispara ninguna sincronización, solo lee lo que ya esté guardado."""
+    skus: set = set()
+    for p in products:
+        sku = p.get(sku_key, "")
+        if sku:
+            skus.add(normalize_to_bm_sku(sku))
+        if p.get("has_variations"):
+            for v in p.get("variations", []):
+                v_sku = v.get("sku", "")
+                if v_sku:
+                    skus.add(normalize_to_bm_sku(v_sku))
+    if not skus:
+        return {}
+    master_rows = await token_store.get_bm_master_rows_for_skus(list(skus))
+
+    def _row_to_inv(row: dict) -> dict:
+        return {
+            "mty": row.get("mty_qty", 0) or 0,
+            "cdmx": row.get("cdmx_qty", 0) or 0,
+            "tj": row.get("tj_qty", 0) or 0,
+            "total": row.get("total_qty", 0) or 0,
+            "avail_total": row.get("available_qty", 0) or 0,
+            "reserved_total": row.get("reserve_qty", 0) or 0,
+            "no_vendible": row.get("no_vendible_qty", 0) or 0,
+            "_v": True,
+            "_wh_fetched": bool(row.get("mty_qty") or row.get("cdmx_qty") or row.get("tj_qty")),
+        }
+
+    result_map: dict = {}
+    for p in products:
+        sku = p.get(sku_key, "")
+        if sku:
+            row = master_rows.get(normalize_to_bm_sku(sku))
+            if row and row.get("verified"):
+                result_map[sku] = _row_to_inv(row)
+        if p.get("has_variations"):
+            for v in p.get("variations", []):
+                v_sku = v.get("sku", "")
+                if not v_sku:
+                    continue
+                v_row = master_rows.get(normalize_to_bm_sku(v_sku))
+                if v_row and v_row.get("verified"):
+                    result_map[v_sku] = _row_to_inv(v_row)
+    return result_map
+
+
 async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool = False) -> dict:
     """Devuelve {sku: {mty, cdmx, tj, total, avail_total}} para products, con cache.
     Usa Warehouse endpoint para desglose MTY/CDMX/TJ y InventoryBySKUAndCondicion_Quantity
@@ -7500,6 +7590,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         _bm_is_down_now = _bm_health.get("consecutive_failures", 0) >= 2
         _bulk_returned_empty = False  # True si BM respondió OK pero devolvió lista vacía
         _bulk_gr_rows = None
+        # FIX 2026-08-12 (incidente real: 0/1552 SKUs colgado 7+ min): si el
+        # intento FRESCO de GR ya falló/tardó su timeout completo, BM está
+        # con problemas ahora mismo -- no tiene sentido intentar 3 fetches
+        # frescos más (LOC47/68/TJ, 90-150s c/u) que muy probablemente
+        # también van a fallar. Circuit breaker simple: solo se activa
+        # cuando SÍ hubo un intento fresco real (no cuando se reusó cache
+        # válida o se saltó el reintento por "falló hace <3min").
+        _gr_fresh_attempt_failed = False
         if _bm_bulk_gr_cache:
             _age_gr = _time.time() - _bm_bulk_gr_cache[0]
             # Servir cache si: fresco (<15 min) O BM marcado caído Y no excede 2h.
@@ -7537,6 +7635,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
                     logger.warning("[BM-CACHE] GR bulk fetch devolvió vacío — fallback a stale cache")
                     _bulk_returned_empty = True  # señal para evitar retries individuales
+                    _gr_fresh_attempt_failed = True
                     _bm_bulk_mark_failed("gr")
                     if _bm_bulk_gr_cache:
                         _bulk_gr_rows = _bm_bulk_gr_cache[1]
@@ -7544,6 +7643,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
             except Exception as _bulk_err:
                 logger.warning(f"[BM-CACHE] GR bulk fetch error: {_bulk_err} — usando stale")
+                _gr_fresh_attempt_failed = True
                 _bm_bulk_mark_failed("gr")
                 # Si falla el fetch, intentar usar cache aunque sea antiguo
                 if _bm_bulk_gr_cache:
@@ -7558,7 +7658,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         _bulk_loc47_rows = None  # CDMX (LOC 47)
         _bulk_loc68_rows = None  # MTY  (LOC 68)
         _bulk_loctj_rows = None  # Tijuana (LOC 45,69,43,42)
-        if _bulk_gr_rows is not None and not _bm_is_down_now:
+        if _bulk_gr_rows is not None and not _bm_is_down_now and not _gr_fresh_attempt_failed:
             # Reutilizar si la cache de ubicación es tan fresca como el GR bulk
             _loc_ttl = 900  # mismo TTL que GR bulk
             if _bm_bulk_loc47_cache and (_time.time() - _bm_bulk_loc47_cache[0]) < _loc_ttl:
@@ -7664,6 +7764,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             if _bulk_all_rows is None and _bm_bulk_recently_failed("all") and _bm_bulk_all_cache:
                 _bulk_all_rows = _bm_bulk_all_cache[1]
                 logger.info("[BM-CACHE] ALL bulk fallo hace <3min -- usando stale sin reintentar")
+            elif _bulk_all_rows is None and _gr_fresh_attempt_failed:
+                # FIX 2026-08-12: mismo circuit breaker que LOC47/68/TJ arriba —
+                # ALL es el último de 5 fetches secuenciales (90+90+90+150+150s
+                # peor caso, ver incidente real) — si GR ya falló fresco este
+                # ciclo, no tiene sentido quemar otros 150s en algo que muy
+                # probablemente también va a fallar. Usar stale si hay.
+                if _bm_bulk_all_cache:
+                    _bulk_all_rows = _bm_bulk_all_cache[1]
+                    logger.info("[BM-CACHE] ALL bulk saltado (GR ya falló este ciclo) -- usando stale")
             elif _bulk_all_rows is None:
                 try:
                     # timeout=150s: FIX 2026-08-10 — mismo motivo que LOC-TJ arriba,
@@ -16299,21 +16408,26 @@ async def bm_health_status():
 
 @app.get("/api/catalog/status")
 async def catalog_status_endpoint(request: Request):
-    """Estado del sync semanal de catálogo BM. Solo admin."""
+    """Estado del sync de catálogo BM. Solo admin.
+
+    FIX 2026-08-12: decía "domingo 9pm" (texto viejo, de cuando de verdad
+    era semanal) pero el loop real (_weekly_catalog_sync, main.py) corre
+    a DIARIO desde hace tiempo (3am Monterrey = 09:00 UTC) -- el nombre de
+    la función se quedó atrás del cambio de cadencia. Confirmado con Jovan
+    2026-08-12: diario está bien (más actualizado sin costo extra real),
+    solo había que corregir el texto para que diga lo que en verdad pasa."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if du.get("role") != "admin":
         return JSONResponse({"error": "Acceso denegado"}, status_code=403)
     now = _time.time()
     last_db_sync = await token_store.get_bm_catalog_last_sync()
     last_db_age_h = round((now - last_db_sync) / 3600, 1) if last_db_sync > 0 else None
-    # Próximo domingo 9pm Monterrey (02:00 UTC lunes)
+    # Próximo 3am Monterrey (09:00 UTC) — mismo cálculo que _weekly_catalog_sync().
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     _dnow = _dt.now(_tz.utc)
-    # Domingo 9pm MTY CDT = lunes 02:00 UTC
-    days_until_monday = (0 - _dnow.weekday()) % 7
-    if days_until_monday == 0 and _dnow.hour >= 2:
-        days_until_monday = 7
-    _next = (_dnow + _td(days=days_until_monday)).replace(hour=2, minute=0, second=0, microsecond=0)
+    _next = _dnow.replace(hour=9, minute=0, second=0, microsecond=0)
+    if _next <= _dnow:
+        _next += _td(days=1)
     next_run_h = round((_next - _dnow).total_seconds() / 3600, 1)
 
     def _fmt(h):
@@ -16330,7 +16444,7 @@ async def catalog_status_endpoint(request: Request):
         "last_db_sync_ts": last_db_sync,
         "last_db_age_h":   last_db_age_h,
         "next_auto_run_h": next_run_h,
-        "next_auto_run_label": f"domingo 9pm MTY (en ~{next_run_h}h)",
+        "next_auto_run_label": f"diario, 3am MTY (en ~{next_run_h}h)",
     })
 
 
