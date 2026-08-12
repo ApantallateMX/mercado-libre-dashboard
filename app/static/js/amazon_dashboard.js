@@ -67,6 +67,7 @@ var _amzFbaCatalogoLoaded = false;
 var amzMsgsOnlyPending = true;
 var amzMsgsOrderSearch = '';
 var amzMsgsScope = 'own';   // 'own' (cuenta activa) | 'all' (todas las cuentas)
+var amzMsgsView = 'normal'; // 'normal' | 'followup' (marcados para seguimiento)
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -2959,7 +2960,12 @@ function loadAmzBuyerMessages() {
     if (!el) return;
     var unified = amzMsgsScope === 'all';
     var url = unified ? '/api/amazon/buyer-messages-unified' : '/api/amazon/buyer-messages';
-    var qs = 'days=365&only_pending=' + (amzMsgsOnlyPending ? 'true' : 'false');
+    var qs = 'days=365';
+    if (amzMsgsView === 'followup') {
+        qs += '&view=followup';
+    } else {
+        qs += '&only_pending=' + (amzMsgsOnlyPending ? 'true' : 'false');
+    }
     if (!unified) qs += '&seller_id=' + encodeURIComponent(window.amzActiveSellerId || '');
     if (amzMsgsOrderSearch) qs += '&order_id=' + encodeURIComponent(amzMsgsOrderSearch);
     fetch(url + '?' + qs)
@@ -2967,6 +2973,17 @@ function loadAmzBuyerMessages() {
         .then(function(data) { _renderAmzBuyerMessages(data); })
         .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>'; });
 }
+
+window.toggleAmzMsgsView = function() {
+    amzMsgsView = (amzMsgsView === 'followup') ? 'normal' : 'followup';
+    var btn = document.getElementById('amz-msgs-followup-toggle');
+    if (btn) {
+        btn.className = 'text-xs px-3 py-1.5 rounded-full font-semibold transition ' +
+            (amzMsgsView === 'followup' ? 'bg-orange-400 text-white' : 'bg-orange-100 text-orange-700 hover:bg-orange-200');
+        btn.textContent = amzMsgsView === 'followup' ? '🔖 Viendo: Seguimiento' : '🔖 Seguimiento';
+    }
+    loadAmzBuyerMessages();
+};
 
 window.setAmzMsgsScope = function(scope) {
     amzMsgsScope = scope;
@@ -3102,7 +3119,8 @@ function _renderAmzBuyerMessages(data) {
     if (!threads.length) {
         var emptyMsg = amzMsgsOrderSearch
             ? 'Sin mensajes para la orden ' + _amzMsgsEscHtml(amzMsgsOrderSearch) + '.'
-            : (amzMsgsOnlyPending ? 'No hay mensajes pendientes de responder — todo al día. (Dale a "Mostrando: solo pendientes" para ver el historial completo)' : 'Sin mensajes de compradores en este periodo.');
+            : (amzMsgsView === 'followup' ? 'No hay mensajes marcados para seguimiento.'
+               : (amzMsgsOnlyPending ? 'No hay mensajes pendientes de responder — todo al día. (Dale a "Mostrando: solo pendientes" para ver el historial completo)' : 'Sin mensajes de compradores en este periodo.'));
         el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">' + emptyMsg + '</p>';
         return;
     }
@@ -3146,9 +3164,19 @@ function _renderAmzBuyerMessages(data) {
             : (vi && status === 'resolved')
                 ? '<button onclick="setAmzThreadStatus(\'' + domId + '\', \'pending\', this)" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium transition">Reabrir</button>'
                 : '';
+        var followupBtn = (vi && vi.needs_followup)
+            ? '<button onclick="setAmzThreadFollowup(\'' + domId + '\', false, this)" class="text-xs px-2.5 py-1 rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 font-medium transition">✅ Ya se envió</button>'
+            : '<button onclick="promptAmzThreadFollowup(\'' + domId + '\', this)" class="text-xs px-2.5 py-1 rounded-full border border-orange-200 text-orange-600 hover:bg-orange-50 font-medium transition">🔖 Seguimiento</button>';
         var historyBtn = '<button onclick="window.showItemHistory(\'amz:' + _amzMsgsEscAttr(th.reply_to_addr) + '\')" class="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-gray-600 font-medium transition" title="Ver quién tomó/resolvió este hilo">🕘 Historial</button>';
         return '<div class="flex items-center gap-2 mt-2 flex-wrap">' +
-            '<span class="text-[10px] text-gray-400">Otras acciones:</span>' + takeBtn + resolveBtn + historyBtn + '</div>';
+            '<span class="text-[10px] text-gray-400">Otras acciones:</span>' + takeBtn + resolveBtn + followupBtn + historyBtn + '</div>';
+    }
+
+    function followupNote(th) {
+        var vi = th.view_info;
+        if (!vi || !vi.needs_followup) return '';
+        return '<div class="mt-2 text-xs bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-orange-700">' +
+            '📌 Pendiente de enviar: <strong>' + _amzMsgsEscHtml(vi.follow_up_note || '(sin nota)') + '</strong></div>';
     }
 
     function threadHtml(th) {
@@ -3243,7 +3271,7 @@ function _renderAmzBuyerMessages(data) {
         ) : '';
 
         return '<div id="thread-card-' + domId + '" data-reply-to-addr="' + _amzMsgsEscAttr(th.reply_to_addr) + '" data-seller-id="' + _amzMsgsEscAttr(th.seller_id || '') + '" class="border border-gray-100 rounded-xl p-4 border-l-4 ' + borderColor + '">' +
-            head + meta + preview + expandToggle + messages + aiButton + replyBox + actionButtons(th, domId) +
+            head + meta + preview + followupNote(th) + expandToggle + messages + aiButton + replyBox + actionButtons(th, domId) +
         '</div>';
     }
 
@@ -3265,17 +3293,23 @@ function _renderAmzBuyerMessages(data) {
         '</div>';
     }
 
-    var pending = threads.filter(function(t) { return t.needs_response; });
-    var other = threads.filter(function(t) { return !t.needs_response; });
-    var urgent = pending.filter(function(t) { return urgencyOf(t).tier === 'urgent'; });
-    var warn = pending.filter(function(t) { return urgencyOf(t).tier === 'warn'; });
-    var ok = pending.filter(function(t) { return urgencyOf(t).tier === 'ok'; });
+    if (amzMsgsView === 'followup') {
+        // Vista plana -- no tiene sentido agrupar por urgencia de respuesta
+        // algo que típicamente ya está resuelto, solo falta un envío aparte.
+        el.innerHTML = '<div class="space-y-3">' + threads.map(threadHtml).join('') + '</div>';
+    } else {
+        var pending = threads.filter(function(t) { return t.needs_response; });
+        var other = threads.filter(function(t) { return !t.needs_response; });
+        var urgent = pending.filter(function(t) { return urgencyOf(t).tier === 'urgent'; });
+        var warn = pending.filter(function(t) { return urgencyOf(t).tier === 'warn'; });
+        var ok = pending.filter(function(t) { return urgencyOf(t).tier === 'ok'; });
 
-    el.innerHTML =
-        section('🔴 Urgente — más de 72h sin responder', 'text-red-600', urgent, false) +
-        section('🟠 Por atender — 24 a 72h', 'text-orange-600', warn, false) +
-        section('🟢 Recientes — menos de 24h', 'text-teal-600', ok, false) +
-        section('Resueltos / ya respondidos', 'text-gray-500', other, true);
+        el.innerHTML =
+            section('🔴 Urgente — más de 72h sin responder', 'text-red-600', urgent, false) +
+            section('🟠 Por atender — 24 a 72h', 'text-orange-600', warn, false) +
+            section('🟢 Recientes — menos de 24h', 'text-teal-600', ok, false) +
+            section('Resueltos / ya respondidos', 'text-gray-500', other, true);
+    }
 
     // Marcar como leídos los inbound sin leer que se acaban de mostrar —
     // UNA sola llamada con todos los IDs, no una por mensaje.
@@ -3321,6 +3355,31 @@ window.setAmzThreadStatus = function(domId, status, btn) {
         .then(function() { loadAmzBuyerMessages(); })
         .catch(function() { btn.disabled = false; });
 };
+
+// Marcar/desmarcar "Seguimiento" -- ver botón en actionButtons() arriba.
+window.promptAmzThreadFollowup = function(domId, btn) {
+    var note = window.prompt('¿Qué falta enviar? (ej. guía de devolución, foto del producto)', '');
+    if (note === null) return;  // cancelado
+    _setAmzThreadFollowupCall(domId, true, note, btn);
+};
+
+window.setAmzThreadFollowup = function(domId, needsFollowup, btn) {
+    _setAmzThreadFollowupCall(domId, needsFollowup, '', btn);
+};
+
+function _setAmzThreadFollowupCall(domId, needsFollowup, note, btn) {
+    var card = btn.closest('[id^="thread-card-"]');
+    var addr = card ? card.getAttribute('data-reply-to-addr') : '';
+    var sellerId = (card && card.getAttribute('data-seller-id')) || window.amzActiveSellerId;
+    btn.disabled = true;
+    fetch('/api/amazon/buyer-messages/followup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seller_id: sellerId, reply_to_addr: addr, needs_followup: needsFollowup, note: note }),
+    })
+        .then(function(r) { return r.json(); })
+        .then(function() { loadAmzBuyerMessages(); })
+        .catch(function() { btn.disabled = false; });
+}
 
 window.replyToBuyerMessage = function(domId, messageId) {
     var ta = document.getElementById('reply-text-' + domId);

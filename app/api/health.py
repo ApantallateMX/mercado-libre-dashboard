@@ -378,6 +378,32 @@ async def update_message_status(pack_id: str, body: MessageStatusRequest, reques
         await client.close()
 
 
+class MessageFollowupRequest(BaseModel):
+    needs_followup: bool
+    note: str = ""
+    account_id: str = ""  # opcional — solo lo manda la bandeja unificada
+
+
+@router.post("/messages/{pack_id}/followup")
+async def update_message_followup(pack_id: str, body: MessageFollowupRequest, request: Request):
+    """Marca/desmarca una conversación para 'Seguimiento' — ya se respondió
+    pero falta enviar algo después (guía, foto, dato que no se tenía a la
+    mano). Independiente del status (pending/in_progress/resolved)."""
+    client = await get_meli_client(user_id=body.account_id or None)
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        acc = body.account_id or str(client.user_id)
+        user = getattr(request.state, "dashboard_user", {}) or {}
+        username = user.get("display_name") or user.get("username") or "?"
+        await _ts.set_message_followup(pack_id, acc, body.needs_followup, body.note, marked_by=username)
+        await _log_history(request, username, "ml_message_followup", pack_id,
+                            {"account_id": acc, "needs_followup": body.needs_followup, "note": body.note[:200]})
+        return {"ok": True, "needs_followup": body.needs_followup}
+    finally:
+        await client.close()
+
+
 @router.post("/claims/{claim_id}/take")
 async def take_claim(claim_id: str, request: Request):
     """Asigna explícitamente este reclamo al usuario actual."""

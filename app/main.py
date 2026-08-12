@@ -10542,7 +10542,7 @@ async def health_search_partial(
 
 async def _fetch_enriched_ml_conversations(
     client, seller_id: str, offset: int, limit: int, date_from: str, date_to: str,
-    account_id: str = "", account_nickname: str = "", q: str = "",
+    account_id: str = "", account_nickname: str = "", q: str = "", only_followup: bool = False,
 ) -> tuple:
     """Trae y enriquece conversaciones de UNA cuenta ML. Reescrito 2026-08-04:
     la LISTA de conversaciones ahora viene de ml_messages_index (índice local
@@ -10555,6 +10555,7 @@ async def _fetch_enriched_ml_conversations(
     Retorna (enriched, total) — total real para pagination correcta."""
     index_rows, total = await token_store.get_message_index(
         seller_id, offset=offset, limit=limit, date_from=date_from, date_to=date_to, q=q,
+        only_followup=only_followup,
     )
 
     sem_th = asyncio.Semaphore(10)
@@ -10738,6 +10739,7 @@ async def health_messages_partial(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
     q: str = Query("", description="Buscar por orden, comprador o producto"),
+    view: str = Query("normal", description="normal | followup (marcados para seguimiento)"),
 ):
     _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client()
@@ -10757,8 +10759,16 @@ async def health_messages_partial(
         dt = None
         seller_id = str(client.user_id)
         q_clean = (q or "").strip()
+        is_followup_view = (view == "followup")
         try:
-            if q_clean:
+            if is_followup_view:
+                # Ignora búsqueda/paginación -- ver docstring de
+                # get_message_index(only_followup=True).
+                enriched, real_total = await _fetch_enriched_ml_conversations(
+                    client, seller_id, 0, 500, df, dt, only_followup=True,
+                )
+                paging = {"total": real_total, "offset": 0, "limit": real_total or 1}
+            elif q_clean:
                 # FIX 2026-08-11: buscar pack_id/order_id/texto CONTRA TODO EL
                 # HISTORICO via SQL (ver get_message_index), no solo la pagina
                 # chica que ya se hubiera traido -- Jovan reporto un caso real
@@ -10808,6 +10818,7 @@ async def health_messages_partial(
             "seller_id": seller_id,
             "q": q,
             "unified": False,
+            "view": view,
         })
     except Exception as e:
         return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando mensajes: {e}</p>')
@@ -10821,6 +10832,7 @@ async def health_messages_unified_partial(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
     q: str = Query("", description="Buscar por orden, comprador o producto"),
+    view: str = Query("normal", description="normal | followup (marcados para seguimiento)"),
 ):
     """Bandeja unificada ML — fan-out sobre las 4 cuentas (mismo patrón que
     _compute_unified_returns), cada conversación tageada con account_id/
@@ -10834,6 +10846,7 @@ async def health_messages_unified_partial(
     sem_ml = asyncio.Semaphore(3)
 
     q_clean = (q or "").strip()
+    is_followup_view = (view == "followup")
 
     async def _for_account(acc):
         async with sem_ml:
@@ -10843,6 +10856,11 @@ async def health_messages_unified_partial(
             if not cli:
                 return []
             try:
+                if is_followup_view:
+                    convs, _t = await _fetch_enriched_ml_conversations(
+                        cli, uid, 0, 500, df, dt, account_id=uid, account_nickname=nick, only_followup=True,
+                    )
+                    return convs
                 if q_clean:
                     # FIX 2026-08-11: mismo criterio que health_messages_partial
                     # -- pack_id/order_id/texto contra todo el historico de
@@ -10895,13 +10913,14 @@ async def health_messages_unified_partial(
         c.current_user = _current_user
 
     return templates.TemplateResponse(request, "partials/health_messages.html", {
-        "conversations": enriched[:50],
-        "paging": {"total": len(enriched), "offset": 0, "limit": 50},
+        "conversations": enriched[:50] if not is_followup_view else enriched,
+        "paging": {"total": len(enriched), "offset": 0, "limit": 50 if not is_followup_view else (len(enriched) or 1)},
         "offset": 0,
         "limit": 50,
         "seller_id": "",
         "q": q,
         "unified": True,
+        "view": view,
     })
 
 
@@ -21520,13 +21539,19 @@ def _amz_response_deltas(messages: list) -> list:
     return deltas
 
 
-async def _fetch_amazon_threads_for_seller(sid: str, days: int, oid: str = "", nickname: str = "") -> tuple:
+async def _fetch_amazon_threads_for_seller(sid: str, days: int, oid: str = "", nickname: str = "", full_history: bool = False) -> tuple:
     """Trae y agrupa los mensajes de UNA cuenta Amazon en threads (con
     view_info/needs_response). Extraído de amazon_buyer_messages_list para
     reusarlo tanto en la vista de una sola cuenta como en el fan-out de la
-    bandeja unificada. Retorna (threads, total_rows)."""
-    effective_days = 3650 if oid else days
-    rows = await token_store.get_buyer_messages(sid, effective_days, limit=(1000 if oid else 50))
+    bandeja unificada. Retorna (threads, total_rows).
+
+    full_history=True (usado por view=followup, ver amazon_buyer_messages_list):
+    un hilo marcado para seguimiento normalmente ya está 'resolved' y puede
+    llevar más de `days` desde el último mensaje -- sin esto, el hilo
+    desaparecería de la bandeja aunque siguiera marcado, mismo riesgo que
+    resolvió get_message_index(only_followup=True) para ML."""
+    effective_days = 3650 if (oid or full_history) else days
+    rows = await token_store.get_buyer_messages(sid, effective_days, limit=(1000 if (oid or full_history) else 50))
     if oid:
         rows = [r for r in rows if r["order_id"] == oid]
 
@@ -21628,6 +21653,7 @@ async def amazon_buyer_messages_list(
     seller_id: str = Query(""),
     order_id: str = Query(""),
     only_pending: bool = Query(True),
+    view: str = Query("normal", description="normal | followup (marcados para seguimiento)"),
 ):
     """Hilos de mensajes reales de compradores (Buyer-Seller Messaging)
     capturados vía el buzón Gmail dedicado — NO es SP-API (no existe endpoint
@@ -21651,10 +21677,13 @@ async def amazon_buyer_messages_list(
     from app.services import buyer_messages_client as _bmc_op
     _bmc_op.trigger_opportunistic_poll(sid)
     try:
-        threads, total_rows = await _fetch_amazon_threads_for_seller(sid, days, oid)
+        is_followup_view = (view == "followup")
+        threads, total_rows = await _fetch_amazon_threads_for_seller(sid, days, oid, full_history=is_followup_view)
         unread = sum(1 for th in threads for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
         stats = _compute_amazon_thread_stats(threads)
-        if only_pending and not oid:
+        if is_followup_view:
+            threads = [t for t in threads if t["view_info"] and t["view_info"].get("needs_followup")]
+        elif only_pending and not oid:
             threads = [t for t in threads if t["needs_response"]]
         return {"days": days, "threads": threads, "total": total_rows, "unread": unread, "stats": stats}
     except Exception as e:
@@ -21667,6 +21696,7 @@ async def amazon_buyer_messages_unified(
     days: int = Query(30, ge=1, le=365),
     order_id: str = Query(""),
     only_pending: bool = Query(True),
+    view: str = Query("normal", description="normal | followup (marcados para seguimiento)"),
 ):
     """Bandeja unificada Amazon — fan-out sobre las 3 cuentas, cada thread
     tageado con seller_id/seller_nickname para poder Tomar/Resolver/Responder
@@ -21682,12 +21712,14 @@ async def amazon_buyer_messages_unified(
         _bmc_op.trigger_opportunistic_poll(_acc.get("seller_id", ""))
     sem_amz = asyncio.Semaphore(3)
 
+    is_followup_view = (view == "followup")
+
     async def _for_account(acc):
         async with sem_amz:
             sid = acc.get("seller_id", "")
             nick = acc.get("nickname") or sid
             try:
-                threads, total = await _fetch_amazon_threads_for_seller(sid, days, oid, nickname=nick)
+                threads, total = await _fetch_amazon_threads_for_seller(sid, days, oid, nickname=nick, full_history=is_followup_view)
                 return threads, total
             except Exception:
                 return [], 0
@@ -21703,7 +21735,9 @@ async def amazon_buyer_messages_unified(
     all_threads.sort(key=lambda t: t["last_ts"], reverse=True)
     unread = sum(1 for th in all_threads for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
     stats = _compute_amazon_thread_stats(all_threads)
-    if only_pending and not oid:
+    if is_followup_view:
+        all_threads = [t for t in all_threads if t["view_info"] and t["view_info"].get("needs_followup")]
+    elif only_pending and not oid:
         all_threads = [t for t in all_threads if t["needs_response"]]
     return {"days": days, "threads": all_threads[:100], "total": total_rows, "unread": unread, "stats": stats}
 
@@ -21785,6 +21819,40 @@ async def amazon_buyer_messages_status(request: Request):
     except Exception:
         pass
     return JSONResponse({"ok": True, "status": status})
+
+
+@app.post("/api/amazon/buyer-messages/followup")
+async def amazon_buyer_messages_followup(request: Request):
+    """Marca/desmarca un hilo para 'Seguimiento' -- ya se respondió pero
+    falta enviar algo (guía, foto, dato que no se tenía a la mano). Mismo
+    patrón que /api/health/messages/{pack_id}/followup (ML), reusa
+    token_store.set_message_followup vía el prefijo 'amz:'."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+        seller_id = (body.get("seller_id") or "").strip()
+        reply_to_addr = (body.get("reply_to_addr") or "").strip()
+        needs_followup = bool(body.get("needs_followup"))
+        note = (body.get("note") or "").strip()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    if not seller_id or not reply_to_addr:
+        return JSONResponse({"detail": "seller_id y reply_to_addr son requeridos"}, status_code=400)
+    pack_id = _amz_thread_key(reply_to_addr)
+    username = du["username"]
+    await token_store.set_message_followup(pack_id, seller_id, needs_followup, note, marked_by=username)
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=username, user_id=du.get("id"),
+            action="amazon_buyer_message_followup", item_id=pack_id,
+            detail={"seller_id": seller_id, "needs_followup": needs_followup, "note": note[:200]}, ip=ip, section="Salud",
+        )
+    except Exception:
+        pass
+    return JSONResponse({"ok": True, "needs_followup": needs_followup})
 
 
 @app.post("/api/amazon/buyer-messages/mark-all-resolved")

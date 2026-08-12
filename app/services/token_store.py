@@ -239,6 +239,21 @@ async def init_db():
                 PRIMARY KEY (pack_id, account_id)
             )
         """)
+        # Migración 2026-08-12: "Seguimiento" -- marcar un mensaje/hilo (ML o
+        # Amazon, misma tabla reusada con prefijos) que YA se respondió pero
+        # falta enviar algo después (guía, foto, dato que no se tenía a la
+        # mano). Ortogonal a `status` -- un hilo puede estar 'resolved' Y
+        # needs_followup=1 al mismo tiempo, son cosas independientes.
+        for _col, _def in (
+            ("needs_followup",     "INTEGER NOT NULL DEFAULT 0"),
+            ("follow_up_note",     "TEXT NOT NULL DEFAULT ''"),
+            ("followup_marked_at", "REAL NOT NULL DEFAULT 0"),
+        ):
+            try:
+                await db.execute(f"ALTER TABLE ml_message_views ADD COLUMN {_col} {_def}")
+                await db.commit()
+            except Exception:
+                pass  # columna ya existe
         # Índice local de conversaciones ML (2026-08-04) — reemplaza el escaneo en
         # vivo de "50 órdenes más recientes" de get_messages() (meli_client.py),
         # que perdía prácticamente todas las conversaciones reales con cualquier
@@ -2454,18 +2469,40 @@ async def update_message_view_status(pack_id: str, account_id: str, status: str,
 
 
 async def get_message_views(pack_ids: list, account_id: str) -> dict:
-    """Retorna dict {pack_id: {viewed_by, viewed_at, status}} para los pack_ids dados."""
+    """Retorna dict {pack_id: {viewed_by, viewed_at, status, needs_followup,
+    follow_up_note, followup_marked_at}} para los pack_ids dados."""
     if not pack_ids:
         return {}
     placeholders = ",".join("?" * len(pack_ids))
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
-            f"SELECT pack_id, viewed_by, viewed_at, status FROM ml_message_views "
-            f"WHERE pack_id IN ({placeholders}) AND account_id = ?",
+            f"SELECT pack_id, viewed_by, viewed_at, status, needs_followup, follow_up_note, followup_marked_at "
+            f"FROM ml_message_views WHERE pack_id IN ({placeholders}) AND account_id = ?",
             list(pack_ids) + [account_id],
         )).fetchall()
     return {r["pack_id"]: dict(r) for r in rows}
+
+
+async def set_message_followup(pack_id: str, account_id: str, needs_followup: bool, note: str = "", marked_by: str = "") -> None:
+    """Marca/desmarca un mensaje para 'Seguimiento' -- ya se respondió pero
+    falta enviar algo después (guía, foto, dato que no se tenía a la mano).
+    Ortogonal a `status`: no lo toca, no requiere que el mensaje esté
+    tomado/resuelto de antemano (upsert, igual que update_message_view_status)."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            """INSERT INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status,
+                                               needs_followup, follow_up_note, followup_marked_at)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+               ON CONFLICT(pack_id, account_id) DO UPDATE SET
+                   needs_followup=excluded.needs_followup,
+                   follow_up_note=excluded.follow_up_note,
+                   followup_marked_at=excluded.followup_marked_at""",
+            (pack_id, account_id, marked_by or "sistema", _t.time(),
+             1 if needs_followup else 0, (note or "")[:300], _t.time()),
+        )
+        await db.commit()
 
 
 async def bulk_mark_resolved(pack_ids: list, account_id: str, marked_by: str) -> int:
@@ -2521,7 +2558,8 @@ async def upsert_message_index(pack_id: str, account_id: str, order_id: str,
 
 
 async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
-                             date_from: str = "", date_to: str = "", q: str = "") -> tuple:
+                             date_from: str = "", date_to: str = "", q: str = "",
+                             only_followup: bool = False) -> tuple:
     """Lista conversaciones indexadas de UNA cuenta. Pendientes reales primero
     (último mensaje del comprador y no resuelto), luego por fecha más reciente.
     Retorna (rows, total) — total antes de paginar, para 'X de Y'.
@@ -2546,7 +2584,28 @@ async def get_message_index(account_id: str, offset: int = 0, limit: int = 20,
     nuevo) se quedaba enterrada entre miles de filas más recientes porque
     status seguía siendo 'resolved' en la tabla; el badge (que sí hace este
     mismo chequeo de fecha en Python, ver _count_ml_pending_excluding_blocked)
-    la contaba bien pero la lista nunca la mostraba en ninguna página."""
+    la contaba bien pero la lista nunca la mostraba en ninguna página.
+
+    only_followup=True: ignora date_from/date_to/q/paginación -- devuelve
+    TODAS las conversaciones marcadas needs_followup=1 de la cuenta
+    (típicamente ya 'resolved', por eso no puede depender del ORDER BY de
+    pendientes ni de un LIMIT chico, o una marca vieja se perdería fuera de
+    la primera página igual que el bug de 2026-08-11 arriba)."""
+    if only_followup:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            db.row_factory = aiosqlite.Row
+            rows = await (await db.execute(
+                """SELECT idx.pack_id, idx.order_id, idx.last_message_from, idx.last_message_text,
+                          idx.last_message_date, idx.total_messages
+                   FROM ml_message_views v
+                   JOIN ml_messages_index idx
+                       ON idx.pack_id = v.pack_id AND idx.account_id = v.account_id
+                   WHERE v.account_id = ? AND v.needs_followup = 1
+                   ORDER BY v.followup_marked_at DESC""",
+                (account_id,),
+            )).fetchall()
+        rows = [dict(r) for r in rows]
+        return rows, len(rows)
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         where = "WHERE idx.account_id = ?"

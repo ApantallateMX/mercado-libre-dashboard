@@ -1,13 +1,18 @@
 <!-- Barra superior: búsqueda + filtros -->
-<div class="flex flex-wrap gap-2 mb-4 items-center" data-msg-unified="{{ 'true' if unified else 'false' }}">
+<div class="flex flex-wrap gap-2 mb-4 items-center" data-msg-unified="{{ 'true' if unified else 'false' }}" data-msg-view="{{ view or 'normal' }}">
     <!-- Filtro Pendientes / Todos -->
     <button onclick="window.filterMessages('pending')" id="msg-filter-pending"
-            class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
+            class="px-3 py-1 text-xs rounded-full {% if view != 'followup' %}bg-yellow-400 text-gray-800{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %} font-semibold">
         Pendientes
     </button>
     <button onclick="window.filterMessages('all')" id="msg-filter-all"
             class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
         Todos
+    </button>
+    <button onclick="window.filterMessages('followup')" id="msg-filter-followup"
+            class="px-3 py-1 text-xs rounded-full {% if view == 'followup' %}bg-orange-400 text-white{% else %}bg-orange-50 text-orange-600 hover:bg-orange-100{% endif %} font-semibold"
+            title="Mensajes ya respondidos donde falta enviar algo (guía, foto, dato pendiente)">
+        🔖 Seguimiento
     </button>
 
     <span class="w-px h-4 bg-gray-200 mx-1"></span>
@@ -141,6 +146,15 @@
                 </span>
             </div>
             {% endif %}
+
+            <!-- Marcado para seguimiento -- ya se respondió pero falta
+                 enviar algo (guía, foto, dato pendiente). Independiente
+                 de si está resuelto o no. -->
+            {% if vi and vi.needs_followup %}
+            <div class="bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-2 text-xs text-orange-700 flex items-center gap-2 flex-wrap">
+                <span>📌 Pendiente de enviar: <strong>{{ vi.follow_up_note or '(sin nota)' }}</strong></span>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Mensajes del hilo -->
@@ -204,6 +218,20 @@
                 <button onclick="window._setMsgStatus('{{ conv.pack_id }}', 'pending', this)"
                         class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 font-semibold transition">
                     Reabrir
+                </button>
+                {% endif %}
+
+                <!-- Seguimiento: independiente del status -- ver nota arriba
+                     de la tarjeta si ya está marcado. -->
+                {% if vi and vi.needs_followup %}
+                <button onclick="window._toggleMsgFollowup('{{ conv.pack_id }}', false, this)"
+                        class="text-xs px-3 py-1 rounded-full bg-orange-100 text-orange-700 hover:bg-orange-200 font-semibold transition">
+                    ✅ Ya se envió
+                </button>
+                {% else %}
+                <button onclick="window._promptMsgFollowup('{{ conv.pack_id }}', this)"
+                        class="text-xs px-3 py-1 rounded-full bg-orange-50 text-orange-600 hover:bg-orange-100 font-semibold transition">
+                    🔖 Seguimiento
                 </button>
                 {% endif %}
 
@@ -291,6 +319,6 @@
 
 {% else %}
 <p class="text-center py-8 text-gray-500">
-    {% if q %}No se encontraron mensajes para "{{ q }}"{% else %}No hay mensajes{% endif %}
+    {% if view == 'followup' %}No hay mensajes marcados para seguimiento{% elif q %}No se encontraron mensajes para "{{ q }}"{% else %}No hay mensajes{% endif %}
 </p>
 {% endif %}

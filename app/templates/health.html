@@ -737,6 +737,22 @@ window.answerQuestion = function(questionId) {
 // not a function" al hacer clic tras recargar la pestaña. Igual que
 // sendChatMessage/respondClaim, estas deben vivir en la página persistente.
 window.filterMessages = function(filter) {
+    var btnFollowup = document.getElementById('msg-filter-followup');
+    // "Seguimiento" es una vista con datos propios del backend (puede incluir
+    // conversaciones ya resueltas fuera de la página normal) -- no es un
+    // simple hide/show de tarjetas ya cargadas como Pendientes/Todos.
+    if (filter === 'followup') {
+        var url = window._msgBaseUrl() + '?view=followup';
+        if (window.switchHealthTab) {
+            window.switchHealthTab('messages', url);
+        } else {
+            htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
+        }
+        return;
+    }
+    if (btnFollowup) {
+        btnFollowup.className = 'px-3 py-1 text-xs rounded-full bg-orange-50 text-orange-600 hover:bg-orange-100 font-semibold';
+    }
     var cards = document.querySelectorAll('.msg-conv-card');
     var btnPending = document.getElementById('msg-filter-pending');
     var btnAll = document.getElementById('msg-filter-all');
@@ -751,6 +767,51 @@ window.filterMessages = function(filter) {
         btnPending.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200';
         cards.forEach(function(c) { c.style.display = ''; });
     }
+};
+
+// Marcar/desmarcar "Seguimiento" -- ver botón en health_messages.html.
+window._promptMsgFollowup = function(packId, btn) {
+    var note = window.prompt('¿Qué falta enviar? (ej. guía de devolución, foto del producto)', '');
+    if (note === null) return;  // cancelado
+    window._setMsgFollowup(packId, true, note, btn);
+};
+
+window._toggleMsgFollowup = function(packId, needsFollowup, btn) {
+    window._setMsgFollowup(packId, needsFollowup, '', btn);
+};
+
+window._setMsgFollowup = function(packId, needsFollowup, note, btn) {
+    btn.disabled = true;
+    var card = btn.closest('.msg-conv-card');
+    var accountId = card ? card.getAttribute('data-account-id') : '';
+    fetch('/api/health/messages/' + packId + '/followup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({needs_followup: needsFollowup, note: note, account_id: accountId || ''})
+    })
+    .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || ('HTTP ' + r.status)); });
+        return r.json();
+    })
+    .then(function() {
+        // La vista actual (normal o Seguimiento) puede dejar de mostrar esta
+        // tarjeta tras el cambio -- recargar es más simple y confiable que
+        // parchar el DOM a mano (mismo criterio que setMsgScope/searchMessages).
+        var bar = document.querySelector('[data-msg-view]');
+        var currentView = bar ? bar.getAttribute('data-msg-view') : 'normal';
+        var url = window._msgBaseUrl() + (currentView === 'followup' ? '?view=followup' : '');
+        if (window.switchHealthTab) {
+            window.switchHealthTab('messages', url);
+        } else {
+            htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'}).then(function() {
+                if (currentView !== 'followup') window.filterMessages('pending');
+            });
+        }
+    })
+    .catch(function(e) {
+        btn.disabled = false;
+        alert('No se pudo actualizar seguimiento: ' + e.message);
+    });
 };
 
 window._msgBaseUrl = function() {
