@@ -106,7 +106,13 @@
         fetch('/api/health/counts').then(function(r){ return r.json(); }).then(function(d) {
             var b = document.getElementById('health-badge');
             if (!b) return;
-            var n = (d.questions || 0) + (d.claims || 0);
+            // FIX 2026-08-12: nunca sumaba d.messages -- el numerito de "Salud"
+            // en el menú de arriba (visible en cualquier pestaña) jamás
+            // reflejaba mensajes pendientes, solo reclamos+preguntas. Jovan
+            // reportó un mensaje real de comprador sin verse en ningún lado
+            // visible -- la cuenta correcta sí lo tenía indexado, pero el
+            // badge global nunca lo habría mostrado de todos modos.
+            var n = (d.questions || 0) + (d.claims || 0) + (d.messages || 0);
             if (n > 0) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
             else { b.classList.add('hidden'); }
         }).catch(function(){});
