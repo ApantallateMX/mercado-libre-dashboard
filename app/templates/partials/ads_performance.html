@@ -160,6 +160,33 @@
 </div>
 {% endif %}
 
+<!-- Motor de recomendaciones (solo lectura -- pedido de Jovan tras auditoria
+     de Ads) -- top 5 items quemando mas gasto por encima de su margen real. -->
+{% if quema_margen_top5 %}
+<div class="px-4 py-3 bg-red-50 border-b border-red-200">
+    <p class="text-sm text-red-800 font-semibold mb-2">
+        ⚠ {{ tier_counts.quema_margen }} producto{{ 's' if tier_counts.quema_margen != 1 }} quemando margen
+        (${{ "%.2f"|format(quema_margen_cost_total) }} de gasto donde el ACOS ya supera el margen real — pérdida neta)
+    </p>
+    <ul class="text-xs text-red-700 space-y-1">
+        {% for p in quema_margen_top5 %}
+        <li class="flex items-center justify-between gap-2">
+            <span class="truncate">{{ p.title[:50] }} — gasto ${{ "%.2f"|format(p.cost) }}, ACOS {{ "%.1f"|format(p.acos) }}% vs margen {{ "%.1f"|format(p.margen_pct) }}%</span>
+            {% if p.status == 'active' %}
+            <button onclick="toggleAdItem('{{ p.item_id }}', 'paused', this)"
+                    class="text-xs px-2 py-0.5 bg-red-600 text-white rounded hover:bg-red-700 transition font-medium whitespace-nowrap flex-shrink-0">
+                Pausar
+            </button>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% if tier_counts.quema_margen > 5 %}
+    <button onclick="filterByTier('quema_margen')" class="text-xs text-red-700 underline mt-2">Ver los {{ tier_counts.quema_margen }} completos →</button>
+    {% endif %}
+</div>
+{% endif %}
+
 <!-- Boton crear campana para productos TOP -->
 {% if tier_filter == 'top' and products %}
 <div class="px-4 py-2 bg-green-50 border-b border-green-200 flex items-center justify-between">

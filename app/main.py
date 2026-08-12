@@ -11970,6 +11970,18 @@ async def ads_performance_partial(
                 "sin_venta": sum(1 for p in products if p["tier"] == "sin_venta"),
             }
 
+            # FIX 2026-08-11: motor de recomendaciones (solo lectura, no
+            # ejecuta nada -- pedido de Jovan tras auditoria de Ads). Top 5
+            # items que mas gasto queman por encima de su margen real, para
+            # accion manual (pausar en ML directo, o desde aqui con el boton
+            # de pausar que ya existe en la tabla).
+            _quema_items = sorted(
+                (p for p in products if p["tier"] == "quema_margen"),
+                key=lambda x: x["cost"], reverse=True,
+            )
+            quema_margen_cost_total = sum(p["cost"] for p in products if p["tier"] == "quema_margen")
+            quema_margen_top5 = _quema_items[:5]
+
             # Aplicar filtro de tier
             if tier_filter != "all":
                 products = [p for p in products if p["tier"] == tier_filter]
@@ -12012,6 +12024,8 @@ async def ads_performance_partial(
                 "category_filter": category,
                 "tier_counts": tier_counts,
                 "all_categories": all_categories,
+                "quema_margen_cost_total": quema_margen_cost_total,
+                "quema_margen_top5": quema_margen_top5,
             })
         except Exception:
             pass
