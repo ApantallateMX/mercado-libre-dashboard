@@ -754,6 +754,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_ml_messages_new_orders_scan_loop())
     asyncio.create_task(_ml_messages_index_refresh_loop())
     asyncio.create_task(_ml_messages_wide_backfill_loop())
+    asyncio.create_task(_ml_messages_unread_poll_loop())
     asyncio.create_task(token_store.feedback_sync_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
@@ -25778,6 +25779,82 @@ async def _ml_messages_new_orders_scan_loop() -> None:
         except Exception as _e:
             logger.warning(f"[ML-MSG-REFRESH-NEW] error general: {_e}")
         await asyncio.sleep(600)
+
+
+async def _ml_messages_unread_poll_loop() -> None:
+    """SOLUCIÓN DE RAÍZ (2026-08-12, pedido explícito de Jovan: "arregla el
+    problema de raíz, dejate de parchar") -- reemplaza la arquitectura de
+    "adivinar qué tan vieja puede ser la orden" (PARTE 1/2/3 arriba, ventanas
+    de 4/21/180 días) por el endpoint REAL de ML que lista directamente TODAS
+    las conversaciones sin leer de la cuenta, sin importar la fecha de la
+    orden: GET /messages/unread?tag=post_sale (confirmado con la documentación
+    oficial de ML y probado en vivo contra las 4 cuentas antes de escribir
+    este código -- trajo exactamente el pack que Jovan reportó invisible).
+
+    Por qué las 3 PARTES de arriba nunca iban a ser suficientes: cada una
+    cubre una ventana de tiempo distinta (4 días / 21 días si ya estaba
+    indexado / 180 días 1x al día) -- CUALQUIER combinación de ventanas fijas
+    va a tener un hueco entre la más rápida y la más lenta. El caso real de
+    hoy (orden de 7 días, sin mensajes hasta hoy) cayó exactamente en ese
+    hueco: 3 días fuera de la ventana rápida, y la única que lo cubría corre
+    1 vez al día. Ampliar la ventana de nuevo solo movería el hueco, no lo
+    cerraría -- por eso este loop no depende de ninguna ventana de fecha.
+
+    Corre cada 2 min, 1 sola llamada barata por cuenta (hasta 500 packs sin
+    leer por respuesta, documentado por ML) -- si algún día una cuenta tiene
+    más de 500 sin leer a la vez, se loguea para saberlo, pero no es el caso
+    normal. Las PARTES 1/2/3 se quedan activas como respaldo secundario
+    (completan order_id real y cubren el caso raro de un mensaje marcado
+    leído fuera de esta app antes de que la viéramos) -- este loop es ahora
+    la vía PRINCIPAL y no depende de la edad de la orden en absoluto."""
+    import re as _re_unread
+    await asyncio.sleep(30)
+    while True:
+        try:
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if not uid:
+                    continue
+                client = await get_meli_client(user_id=uid)
+                if not client:
+                    continue
+                try:
+                    r = await client.get("/messages/unread", params={"tag": "post_sale"})
+                    results = r.get("results", []) or []
+                    total = r.get("total", len(results))
+                    if total > len(results):
+                        logger.warning(f"[ML-MSG-UNREAD-POLL] cuenta={uid} total={total} pero solo {len(results)} en la respuesta -- puede haber mas de 500 sin leer, revisar")
+                    # Solo packs donde ESTA cuenta es la vendedora en el resource --
+                    # verificado en vivo: /messages/unread también devuelve hilos
+                    # donde la cuenta es la COMPRADORA (sellers/{otro_id} distinto
+                    # de uid) -- esos no son mensajes de posventa nuestros, se
+                    # descartan en vez de intentar indexarlos (fallarían 403/404
+                    # al pedir el thread con el seller_id equivocado).
+                    pack_ids: set = set()
+                    for item in results:
+                        m = _re_unread.search(r"/packs/([^/]+)/sellers/(\d+)", item.get("resource", ""))
+                        if m and m.group(2) == str(uid):
+                            pack_ids.add(m.group(1))
+                    if pack_ids:
+                        sem = asyncio.Semaphore(10)
+
+                        async def _index_one(pid):
+                            async with sem:
+                                try:
+                                    await _ml_refresh_indexed_pack(client, uid, pid)
+                                except Exception:
+                                    pass
+
+                        await asyncio.gather(*[_index_one(p) for p in pack_ids])
+                        logger.info(f"[ML-MSG-UNREAD-POLL] cuenta={uid} sin_leer={len(pack_ids)} indexados")
+                except Exception as _e:
+                    logger.warning(f"[ML-MSG-UNREAD-POLL] error cuenta={uid}: {_e}")
+                finally:
+                    await client.close()
+        except Exception as _e:
+            logger.warning(f"[ML-MSG-UNREAD-POLL] error general: {_e}")
+        await asyncio.sleep(120)
 
 
 async def _ml_refresh_indexed_pack(client, account_id: str, pack_id: str) -> bool:
