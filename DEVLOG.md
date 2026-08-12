@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont. 5) — FIX: badge global de Salud nunca contaba mensajes pendientes
+
+Jovan reportó (molesto, "de nuevo") un mensaje real de comprador (BLOW,
+Miguel Ángel Plascencia, "le falta el conector") visible en ML pero no en
+la app. Verificado en producción con diag dedicados ANTES de asumir nada:
+
+- El mensaje SÍ estaba correctamente indexado — BLOW tiene 161 mensajes
+  pendientes reales en nuestro sistema ahora mismo, confirmados en vivo
+  contra ML (`live_conversation_status`, `live_last_message` coinciden
+  exacto con lo que ML muestra).
+- La segunda captura de Jovan tenía la cuenta **ML APANTALLATE**
+  seleccionada en el dashboard, no BLOW — el tile "Mensajes: 0" de esa
+  página es correcto PARA ESA cuenta (otra cuenta, sin relación con el
+  mensaje reportado). No es un bug de datos.
+
+Investigando de todos modos se encontró un bug real y separado:
+**`base.html` línea ~109** — el numerito junto a "Salud" en el menú
+superior (visible en CUALQUIER pestaña, sin entrar a Salud) solo sumaba
+`questions + claims`, nunca `messages` — el mismo bug de nombres que ya
+se había corregido en `dashboard.html` (franja de alertas) el 2026-08-08
+nunca se replicó aquí. Aunque Jovan hubiera tenido la cuenta correcta
+seleccionada, ese indicador global jamás habría avisado del mensaje.
+Fix: una línea, sumar `d.messages || 0` también.
+
+Deploy Railway SUCCESS.
+
+---
+
 ## 2026-08-12 (cont. 4) — FIX: Deals ML mostraba falsos "deal activo" + margen mal calculado
 
 Jovan reportó que Deals "no está funcionando de forma correcta" (sin
