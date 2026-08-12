@@ -195,22 +195,30 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
         p["_retail_ph_mxn"] = round(retail_ph * usd_to_mxn, 2) if (0 < retail_ph < 9999) else 0
 
         price = p.get("price", 0)
+        # Precio real de venta: promo_deal_price → price → original_price (fallback catalogo)
+        # FIX 2026-08-12: bug real confirmado -- el margen se calculaba sobre
+        # `price` (precio de LISTA) aunque el producto tuviera un deal activo
+        # con descuento real (_promo_deal_price). Consecuencia grave: la
+        # alerta de "deal con margen negativo" (más abajo, sección Deals)
+        # NUNCA disparaba para un deal que de verdad pierde dinero, porque
+        # evaluaba el margen como si se vendiera al precio sin descontar. El
+        # cálculo de "Neto ML" de abajo SÍ usaba _sale_price correctamente --
+        # ahora el margen usa la misma fuente de precio real.
+        _sale_price = p.get("_promo_deal_price") or price or p.get("original_price") or 0
 
-        # ── Ganancia/margen vs precio de venta actual ──────────────────────
-        if price > 0 and p["_costo_mxn"] > 0:
-            comision = price * _ml_fee(price)
+        # ── Ganancia/margen vs precio de venta REAL (deal price si aplica) ──
+        if _sale_price > 0 and p["_costo_mxn"] > 0:
+            comision = _sale_price * _ml_fee(_sale_price)
             iva_comision = comision * 0.16
             envio = 150
-            ganancia = price - p["_costo_mxn"] - comision - iva_comision - envio
+            ganancia = _sale_price - p["_costo_mxn"] - comision - iva_comision - envio
             p["_ganancia_est"] = round(ganancia, 2)
-            p["_margen_pct"] = round((ganancia / price) * 100, 1)
+            p["_margen_pct"] = round((ganancia / _sale_price) * 100, 1)
         else:
             p["_ganancia_est"] = None
             p["_margen_pct"] = None
 
         # ── Neto ML y % Recuperación Retail ─────────────────────────────────
-        # Precio real de venta: promo_deal_price → price → original_price (fallback catalogo)
-        _sale_price = p.get("_promo_deal_price") or price or p.get("original_price") or 0
         _retail_mxn = p["_retail_mxn"]
         if _sale_price > 0:
             _item_id = p.get("id", "")
@@ -243,9 +251,12 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
         _orig_p = p.get("original_price", 0) or 0
         p["_meli_contribution_mxn"] = round(_orig_p * _meli_pct / 100, 2) if (_meli_pct > 0 and _orig_p > 0) else 0
         # Ganancia real = ganancia_est + lo que ML aporta (gratis para el vendedor)
+        # FIX 2026-08-12: _eff_price ahora también usa _sale_price (precio real
+        # del deal) en vez de `price` (lista) -- consistente con el fix de
+        # _ganancia_est arriba, mismo bug, mismo lugar.
         if p["_ganancia_est"] is not None:
             p["_ganancia_real"] = round(p["_ganancia_est"] + p["_meli_contribution_mxn"], 2)
-            _eff_price = price + p["_meli_contribution_mxn"]
+            _eff_price = _sale_price + p["_meli_contribution_mxn"]
             p["_margen_real_pct"] = round((p["_ganancia_real"] / _eff_price) * 100, 1) if _eff_price > 0 else None
         else:
             p["_ganancia_real"] = None
@@ -1626,20 +1637,26 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
         iid, data = r
         if isinstance(data, list):
             p_map[iid] = data
-    _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN"}
+    _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN",
+                   "PRICE_MATCHING", "UNHEALTHY_STOCK"}
     for p in products:
         promos = p_map.get(p.get(id_key), [])
         p["_promotions"] = promos
+        # FIX 2026-08-12: "pending" quitado del allowlist -- verificado en vivo
+        # que significa "aceptada pero todavía no arranca" (ej. LIGHTNING
+        # programado para mañana) o, para DEAL/LIGHTNING, ni siquiera trae
+        # precio real todavía. Solo "started" (y "active" como alias legado
+        # de otros tipos) es un descuento genuinamente corriendo ahora mismo.
         # Promos que gestiona el vendedor (PRICE_DISCOUNT, DEAL)
         active_seller = [
             pr for pr in promos
-            if pr.get("status") in ("started", "active", "pending")
+            if pr.get("status") in ("started", "active")
             and pr.get("type") not in _auto_types
         ]
         # Promos que gestiona ML automáticamente (PRE_NEGOTIATED, SMART, MARKETPLACE_CAMPAIGN, etc.)
         active_auto = [
             pr for pr in promos
-            if pr.get("status") in ("started", "active", "pending")
+            if pr.get("status") in ("started", "active")
             and pr.get("type") in _auto_types
         ]
         # Seller tiene prioridad; si no hay seller, usar auto (PRE_NEGOTIATED cuenta como deal activo)
@@ -9147,12 +9164,25 @@ async def products_deals_partial(request: Request):
         # ── Paso 2: obtener items de TODAS las campañas en paralelo ──────────
         # Sin filtro de status: campañas inactivas retornan 0 items rápido;
         # MARKETPLACE_CAMPAIGN puede tener status distinto a "started"/"active"
-        _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN"}
+        # PRICE_MATCHING/UNHEALTHY_STOCK: ML los calcula y cofinancia igual que
+        # SMART (precio ya fijado por ML, seller no lo escribe a mano) — 2 de
+        # los 3 tipos que faltaban reconocer (auditoría 2026-08-12).
+        _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN",
+                       "PRICE_MATCHING", "UNHEALTHY_STOCK"}
+        # VOLUME (descuento por cantidad: buy_quantity/discount_percentage) y
+        # SELLER_COUPON_CAMPAIGN (cupón: fixed_amount) NO tienen un campo
+        # "price" simple como el resto -- verificado en vivo 2026-08-12 contra
+        # datos reales de las 4 cuentas. Incluirlos en promo_items_map con
+        # deal_price=None generaba filas "Deal activo" con precio en blanco.
+        # Se excluyen de este flujo (precio único); si algún día se quiere
+        # mostrarlos, necesitan su propia columna (cantidad/cupón), no precio.
+        _NO_SIMPLE_PRICE_TYPES = {"VOLUME", "SELLER_COUPON_CAMPAIGN"}
         _skip_statuses = {"finished", "expired", "cancelled", "paused"}
         all_promos = [
             p for p in user_promos
             if p.get("id") and p.get("type")
             and p.get("status") not in _skip_statuses
+            and p.get("type") not in _NO_SIMPLE_PRICE_TYPES
         ]
         promo_item_tasks = [
             client.get_promotion_items(p["id"], p["type"])
@@ -9161,13 +9191,25 @@ async def products_deals_partial(request: Request):
         promo_items_lists = await asyncio.gather(*promo_item_tasks, return_exceptions=True)
 
         # Construir mapa item_id → datos de promo
+        # FIX 2026-08-12 (bug real confirmado en vivo): el ciclo de vida REAL de
+        # un item dentro de una promoción es candidate -> pending -> started ->
+        # finished. "candidate" significa "eres elegible, nunca te uniste" -- NO
+        # hay descuento corriendo, y para DEAL/LIGHTNING esos items ni siquiera
+        # tienen "price" (solo min/max/suggested_discounted_price, un RANGO para
+        # elegir, no un precio activo). Antes este loop metía TODOS los items de
+        # una campaña "started" al mapa sin mirar el status de cada item —
+        # verificado con datos reales: la misma campaña DEAL "started" trae
+        # cientos de items "candidate" mezclados con los genuinamente "started".
+        # Resultado real del bug: productos sin ningún descuento activo se
+        # mostraban en "Deals Activos" con precio/margen calculados sobre datos
+        # de una oferta que el vendedor nunca aceptó.
         promo_items_map: dict = {}
         for promo, result in zip(all_promos, promo_items_lists):
             if isinstance(result, Exception) or not result:
                 continue
             for item in result:
                 iid = item.get("id")
-                if not iid:
+                if not iid or item.get("status") != "started":
                     continue
                 promo_items_map[iid] = {
                     "original_price": item.get("original_price"),

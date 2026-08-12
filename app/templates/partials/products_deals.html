@@ -344,7 +344,9 @@
                                 'LIGHTNING': 'bg-yellow-100 text-yellow-700',
                                 'SMART': 'bg-blue-100 text-blue-600',
                                 'PRE_NEGOTIATED': 'bg-blue-100 text-blue-600',
-                                'SELLER_CAMPAIGN': 'bg-orange-100 text-orange-700'
+                                'SELLER_CAMPAIGN': 'bg-orange-100 text-orange-700',
+                                'PRICE_MATCHING': 'bg-cyan-100 text-cyan-700',
+                                'UNHEALTHY_STOCK': 'bg-rose-100 text-rose-700'
                             } %}
                             {% set _tc = _type_colors.get(_ptype, 'bg-gray-100 text-gray-600') %}
                             <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold {{ _tc }}">{{ _ptype | replace('_', ' ') | truncate(14, true, '') }}</span>
