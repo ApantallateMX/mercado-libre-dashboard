@@ -525,7 +525,18 @@ class MeliClient:
         Estrategia: usa status como filtro primario (más estable que date_created en v2),
         pagina sorted desc y para cuando llegamos a claims más viejos que date_from.
         Si no se pide status específico, corre opened + closed en paralelo.
-        """
+
+        FIX 2026-08-12 (mismo patrón que el bug real de Mensajes ML, pedido
+        explícito de Jovan de buscar la causa de raíz en vez de parchar
+        ventanas): un reclamo "opened" NUNCA debe cortarse por date_from, sin
+        importar qué tan viejo sea -- sigue siendo accionable HOY mientras
+        siga abierto. Confirmado con datos reales: reclamo real
+        id=5143152874 (APANTALLATEMX), stage=recontact, ABIERTO desde
+        2022-08-24 -- con la ventana vieja de 180 días quedaba invisible por
+        completo, sin que nada lo mostrara ni lo reportara como pendiente.
+        El date_from/date_to sigue aplicando SOLO a "closed" (ahí sí tiene
+        sentido acotar el histórico -- un reclamo cerrado no es accionable,
+        no hace falta traer los de hace años cada vez)."""
         df = date_from or ""
         dt = date_to or "9999-12-31"
 
@@ -533,6 +544,9 @@ class MeliClient:
             acc: list = []
             off = 0
             limit_p = 50
+            # "opened" es siempre accionable sin importar su edad -- nunca se
+            # corta por fecha. Solo "closed" respeta la ventana (histórico).
+            _apply_date_filter = (st != "opened")
             while True:
                 page = await self.get_claims(offset=off, limit=limit_p, status=st)
                 items = page.get("results", [])
@@ -542,10 +556,10 @@ class MeliClient:
                 for c in items:
                     # date_created viene como "2026-06-17T14:24:48.000-04:00" — tomar primeros 10
                     d = (c.get("date_created") or "")[:10]
-                    if df and d < df:
+                    if _apply_date_filter and df and d < df:
                         # Claims vienen sorted desc: pasamos el rango, paramos
                         return acc
-                    if d <= dt:
+                    if not _apply_date_filter or d <= dt:
                         acc.append(c)
                 off += limit_p
                 if off >= total:
