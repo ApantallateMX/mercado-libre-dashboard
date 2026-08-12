@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 — OPERACION: rol RDT "Direct-to-Consumer Shipping" agregado a VektorClaude, pendiente aprobación de Amazon
+
+Retomado el pendiente de RDT (dirección de envío Amazon para zonas/
+transferencias, solo cubría ML hasta hoy). Jovan navegó Developer Central
+paso a paso: el rol restringido ya no es un checkbox separado, quedó bajo
+"Will you delegate access to PII..." → Yes → sub-checkbox "Direct-to-
+Consumer Shipping", marcado en la app VektorClaude (cubre VECKTOR IMPORTS +
+AUTOBOT AMZ MX, comparten client_id) + re-autorizado en Seller Central.
+
+Se agregó `/api/diag/amazon-rdt-probe` (`app/main.py`, commit `a8c898b`,
+Railway SUCCESS) para probar `createRestrictedDataToken` contra producción
+sin depender de la copia local de `tokens.db`. Confirmado que el
+`refresh_token` de VECKTOR rotó tras el reauth, pero la llamada real sigue
+devolviendo `InvalidInput: Application does not have access to ...
+[buyerInfo, shippingAddress]` — el rol quedó bien configurado pero Amazon
+aún no lo aprueba/activa del lado del API (su propia doc dice que roles
+restringidos pasan por revisión, no es instantáneo). Sin acción pendiente
+de Jovan; re-probar más adelante con el mismo endpoint. Falta repetir el
+mismo cambio en la app de ExclusiveBulbs cuando esto quede aprobado.
+
+---
+
 ## 2026-08-11 (cont. 7) — Auditoría de Ads + margen real + fix endpoint muerto + motor de recomendaciones + bm_sku_master atascado resuelto
 
 **Auditoría de Ads** (especialista marketplace-ads-strategist, 2 sesiones):
