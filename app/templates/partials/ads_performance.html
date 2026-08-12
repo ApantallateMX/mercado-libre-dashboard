@@ -101,21 +101,42 @@
         <button onclick="filterByTier('all')"
                 class="px-3 py-1 text-xs rounded-full font-medium transition
                        {{ 'bg-gray-800 text-white' if tier_filter == 'all' else 'bg-gray-200 text-gray-700 hover:bg-gray-300' }}">
-            Todos ({{ (tier_counts.top or 0) + (tier_counts.medio or 0) + (tier_counts.bajo or 0) + (tier_counts.sin_venta or 0) }})
+            Todos ({{ (tier_counts.quema_margen or 0) + (tier_counts.riesgo or 0) + (tier_counts.rentable or 0) + (tier_counts.top or 0) + (tier_counts.medio or 0) + (tier_counts.bajo or 0) + (tier_counts.sin_venta or 0) }})
         </button>
+        {# FIX 2026-08-11: tiers con margen real (cuando se pudo resolver SKU+costo BM) --
+           top/medio/bajo quedan como fallback solo para items sin dato de margen. #}
+        <button onclick="filterByTier('quema_margen')"
+                class="px-3 py-1 text-xs rounded-full font-medium transition
+                       {{ 'bg-red-600 text-white' if tier_filter == 'quema_margen' else 'bg-red-100 text-red-700 hover:bg-red-200' }}">
+            QUEMA MARGEN {{ tier_counts.quema_margen or 0 }}
+        </button>
+        <button onclick="filterByTier('riesgo')"
+                class="px-3 py-1 text-xs rounded-full font-medium transition
+                       {{ 'bg-yellow-500 text-white' if tier_filter == 'riesgo' else 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' }}">
+            RIESGO {{ tier_counts.riesgo or 0 }}
+        </button>
+        <button onclick="filterByTier('rentable')"
+                class="px-3 py-1 text-xs rounded-full font-medium transition
+                       {{ 'bg-green-600 text-white' if tier_filter == 'rentable' else 'bg-green-100 text-green-700 hover:bg-green-200' }}">
+            RENTABLE {{ tier_counts.rentable or 0 }}
+        </button>
+        <span class="mx-1 text-gray-300">|</span>
         <button onclick="filterByTier('top')"
                 class="px-3 py-1 text-xs rounded-full font-medium transition
-                       {{ 'bg-green-600 text-white' if tier_filter == 'top' else 'bg-green-100 text-green-700 hover:bg-green-200' }}">
+                       {{ 'bg-green-600 text-white' if tier_filter == 'top' else 'bg-green-100 text-green-700 hover:bg-green-200' }}"
+                title="Sin dato de margen (SKU o costo BM no resuelto) -- clasificado solo por ROAS">
             TOP {{ tier_counts.top or 0 }}
         </button>
         <button onclick="filterByTier('medio')"
                 class="px-3 py-1 text-xs rounded-full font-medium transition
-                       {{ 'bg-yellow-500 text-white' if tier_filter == 'medio' else 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' }}">
+                       {{ 'bg-yellow-500 text-white' if tier_filter == 'medio' else 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200' }}"
+                title="Sin dato de margen (SKU o costo BM no resuelto) -- clasificado solo por ROAS">
             MEDIO {{ tier_counts.medio or 0 }}
         </button>
         <button onclick="filterByTier('bajo')"
                 class="px-3 py-1 text-xs rounded-full font-medium transition
-                       {{ 'bg-red-500 text-white' if tier_filter == 'bajo' else 'bg-red-100 text-red-700 hover:bg-red-200' }}">
+                       {{ 'bg-red-500 text-white' if tier_filter == 'bajo' else 'bg-red-100 text-red-700 hover:bg-red-200' }}"
+                title="Sin dato de margen (SKU o costo BM no resuelto) -- clasificado solo por ROAS">
             BAJO {{ tier_counts.bajo or 0 }}
         </button>
         <button onclick="filterByTier('sin_venta')"
@@ -162,12 +183,18 @@
                 <p class="text-xs font-mono text-gray-400">{{ p.item_id }}</p>
             </div>
             <!-- Tier badge -->
-            {% if p.tier == 'top' %}
-            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold flex-shrink-0">TOP</span>
+            {% if p.tier == 'quema_margen' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold flex-shrink-0" title="ACOS &gt;= margen real -- perdiendo dinero neto">QUEMA MARGEN</span>
+            {% elif p.tier == 'riesgo' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold flex-shrink-0" title="ACOS cerca del margen real">RIESGO</span>
+            {% elif p.tier == 'rentable' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold flex-shrink-0">RENTABLE</span>
+            {% elif p.tier == 'top' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold flex-shrink-0" title="Sin dato de margen -- solo ROAS">TOP</span>
             {% elif p.tier == 'medio' %}
-            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold flex-shrink-0">MEDIO</span>
+            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold flex-shrink-0" title="Sin dato de margen -- solo ROAS">MEDIO</span>
             {% elif p.tier == 'bajo' %}
-            <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold flex-shrink-0">BAJO</span>
+            <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold flex-shrink-0" title="Sin dato de margen -- solo ROAS">BAJO</span>
             {% else %}
             <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 font-semibold flex-shrink-0">SIN VENTA</span>
             {% endif %}
@@ -181,6 +208,9 @@
             <span>Clics: {{ p.clicks or 0 }}</span>
             <span>Ventas: {{ p.units or 0 }}</span>
             <span>ACOS: {{ "%.1f"|format(p.acos or 0) }}%</span>
+            {% if p.margen_pct is not none %}
+            <span>Margen real: {{ "%.1f"|format(p.margen_pct) }}%</span>
+            {% endif %}
         </div>
         {% if p.campaign_name %}
         <div class="mt-1 text-xs text-blue-600">Campana: {{ p.campaign_name }}</div>
@@ -218,6 +248,7 @@
                     {{ label }} {% if current_sort == col %}<span class="text-indigo-500">&#9660;</span>{% endif %}
                 </th>
                 {% endfor %}
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Margen neto real del SKU (costo BM + comision + IVA + envio) -- vacio si no se pudo resolver SKU o costo">Margen real</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Campana</th>
                 <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Accion</th>
             </tr>
@@ -233,16 +264,28 @@
                     {% endif %}
                 </td>
                 <td class="px-4 py-3 text-center">
-                    {% if p.tier == 'top' %}
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold" title="ROAS ≥ 5x — Escalar: aumentar presupuesto">
+                    {% if p.tier == 'quema_margen' %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold" title="ACOS >= margen real -- perdiendo dinero neto, considerar pausar">
+                        <span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>QUEMA MARGEN
+                    </span>
+                    {% elif p.tier == 'riesgo' %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold" title="ACOS cerca del margen real -- monitorear">
+                        <span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>RIESGO
+                    </span>
+                    {% elif p.tier == 'rentable' %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold" title="ACOS por debajo del margen real -- utilidad neta positiva">
+                        <span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>RENTABLE
+                    </span>
+                    {% elif p.tier == 'top' %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold" title="Sin dato de margen real (SKU o costo BM no resuelto) -- clasificado solo por ROAS ≥ 5x">
                         <span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>TOP
                     </span>
                     {% elif p.tier == 'medio' %}
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold" title="ROAS 2-5x — Optimizar: monitorear">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold" title="Sin dato de margen real -- clasificado solo por ROAS 2-5x">
                         <span class="w-2 h-2 rounded-full bg-yellow-400 inline-block"></span>MEDIO
                     </span>
                     {% elif p.tier == 'bajo' %}
-                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold" title="ROAS < 2x — Revisar: considerar pausar">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold" title="Sin dato de margen real -- clasificado solo por ROAS < 2x">
                         <span class="w-2 h-2 rounded-full bg-red-500 inline-block"></span>BAJO
                     </span>
                     {% else %}
@@ -260,6 +303,9 @@
                 </td>
                 <td class="px-4 py-3 text-sm text-right font-medium {{ 'text-green-600' if (p.acos or 0) <= 15 else 'text-red-600' if (p.acos or 0) > 30 else 'text-yellow-600' }}">
                     {{ "%.1f"|format(p.acos or 0) }}%
+                </td>
+                <td class="px-4 py-3 text-sm text-right font-medium {{ 'text-gray-400' if p.margen_pct is none else ('text-red-600' if p.margen_pct < 15 else 'text-green-600') }}">
+                    {{ "%.1f"|format(p.margen_pct) + '%' if p.margen_pct is not none else '—' }}
                 </td>
                 <td class="px-4 py-3 text-xs text-blue-600">{{ p.campaign_name or '—' }}</td>
                 <td class="px-4 py-3 text-center">

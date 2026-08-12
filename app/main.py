@@ -319,6 +319,22 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_precio_piso"] = None
 
 
+def _margin_pct_simple(price_mxn: float, cost_usd: float, usd_to_mxn: float) -> float | None:
+    """Version standalone de la formula de margen de _calc_margins() (comision
+    escalonada + IVA + envio estimado) para casos que no traen el objeto
+    'producto' completo -- ej. items de Ads (solo item_id/costo/ingresos de
+    la API de publicidad, no el listing completo). Pedido de Jovan 2026-08-11:
+    cruzar Ads con margen real en vez de ACoS/ROAS aislado."""
+    if price_mxn <= 0 or cost_usd <= 0 or cost_usd >= 9000:
+        return None
+    costo_mxn = cost_usd * usd_to_mxn
+    comision = price_mxn * _ml_fee(price_mxn)
+    iva_comision = comision * 0.16
+    envio = 150
+    ganancia = price_mxn - costo_mxn - comision - iva_comision - envio
+    return round((ganancia / price_mxn) * 100, 1)
+
+
 def _apply_bundle_stock_override(products: list, bundles: dict):
     """Para productos cuyo SKU coincide EXACTO con un bundle definido,
     sobreescribe _bm_avail/_bm_avail_raw con el mínimo real de sus
@@ -11817,7 +11833,7 @@ async def ads_performance_partial(
         date_from, date_to = _default_dates(date_from, date_to)
         sort_key = sort if sort in ("cost", "roas", "revenue", "clicks", "units", "acos") else "cost"
         show_all = per_page >= 9999
-        valid_tiers = ("all", "top", "medio", "bajo", "sin_venta")
+        valid_tiers = ("all", "top", "medio", "bajo", "sin_venta", "quema_margen", "riesgo", "rentable")
         tier_filter = tier if tier in valid_tiers else "all"
 
         # Obtener campanas como fallback
@@ -11846,15 +11862,6 @@ async def ads_performance_partial(
                 revenue = metrics.get("total_amount", 0) or 0
                 roas = (revenue / cost) if cost > 0 else 0
                 acos = (cost / revenue * 100) if revenue > 0 else 0
-                # Tier classification
-                if units == 0:
-                    tier_val = "sin_venta"
-                elif roas >= 5:
-                    tier_val = "top"
-                elif roas >= 2:
-                    tier_val = "medio"
-                else:
-                    tier_val = "bajo"
                 camp_id = str(item.get("campaign_id", ""))
                 products.append({
                     "item_id": item.get("item_id", item.get("id", "-")),
@@ -11868,8 +11875,72 @@ async def ads_performance_partial(
                     "revenue": revenue,
                     "roas": roas,
                     "acos": acos,
-                    "tier": tier_val,
                 })
+
+            # FIX 2026-08-11 (pedido por Jovan: cruzar Ads con margen real en
+            # vez de ACoS/ROAS aislado, ver auditoria del especialista de
+            # Ads): un ACoS de 15% se ve "bien" contra un benchmark generico,
+            # pero si el SKU tiene 12% de margen ya esta perdiendo dinero neto
+            # -- y un ACoS de 30% puede ser perfectamente rentable en un SKU
+            # con 40% de margen. Se resuelve SKU real por item_id (cache
+            # local, sin llamadas nuevas a ML) y margen via catalogo BM en
+            # memoria (_enrich_with_bm_product_info, sin llamadas a BM -- ver
+            # regla del proyecto de nunca llamar BM en vivo desde lectura).
+            _item_ids_ads = [p["item_id"] for p in products if p["item_id"] and p["item_id"] != "-"]
+            _item_sku_map = await token_store.get_cached_skus(_item_ids_ads)
+            _missing_sku_ids = [iid for iid in _item_ids_ads if iid not in _item_sku_map]
+            if _missing_sku_ids:
+                _item_sku_map.update(await token_store.get_skus_from_listings(_missing_sku_ids))
+            _price_map: dict[str, float] = {}
+            _sku_details_ids = list({iid for iid in _item_sku_map})
+            for _i in range(0, len(_sku_details_ids), 20):
+                _batch = _sku_details_ids[_i:_i + 20]
+                try:
+                    _details = await client.get_items_details(_batch)
+                    for _d in _details:
+                        _body = _d.get("body", _d)
+                        if _body and _body.get("id"):
+                            _price_map[_body["id"]] = _body.get("price", 0) or 0
+                except Exception:
+                    pass
+            _fx_ads = _last_fx_rate if _last_fx_rate > 0 else 17.0
+            # FIX (durante pruebas locales 2026-08-11): _enrich_with_bm_product_info
+            # solo trae costo para SKUs presentes en el bulk de STOCK actual --
+            # BM omite del bulk cualquier SKU con 0 stock ("no esta en el bulk"
+            # != "no existe"), y varios SKUs con ads activos resultaron sin
+            # stock actual pero SI con costo conocido en catalogo. _bm_cost_cache
+            # (poblado desde token_store.get_bm_catalog_all() al arrancar, ver
+            # [CATALOG-LOAD]) es catalogo completo por SKU normalizado, sin esa
+            # dependencia de stock -- confirmado con SNTV001863 (0 en bulk,
+            # retail_ph_usd=278.0 en catalogo).
+            _cost_by_sku: dict[str, float] = {}
+            for sku in set(_item_sku_map.values()):
+                base_sku = normalize_to_bm_sku(sku) or sku
+                cached = _bm_cost_cache.get(base_sku)
+                if cached and cached[1] > 0:
+                    _cost_by_sku[sku] = cached[1]
+            for p in products:
+                sku = _item_sku_map.get(p["item_id"])
+                price_mxn = _price_map.get(p["item_id"], 0)
+                cost_usd = _cost_by_sku.get(sku, 0) if sku else 0
+                margin_pct = _margin_pct_simple(price_mxn, cost_usd, _fx_ads) if (price_mxn and cost_usd) else None
+                p["sku"] = sku or ""
+                p["margen_pct"] = margin_pct
+                if p["units"] == 0:
+                    p["tier"] = "sin_venta"
+                elif margin_pct is not None:
+                    if p["acos"] >= margin_pct:
+                        p["tier"] = "quema_margen"
+                    elif p["acos"] >= margin_pct * 0.7:
+                        p["tier"] = "riesgo"
+                    else:
+                        p["tier"] = "rentable"
+                elif p["roas"] >= 5:
+                    p["tier"] = "top"
+                elif p["roas"] >= 2:
+                    p["tier"] = "medio"
+                else:
+                    p["tier"] = "bajo"
 
             # Enriquecer category_name si falta (batch fetch)
             missing_cat_ids = {p["category_id"] for p in products if p["category_id"] and not p["category_name"]}
@@ -11886,8 +11957,13 @@ async def ads_performance_partial(
                     if p["category_id"] and not p["category_name"]:
                         p["category_name"] = _category_cache.get(p["category_id"], p["category_id"])
 
-            # Contar tiers antes de filtrar
+            # Contar tiers antes de filtrar -- quema_margen/riesgo/rentable
+            # cuando hay dato de margen real; top/medio/bajo son el fallback
+            # cuando no se pudo resolver SKU/costo BM para ese item.
             tier_counts = {
+                "quema_margen": sum(1 for p in products if p["tier"] == "quema_margen"),
+                "riesgo": sum(1 for p in products if p["tier"] == "riesgo"),
+                "rentable": sum(1 for p in products if p["tier"] == "rentable"),
                 "top": sum(1 for p in products if p["tier"] == "top"),
                 "medio": sum(1 for p in products if p["tier"] == "medio"),
                 "bajo": sum(1 for p in products if p["tier"] == "bajo"),
@@ -12640,13 +12716,20 @@ async def ads_by_category_partial(
             })
 
         # 1. Obtener todos los items con metricas (paginado)
+        # FIX 2026-08-11: /advertising/advertisers/{adv}/product_ads/items
+        # esta descontinuado por ML desde el 26-feb-2026 (404) -- el
+        # except Exception: break de abajo lo tragaba en silencio, asi que
+        # este tab mostraba "0 categorias" sin ningun error visible desde esa
+        # fecha (hallazgo del especialista de Ads). Se migra al endpoint que
+        # ya usan get_ads_items/get_campaign_items (meli_client.py:955-970),
+        # confirmado vivo hoy.
         adv_id = await client._get_advertiser_id()
         all_items = []
         offset = 0
         limit = 100
         while True:
             params = {
-                "metrics": "clicks,prints,cost,units_quantity,total_amount",
+                "metrics": "clicks,prints,cost,cpc,acos,roas,units_quantity,total_amount",
                 "limit": limit,
                 "offset": offset,
             }
@@ -12655,8 +12738,8 @@ async def ads_by_category_partial(
             if date_to:
                 params["date_to"] = date_to
             try:
-                data = await client.get(
-                    f"/advertising/advertisers/{adv_id}/product_ads/items",
+                data = await client._ads_get(
+                    f"/advertising/MLM/advertisers/{adv_id}/product_ads/ads/search",
                     params=params,
                 )
             except Exception:
