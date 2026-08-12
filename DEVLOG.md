@@ -7,6 +7,50 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont. 6) — FIX DEFINITIVO: mensajes ML invisibles — reemplazado el esquema de ventanas de días por el endpoint real de ML
+
+Jovan reportó (con capturas reales, mismas cuenta en ambas) un mensaje de
+comprador visible en ML pero invisible en la app: APANTALLATEMX, pedido
+#2000014378634069 (pack real), comprador preguntando por una TV que se
+prende sola. Primero se hizo un parche rápido (ampliar la ventana de
+`_ml_messages_new_orders_scan_loop` de 4 a 10 días, commit `c2dcad3`) —
+Jovan lo rechazó explícitamente ("arregla el problema de raíz, dejate de
+parchar") y tenía razón: ampliar un número solo mueve el hueco, no lo
+cierra.
+
+**Causa raíz real, confirmada en vivo antes de tocar código de nuevo:**
+la orden tenía 7 días (creada 2026-08-05) y nunca había tenido mensajes
+hasta hoy — cayó exactamente en el hueco estructural entre PARTE 1
+(4→10 días) y PARTE 3 (180 días, pero 1 sola vez al día). Cualquier
+combinación de ventanas fijas de fecha SIEMPRE va a tener un hueco así
+en algún punto entre la ventana más rápida y la más lenta.
+
+**Solución de raíz**: investigada la documentación oficial de ML +
+confirmado en vivo contra las 4 cuentas reales — existe
+`GET /messages/unread?tag=post_sale`, que lista TODAS las conversaciones
+sin leer de la cuenta **sin importar la fecha de la orden**. Probado en
+vivo: trajo exactamente el pack reportado, sin adivinar ninguna ventana.
+
+Nuevo loop `_ml_messages_unread_poll_loop()` (commit `7cb126f`): cada
+2 min, 1 llamada barata por cuenta, indexa cada pack sin leer al momento.
+Encontrado en el camino y corregido antes de subir: el endpoint también
+devuelve hilos donde la cuenta es la COMPRADORA (no la vendedora) —
+verificado en vivo que sin filtrar por `sellers/{uid}` propio, 0/18, 1/7
+y 2/4 packs fallaban al indexar (403/404, seller_id equivocado en la
+URL); con el filtro, 100% de los packs propios se indexaron
+correctamente en las 4 cuentas.
+
+Las PARTES 1/2/3 (order-scan por ventana) se quedan activas como
+respaldo secundario — completan `order_id` real y cubren el caso raro de
+un mensaje marcado leído fuera de la app antes de que la app lo viera —
+pero esta vía nueva es ahora la principal y no depende de la edad de la
+orden en absoluto. Se indexó también, manualmente vía diag ya existente,
+el pack puntual reportado, sin esperar el deploy.
+
+Deploy Railway SUCCESS, verificado en producción tras el deploy.
+
+---
+
 ## 2026-08-12 (cont. 5) — FIX: badge global de Salud nunca contaba mensajes pendientes
 
 Jovan reportó (molesto, "de nuevo") un mensaje real de comprador (BLOW,
