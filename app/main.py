@@ -25730,13 +25730,26 @@ async def _ml_messages_new_orders_scan_loop() -> None:
     (12 mensajes, comprador esperando respuesta) estaba completamente ausente
     de ml_messages_index pese al webhook activo: ML no entrega la
     notificación de forma confiable para este topic. Re-escanea una ventana
-    corta (últimos 4 días) de ÓRDENES de las 4 cuentas cada 10 min para
-    detectar conversaciones que todavía no existen en el índice.
+    de ÓRDENES de las 4 cuentas cada 10 min para detectar conversaciones que
+    todavía no existen en el índice.
+
+    FIX 2026-08-12 (incidente real, Jovan): ventana subida de 4 a 10 días.
+    Caso real confirmado en vivo: orden creada 2026-08-05 (7 días antes),
+    SIN ningún mensaje hasta que el comprador escribió por primera vez hoy
+    -- 3 días fuera de la ventana vieja de 4 días. Como el pack nunca había
+    tenido mensajes, _ml_messages_index_refresh_loop (solo refresca packs
+    YA indexados) tampoco lo cubría -- el único respaldo que lo hubiera
+    detectado era _ml_messages_wide_backfill_loop (PARTE 3, 180 días), que
+    corre 1 SOLA VEZ AL DÍA -- hasta 24h de hueco real para un mensaje
+    nuevo. max_orders subido de 600 a 2000 en la misma proporción (con 4
+    días ya había ~440 órdenes en la cuenta más grande) para no truncar la
+    ventana ampliada en silencio -- se loguea `remaining` si aun así queda
+    algo sin cubrir, para detectar si hay que ampliar de nuevo a futuro.
 
     Esto NO cubre respuestas nuevas en conversaciones sobre órdenes viejas
     (ver _ml_messages_index_refresh_loop para ese caso — encontrado el mismo
     día con un segundo caso real: comprador respondió 2 días después sobre
-    una orden ya fuera de esta ventana de 4 días, y se quedó invisible)."""
+    una orden ya fuera de esta ventana, y se quedó invisible)."""
     from datetime import datetime as _dt_mr, timedelta as _td_mr
     await asyncio.sleep(60)
     while True:
@@ -25751,11 +25764,13 @@ async def _ml_messages_new_orders_scan_loop() -> None:
                     continue
                 try:
                     date_to = _dt_mr.utcnow().strftime("%Y-%m-%d")
-                    date_from = (_dt_mr.utcnow() - _td_mr(days=4)).strftime("%Y-%m-%d")
-                    scanned, indexed, _off, _rem = await _ml_messages_scan_and_index(
-                        client, date_from, date_to, max_orders=600,
+                    date_from = (_dt_mr.utcnow() - _td_mr(days=10)).strftime("%Y-%m-%d")
+                    scanned, indexed, _off, remaining = await _ml_messages_scan_and_index(
+                        client, date_from, date_to, max_orders=2000,
                     )
                     logger.info(f"[ML-MSG-REFRESH-NEW] cuenta={uid} ordenes={scanned} actualizadas={indexed}")
+                    if remaining > 0:
+                        logger.warning(f"[ML-MSG-REFRESH-NEW] cuenta={uid} se quedaron {remaining} ordenes sin revisar este ciclo (max_orders=2000 insuficiente) -- ampliar si se repite")
                 except Exception as _e:
                     logger.warning(f"[ML-MSG-REFRESH-NEW] error cuenta={uid}: {_e}")
                 finally:
