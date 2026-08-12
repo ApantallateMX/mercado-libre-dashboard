@@ -2952,7 +2952,10 @@ function _amzMsgsSanitizeId(s) {
 function _amzMsgsFmtDate(ts) {
     if (!ts) return '';
     var d = new Date(ts * 1000);
-    return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    // timeZone fijo -- Jovan pidio 2026-08-12 que coincida siempre con CDMX
+    // (mismo horario que ML), sin depender de como este configurada la PC
+    // de quien abra el dashboard.
+    return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'America/Mexico_City' });
 }
 
 function loadAmzBuyerMessages() {

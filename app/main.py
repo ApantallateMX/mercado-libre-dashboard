@@ -2211,6 +2211,24 @@ def _ml_msg_date(msg: dict) -> str:
     return msg.get("date_created", msg.get("date", ""))
 
 
+def _ml_msg_dt_mx(iso_date: str):
+    """Convierte un ISO8601 de la API de ML (viene en UTC, igual que
+    date_created de órdenes) a hora CDMX -- mismo patrón que _order_mx_date
+    usa para fechas de órdenes (-6h fijo; México eliminó el horario de
+    verano en la mayoría del país desde 2022, así que el offset es
+    constante todo el año). Jovan pidió 2026-08-12 que Mensajes reflejara
+    la hora real de CDMX (como ML la muestra nativamente) -- antes se
+    mostraba el string UTC crudo sin convertir, 6h adelantado.
+    Retorna None si el string no se puede parsear (fallback del caller)."""
+    if not iso_date:
+        return None
+    try:
+        dt_utc = datetime.fromisoformat(iso_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        return dt_utc - timedelta(hours=6)
+    except Exception:
+        return None
+
+
 def _ml_sort_messages_asc(msgs: list) -> list:
     """Ordena mensajes de un thread ML por fecha real, ascendente (más viejo
     primero). Encontrado 2026-08-05: get_message_thread() de ML devuelve los
@@ -10666,7 +10684,8 @@ async def _fetch_enriched_ml_conversations(
             else:
                 text = str(text_raw) if text_raw else ""
             msg_date = _ml_msg_date(m)
-            msg_time = msg_date[11:16] if msg_date and len(msg_date) > 16 else ""
+            _msg_dt_mx = _ml_msg_dt_mx(msg_date)
+            msg_time = _msg_dt_mx.strftime("%H:%M") if _msg_dt_mx else (msg_date[11:16] if msg_date and len(msg_date) > 16 else "")
             # message_attachments (NO "attachments") -- un mensaje que es solo
             # una imagen no trae texto, así que sin esto se veía vacío/con "-"
             # aunque el comprador sí hubiera mandado algo (ej. un screenshot).
@@ -10697,10 +10716,11 @@ async def _fetch_enriched_ml_conversations(
         is_blocked = conv_status.get("status") == "blocked"
         blocked_claim_ids = conv_status.get("claim_ids") or []
 
+        _conv_date_mx = _ml_msg_dt_mx(row["last_message_date"])
         enriched.append(SimpleNamespace(
             pack_id=row["pack_id"],
             order_id=row["order_id"],
-            date=row["last_message_date"][:10] if row["last_message_date"] else "-",
+            date=_conv_date_mx.strftime("%Y-%m-%d") if _conv_date_mx else (row["last_message_date"][:10] if row["last_message_date"] else "-"),
             _sort_date=row["last_message_date"] or "",
             last_from_buyer=last_from_buyer,
             last_elapsed=last_elapsed,
