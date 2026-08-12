@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-12 (cont. 7) — FIX DEFINITIVO: reclamos abiertos viejos invisibles (auditoría "mismo patrón en otras secciones")
+
+Tras el fix de Mensajes, Jovan pidió auditar si el mismo patrón ("ventana
+de fecha en vez de estado real de la plataforma") se repetía en otras
+secciones. Se lanzaron 2 especialistas en paralelo: inventario completo
+de mecanismos "hechos a mano" en el código (loops de background, scans
+por ventana) + revisión de qué endpoints dedicados ofrecen ML/Amazon para
+cada sección. Resultado: **Reclamos tenía exactamente el mismo bug.**
+
+`fetch_all_claims()` (`app/services/meli_client.py`) ya usaba `status`
+como filtro primario (correcto, v2 de Claims API), pero seguía cortando
+la paginación de `status="opened"` en cuanto encontraba un claim más
+viejo que `date_from` — un reclamo puede seguir genuinamente abierto
+(mediación/recontact) mucho más tiempo que cualquier ventana razonable.
+Confirmado en vivo ANTES de tocar código: reclamo real id `5143152874`
+(APANTALLATEMX), status `opened`, stage `recontact`, `date_created`
+2022-08-24 — **4 años de antigüedad, genuinamente abierto ahora mismo**,
+invisible por completo para el sistema.
+
+Fix (commit `c494438`): "opened" nunca se corta por fecha — un reclamo
+abierto es accionable sin importar qué tan viejo sea. "closed" sigue
+respetando `date_from`/`date_to` (acotar histórico de cerrados sí tiene
+sentido, no son accionables). Verificado en vivo tras el fix: el reclamo
+de 2022 aparece, los 24 reclamos abiertos reales de la cuenta se traen
+completos.
+
+**Revisado y descartado en la misma auditoría (sin cambios necesarios)**:
+- Preguntas ML: ya filtra por `status=UNANSWERED` desde el diseño
+  original — sin ventana de fecha, sin bug.
+- Devoluciones ML: dependen de Reclamos (no es un recurso independiente
+  en la API de ML) — se benefician indirectamente del fix de arriba.
+- Amazon Returns/Feedback: Amazon no ofrece nada mejor que reportes por
+  lote (confirmado con documentación oficial 2026) — no es un endpoint
+  que se nos haya pasado, es el límite real de la plataforma.
+- Amazon Buyer Messages: mismo síntoma conocido ("se detiene sin error
+  visible") ya documentado en `project_ml_amazon_messages_backup_polling.md`
+  — no requirió acción nueva hoy.
+
+Deploy Railway SUCCESS, verificado en producción.
+
+---
+
 ## 2026-08-12 (cont. 6) — FIX DEFINITIVO: mensajes ML invisibles — reemplazado el esquema de ventanas de días por el endpoint real de ML
 
 Jovan reportó (con capturas reales, mismas cuenta en ambas) un mensaje de
