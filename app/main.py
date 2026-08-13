@@ -16732,8 +16732,21 @@ async def diag_bm_sku_gaps_row(sku: str = "", token: str = ""):
     async with _aio_gaps.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_gaps.Row
         cur = await db.execute("SELECT * FROM bm_sku_gaps WHERE sku = ?", (sku.upper(),))
-        rows = [dict(r) for r in await cur.fetchall()]
-    return JSONResponse({"sku": sku.upper(), "rows": rows, "count": len(rows)})
+        gaps_rows = [dict(r) for r in await cur.fetchall()]
+        cur2 = await db.execute(
+            "SELECT sku, item_id, account_id, status, title FROM ml_listings WHERE sku LIKE ?",
+            (f"%{sku.upper()}%",),
+        )
+        ml_rows = [dict(r) for r in await cur2.fetchall()]
+        cur3 = await db.execute(
+            "SELECT sku, base_sku, seller_id, status, title FROM amazon_listings WHERE sku LIKE ? OR base_sku = ?",
+            (f"%{sku.upper()}%", sku.upper()),
+        )
+        amz_rows = [dict(r) for r in await cur3.fetchall()]
+    return JSONResponse({
+        "sku": sku.upper(), "bm_sku_gaps": gaps_rows, "gaps_count": len(gaps_rows),
+        "ml_listings": ml_rows, "amazon_listings": amz_rows,
+    })
 
 
 @app.get("/api/sku-history", response_class=HTMLResponse)
