@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 7) — LIMPIEZA: production-kpis con cliente BM inconsistente + logging en 7 fallos silenciosos
+
+1. **`/api/planning/production-kpis`** creaba su propio `BinManagerClient()`
+   y lo cerraba en un `finally` — inconsistente con el resto de la app
+   (todo lo demás usa `get_shared_bm()`, el singleton compartido que ya
+   maneja login/re-login). Corregido para usar el singleton, sin
+   `.close()` explícito (cerrar el compartido rompería a otros callers
+   concurrentes). Verificado en vivo localmente con datos reales.
+
+2. **7 `except Exception: pass` silenciosos con impacto real en negocio**,
+   ahora con `logger.warning(...)` (mismo comportamiento, solo visibilidad):
+   - `_get_usd_to_mxn()`: si falla el tipo de cambio real de ML, cae a
+     20.0 fijo sin dejar rastro — afecta TODOS los cálculos de margen.
+   - `get_order_sale_fee` (reporte de ventas): fee=0.0 en silencio si
+     falla — infla el margen mostrado sin avisar.
+   - `get_shipment_costs` (reporte de ventas): costo de envío ausente
+     en silencio si falla.
+   - 4 escrituras de `audit_log` (`stock_order_substitution`,
+     `amazon_buyer_message_take`, `amazon_buyer_message_status`,
+     `ml_concentration`): la acción real SÍ se ejecuta, pero si el
+     registro de auditoría fallaba, se perdía sin ningún rastro —
+     ahora al menos queda en los logs de Railway.
+
+---
+
 ## 2026-08-13 (cont. 6) — LIMPIEZA: BM_USER/BM_PASS con default roto + 4 constantes LocationIDs muertas
 
 Arquitectura/tech-debt de la auditoría del 2026-08-08. Dos hallazgos:

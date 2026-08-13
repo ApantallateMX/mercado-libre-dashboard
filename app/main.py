@@ -159,7 +159,8 @@ async def _get_usd_to_mxn(client) -> float:
     try:
         fx_data = await client.get("/currency_conversions/search", params={"from": "USD", "to": "MXN"})
         return fx_data.get("ratio", 20.0)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"_get_usd_to_mxn: fallo al obtener tipo de cambio real de ML, usando fallback 20.0 — {e}")
         return 20.0
 
 
@@ -4529,7 +4530,8 @@ async def orders_table_partial(
             elif o.get("status") in ("paid", "delivered", "payment_required"):
                 try:
                     fee_amounts[oid] = await client.get_order_sale_fee(str(oid))
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"get_order_sale_fee falló para orden {oid}, usando fee=0.0 (margen quedará inflado) — {e}")
                     fee_amounts[oid] = 0.0
 
         # Fetch shipping costs sequentially (Windows select() FD limit)
@@ -4541,8 +4543,8 @@ async def orders_table_partial(
                 try:
                     cost = await client.get_shipment_costs(str(ship_id))
                     shipping_costs[o.get("id")] = cost
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"get_shipment_costs falló para shipment {ship_id} (orden {o.get('id')}) — {e}")
 
         # Config de precios deal — distinta por cuenta para no revelar mismo vendedor
         _deal_cfg = await token_store.get_deal_config(str(client.user_id))
@@ -14516,8 +14518,8 @@ async def stock_concentration_execute_api(request: Request):
                     ml_account=_acct,
                     section="Stock",
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"log_action falló para ml_concentration (sku={sku}) — {e}")
 
     from app.services.stock_concentrator import execute_concentration
     result = await execute_concentration(sku, winner_uid, total_stock, dry_run=dry_run, trigger=trigger)
@@ -16304,8 +16306,8 @@ async def resolve_stock_alert_substitution(request: Request):
             detail={"order_id": order_id, "substitute_sku": substitute_sku, "note": note},
             ip=ip, ml_account=account_id, section="Ventas",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"log_action falló para stock_order_substitution (order={order_id}, sku={sku}) — {e}")
 
     return JSONResponse({"ok": True, "id": resolution_id})
 
@@ -21981,8 +21983,8 @@ async def amazon_buyer_messages_take(request: Request):
             action="amazon_buyer_message_take", item_id=pack_id,
             detail={"seller_id": seller_id}, ip=ip, section="Salud",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"log_action falló para amazon_buyer_message_take (pack={pack_id}) — {e}")
     return JSONResponse({"ok": True, "taken_by": username})
 
 
@@ -22013,8 +22015,8 @@ async def amazon_buyer_messages_status(request: Request):
             action="amazon_buyer_message_status", item_id=pack_id,
             detail={"seller_id": seller_id, "status": status}, ip=ip, section="Salud",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"log_action falló para amazon_buyer_message_status (pack={pack_id}) — {e}")
     return JSONResponse({"ok": True, "status": status})
 
 
@@ -23925,18 +23927,18 @@ async def returns_sku_claims_detail(
 async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
     """Production KPIs from BinManager Operations Dashboard."""
     from datetime import datetime, timedelta, timezone
-    from app.services.binmanager_client import BinManagerClient
+    from app.services.binmanager_client import get_shared_bm
 
-    bm = BinManagerClient()
     try:
         now       = datetime.now(timezone.utc)
         yesterday = now - timedelta(days=1)  # datos del día en curso aún incompletos en BM
         start     = (yesterday - timedelta(days=days - 1)).strftime("%Y-%m-%d")
         end       = yesterday.strftime("%Y-%m-%d")
 
-        # Explicit login step for better error diagnosis
-        login_ok = await bm.login()
-        if not login_ok:
+        # get_shared_bm() ya maneja login/re-login — evita crear un cliente
+        # (y una sesión BM) nuevo en cada llamada, como hace el resto de la app.
+        bm = await get_shared_bm()
+        if not bm._logged_in:
             return {"error": "Login fallido — verifica credenciales BM_USER/BM_PASS", "bm_unavailable": True}
 
         kpis = await bm.get_operations_kpis(start, end)
@@ -23964,8 +23966,6 @@ async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
     except Exception as e:
         logger.error(f"planning_production_kpis error: {e}")
         return {"error": str(e), "bm_unavailable": True}
-    finally:
-        await bm.close()
 
 
 @app.get("/api/planning/coverage")
