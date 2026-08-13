@@ -30,8 +30,13 @@ def _get_bm_sem() -> asyncio.Semaphore:
     return _BM_GLOBAL_SEM
 
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = os.getenv("BM_USER", "claudio.suarez@mitechnologiesinc.com")
-_BM_PASS = os.getenv("BM_PASS", "123456")
+# Default de BM_USER: la cuenta de servicio ACTIVA (Claude.Jovan@...), NUNCA
+# las cuentas rotas conocidas (claudio.suarez@ -> HTTP 500 en todo;
+# Carlos.Herrera@ -> IsFirstUse=true, retorna []). Si BM_USER faltara en el
+# entorno, al menos el fallback intenta la cuenta que sí funciona en vez de
+# fallar silenciosamente contra una que nunca ha servido.
+_BM_USER = os.getenv("BM_USER", "Claude.Jovan@mitechnologiesinc.com")
+_BM_PASS = os.getenv("BM_PASS", "")
 
 _AJAX_HEADERS = {
     "Content-Type": "application/json",

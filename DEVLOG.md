@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 6) — LIMPIEZA: BM_USER/BM_PASS con default roto + 4 constantes LocationIDs muertas
+
+Arquitectura/tech-debt de la auditoría del 2026-08-08. Dos hallazgos:
+
+1. **`BM_USER`/`BM_PASS` con default apuntando a cuentas rotas**:
+   `binmanager_client.py` caía a `claudio.suarez@...` (HTTP 500 en todo,
+   ver CLAUDE.md "Cuentas BM") y `app/api/lanzar.py` caía a
+   `Carlos.Herrera@...` (IsFirstUse=true, retorna `[]` siempre) — dos
+   defaults DISTINTOS, ambos apuntando a cuentas conocidas como no
+   funcionales. `lanzar.py` ahora importa `_BM_USER/_BM_PASS/_BM_BASE`
+   desde `binmanager_client.py` (única fuente de verdad) en vez de
+   redeclararlos. Default de `binmanager_client.py` cambiado a
+   `Claude.Jovan@...` (la cuenta de servicio ACTIVA). `BM_PASS` sin
+   fallback (antes "123456", literal débil en el repo). Además: `BM_USER`/
+   `BM_PASS` no estaban en `.env` local — agregados (copiados de Railway)
+   para que las pruebas locales de BM funcionen. Verificado en vivo:
+   login real contra BinManager exitoso con las credenciales corregidas.
+
+2. **4 constantes de LocationIDs vendibles (`"47,62,68"`) muertas** —
+   declaradas y nunca usadas en `lanzar.py`, `stock_sync_multi.py`,
+   `items.py`, `productos.py` (cada una con su propio comentario "sin uso
+   directo hoy"). Eliminadas. El valor real sigue viviendo como default
+   de parámetro en los métodos de `binmanager_client.py`
+   (`get_bulk_stock`, `get_stock_with_reserve`, `_query_bm_stock`) — esa
+   ya es la única fuente de verdad funcional; los usos activos restantes
+   en `amazon_products.py`/`sku_inventory.py` tienen semántica distinta
+   (desglose con Tijuana incluida) y se dejaron intactos.
+
+Verificado: los 4 módulos importan limpio, servidor local arranca sin
+errores nuevos.
+
+---
+
 ## 2026-08-13 (cont. 5) — Verificado y cerrado: admin ya NO tiene la contraseña default
 
 Endpoint temporal `/api/diag/admin-pw-check` (solo devolvía booleano,

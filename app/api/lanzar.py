@@ -56,16 +56,16 @@ def _load_video(vid_id: str) -> bytes | None:
         return data
     return None
 
-# BM endpoints (same as sku_inventory.py)
-_BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = __import__("os").getenv("BM_USER", "Carlos.Herrera@mitechnologiesinc.com")
-_BM_PASS = __import__("os").getenv("BM_PASS", "123456")
+# BM endpoints (same as sku_inventory.py) — _BM_USER/_BM_PASS desde
+# binmanager_client.py (única fuente de verdad, evita que un segundo
+# default apunte a una cuenta rota conocida — Carlos.Herrera tiene
+# IsFirstUse=true y retorna [] siempre).
+from app.services.binmanager_client import _BM_BASE, _BM_USER, _BM_PASS
 _BM_INVENTORY_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 _BM_WAREHOUSE_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 _BM_AJAX = {"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"}
 _BM_COMPANY = 1
 _BM_CONCEPT = 8
-_BM_LOCATIONS = "47,62,68"  # vendible online real — Tijuana excluida (2026-08-05), sin uso directo hoy
 
 # ─── Background scan state ────────────────────────────────────────────────────
 _scan_lock = asyncio.Lock()

@@ -32,7 +32,6 @@ _templates = Jinja2Templates(directory="app/templates")
 _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 _BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 _BM_COMPANY   = 1
-_BM_LOCS      = "47,62,68"  # vendible online real — Tijuana excluida (2026-08-05), sin uso directo hoy
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
