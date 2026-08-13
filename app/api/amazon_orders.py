@@ -333,29 +333,43 @@ def _build_finanzas(
     # Pct referral para mostrar en UI
     ref_pct  = round(fees["referral_fee"] / revenue * 100, 1) if revenue > 0 else 0.0
 
-    # Costo desde caché BM (lazy import)
-    costo_usd = None
+    # Retail BM (lazy import) -- reemplaza el costo de BM (AvgCost, confirmado
+    # no confiable por Jovan 2026-08-13) como referencia de rentabilidad. Antes
+    # esta funcion mezclaba costo_mxn (ya en MXN, ver _sku_cost_map) con
+    # neto (MXN) tras "convertirlo" a USD dividiendo por fx -- bug real de
+    # unidades, restaba USD de un monto MXN. La meta de recuperacion (80% TV /
+    # 60% otras, ver _RECOVERY_TARGET_TV/_OTHER en main.py) no depende de
+    # convertir nada, todo el calculo queda en MXN.
+    retail_mxn = None
+    recup_target_pct = None
+    commission_pct = 0.07
     try:
-        from app.main import _sku_cost_map, _last_fx_rate, _PARTNER_COMMISSION_PCT  # type: ignore
+        from app.main import _sku_retail_map, _PARTNER_COMMISSION_PCT, _RECOVERY_TARGET_TV, _RECOVERY_TARGET_OTHER  # type: ignore
         from app.services.sku_utils import normalize_to_bm_sku as _norm
-        fx = float(_last_fx_rate or 17.0)
         commission_pct = float(_PARTNER_COMMISSION_PCT or 0.07)
-        total_cost = 0.0
+        total_retail = 0.0
+        weighted_target = 0.0
         for it in items:
             sku_bm = _norm(it["sku"]) if it["sku"] not in ("—", "", None) else ""
             if sku_bm:
-                costo_mxn = _sku_cost_map.get(sku_bm, 0) or 0
-                if costo_mxn > 0 and fx > 0:
-                    total_cost += (costo_mxn / fx) * int(it.get("qty") or 1)
-        if total_cost > 0:
-            costo_usd = round(total_cost, 2)
+                r = _sku_retail_map.get(sku_bm, 0) or 0
+                if r > 0:
+                    qty = int(it.get("qty") or 1)
+                    item_retail = r * qty
+                    total_retail += item_retail
+                    target = _RECOVERY_TARGET_TV if sku_bm.upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
+                    weighted_target += item_retail * target
+        if total_retail > 0:
+            retail_mxn = round(total_retail, 2)
+            recup_target_pct = round(weighted_target / total_retail, 1)
     except Exception:
-        commission_pct = 0.07
+        pass
 
-    ganancia = margen_pct = None
-    if costo_usd is not None and neto > 0:
-        ganancia  = round(neto * (1 - commission_pct) - costo_usd, 2)
-        margen_pct = round(ganancia / revenue * 100, 1) if revenue > 0 else None
+    neto_socio = recup_pct = recup_below_target = None
+    if retail_mxn and neto > 0:
+        neto_socio = round(neto * (1 - commission_pct), 2)
+        recup_pct = round(neto_socio / retail_mxn * 100, 1)
+        recup_below_target = recup_pct < recup_target_pct
 
     return {
         "revenue":      round(revenue, 2),
@@ -365,9 +379,11 @@ def _build_finanzas(
         "other_fees":   fees["other_fees"],
         "tax":          tax,
         "neto":         neto,
-        "costo_usd":    costo_usd,
-        "ganancia":     ganancia,
-        "margen_pct":   margen_pct,
+        "retail_mxn":         retail_mxn,
+        "neto_socio":         neto_socio,
+        "recup_pct":          recup_pct,
+        "recup_target_pct":   recup_target_pct,
+        "recup_below_target": recup_below_target,
         "is_estimated": fees["is_estimated"],
         "currency":     currency,
     }

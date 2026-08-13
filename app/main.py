@@ -175,6 +175,15 @@ def _ml_fee(price: float) -> float:
     return 0.18
 
 
+# Meta de recuperación de retail (neto después de TODOS los gastos: fee ML,
+# retenciones fiscales, envío, comisión de socio) — reemplaza el margen
+# basado en costo de BM (AvgCost/cost_usd, confirmado NO confiable por
+# Jovan 2026-08-13) como criterio de "deal saludable". TVs necesitan
+# recuperar más porque el margen unitario real es mayor en esa categoría.
+_RECOVERY_TARGET_TV = 80.0
+_RECOVERY_TARGET_OTHER = 60.0
+
+
 def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.15, retail_target_pct: float = 1.0):
     """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto."""
     for p in products:
@@ -243,9 +252,13 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
                 _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)
             p["_neto_ml"] = round(_neto, 2)
             p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
+            p["_recup_target_pct"] = _RECOVERY_TARGET_TV if (p.get("sku") or "").upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
+            p["_recup_below_target"] = p["_recup_retail_pct"] is not None and p["_recup_retail_pct"] < p["_recup_target_pct"]
         else:
             p["_neto_ml"] = None
             p["_recup_retail_pct"] = None
+            p["_recup_target_pct"] = None
+            p["_recup_below_target"] = None
 
         # ── Aportación MeLi (PRE_NEGOTIATED) — ML subsidia parte del descuento ──
         _meli_pct = p.get("_meli_promo_pct", 0) or 0
@@ -9409,14 +9422,18 @@ async def products_deals_partial(request: Request):
                 "desc": "Si vencen sin renovar perdes posicionamiento. Revisa y renueva los que esten vendiendo bien.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"{p.get('_days_remaining', '?')}d — {p.get('_promo_type_str', 'DEAL')}"} for p in expiring_soon[:5]],
             })
-        neg_margin = [p for p in active_deals if p.get("_margen_pct") is not None and p["_margen_pct"] < 0]
+        # Criterio 2026-08-13: ya no se usa _margen_pct (basado en AvgCost de BM,
+        # confirmado no confiable) — se usa _recup_retail_pct (neto real después
+        # de fee ML + retenciones + envío + comisión de socio, contra retail BM)
+        # con meta por categoría (TV 80%, otras 60%, ver _RECOVERY_TARGET_*).
+        neg_margin = [p for p in active_deals if p.get("_recup_below_target")]
         if neg_margin:
-            neg_margin.sort(key=lambda p: p["_margen_pct"])
+            neg_margin.sort(key=lambda p: (p.get("_recup_retail_pct") or 0) - (p.get("_recup_target_pct") or 0))
             recs.append({
                 "type": "danger", "icon": "!",
-                "title": f"{len(neg_margin)} deal(s) con margen negativo",
-                "desc": "Estos deals pierden dinero en cada venta. Revisa si conviene desactivarlos o subir el precio.",
-                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"Margen {p['_margen_pct']:.1f}%"} for p in neg_margin[:5]],
+                "title": f"{len(neg_margin)} deal(s) por debajo de la meta de recuperación",
+                "desc": "Estos deals no alcanzan a recuperar lo mínimo esperado del retail (80% TV / 60% otras) después de fee ML, retenciones, envío y comisión de socio. Revisa si conviene desactivarlos o subir el precio.",
+                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"Recupera {p.get('_recup_retail_pct', 0):.1f}% (meta {p.get('_recup_target_pct', 0):.0f}%)"} for p in neg_margin[:5]],
             })
         high_stock_no_sales = [p for p in candidates if p.get("available_quantity", 0) >= 10 and p.get("units_30d", 0) == 0]
         if high_stock_no_sales:

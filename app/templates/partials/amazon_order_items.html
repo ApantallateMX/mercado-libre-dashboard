@@ -156,37 +156,35 @@
                 {% endif %}
             </div>
 
-            {# ── Rentabilidad (si hay costo BM) ───────────────────────── #}
-            {% if finanzas.costo_usd is not none %}
+            {# ── Rentabilidad (recuperación vs retail BM — no usa costo BM, no confiable) ── #}
+            {% if finanzas.retail_mxn is not none %}
             <div>
                 <p class="text-[10px] font-semibold text-gray-400 uppercase mb-1.5">Rentabilidad</p>
                 <div class="space-y-0.5 text-xs">
                     <div class="flex justify-between">
-                        <span class="text-gray-500">Costo producto (BM)</span>
-                        <span class="text-red-600 font-medium">-${{ "%.2f"|format(finanzas.costo_usd) }}</span>
+                        <span class="text-gray-500">Retail BM (referencia)</span>
+                        <span class="text-gray-600 font-medium">${{ "%.2f"|format(finanzas.retail_mxn) }}</span>
                     </div>
                 </div>
-                {% if finanzas.ganancia is not none %}
+                {% if finanzas.neto_socio is not none %}
                 <div class="flex justify-between items-center mt-1.5 py-1.5 px-2 rounded-lg border
-                    {% if finanzas.ganancia > 0 %}bg-green-50 border-green-200{% else %}bg-red-50 border-red-200{% endif %}">
-                    <span class="text-xs font-bold text-gray-700">Ganancia neta</span>
+                    {% if not finanzas.recup_below_target %}bg-green-50 border-green-200{% else %}bg-red-50 border-red-200{% endif %}">
+                    <span class="text-xs font-bold text-gray-700">Neto (después de socio)</span>
                     <div class="text-right">
                         <div class="text-sm font-bold
-                            {% if finanzas.ganancia > 0 %}text-green-700{% else %}text-red-600{% endif %}">
-                            ${{ "%.2f"|format(finanzas.ganancia) }}
+                            {% if not finanzas.recup_below_target %}text-green-700{% else %}text-red-600{% endif %}">
+                            ${{ "%.2f"|format(finanzas.neto_socio) }}
                         </div>
-                        {% if finanzas.margen_pct is not none %}
                         <div class="text-[10px]
-                            {% if finanzas.margen_pct > 0 %}text-green-600{% else %}text-red-500{% endif %}">
-                            {{ "%.1f"|format(finanzas.margen_pct) }}% margen
+                            {% if not finanzas.recup_below_target %}text-green-600{% else %}text-red-500{% endif %}">
+                            Recupera {{ "%.1f"|format(finanzas.recup_pct) }}% del retail (meta {{ "%.0f"|format(finanzas.recup_target_pct) }}%)
                         </div>
-                        {% endif %}
                     </div>
                 </div>
                 {% endif %}
             </div>
             {% else %}
-            <p class="text-[11px] text-gray-400 italic">Costo BM no disponible para este SKU.</p>
+            <p class="text-[11px] text-gray-400 italic">Retail BM no disponible para este SKU.</p>
             {% endif %}
 
             <p class="text-[10px] text-gray-400 mt-2">{{ finanzas.currency }} · Amazon SP-API</p>

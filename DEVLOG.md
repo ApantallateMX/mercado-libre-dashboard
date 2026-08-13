@@ -7,6 +7,54 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 11) — FEAT: margen reemplaza costo BM (no confiable) por % de recuperación de retail
+
+Jovan retomó la discusión de "otros hallazgos" pausada antes (ver cont. 3):
+el margen mostrado en Deals y en Amazon usaba `AvgCost`/`cost_usd` de BM,
+que Jovan confirma no es confiable. Regla nueva acordada: el margen se
+mide como % del retail de BM (`retail_ph`) que se recupera DESPUÉS de
+TODOS los gastos (fee ML/Amazon escalonado, retenciones fiscales 9.05%,
+envío, comisión de socio 7%) — meta mínima 80% para TVs (`SNTV*`), 60%
+para las demás categorías.
+
+**Deals** (`app/main.py`): ya existía casi toda la fórmula
+(`_recup_retail_pct`, `_calc_margins()` líneas ~231-254) sin usarse para
+ninguna alerta. Agregado `_RECOVERY_TARGET_TV=80.0`/`_RECOVERY_TARGET_OTHER=60.0`
+y los campos `_recup_target_pct`/`_recup_below_target` por producto. La
+alerta "deal con margen negativo" (antes `_margen_pct < 0`, basada en
+costo BM) ahora usa `_recup_below_target` — ya no depende de AvgCost en
+absoluto.
+
+**Amazon** (`app/api/amazon_orders.py`, `_build_finanzas()`): de paso se
+encontró un bug real de unidades — mezclaba `costo_mxn` (ya en MXN) con
+`neto` (MXN) después de "convertirlo" a USD dividiendo por FX, restando
+USD de un monto MXN sin reconvertir. Reemplazado por el mismo criterio de
+recuperación de retail (usa `_sku_retail_map`, ya en MXN, sin conversión
+de unidades). Template `amazon_order_items.html` actualizado: ya no
+muestra "Costo producto (BM)" sino "Retail BM (referencia)" + "Recupera
+X% del retail (meta Y%)".
+
+Verificado con datos sintéticos realistas (no con orden real — la orden
+de prueba no tenía items vía API en local): TV con retail_ph=$400 USD
+vendiendo a $9500 MXN → recupera 82.5%, no se marca (sano); vendiendo a
+$7000 MXN → recupera 59.6%, se marca (por debajo de meta 80%). Categoría
+detectada correctamente por prefijo `SNTV`.
+
+**Nota importante**: `assistant_tools.py` (`tool_get_item_profitability`)
+NO se tocó — se descubrió que es código muerto, ningún archivo lo
+importa. De paso se confirmó que `claude_client.py`/Anthropic directo ya
+no se usa en absoluto (migrado a OpenRouter desde 2026-06-08 y
+2026-07-16, exactamente por quedarse sin crédito — ver DEVLOG de esas
+fechas) — la clave de Anthropic hardcodeada (pendiente de rotar, ver
+cont. 3) ya no tiene ningún impacto funcional, solo el riesgo de
+seguridad en sí.
+
+Pendiente (no parte de este cambio): envío sigue siendo estimado por
+tramo fijo (400/250/150/100 según retail), no el histórico real por
+SKU/plataforma que se platicó — ese es el siguiente paso.
+
+---
+
 ## 2026-08-13 (cont. 10) — DROP TABLE bm_product_catalog/bm_stock_snapshot (respaldadas primero)
 
 Jovan pidió respaldo antes de borrar, aunque ya estaba confirmado que
