@@ -6403,7 +6403,7 @@ async def get_deletion_candidates(
             ON oh.account_id = aa.nickname
             AND oh.platform IN ('amazon','amz','Amazon')
             AND (oh.sku = al.sku OR oh.sku = al.base_sku)
-        LEFT JOIN bm_product_catalog bc
+        LEFT JOIN bm_sku_master bc
             ON bc.sku = al.base_sku OR bc.sku = al.sku
         LEFT JOIN (
             SELECT base_sku, SUM(available_qty) as bm_stock

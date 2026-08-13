@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 8) — FIX: 3 queries leían precio BM de tabla congelada (bm_product_catalog) en vez de bm_sku_master
+
+Investigando si `bm_product_catalog`/`bm_stock_snapshot` seguían vigentes
+(pendiente "decidir si tirarlas" de la auditoría del 2026-08-08): confirmé
+que ambas tablas están genuinamente congeladas — nada las escribe ya
+(`upsert_bm_catalog_batch`/`upsert_bm_stock_snapshot_batch` escriben en
+`bm_sku_master` a pesar de conservar esos nombres legacy). Pero encontré
+**3 lecturas activas que seguían apuntando a la tabla congelada** en vez
+de a `bm_sku_master`:
+
+- `token_store.get_deletion_candidates()` (candidatos a borrar en Amazon
+  por falta de venta) — `LEFT JOIN bm_product_catalog` → ahora
+  `bm_sku_master`. El precio BM mostrado para decidir si borrar un
+  listing podía estar desactualizado desde antes del corte Fase D.
+- `amazon_products.py` — 2 queries del listado de productos Amazon
+  (suprimidos + inactivos) YA hacían join con `bm_sku_master` para el
+  stock, pero seguían jalando el precio (`bm_price`) de la tabla
+  congelada — inconsistencia real dentro de la misma query. Corregido
+  para usar `bm_sku_master` también para el precio (una sola fuente).
+
+Verificado en vivo: `get_deletion_candidates()` corre sin error contra
+producción local; endpoint `/api/amazon/products/sin-publicar` responde
+200 tras el cambio.
+
+**Pendiente, no ejecutado — requiere tu aprobación explícita**: ambas
+tablas (`bm_product_catalog`, `bm_stock_snapshot`) ya no tienen ningún
+lector ni escritor real — son candidatas limpias para `DROP TABLE` y
+liberar espacio en el disco de Railway (recordar
+[[project_disk_crisis_2026-07-31]]). No las borré porque es una acción
+destructiva/irreversible — la dejo para que decidas.
+
+---
+
 ## 2026-08-13 (cont. 7) — LIMPIEZA: production-kpis con cliente BM inconsistente + logging en 7 fallos silenciosos
 
 1. **`/api/planning/production-kpis`** creaba su propio `BinManagerClient()`

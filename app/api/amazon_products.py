@@ -2757,12 +2757,10 @@ async def amazon_products_sin_publicar(
                 _base_q = f"""
                     SELECT al.sku, al.asin, al.title, al.status,
                            al.price, al.available_qty, al.synced_at,
-                           COALESCE(bc.retail_ph, 0) as bm_price,
+                           COALESCE(bsm.retail_ph, 0) as bm_price,
                            COALESCE(al.is_parent, 0) as is_parent,
                            COALESCE(bsm.available_qty, 0) as bm_stock
                     FROM amazon_listings al
-                    LEFT JOIN bm_product_catalog bc
-                        ON bc.sku = al.base_sku OR bc.sku = al.sku
                     LEFT JOIN bm_sku_master bsm ON bsm.sku = al.base_sku
                     WHERE al.seller_id=? AND UPPER(al.status) = ? {_parent_filter}
                     ORDER BY al.title LIMIT ? OFFSET ?"""
@@ -2804,11 +2802,10 @@ async def amazon_products_sin_publicar(
                 _inac_q = f"""
                     SELECT al.sku, al.asin, al.title, al.status,
                            al.price, al.available_qty, al.synced_at,
-                           COALESCE(bc.retail_ph, 0) as bm_price,
+                           COALESCE(bsm2.retail_ph, 0) as bm_price,
                            COALESCE(al.is_parent, 0) as is_parent,
                            COALESCE(bsm2.available_qty, 0) as bm_stock
                     FROM amazon_listings al
-                    LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
                     LEFT JOIN bm_sku_master bsm2 ON bsm2.sku = al.base_sku
                     WHERE al.seller_id=?
                       AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
