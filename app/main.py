@@ -16727,6 +16727,48 @@ async def diag_frozen_tables_size(token: str = ""):
     return JSONResponse(result)
 
 
+@app.get("/api/diag/frozen-tables-export")
+async def diag_frozen_tables_export(token: str = ""):
+    """One-time: exporta TODAS las filas de bm_product_catalog/bm_stock_snapshot
+    (congeladas) como respaldo antes de DROP TABLE. Borrar este endpoint
+    después de usarlo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_fz
+    result = {}
+    async with _aio_fz.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_fz.Row
+        for _t in ("bm_product_catalog", "bm_stock_snapshot"):
+            try:
+                cur = await db.execute(f"SELECT * FROM {_t}")
+                rows = [dict(r) for r in await cur.fetchall()]
+            except Exception as e:
+                result[_t] = {"error": str(e)}
+                continue
+            result[_t] = {"count": len(rows), "rows": rows}
+    return JSONResponse(result)
+
+
+@app.post("/api/diag/frozen-tables-drop")
+async def diag_frozen_tables_drop(token: str = "", expected_gone: str = ""):
+    """Borra bm_product_catalog/bm_stock_snapshot (congeladas, ver DEVLOG
+    2026-08-13) — SOLO llamar después de respaldar con
+    /api/diag/frozen-tables-export. expected_gone debe ser exactamente
+    'si-ya-respalde' como confirmación explícita, no hay marcha atrás."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if expected_gone != "si-ya-respalde":
+        return JSONResponse({"error": "Falta confirmación — pasa expected_gone=si-ya-respalde"}, status_code=400)
+    import aiosqlite as _aio_fz
+    dropped = []
+    async with _aio_fz.connect(DATABASE_PATH) as db:
+        for _t in ("bm_product_catalog", "bm_stock_snapshot"):
+            await db.execute(f"DROP TABLE IF EXISTS {_t}")
+            dropped.append(_t)
+        await db.commit()
+    return JSONResponse({"ok": True, "dropped": dropped})
+
+
 @app.get("/api/sku-history", response_class=HTMLResponse)
 async def sku_price_history(
     request: Request,
