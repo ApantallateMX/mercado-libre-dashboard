@@ -7,6 +7,16 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 5) — Verificado y cerrado: admin ya NO tiene la contraseña default
+
+Endpoint temporal `/api/diag/admin-pw-check` (solo devolvía booleano,
+nunca hash/salt) confirmó contra producción real: el usuario `admin` ya
+no tiene la contraseña default de `init_user_db` (`010817xD`) — Jovan ya
+la cambió en algún momento. Sin acción pendiente ahí. Endpoint eliminado
+tras usarlo (era de un solo uso, según su propio docstring).
+
+---
+
 ## 2026-08-13 (cont. 4) — FEAT: rate-limiting en /login/verify
 
 `/login/verify` no tenía ningún límite de intentos — fuerza bruta viable

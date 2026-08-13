@@ -16693,29 +16693,6 @@ _DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e"
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
-@app.get("/api/diag/admin-pw-check")
-async def diag_admin_pw_check(token: str = ""):
-    """One-time: verifica si el usuario 'admin' sigue con la contraseña default
-    de init_user_db (010817xD) o ya fue cambiada. NUNCA devuelve el hash/salt,
-    solo un booleano. Borrar este endpoint después de usarlo."""
-    if token != _DIAG_TOKEN:
-        return JSONResponse({"error": "token inválido"}, status_code=403)
-    from app.services.user_store import hash_password
-    import aiosqlite as _aio_pw
-    async with _aio_pw.connect(DATABASE_PATH) as db:
-        db.row_factory = _aio_pw.Row
-        cur = await db.execute("SELECT password_hash, password_salt, must_change_pw FROM dashboard_users WHERE username='admin'")
-        row = await cur.fetchone()
-    if not row:
-        return JSONResponse({"admin_exists": False})
-    h, _ = hash_password("010817xD", row["password_salt"])
-    return JSONResponse({
-        "admin_exists": True,
-        "still_default_password": h == row["password_hash"],
-        "must_change_pw": bool(row["must_change_pw"]),
-    })
-
-
 @app.get("/api/sku-history", response_class=HTMLResponse)
 async def sku_price_history(
     request: Request,
