@@ -7,6 +7,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 4) — FEAT: rate-limiting en /login/verify
+
+`/login/verify` no tenía ningún límite de intentos — fuerza bruta viable
+sin restricción. Agregado lockout en memoria (`_login_attempts`, 1 solo
+worker uvicorn por Procfile, mismo patrón que `_bm_stock_cache`): 5
+intentos fallidos por username en 15 minutos → bloqueo de 15 minutos.
+Se limpia en cualquier login exitoso. No afecta a otros usuarios (la
+llave es el username, no global). Probado en vivo localmente: 6 intentos
+fallidos con un usuario de prueba → el 6to ya viene bloqueado; un login
+real con `admin` en paralelo no se ve afectado.
+
+---
+
 ## 2026-08-13 (cont. 3) — SEGURIDAD CRÍTICA: APP_PIN protegía el refresh_token real de Amazon con el mismo valor hardcodeado en el repo público
 
 Mientras unificaba `SECRET_KEY` encontré algo más grave que el DIAG_TOKEN:

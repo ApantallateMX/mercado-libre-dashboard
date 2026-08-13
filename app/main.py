@@ -1145,6 +1145,30 @@ app.add_middleware(AccountMiddleware)
 
 
 # ---------- Auth routes (login/logout/set-password) ----------
+
+# Rate-limit de intentos de login — sin esto /login/verify no tenía ningún
+# límite de fuerza bruta. En memoria (1 solo worker uvicorn, ver Procfile) —
+# igual que _bm_stock_cache, no sobrevive un restart, aceptable para esto.
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_SECONDS = 15 * 60
+_login_attempts: dict[str, list[float]] = {}
+
+def _login_locked_out(key: str) -> int:
+    """Retorna segundos restantes de bloqueo (0 si no está bloqueado)."""
+    now = _time_module.time()
+    attempts = [t for t in _login_attempts.get(key, []) if now - t < _LOGIN_LOCKOUT_SECONDS]
+    _login_attempts[key] = attempts
+    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        return int(_LOGIN_LOCKOUT_SECONDS - (now - attempts[0]))
+    return 0
+
+def _login_record_failure(key: str):
+    _login_attempts.setdefault(key, []).append(_time_module.time())
+
+def _login_clear(key: str):
+    _login_attempts.pop(key, None)
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, error: str = "", next: str = "/dashboard", username: str = ""):
     # Si ya tiene sesión válida, redirigir
@@ -1167,8 +1191,16 @@ async def login_verify(request: Request):
     next_url = form.get("next", "/dashboard")
     from urllib.parse import quote
 
+    _wait_s = _login_locked_out(username) if username else 0
+    if _wait_s > 0:
+        return RedirectResponse(
+            f"/login?error=Demasiados+intentos.+Espera+{_wait_s//60+1}+minutos&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
+            status_code=302
+        )
+
     user = await user_store.get_user_by_username(username)
     if not user:
+        _login_record_failure(username)
         return RedirectResponse(
             f"/login?error=Usuario+o+contrasena+incorrectos&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
             status_code=302
@@ -1177,26 +1209,31 @@ async def login_verify(request: Request):
     if not user.get("password_hash") or user.get("must_change_pw"):
         # Verificar si tiene hash — si no tiene nunca ha seteado pw
         if not user.get("password_hash"):
+            _login_clear(username)
             token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
             response = RedirectResponse("/set-password", status_code=302)
             response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax", secure=IS_PRODUCTION)
             return response
         # Tiene hash pero must_change_pw=1: validar pw actual primero
         if not user_store.verify_password(password, user["password_hash"], user["password_salt"]):
+            _login_record_failure(username)
             return RedirectResponse(
                 f"/login?error=Contrasena+incorrecta&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
                 status_code=302
             )
+        _login_clear(username)
         token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
         response = RedirectResponse("/set-password", status_code=302)
         response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax", secure=IS_PRODUCTION)
         return response
 
     if not user_store.verify_password(password, user["password_hash"], user["password_salt"]):
+        _login_record_failure(username)
         return RedirectResponse(
             f"/login?error=Usuario+o+contrasena+incorrectos&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
             status_code=302
         )
+    _login_clear(username)
     token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
     await user_store.update_last_login(user["id"])
     await user_store.log_action(
