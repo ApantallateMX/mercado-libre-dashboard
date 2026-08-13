@@ -27,6 +27,7 @@ from typing import Optional
 
 from app.services import token_store
 from app.services.meli_client import get_meli_client
+from app.services.stock_sync_multi import _REPUTATION_FACTOR
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,15 @@ async def enrich_with_sales(account_data: dict, days: int = 30) -> dict:
         try:
             client = await get_meli_client(user_id=uid)
             orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
+
+            rep_factor = 1.0
+            try:
+                _user_info = await client.get_user_info()
+                _level_id = (_user_info.get("seller_reputation", {}) or {}).get("level_id")
+                rep_factor = _REPUTATION_FACTOR.get(_level_id, 1.0)
+            except Exception as e:
+                logger.warning(f"[CONC] Cuenta {uid}: no se pudo leer reputación ({e}), rep_factor=1.0")
+
             await client.close()
 
             units_by_item: dict[str, int] = {}
@@ -103,9 +113,11 @@ async def enrich_with_sales(account_data: dict, days: int = 30) -> dict:
 
             data["units_by_item"] = units_by_item
             data["sold_30d"] = sum(units_by_item.values())
+            data["rep_factor"] = rep_factor
         except Exception as e:
             data["units_by_item"] = {}
             data["sold_30d"] = 0
+            data["rep_factor"] = 1.0
             data["error_sales"] = str(e)
 
     await asyncio.gather(*[
@@ -143,6 +155,7 @@ async def preview_concentration(base_sku: str) -> dict:
     all_items_flat = []
     for uid, data in account_data.items():
         units_by_item = data.get("units_by_item", {})
+        rep_factor = data.get("rep_factor", 1.0)
         for item in data.get("items", []):
             item_id = item.get("id", "")
             avail = item.get("available_quantity", 0) or 0
@@ -161,6 +174,9 @@ async def preview_concentration(base_sku: str) -> dict:
                 "sold_total": sold_total,
                 "has_variations": bool(item.get("variations")),
                 "is_full": is_full,
+                "rep_factor": rep_factor,
+                "sold_30d_weighted": sold_30d * rep_factor,
+                "sold_total_weighted": sold_total * rep_factor,
             })
 
     if not all_items_flat:
@@ -228,11 +244,11 @@ async def preview_concentration(base_sku: str) -> dict:
     total_meli_stock = sum(d["available_quantity"] for d in details)
 
     if has_30d_sales:
-        winner = max(candidate_pool, key=lambda d: (d["sold_30d"], d["sold_total"]))
+        winner = max(candidate_pool, key=lambda d: (d["sold_30d_weighted"], d["sold_total_weighted"]))
         period_label = "30 días"
         manual_selection = False
     elif has_any_sales:
-        winner = max(candidate_pool, key=lambda d: d["sold_total"])
+        winner = max(candidate_pool, key=lambda d: d["sold_total_weighted"])
         period_label = "histórico"
         manual_selection = False
     else:
@@ -249,16 +265,17 @@ async def preview_concentration(base_sku: str) -> dict:
 
     # Construir mensaje
     full_note = f" · {len(full_items)} FULL (sin cambio de stock)" if has_full else ""
+    rep_note = f" · reputación {winner['rep_factor']:.2f}x" if winner.get("rep_factor", 1.0) != 1.0 else ""
     if period_label == "30 días":
         message = (
             f"GANADOR: {winner['nickname']} · {winner['item_id']} "
-            f"({winner['sold_30d']} v/30d · {winner['sold_total']} hist.)"
+            f"({winner['sold_30d']} v/30d · {winner['sold_total']} hist.){rep_note}"
             f"{full_note}"
         )
     elif period_label == "histórico":
         message = (
             f"GANADOR (histórico): {winner['nickname']} · {winner['item_id']} "
-            f"({winner['sold_total']} ventas acumuladas)"
+            f"({winner['sold_total']} ventas acumuladas){rep_note}"
             f"{full_note}"
         )
     else:

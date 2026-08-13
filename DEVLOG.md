@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 — FIX: stock_concentrator.py sin ponderación de reputación
+
+Del reporte de auditoría de lógica de negocio (5 especialistas, 2026-08-08,
+ver DEVLOG cont.), quedaba pendiente el hallazgo más directamente análogo:
+`stock_sync_multi.py._score()` ya pondera el reparto de stock por reputación
+real de la cuenta (`_REPUTATION_FACTOR`, para no seguir favoreciendo a una
+cuenta en crisis como BLOWTECHNOLOGIES solo por ventas históricas), pero
+`stock_concentrator.py.preview_concentration()` — la función hermana que
+decide el GANADOR al concentrar stock manualmente desde Alertas de Stock —
+no tenía esa ponderación: elegía ganador solo por `sold_30d`/`sold_total`
+crudos, sin importar si esa cuenta está en amarillo/rojo hoy.
+
+Fix: `enrich_with_sales()` ahora también lee `seller_reputation.level_id`
+por cuenta (mismo `client.get_user_info()` que ya usa `stock_sync_multi.py`)
+y calcula `rep_factor` con el mismo diccionario `_REPUTATION_FACTOR`
+(importado directamente, una sola fuente de verdad). `preview_concentration()`
+pondera `sold_30d_weighted`/`sold_total_weighted` = ventas × rep_factor para
+elegir ganador. El mensaje y el diálogo de confirmación en
+`products_stock_issues.html` muestran `rep=0.5x` etc. cuando el factor no es
+1.0, para que quede visible por qué se eligió esa cuenta.
+
+Verificado en vivo (SKU real SNWM000001, servidor local): BLOWTECHNOLOGIES
+(FULL, reputación amarilla `3_yellow`) aparece con `rep_factor: 0.5` en la
+respuesta — 48 ventas históricas pesan como 28.5, evitando que gane la
+concentración solo por historial viejo de una cuenta hoy deteriorada.
+
+---
+
 ## 2026-08-12 (cont. 7) — FIX DEFINITIVO: reclamos abiertos viejos invisibles (auditoría "mismo patrón en otras secciones")
 
 Tras el fix de Mensajes, Jovan pidió auditar si el mismo patrón ("ventana

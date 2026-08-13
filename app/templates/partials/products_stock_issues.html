@@ -2223,7 +2223,8 @@ function concentrateItem(sku, title, bmAvail, btn) {
         details.forEach(function(a) {
             var isWinner = winner.user_id && a.user_id === winner.user_id;
             var marker = isWinner ? '★ GANADOR' : '  Perder';
-            lines.push(marker + '  ' + (a.nickname || a.user_id) + ': ' + (a.sold_30d||0) + ' v/30d · MeLi=' + (a.available_quantity||0));
+            var repNote = (a.rep_factor && a.rep_factor !== 1.0) ? ' · rep=' + a.rep_factor.toFixed(2) + 'x' : '';
+            lines.push(marker + '  ' + (a.nickname || a.user_id) + ': ' + (a.sold_30d||0) + ' v/30d · MeLi=' + (a.available_quantity||0) + repNote);
         });
         if (!winner.user_id) {
             lines.push('');
