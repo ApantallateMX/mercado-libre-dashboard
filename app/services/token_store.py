@@ -835,26 +835,9 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_billing_requests_platform_order "
             "ON billing_requests(platform, order_number)"
         )
-        # ─────────────────────────────────────────────────────────────────
-        # TABLA: bm_product_catalog — info estática de SKUs desde BM
-        # retail_ph, brand, model, title — actualizada 1x/semana (domingo 9pm MTY)
-        # Sobrevive deploys, reinicios y resets de cache en memoria.
-        # ─────────────────────────────────────────────────────────────────
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS bm_product_catalog (
-                sku        TEXT PRIMARY KEY,
-                retail_ph  REAL NOT NULL DEFAULT 0,
-                brand      TEXT NOT NULL DEFAULT '',
-                model      TEXT NOT NULL DEFAULT '',
-                title      TEXT NOT NULL DEFAULT '',
-                updated_at REAL NOT NULL DEFAULT 0
-            )
-        """)
-        # Migración: costo (AvgCostQTY de BM) — antes solo se guardaba retail_ph
-        try:
-            await db.execute("ALTER TABLE bm_product_catalog ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
-        except Exception:
-            pass
+        # bm_product_catalog: congelada y DROP-eada 2026-08-13 (fusionada en
+        # bm_sku_master desde antes, ver upsert_bm_catalog_batch) — respaldo en
+        # backups/bm_frozen_tables/. NO recrear el CREATE TABLE aquí.
         await db.execute("""
             CREATE TABLE IF NOT EXISTS item_sync_log (
                 item_id    TEXT NOT NULL,
@@ -1083,23 +1066,9 @@ async def init_db():
             )
         """)
         await db.execute("INSERT OR IGNORE INTO supplier_debt_settings (id, rate_tv, rate_other) VALUES (1, 0.80, 0.50)")
-        # ─────────────────────────────────────────────────────────────────
-        # TABLA: bm_stock_snapshot — foto en disco de _bm_stock_cache (memoria),
-        # tomada al final de cada ciclo de _prewarm_caches. Permite consultar
-        # el stock actual vía SQL (rápido) y sobrevive reinicios/deploys —
-        # a diferencia del dict en memoria, que se vacía en cada restart.
-        # NO representa una llamada nueva a BM: solo persiste lo que el
-        # prewarm ya trae cada ~7 min de todas formas.
-        # ─────────────────────────────────────────────────────────────────
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS bm_stock_snapshot (
-                sku            TEXT PRIMARY KEY,
-                available_qty  INTEGER NOT NULL DEFAULT 0,
-                reserve_qty    INTEGER NOT NULL DEFAULT 0,
-                total_qty      INTEGER NOT NULL DEFAULT 0,
-                updated_at     REAL NOT NULL DEFAULT 0
-            )
-        """)
+        # bm_stock_snapshot: congelada y DROP-eada 2026-08-13 (fusionada en
+        # bm_sku_master desde antes, ver upsert_bm_stock_snapshot_batch) —
+        # respaldo en backups/bm_frozen_tables/. NO recrear el CREATE TABLE aquí.
         # NOTA 2026-08-10: la tabla stock_issues_snapshot que iba aqui era un
         # duplicado -- la tabla real (con esa misma finalidad, sobrevivir
         # deploys) ya existe mas arriba como stock_issues_cache. Eliminada.
@@ -1128,8 +1097,9 @@ async def init_db():
         # + bm_stock_snapshot). Fuente única de verdad para alertas, sugerencias
         # y lanzamientos. Dos timestamps porque título/retail/costo se refrescan
         # 1x/semana y stock cada ~10 min — cada bloque guarda su propia frescura.
-        # bm_product_catalog y bm_stock_snapshot se dejan de escribir pero NO se
-        # borran todavía (rollback seguro si algo sale mal con la migración).
+        # bm_product_catalog y bm_stock_snapshot DROP-eadas 2026-08-13, sin
+        # lectores/escritores reales desde la migración — respaldo en
+        # backups/bm_frozen_tables/.
         # ─────────────────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bm_sku_master (
@@ -1192,31 +1162,10 @@ async def init_db():
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_bsc_sku ON bm_sku_changes(sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_bsc_changed_at ON bm_sku_changes(changed_at)")
-        # Migración única: backfill de bm_sku_master desde las 2 tablas viejas,
-        # solo si el maestro está vacío (primera vez que corre este código).
-        _mcount = await (await db.execute("SELECT COUNT(*) FROM bm_sku_master")).fetchone()
-        if _mcount and _mcount[0] == 0:
-            await db.execute("""
-                INSERT OR IGNORE INTO bm_sku_master
-                    (sku, title, brand, model, retail_ph, cost_usd,
-                     available_qty, reserve_qty, total_qty,
-                     catalog_updated_at, stock_updated_at)
-                SELECT
-                    bpc.sku, bpc.title, bpc.brand, bpc.model, bpc.retail_ph, bpc.cost_usd,
-                    COALESCE(bss.available_qty, 0), COALESCE(bss.reserve_qty, 0), COALESCE(bss.total_qty, 0),
-                    bpc.updated_at, COALESCE(bss.updated_at, 0)
-                FROM bm_product_catalog bpc
-                LEFT JOIN bm_stock_snapshot bss ON bss.sku = bpc.sku
-            """)
-            # SKUs que solo existen en bm_stock_snapshot (aún no vistos por el catálogo)
-            await db.execute("""
-                INSERT OR IGNORE INTO bm_sku_master
-                    (sku, available_qty, reserve_qty, total_qty, stock_updated_at)
-                SELECT sku, available_qty, reserve_qty, total_qty, updated_at
-                FROM bm_stock_snapshot
-                WHERE sku NOT IN (SELECT sku FROM bm_product_catalog)
-            """)
-            await db.commit()
+        # Migración única bm_product_catalog/bm_stock_snapshot -> bm_sku_master
+        # ya completada y esas 2 tablas DROP-eadas 2026-08-13 (respaldo en
+        # backups/bm_frozen_tables/) -- eliminada de aquí, referenciaba tablas
+        # que ya no existen.
         # ─────────────────────────────────────────────────────────────────
         # TABLA: realtime_stock_alerts — feed de órdenes individuales sin stock,
         # detectadas al momento vía webhook de ML (Fase 1 — Amazon pendiente,

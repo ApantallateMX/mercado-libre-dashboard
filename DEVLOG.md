@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 10) — DROP TABLE bm_product_catalog/bm_stock_snapshot (respaldadas primero)
+
+Jovan pidió respaldo antes de borrar, aunque ya estaba confirmado que
+ambas tablas no tenían lectores ni escritores reales (cont. 8). Flujo:
+
+1. Endpoint temporal `/api/diag/frozen-tables-size`: producción real —
+   `bm_product_catalog` 11,124 filas / 1.74 MB, `bm_stock_snapshot`
+   1,653 filas / 0.05 MB. Poco espacio (el problema de disco fue
+   `audit_log`, ya resuelto antes), pero limpieza sin riesgo.
+2. Endpoint temporal `/api/diag/frozen-tables-export`: dump completo de
+   ambas tablas → `backups/bm_frozen_tables/backup_2026-08-13.json`
+   (gitignored). Verificado: conteo de filas en el archivo coincide
+   exacto con el conteo real (11,124 + 1,653).
+3. Endpoint temporal `/api/diag/frozen-tables-drop` (con confirmación
+   explícita `expected_gone=si-ya-respalde`, mismo patrón de seguridad
+   que `audit-log-purge`): ejecutado en producción.
+4. Verificado sano post-drop: login, `/api/amazon/products/sin-publicar`,
+   `/api/diag/cache-health` — todos 200.
+5. Limpieza de código: los 3 endpoints temporales eliminados; los
+   `CREATE TABLE IF NOT EXISTS` de ambas tablas en `token_store.py`
+   eliminados (si no, se recrean vacías en cada arranque); la migración
+   de backfill `bm_product_catalog/bm_stock_snapshot → bm_sku_master`
+   (guardada por `if bm_sku_master vacío`, ya nunca vuelve a correr)
+   eliminada también — referenciaba tablas que ya no existen, hubiera
+   tronado si alguna vez se hubiera vuelto a disparar.
+
+Cierra el pendiente de [[project_security_hardening_2026-08-13]] sobre
+la decisión de DROP.
+
+---
+
 ## 2026-08-13 (cont. 9) — OPERACIÓN: refresh_token de Amazon (VECKTOR) rotado por exposure window de 6 meses
 
 Continuación del hallazgo `APP_PIN` (cont. 3): dado que el PIN protegía
