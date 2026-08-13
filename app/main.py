@@ -16695,6 +16695,38 @@ _DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e"
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
+@app.get("/api/diag/frozen-tables-size")
+async def diag_frozen_tables_size(token: str = ""):
+    """One-time: tamaño en disco de bm_product_catalog/bm_stock_snapshot
+    (congeladas, ver DEVLOG 2026-08-13) antes de decidir si DROP TABLE.
+    Borrar este endpoint después de usarlo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_fz
+    result = {}
+    async with _aio_fz.connect(DATABASE_PATH) as db:
+        for _t in ("bm_product_catalog", "bm_stock_snapshot"):
+            try:
+                cur = await db.execute(f"SELECT COUNT(*) FROM {_t}")
+                row_count = (await cur.fetchone())[0]
+            except Exception as e:
+                result[_t] = {"error": str(e)}
+                continue
+            try:
+                cur = await db.execute(
+                    "SELECT SUM(pgsize) FROM dbstat WHERE name = ?", (_t,)
+                )
+                size_bytes = (await cur.fetchone())[0] or 0
+            except Exception:
+                size_bytes = None
+            result[_t] = {
+                "row_count": row_count,
+                "size_bytes": size_bytes,
+                "size_mb": round(size_bytes / (1024 * 1024), 2) if size_bytes else None,
+            }
+    return JSONResponse(result)
+
+
 @app.get("/api/sku-history", response_class=HTMLResponse)
 async def sku_price_history(
     request: Request,
