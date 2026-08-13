@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 9) — OPERACIÓN: refresh_token de Amazon (VECKTOR) rotado por exposure window de 6 meses
+
+Continuación del hallazgo `APP_PIN` (cont. 3): dado que el PIN protegía
+el refresh_token real de Amazon (VECKTOR IMPORTS) y estuvo expuesto en
+el repo público ~6 meses, se decidió rotar el token real, no solo el PIN.
+
+Jovan revocó el acceso de la app "VeKtorClaude" desde Seller Central
+(Manage Your Apps → Disable Authorization) — esto invalida el token
+viejo de inmediato sin importar quién más lo tuviera. Un primer intento
+de re-autorizar usando el botón "Re-Authorize" de Seller Central no
+guardó el token nuevo correctamente (confirmado con un intercambio LWA
+directo contra Amazon: `invalid_grant`) — probablemente por un
+redirect_uri distinto al que espera nuestro callback. Segundo intento
+usando el link directo (`/auth/amazon/connect`) sí funcionó.
+
+Verificado con una llamada LWA real (`grant_type=refresh_token` directo
+contra `api.amazon.com`, sin pasar por nuestro código): el token nuevo
+sí intercambia por un access_token válido, el viejo confirmado muerto.
+`AMAZON_REFRESH_TOKEN` actualizado en Railway (para el seed de
+auto-recovery en redeploys) y en `.env.production` local. Verificado en
+producción real tras el restart: llamada real a Amazon para VECKTOR
+(`/api/amazon/products/sin-publicar`) responde 200.
+
+Cierra el pendiente de [[project_security_hardening_2026-08-13]] sobre
+la decisión de re-autorizar VECKTOR.
+
+---
+
 ## 2026-08-13 (cont. 8) — FIX: 3 queries leían precio BM de tabla congelada (bm_product_catalog) en vez de bm_sku_master
 
 Investigando si `bm_product_catalog`/`bm_stock_snapshot` seguían vigentes
