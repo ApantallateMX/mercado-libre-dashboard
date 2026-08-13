@@ -16721,6 +16721,21 @@ _DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e"
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
+@app.get("/api/diag/bm-sku-gaps-row")
+async def diag_bm_sku_gaps_row(sku: str = "", token: str = ""):
+    """One-time: estado actual de un SKU en bm_sku_gaps (todas las cuentas) --
+    investigacion 2026-08-13 de por que SKUs con stock real no aparecen en
+    Sin publicar. Borrar despues de usarlo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_gaps
+    async with _aio_gaps.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_gaps.Row
+        cur = await db.execute("SELECT * FROM bm_sku_gaps WHERE sku = ?", (sku.upper(),))
+        rows = [dict(r) for r in await cur.fetchall()]
+    return JSONResponse({"sku": sku.upper(), "rows": rows, "count": len(rows)})
+
+
 @app.get("/api/sku-history", response_class=HTMLResponse)
 async def sku_price_history(
     request: Request,
