@@ -24,6 +24,11 @@ SECRET_KEY = os.getenv("SECRET_KEY", "cambiar-esta-clave-secreta-en-produccion")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "tokens.db")
 APP_PIN = os.getenv("APP_PIN", "8741")
 
+# Railway inyecta esta variable automáticamente en todo deploy — permite
+# distinguir prod (HTTPS real, cookies deben ir secure=True) de desarrollo
+# local (HTTP en 127.0.0.1, secure=True rompería el login) sin config manual.
+IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT"))
+
 # Seed tokens for auto-recovery on deploy (Railway ephemeral storage)
 # Slot 1 usa MELI_USER_ID / MELI_REFRESH_TOKEN (backwards compat)
 # Slots 2+ usan MELI_USER_ID_N / MELI_REFRESH_TOKEN_N (dinámico, sin límite)

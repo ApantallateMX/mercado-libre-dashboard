@@ -32,7 +32,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.config import MELI_USER_ID, MELI_REFRESH_TOKEN, DATABASE_PATH
+from app.config import MELI_USER_ID, MELI_REFRESH_TOKEN, DATABASE_PATH, IS_PRODUCTION
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -1179,7 +1179,7 @@ async def login_verify(request: Request):
         if not user.get("password_hash"):
             token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
             response = RedirectResponse("/set-password", status_code=302)
-            response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax")
+            response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax", secure=IS_PRODUCTION)
             return response
         # Tiene hash pero must_change_pw=1: validar pw actual primero
         if not user_store.verify_password(password, user["password_hash"], user["password_salt"]):
@@ -1189,7 +1189,7 @@ async def login_verify(request: Request):
             )
         token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
         response = RedirectResponse("/set-password", status_code=302)
-        response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax")
+        response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax", secure=IS_PRODUCTION)
         return response
 
     if not user_store.verify_password(password, user["password_hash"], user["password_salt"]):
@@ -1212,7 +1212,7 @@ async def login_verify(request: Request):
         _plat, _tab, _ = user_store.first_allowed_location(allowed_sections)
         next_url = _tab_url(_plat, _tab) if _plat else "/facturacion"
     response = RedirectResponse(next_url, status_code=302)
-    response.set_cookie("dash_session", token, max_age=2592000, httponly=True, samesite="lax")
+    response.set_cookie("dash_session", token, max_age=2592000, httponly=True, samesite="lax", secure=IS_PRODUCTION)
     # Pre-warm caches
     global _prewarm_task
     if _prewarm_task is None or _prewarm_task.done():
@@ -1265,7 +1265,7 @@ async def set_password_submit(request: Request):
     # y el middleware lo detectaría redirigiendo de vuelta a /set-password en loop.
     new_token = await user_store.create_session(du["id"], ip=request.client.host if request.client else "")
     response = RedirectResponse("/dashboard", status_code=302)
-    response.set_cookie("dash_session", new_token, max_age=2592000, httponly=True, samesite="lax")
+    response.set_cookie("dash_session", new_token, max_age=2592000, httponly=True, samesite="lax", secure=IS_PRODUCTION)
     return response
 
 
@@ -1462,8 +1462,8 @@ async def switch_account(request: Request):
             if redirect_to.startswith("/amazon"):
                 redirect_to = "/dashboard"
             response = RedirectResponse(redirect_to, status_code=303)
-            response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
-            response.set_cookie("last_platform", "ml", max_age=2592000, httponly=True, samesite="lax")
+            response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax", secure=IS_PRODUCTION)
+            response.set_cookie("last_platform", "ml", max_age=2592000, httponly=True, samesite="lax", secure=IS_PRODUCTION)
             return response
     return RedirectResponse("/dashboard", status_code=303)
 
@@ -1490,8 +1490,8 @@ async def switch_amazon_account(request: Request):
             elif next_url in _ML_ONLY_PATHS:
                 next_url = "/amazon"
             response = RedirectResponse(next_url, status_code=303)
-            response.set_cookie("active_amazon_id", seller_id, max_age=2592000, httponly=True, samesite="lax")
-            response.set_cookie("last_platform", "amz", max_age=2592000, httponly=True, samesite="lax")
+            response.set_cookie("active_amazon_id", seller_id, max_age=2592000, httponly=True, samesite="lax", secure=IS_PRODUCTION)
+            response.set_cookie("last_platform", "amz", max_age=2592000, httponly=True, samesite="lax", secure=IS_PRODUCTION)
             return response
     return RedirectResponse("/amazon", status_code=303)
 
@@ -16651,9 +16651,9 @@ async def debug_bm_cache(sku: str = ""):
     })
 
 
-_DEBUG_KEY = "mi-apantallate-debug-2025"
 import os as _os_diag
-_DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
+_DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e")
+_DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
 @app.get("/api/sku-history", response_class=HTMLResponse)
@@ -17011,8 +17011,7 @@ async def diag_sku(sku: str = "", token: str = ""):
 async def diag_supplier_debt(token: str = ""):
     """Diagnóstico: salud del ledger de deuda — cuántas filas siguen en $0
     (candidatas a auto-sanar en el próximo ciclo de _supplier_debt_sync_loop)."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_sd
     async with _aio_sd.connect(DATABASE_PATH) as db:
@@ -17056,8 +17055,7 @@ async def diag_bm_stock_snapshot(token: str = ""):
     """Diagnóstico: estado de bm_stock_snapshot (foto en disco del stock BM,
     tomada al final de cada ciclo de prewarm) — para confirmar que se está
     llenando sin necesitar sesión admin."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_bss
     async with _aio_bss.connect(DATABASE_PATH) as db:
@@ -17505,8 +17503,7 @@ async def diag_reconcile_realtime_alerts(token: str = ""):
     """Dispara YA el chequeo de reconciliación (normalmente corre solo cada
     5 min) — revisa cada alerta activa contra el estado real del envío en
     ML y borra las que ya no son accionables (enviadas/FULL/en_camino)."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     result = await _reconcile_realtime_alerts_once()
     return result
@@ -17519,8 +17516,7 @@ async def diag_clear_realtime_alerts(token: str = ""):
     6250d9a). Las alertas se regeneran solas con el webhook ya corregido.
     POST (no GET) desde 2026-08-03 — un GET destructivo puede dispararse por
     accidente (link preview, crawler, precarga del navegador), auditoría."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_clr
     async with _aio_clr.connect(DATABASE_PATH) as db:
@@ -17616,8 +17612,7 @@ async def diag_order_lookup(order_id: str = "", token: str = ""):
     ¿generó una realtime_stock_alert? ¿qué stock tiene su SKU ahora en
     bm_sku_master? Para diagnosticar por qué una orden que BM marca 'Sin
     Stock' no apareció (o sí) en nuestro feed, sin adivinar."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not order_id:
         return JSONResponse({"error": "order_id requerido"}, status_code=400)
@@ -17650,8 +17645,7 @@ async def diag_ml_webhook_activity(token: str = "", minutes: int = 60):
     """Diagnóstico: actividad reciente de order_history por cuenta ML — para
     confirmar que el webhook de notificaciones (POST /webhooks/ml/orders)
     está llegando de las 4 cuentas, no solo de la que se probó a mano."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     minutes = max(1, min(minutes, 1440))
     cutoff_ts = _time.time() - minutes * 60
@@ -17721,8 +17715,7 @@ async def diag_trigger_catalog_sync(token: str = ""):
     """Dispara el sync manual del catálogo BM sin necesitar sesión admin —
     para refrescar bm_product_catalog.cost_usd/retail_ph en producción tras
     un deploy que agrega/cambia esas columnas, sin esperar al cron semanal."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if _catalog_sync_running:
         return JSONResponse({"ok": False, "error": "Ya está corriendo un sync"})
@@ -17736,8 +17729,7 @@ async def diag_fix_buyer_message_subjects(token: str = ""):
     limpiar (RFC 5322) — filas guardadas antes del fix del parser. Sin esto,
     responder a esos mensajes truena con 'Header values may not contain
     linefeed or carriage return characters' (email.message lo rechaza)."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import re as _re_fix
     import aiosqlite as _aio_fix
@@ -17763,8 +17755,7 @@ async def diag_gmail_setup_filter(token: str = "", seller_id: str = Query(...)):
     el scope gmail.settings.basic. label_name se deriva del nickname real de
     la cuenta (antes estaba fijo en "Vektor Amazon" — bug real, hubiera
     creado esa misma etiqueta también en las bandejas de Autobot/ExclusiveBulbs)."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     from app.services.buyer_messages_client import setup_organization_filter
     from app.config import AMAZON_BUYER_INBOX_ACCOUNTS
@@ -17785,8 +17776,7 @@ async def diag_smtp_test(token: str = ""):
     SMTP (25/465/587) por antiabuso, y smtplib.SMTP_SSL no tenía timeout, así
     que un bloqueo silencioso (sin RST) cuelga la conexión indefinidamente
     en vez de fallar rápido."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import time as _t_smtp
     from app.services.buyer_messages_client import AMAZON_BUYER_INBOX_ACCOUNTS
@@ -17826,8 +17816,7 @@ async def diag_smtp_test(token: str = ""):
 async def diag_db_size(token: str = ""):
     """Diagnóstico URGENTE: tamaño de tokens.db, filas por tabla, y tamaño de
     claim_photos/ en disco — para encontrar qué está llenando el Railway Volume."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_sz
     import os as _os_sz
@@ -17912,8 +17901,7 @@ async def diag_emergency_clear_claim_photos(token: str = ""):
     reclamos en sí (claims_history) NO se tocan — solo las fotos, que se recachean
     solas la próxima vez que alguien abra la galería de un reclamo (lazy, 1 a la vez).
     """
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import os as _os_ec
     import shutil as _shutil_ec
@@ -17959,8 +17947,7 @@ async def diag_migrate_billing_invoices_to_disk(token: str = ""):
     factura nueva reescribía el archivo completo de SQLite — causa directa del
     incidente de disk-full de 2026-07-18. Idempotente: una fila ya migrada
     (pdf_path ya seteado) se salta, así que es seguro volver a llamarlo."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_mig
 
@@ -18024,8 +18011,7 @@ async def diag_fix_claims_account_id(token: str = ""):
     None y el backfill de comentario/foto en sku-claims-detail se salta esas filas
     en silencio, para siempre. Este endpoint mapea nickname -> user_id real y
     corrige lo ya guardado; después el backfill normal las toma solas."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     accounts = await token_store.get_all_tokens()
     nick_to_uid = {a.get("nickname"): str(a["user_id"]) for a in accounts if a.get("nickname")}
@@ -18054,8 +18040,7 @@ async def diag_claim_photos_capacity(token: str = ""):
     reclamos ML de los últimos 30 días (total y con razón tipo 'Defectuoso' —
     la más propensa a traer fotos) para poder calcular con datos reales cuánto
     pesaría guardar 1 mes, con y sin comprimir imágenes."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import os as _os_cap
     import aiosqlite as _aio_cap
@@ -18120,8 +18105,7 @@ async def diag_inspect_claim(token: str = "", claim_id: str = Query(""), account
     get_claim_messages(claim_id) — sender_role, texto y attachments de cada
     mensaje tal como los da ML — para comparar contra lo que el dashboard
     termina mostrando."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not claim_id:
         return {"error": "claim_id requerido"}
@@ -18176,8 +18160,7 @@ async def diag_reset_claim_comments(token: str = ""):
     ON CONFLICT de upsert_claims_history no pisa un comentario existente con uno
     vacío — hay que limpiar lo ya guardado para que se re-resuelva bien la próxima
     vez que alguien abra el SKU."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_rc
     async with _aio_rc.connect(DATABASE_PATH) as db:
@@ -24571,7 +24554,6 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
 async def diag_amazon_accounts(token: str = "", fix: int = 0):  # noqa
     """Muestra las cuentas Amazon en DB (marketplace_id, marketplace_name).
     Pasa fix=1 para corregir marketplace de ExclusiveBulbs usando env vars."""
-    _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite, os as _os
@@ -24625,7 +24607,6 @@ async def diag_exclusivebulbs_probe(token: str = ""):  # noqa
     Diagnóstico temporal: llama SP-API para ExclusiveBulbs (A22XNR713HGDVG) en USA.
     Verifica órdenes 30d y listings activos. Solo accesible con diag token.
     """
-    _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
@@ -24788,7 +24769,6 @@ async def diag_amazon_rdt_probe(token: str = "", seller_id: str = "A20NFIUQNEYZ1
     "Direct-to-Consumer Shipping" ya quedó activo tras agregarlo en Developer
     Central y re-autorizar. Ver [[project_amazon_rdt_pending]].
     """
-    _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
@@ -24865,8 +24845,7 @@ async def diag_amazon_rdt_probe(token: str = "", seller_id: str = "A20NFIUQNEYZ1
 @app.get("/api/diag/refresh-ml-tokens")
 async def diag_refresh_ml_tokens(token: str = ""):
     """Fuerza re-seed de tokens ML. Solo accesible con diag token."""
-    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
-    if token != _DT:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     results = []
     import os as _diag_os
@@ -26251,8 +26230,7 @@ async def diag_mlmu(
     mlmu_id: str = Query("MLMU3559888403"),
 ):
     """Diagnóstico: probar endpoints para resolver un MLMU Universal Product ID."""
-    _dk = _os_diag.environ.get("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
-    if token != _dk:
+    if token != _DIAG_TOKEN:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     client = await get_meli_client()
     if not client:

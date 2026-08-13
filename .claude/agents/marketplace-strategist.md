@@ -112,8 +112,9 @@ Campos clave: `AvailableQTY`, `Reserve`, `TotalQty`, `AvgCostQTY`, `LastRetailPr
 ### 4. Caché BM rápido (sin auth)
 
 ```http
-GET https://apantallatemx.up.railway.app/api/diag/sku?sku=SNTV001764&token=dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5
+GET https://apantallatemx.up.railway.app/api/diag/sku?sku=SNTV001764&token=<DIAG_TOKEN>
 ```
+(DIAG_TOKEN vive en `.env`/`.env.production`, no en este archivo — este repo es público)
 
 ### 5. Búsqueda web
 Usar WebSearch y WebFetch para:

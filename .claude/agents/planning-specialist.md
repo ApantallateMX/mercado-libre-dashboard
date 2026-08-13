@@ -132,14 +132,15 @@ Usar `days=7`, `days=14`, `days=30`, `days=60` según el análisis.
 ### 3. Caché BM del dashboard (rápido, sin auth)
 
 ```http
-GET https://apantallatemx.up.railway.app/api/diag/sku?sku=SNTV001764&token=dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5
+GET https://apantallatemx.up.railway.app/api/diag/sku?sku=SNTV001764&token=<DIAG_TOKEN>
 ```
 Devuelve: `cache.avail_total`, `cache.reserved_total`, `bulk_cache.avail`, edad del caché.
 
 ```http
-GET https://apantallatemx.up.railway.app/api/diag/cache-health?token=dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5
+GET https://apantallatemx.up.railway.app/api/diag/cache-health?token=<DIAG_TOKEN>
 ```
 Salud general del caché BM.
+(DIAG_TOKEN vive en `.env`/`.env.production`, no en este archivo — este repo es público)
 
 ### 4. Búsqueda web
 Usar WebSearch para:

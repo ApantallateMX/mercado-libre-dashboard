@@ -20,6 +20,7 @@ Pensado para Programador de tareas de Windows (Task Scheduler), 1x/noche.
 """
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -27,8 +28,13 @@ import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env.production")
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 PROD_URL = "https://apantallatemx.up.railway.app"
-DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+DIAG_TOKEN = os.environ["DIAG_TOKEN"]
 BACKUP_DIR = Path(__file__).parent.parent / "backups" / "audit_log"
 
 

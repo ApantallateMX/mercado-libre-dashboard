@@ -7,6 +7,60 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 2) — SEGURIDAD: DIAG_TOKEN rotado + bypass real de env var en 22 endpoints + cookies secure
+
+De la auditoría de seguridad del 2026-08-12: el token que abre ~60
+endpoints de diagnóstico sin login (`/api/diag/*`) tenía un default
+hardcodeado (`dk_b55c...`) que además estaba **impreso tal cual en
+CLAUDE.md**, y CLAUDE.md vive en el repo público
+`github.com/ApantallateMX/mercado-libre-dashboard` (confirmado público,
+HTTP 200 sin auth). Mismo tipo de exposición que la clave de Anthropic
+pendiente, pero esta no depende de que Jovan haga nada — la puedo rotar
+yo solo.
+
+Al investigar encontré algo peor que el default expuesto: **22 endpoints
+individuales redeclaraban `_DIAG_TOKEN`/`_DT` como variable local con el
+valor hardcodeado**, ignorando por completo la variable de entorno
+`DIAG_TOKEN` — es decir, aunque alguien configurara la variable en
+Railway, esos 22 endpoints seguían aceptando el token viejo/expuesto sin
+importar qué. Bug real, no solo "falta rotar", eran candados que decían
+leer la config pero no la leían.
+
+**Fix**: token nuevo generado (`secrets.token_hex`), seteado en Railway
+vía API (`variableUpsert`), en `.env`/`.env.production` locales
+(gitignored). Los 22 endpoints ahora usan la constante global
+`_DIAG_TOKEN` (que sí lee `DIAG_TOKEN` del entorno) — se eliminaron las
+redeclaraciones locales. `_DEBUG_KEY` (2 endpoints de debug legacy,
+menor severidad, no estaba expuesto en git) también movido a env var.
+Referencias al token viejo en `CLAUDE.md`, 2 agentes (`marketplace-strategist.md`,
+`planning-specialist.md`) y 1 `.bak` reemplazadas por `<DIAG_TOKEN>` +
+nota de "no escribir el valor real, repo público". `scripts/archive_audit_log.py`
+(corre 1x/noche vía Task Scheduler, purga audit_log) también tenía el
+token hardcodeado — ahora lo lee de `.env`/`.env.production` con
+`python-dotenv`.
+
+Evalué convertir los endpoints destructivos (`ml-item-stock-fix`,
+`clear-bm-sku`, etc.) de GET a POST — decisión: NO, el modelo de auth
+aquí es un token estático en query string, no cookie de sesión, así que
+CSRF no aplica y el método HTTP no cambia el riesgo real. El único
+candado real es el token, ya rotado y ya sin bypass.
+
+**Además**: las 8 llamadas `set_cookie` (dash_session, active_account_id,
+active_amazon_id, last_platform) no tenían `secure=True` — la sesión se
+podía enviar sobre HTTP plano si alguna vez hubiera una ruta no-HTTPS.
+Agregado `IS_PRODUCTION` en `app/config.py` (`bool(os.getenv("RAILWAY_ENVIRONMENT"))`,
+Railway la inyecta solo, sin config manual) y `secure=IS_PRODUCTION` en
+las 8 cookies — en local sigue sin `Secure` (HTTP, login probado y
+funcionando), en Railway ahora sí la lleva.
+
+Verificado en vivo antes de subir: token nuevo acepta 200 en
+`/api/diag/cache-health` y en los 2 endpoints que tenían el bypass
+(`amazon-accounts`, `mlmu`); token viejo rechazado con 403 en los tres.
+Login real probado localmente (`/login/verify`), cookie sin `Secure` en
+HTTP local como se espera.
+
+---
+
 ## 2026-08-13 — FIX: stock_concentrator.py sin ponderación de reputación
 
 Del reporte de auditoría de lógica de negocio (5 especialistas, 2026-08-08,

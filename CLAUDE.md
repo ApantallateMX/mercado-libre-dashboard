@@ -131,9 +131,12 @@ Set final de stock vendible: `47,62,68` (Tijuana excluida). Las ubicaciones 45,6
 - `higgsfield_assets` — assets generados con Higgsfield AI por SKU/listing
 
 ### Endpoints de diagnóstico (sin login)
+Token en variable de entorno `DIAG_TOKEN` (`.env` local / `.env.production` / Railway) —
+NUNCA escribir el valor real aquí, este archivo vive en un repo público.
+Rotado 2026-08-13 (el valor anterior estaba impreso aquí mismo, expuesto).
 ```
-GET /api/diag/sku?sku=SNWM000001&token=dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5
-GET /api/diag/cache-health?token=dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5
+GET /api/diag/sku?sku=SNWM000001&token=<DIAG_TOKEN>
+GET /api/diag/cache-health?token=<DIAG_TOKEN>
 ```
 
 ---
