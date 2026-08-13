@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 12) — FEAT: reversa de deuda de proveedor en cancelaciones + alerta temprana de reputación
+
+Cierra los 2 hallazgos restantes de "otros hallazgos" (cont. 3), con
+"adelante con todos" de Jovan:
+
+**1. Reversa de deuda de proveedor** (`supplier_debt_ledger`): antes, una
+vez registrada la deuda de una venta (% del retail BM), quedaba para
+siempre sin importar si la orden se cancelaba después — cero mecanismo
+de reversa. Agregada columna `reversed_at`; `upsert_order_history()`
+ahora revierte (`amount_mxn=0`) cualquier deuda ya registrada cuando la
+fila trae un status de cancelación (`cancelled`/`Cancelled`/`Canceled`,
+cubre ML+Amazon). **Alcance limitado, documentado**: solo cubre
+cancelaciones (antes de envío) — un reembolso DESPUÉS de enviado no
+cambia el `OrderStatus` en Amazon (vive en Finances API, reembolsos
+separado) ni el `status` en ML; cubrir eso es una investigación aparte,
+no incluida aquí. Probado end-to-end con datos sintéticos (orden
+"paid" → genera deuda → misma orden "cancelled" → deuda se revierte a 0).
+
+**2. Alerta temprana de reputación** (`reputation_snapshots`, tabla
+nueva): antes solo existía el estado ACTUAL (badge verde/amarillo/rojo +
+distancia al siguiente umbral), sin poder detectar que se está
+deteriorando ANTES de cruzar a una zona peor. Snapshot diario
+(`UNIQUE(account_id, captured_date)`, `INSERT OR IGNORE`) alimentado
+gratis desde `stock_sync_multi.py` — ya llama `get_user_info()` cada
+ciclo (5 min) para el `rep_factor`, ahora también guarda 1 snapshot/día
+sin gastar ninguna llamada extra a la API. `get_reputation_trend()`
+compara el snapshot más viejo disponible en 14 días contra el más
+reciente; `worsening=True` si el `level_id` bajó de rango O cualquier
+rate (claims/cancelaciones/demoras) subió ≥1pp — umbral conservador para
+no alertar con ruido normal. Mostrado como banner naranja en la parte de
+arriba de Salud (`health_summary.html`) cuando hay tendencia negativa.
+Probado end-to-end (deterioro real detectado, caso estable NO marcado
+como falso positivo).
+
+Ambas features probadas con datos sintéticos limpiados después (no
+quedó nada de prueba en `tokens.db`).
+
+---
+
 ## 2026-08-13 (cont. 11) — FEAT: margen reemplaza costo BM (no confiable) por % de recuperación de retail
 
 Jovan retomó la discusión de "otros hallazgos" pausada antes (ver cont. 3):

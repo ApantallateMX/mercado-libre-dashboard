@@ -9939,6 +9939,14 @@ async def health_summary_partial(
         reputation = user.get("seller_reputation", {})
         metrics = reputation.get("metrics", {})
 
+        # Alerta temprana de tendencia (2026-08-13) -- el badge/margen de abajo
+        # ya muestra el estado ACTUAL, pero no avisa si se está deteriorando
+        # antes de cruzar a una zona peor. Ver get_reputation_trend().
+        try:
+            reputation_trend = await token_store.get_reputation_trend(str(client.user_id), days=14)
+        except Exception:
+            reputation_trend = None
+
         claims_rate = metrics.get("claims", {}).get("rate", 0) or 0
         cancel_rate = metrics.get("cancellations", {}).get("rate", 0) or 0
         delay_rate = metrics.get("delayed_handling_time", {}).get("rate", 0) or 0
@@ -9996,6 +10004,7 @@ async def health_summary_partial(
             "errors": errors,
             "date_from": date_from,
             "date_to": date_to,
+            "reputation_trend": reputation_trend,
         })
     finally:
         await client.close()

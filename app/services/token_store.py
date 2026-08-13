@@ -1046,6 +1046,13 @@ async def init_db():
                 UNIQUE(order_id, item_id, platform)
             )
         """)
+        # Migración 2026-08-13: reversa de deuda cuando la orden se cancela.
+        # Antes la deuda se registraba una vez y quedaba para siempre, sin
+        # importar si la orden se canceló después -- ver reverse_cancelled_debt().
+        try:
+            await db.execute("ALTER TABLE supplier_debt_ledger ADD COLUMN reversed_at REAL NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sdl_week ON supplier_debt_ledger(iso_week)")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS supplier_debt_payments (
@@ -1066,6 +1073,28 @@ async def init_db():
             )
         """)
         await db.execute("INSERT OR IGNORE INTO supplier_debt_settings (id, rate_tv, rate_other) VALUES (1, 0.80, 0.50)")
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: reputation_snapshots — foto diaria de seller_reputation por
+        # cuenta ML. Sin esto la reputación solo se ve como valor puntual
+        # (¿estoy en verde/amarillo AHORA?) sin poder detectar que se está
+        # deteriorando ANTES de cruzar a la zona roja. UNIQUE(account_id,
+        # captured_date) + INSERT OR IGNORE -- se llena gratis desde
+        # stock_sync_multi.py, que ya llama get_user_info() cada ciclo
+        # (cada 5 min) para el rep_factor; aquí solo se guarda 1x/día.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reputation_snapshots (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id    TEXT NOT NULL,
+                level_id      TEXT NOT NULL DEFAULT '',
+                claims_rate   REAL NOT NULL DEFAULT 0,
+                cancel_rate   REAL NOT NULL DEFAULT 0,
+                delay_rate    REAL NOT NULL DEFAULT 0,
+                captured_date TEXT NOT NULL,
+                captured_at   REAL NOT NULL DEFAULT 0,
+                UNIQUE(account_id, captured_date)
+            )
+        """)
         # bm_stock_snapshot: congelada y DROP-eada 2026-08-13 (fusionada en
         # bm_sku_master desde antes, ver upsert_bm_stock_snapshot_batch) —
         # respaldo en backups/bm_frozen_tables/. NO recrear el CREATE TABLE aquí.
@@ -5061,6 +5090,12 @@ async def get_zone_demand_by_sku(account_id: str, platform: str = "ml", days: in
     return result
 
 
+# Statuses de cancelación que disparan reversa de supplier_debt_ledger.
+# ML usa "cancelled" (raw API); Amazon usa OrderStatus "Canceled"/"Cancelled"
+# (ambas grafías se ven en el código, ver _CANCELED_STATUSES en amazon_orders.py).
+_DEBT_CANCEL_STATUSES = {"cancelled", "Cancelled", "Canceled"}
+
+
 async def upsert_order_history(rows: list[dict]) -> int:
     """Guarda/actualiza historial de ventas. ON CONFLICT actualiza con el dato más preciso.
     data_source='real' prevalece sobre 'estimated'; sale_fee y neto_plat toman el mayor valor.
@@ -5068,6 +5103,8 @@ async def upsert_order_history(rows: list[dict]) -> int:
     También genera (si es la primera vez que se ve el sale) una entrada en
     supplier_debt_ledger — deuda con la empresa proveedora = % fijo del
     retail por unidad (teles vs otras categorías). Ver supplier_debt_settings.
+    Si el status de esta fila es una cancelación (_DEBT_CANCEL_STATUSES),
+    revierte (amount_mxn=0) cualquier deuda ya registrada para esa orden.
     """
     import time as _t
     if not rows:
@@ -5142,6 +5179,21 @@ async def upsert_order_history(rows: list[dict]) -> int:
                     rate, quantity, retail_ph_usd, fx_rate,
                     amount_mxn, order_date, iso_week, _t.time(),
                 ))
+                # Reversa: si esta fila trae un status de cancelación, la deuda ya
+                # registrada para esta orden (si la había) se pone en 0. Cubre
+                # cancelaciones (antes de envío) en ambas plataformas -- NO cubre
+                # reembolsos DESPUÉS de enviado (Amazon no cambia OrderStatus en
+                # ese caso, vive en Finances API por separado; ML tampoco cambia
+                # `status` en un reembolso post-pago -- pendiente, requiere
+                # investigación aparte de cada API de reembolsos).
+                if (r.get("status") or "") in _DEBT_CANCEL_STATUSES:
+                    cur_rev = await db.execute("""
+                        UPDATE supplier_debt_ledger SET amount_mxn = 0, reversed_at = ?
+                        WHERE order_id = ? AND item_id = ? AND platform = ?
+                          AND amount_mxn > 0 AND reversed_at = 0
+                    """, (_t.time(), r.get("order_id", ""), r.get("item_id", ""), r.get("platform", "ml")))
+                    if cur_rev.rowcount:
+                        logger.info(f"[SUPPLIER-DEBT] Reversada deuda de orden cancelada {r.get('order_id')}/{r.get('item_id')} ({r.get('platform')})")
             except Exception:
                 pass  # el ledger de deuda nunca debe tumbar el guardado de order_history
         await db.commit()
@@ -5276,6 +5328,67 @@ async def set_supplier_debt_settings(rate_tv: float, rate_other: float) -> None:
             ON CONFLICT(id) DO UPDATE SET rate_tv = excluded.rate_tv, rate_other = excluded.rate_other
         """, (rate_tv, rate_other))
         await db.commit()
+
+
+async def save_reputation_snapshot(account_id: str, seller_reputation: dict) -> None:
+    """Guarda 1 snapshot diario de seller_reputation (level_id + rates de
+    claims/cancelaciones/demoras) — INSERT OR IGNORE, solo la primera llamada
+    del día por cuenta se queda. Alimenta get_reputation_trend() para poder
+    avisar ANTES de que la cuenta cruce a una zona peor, no solo reaccionar
+    cuando ya está mal."""
+    metrics = (seller_reputation or {}).get("metrics", {}) or {}
+    level_id = (seller_reputation or {}).get("level_id") or ""
+    claims_rate = metrics.get("claims", {}).get("rate", 0) or 0
+    cancel_rate = metrics.get("cancellations", {}).get("rate", 0) or 0
+    delay_rate = metrics.get("delayed_handling_time", {}).get("rate", 0) or 0
+    now = __import__("time").time()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute("""
+            INSERT OR IGNORE INTO reputation_snapshots
+                (account_id, level_id, claims_rate, cancel_rate, delay_rate, captured_date, captured_at)
+            VALUES (?,?,?,?,?,?,?)
+        """, (account_id, level_id, claims_rate, cancel_rate, delay_rate, today, now))
+        await db.commit()
+
+
+_REPUTATION_LEVEL_RANK = {"5_green": 5, "4_light_green": 4, "3_yellow": 3, "2_orange": 2, "1_red": 1}
+
+
+async def get_reputation_trend(account_id: str, days: int = 14) -> dict | None:
+    """Compara el snapshot más viejo disponible en la ventana de `days` contra
+    el más reciente. Retorna None si no hay al menos 2 snapshots (cuenta nueva
+    en el sistema, o el histórico todavía no se acumula). 'worsening'=True si
+    el level_id bajó de rango O cualquiera de los 3 rates subió >= 1 punto
+    porcentual — umbral deliberadamente conservador para no alertar con ruido
+    normal día a día."""
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT level_id, claims_rate, cancel_rate, delay_rate, captured_date
+            FROM reputation_snapshots
+            WHERE account_id = ? AND captured_date >= ?
+            ORDER BY captured_date ASC
+        """, (account_id, cutoff))
+        rows = await cur.fetchall()
+    if len(rows) < 2:
+        return None
+    old, new = rows[0], rows[-1]
+    old_rank = _REPUTATION_LEVEL_RANK.get(old["level_id"], 3)
+    new_rank = _REPUTATION_LEVEL_RANK.get(new["level_id"], 3)
+    delta_claims = round((new["claims_rate"] - old["claims_rate"]) * 100, 2)
+    delta_cancel = round((new["cancel_rate"] - old["cancel_rate"]) * 100, 2)
+    delta_delay = round((new["delay_rate"] - old["delay_rate"]) * 100, 2)
+    worsening = (new_rank < old_rank) or max(delta_claims, delta_cancel, delta_delay) >= 1.0
+    return {
+        "days_compared": days,
+        "old_date": old["captured_date"], "new_date": new["captured_date"],
+        "old_level": old["level_id"], "new_level": new["level_id"],
+        "level_dropped": new_rank < old_rank,
+        "delta_claims_pp": delta_claims, "delta_cancel_pp": delta_cancel, "delta_delay_pp": delta_delay,
+        "worsening": worsening,
+    }
 
 
 async def upsert_claims_history(rows: list[dict]) -> int:

@@ -33,6 +33,7 @@ from datetime import datetime
 import httpx
 
 from app.services.sku_utils import base_sku as _base_sku, extract_item_sku
+from app.services import token_store
 
 logger = logging.getLogger(__name__)
 
@@ -259,8 +260,15 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
             rep_factor = 1.0
             try:
                 _user_info = await client.get_user_info()
-                _level_id = (_user_info.get("seller_reputation", {}) or {}).get("level_id")
+                _seller_rep = _user_info.get("seller_reputation", {}) or {}
+                _level_id = _seller_rep.get("level_id")
                 rep_factor = _REPUTATION_FACTOR.get(_level_id, 1.0)
+                # Snapshot diario para detectar tendencia (get_reputation_trend) --
+                # aprovecha esta misma llamada, sin gastar otra a la API de ML.
+                try:
+                    await token_store.save_reputation_snapshot(uid, _seller_rep)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"[MULTI-SYNC] Cuenta {uid}: no se pudo leer reputación ({e}), rep_factor=1.0")
 

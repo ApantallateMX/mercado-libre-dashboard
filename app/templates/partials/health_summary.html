@@ -19,6 +19,22 @@
 </div>
 {% endif %}
 
+{% if reputation_trend and reputation_trend.worsening %}
+<div class="mb-4 p-3 bg-orange-50 border border-orange-300 rounded-lg flex items-start gap-2">
+    <span class="text-orange-600 font-bold">⚠</span>
+    <div class="text-sm text-orange-800">
+        <span class="font-semibold">Reputación deteriorándose</span> —
+        {% if reputation_trend.level_dropped %}
+            bajó de <span class="font-medium">{{ reputation_trend.old_level }}</span> a <span class="font-medium">{{ reputation_trend.new_level }}</span>
+        {% endif %}
+        {% if reputation_trend.delta_claims_pp >= 1.0 %}reclamos +{{ reputation_trend.delta_claims_pp }}pp{% endif %}
+        {% if reputation_trend.delta_cancel_pp >= 1.0 %}{{ ', ' if reputation_trend.level_dropped or reputation_trend.delta_claims_pp >= 1.0 else '' }}cancelaciones +{{ reputation_trend.delta_cancel_pp }}pp{% endif %}
+        {% if reputation_trend.delta_delay_pp >= 1.0 %}{{ ', ' if reputation_trend.level_dropped or reputation_trend.delta_claims_pp >= 1.0 or reputation_trend.delta_cancel_pp >= 1.0 else '' }}demoras +{{ reputation_trend.delta_delay_pp }}pp{% endif %}
+        en los últimos {{ reputation_trend.days_compared }} días ({{ reputation_trend.old_date }} → {{ reputation_trend.new_date }}). Revisa antes de que empeore más.
+    </div>
+</div>
+{% endif %}
+
 <!-- Row 1: Health Score + Reputation Badge + Power Seller -->
 <div class="bg-white rounded-lg shadow p-5 mb-4">
     <div class="flex items-center gap-6 flex-wrap">
