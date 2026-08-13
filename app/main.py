@@ -16723,9 +16723,9 @@ _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f71
 
 @app.get("/api/diag/bm-sku-gaps-row")
 async def diag_bm_sku_gaps_row(sku: str = "", token: str = ""):
-    """One-time: estado actual de un SKU en bm_sku_gaps (todas las cuentas) --
-    investigacion 2026-08-13 de por que SKUs con stock real no aparecen en
-    Sin publicar. Borrar despues de usarlo."""
+    """Diagnóstico: estado de un SKU en bm_sku_gaps (todas las cuentas) +
+    si ya está publicado en ml_listings/amazon_listings — para investigar
+    por qué un SKU con stock real no aparece (o sí) en Sin Publicar."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_gaps

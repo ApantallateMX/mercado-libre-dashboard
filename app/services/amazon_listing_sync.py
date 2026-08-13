@@ -4,7 +4,8 @@ amazon_listing_sync.py — Sincronización de listings Amazon → DB local
 Estrategia:
   - Arranque: sync completo para todas las cuentas Amazon (60s después del arranque)
   - Cada 10 min: qty-only sync — solo available_qty (rápido, mantiene stock fresco)
-  - 1x/día (8 PM México ≈ 02:00 UTC): full reconciliation completa + gap scan
+  - Cada 24h desde el último full sync: full reconciliation completa + gap scan
+  - Cada 3h (si no hubo full sync): gap scan independiente (ver _GAP_SCAN_INTERVAL)
   - Manual: trigger via POST /api/listings/refresh
 
 Solo descarga datos — cero escrituras a Amazon Seller Central.
@@ -12,13 +13,13 @@ Solo descarga datos — cero escrituras a Amazon Seller Central.
 import asyncio
 import logging
 import time as _time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 _FULL_INTERVAL      = 24 * 3600  # 24 horas entre syncs completos (1x/día)
 _QTY_SYNC_INTERVAL  = 10 * 60   # 10 minutos entre qty-only syncs
-_GAP_SCAN_INTERVAL  = 6 * 3600  # 6 horas entre gap scans automáticos
+_GAP_SCAN_INTERVAL  = 3 * 3600  # FIX 2026-08-13: antes 6h -- alineado con el lado ML (mismo ritmo, 3h, acordado con Jovan)
 _sync_running       = False
 _qty_sync_running   = False
 _last_sync_ts       = 0.0
@@ -395,21 +396,13 @@ async def _run_gap_scan_background() -> None:
         logger.error(f"[AMZ-AUTO-SCAN] Error: {e}")
 
 
-def _next_8pm_mexico_secs() -> float:
-    """Segundos hasta las 20:00 hora México (CST = UTC-6)."""
-    mex = datetime.now(timezone.utc) + timedelta(hours=-6)
-    target = mex.replace(hour=20, minute=0, second=0, microsecond=0)
-    if mex >= target:
-        target += timedelta(days=1)
-    return (target - mex).total_seconds()
-
-
 async def _loop():
     """Loop periódico:
     - Arranque (60s): full sync → gap scan
     - Cada 10 min: qty-only sync (mantiene stock fresco en DB)
-    - 1x/día a las 8 PM México: full reconciliation → gap scan
-    - Cada 6h (si no hubo full sync): gap scan (cambios de stock BM)
+    - Cada 24h (si pasaron ≥24h desde el último): full reconciliation → gap scan
+    - Cada 3h (si no hubo full sync): gap scan (cambios de stock BM) --
+      FIX 2026-08-13: antes 6h, ver _GAP_SCAN_INTERVAL
     """
     global _last_gap_scan_ts
     await asyncio.sleep(60)   # esperar a que el servidor esté listo

@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 13) — INVESTIGACIÓN + FIX: gap scan (Sin Publicar) subía solo 1x/día en ambas plataformas
+
+Jovan reportó 2 SKUs reales (SNVC000743, SNVC000747) que no aparecían en
+"Sin publicar" en ML pese a tener stock real en BM. Investigación con
+datos reales (BinManager MCP, `inventory_by_sku`, `okf_get`) antes de
+tocar código:
+
+1. **Confirmado real y corregido**: el gap scan de ML (`_nightly_gap_scan_loop`,
+   `app/api/lanzar.py`) corría 1x/día (3am hora México) — un SKU con stock
+   nuevo en BM podía tardar hasta 24h en aparecer como candidato a lanzar.
+   Confirmado en vivo: SNVC000743 apareció de inmediato al forzar
+   "Escanear ahora" manual. Cambiado a cada 3h (acordado con Jovan).
+
+2. **Hallazgo descartado tras investigar más a fondo (documentado para no
+   repetir la duda)**: inicialmente sospeché que `ConfColumns_Conditions_Excel`
+   (fuente de stock del gap scan) subestimaba el stock real al no sumar
+   bien varias condiciones/almacenes — un análisis de 40 SKUs mostró 35%
+   con "discrepancia". Consultando la documentación oficial de BinManager
+   (`concepts/inventory-states`, `concepts/inventory-conditions` vía OKF)
+   se confirmó que el análisis estaba mal planteado: `Available` (campo
+   crudo por ubicación) **no es lo mismo que "vendible"** — condiciones
+   como `PNP`/`DMT` están explícitamente marcadas "no vendible como
+   producto terminado" (estados técnicos/reparación), e `ICD` es vendible
+   pero NO en línea (solo B2B). El endpoint actual y `get_bulk_stock()`
+   (el mecanismo ya confiable del resto de la app) coinciden en el mismo
+   número — ninguno de los dos subestima, mi comparación inicial sumaba
+   unidades que BM ya excluye correctamente. **No se tocó la fórmula de
+   stock** — habría sido un cambio real hacia PEOR (inflar el stock
+   mostrado con unidades no vendibles).
+
+3. **De paso**: Amazon ya corría su gap scan cada 6h (no 1x/día como
+   pensaba al inicio) — encontré una función muerta (`_next_8pm_mexico_secs()`,
+   nunca llamada) y un docstring desactualizado en `amazon_listing_sync.py`
+   que decían "1x/día a las 8pm" cuando la lógica real ya era por intervalo
+   transcurrido. Eliminada la función muerta, corregidos los docstrings,
+   y bajado el intervalo de Amazon de 6h a 3h para igualar el ritmo con ML.
+
+Verificado: ambos módulos importan limpio, servidor local arranca sin
+errores nuevos.
+
+---
+
 ## 2026-08-13 (cont. 12) — FEAT: reversa de deuda de proveedor en cancelaciones + alerta temprana de reputación
 
 Cierra los 2 hallazgos restantes de "otros hallazgos" (cont. 3), con

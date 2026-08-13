@@ -925,19 +925,21 @@ async def _run_gap_scan(user_id: str | None = None):
                 await db.commit()
 
 
+_GAP_SCAN_INTERVAL_HOURS = 3
+
+
 async def _nightly_gap_scan_loop():
-    """Runs nightly at 3am Mexico time (UTC-6 = 9am UTC). Solo corre en horario nocturno."""
+    """FIX 2026-08-13: antes corría 1x/día (3am hora México) -- un SKU que
+    recibía stock nuevo en BM podía tardar hasta 24h en aparecer como
+    candidato a lanzar en "Sin publicar" (confirmado con SNVC000743, Jovan).
+    Ahora corre cada 3h -- mismo ritmo acordado con Jovan ("es perfecto ese
+    ritmo") y ya alineado con el lado Amazon (ver amazon_listing_sync.py
+    _GAP_SCAN_INTERVAL). Nombre de la función se conserva por compatibilidad
+    con el import en main.py, ya no es estrictamente "nocturno"."""
+    await asyncio.sleep(300)  # 5 min al arrancar -- no competir con el prewarm inicial
     while True:
-        now_utc = datetime.now(timezone.utc)
-        # Target: 9:00 UTC = 3:00 AM Mexico City (CST)
-        next_run = now_utc.replace(hour=9, minute=0, second=0, microsecond=0)
-        if now_utc >= next_run:
-            from datetime import timedelta as _td
-            next_run = next_run + _td(days=1)
-        wait_secs = (next_run - now_utc).total_seconds()
-        logger.info(f"BM gap scan: próximo scan en {wait_secs/3600:.1f}h")
-        await asyncio.sleep(wait_secs)
         asyncio.create_task(_run_gap_scan())
+        await asyncio.sleep(_GAP_SCAN_INTERVAL_HOURS * 3600)
 
 
 def start_gap_scan_loop():
