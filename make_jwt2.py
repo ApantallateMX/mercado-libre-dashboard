@@ -7,7 +7,10 @@ import hashlib, hmac, base64, json, time, os, sys
 # SI tenia "sub" y por casualidad coincidia con el codigo viejo (tambien
 # roto). Ahora simula una sesion real para que las pruebas locales detecten
 # este tipo de bug en vez de esconderlo.
-key = os.getenv("SECRET_KEY") or "meli-dashboard-prod-2026-apantallate"
+#
+# FIX 2026-08-13: usa la MISMA SECRET_KEY resuelta por app.config (antes
+# tenía su propio fallback hardcodeado, tracked en el repo público).
+from app.config import SECRET_KEY as key
 username = sys.argv[1] if len(sys.argv) > 1 else "admin"
 payload = {
     "uid": 1, "username": username, "dn": username, "role": "admin",

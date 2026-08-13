@@ -20,14 +20,32 @@ MELI_TOKEN_URL = "https://api.mercadolibre.com/oauth/token"
 MELI_API_URL = "https://api.mercadolibre.com"
 
 # App Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "cambiar-esta-clave-secreta-en-produccion")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "tokens.db")
-APP_PIN = os.getenv("APP_PIN", "8741")
+# Rotado 2026-08-13: el default "8741" era literal en el repo público Y era
+# el valor REAL configurado en Railway — protegía endpoints que devuelven el
+# refresh_token completo de Amazon (auth.py:amazon_export_token,
+# system_health.py:amazon_token_full). Exposición de credencial viva, no solo
+# de un endpoint de diagnóstico. Ya no hay UI que pida un PIN corto tecleado
+# (pin.html no está referenciado en ninguna ruta) — puede ser un secreto largo.
+APP_PIN = os.getenv("APP_PIN", "pin_ed1853c60fb51607c88cdee199a7360505cd9eab9aee076d")
 
 # Railway inyecta esta variable automáticamente en todo deploy — permite
 # distinguir prod (HTTPS real, cookies deben ir secure=True) de desarrollo
 # local (HTTP en 127.0.0.1, secure=True rompería el login) sin config manual.
 IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT"))
+
+# SECRET_KEY firma las sesiones del dashboard (user_store.py) y el state de
+# OAuth (auth.py) — única fuente de verdad, antes había 3 fallbacks distintos
+# hardcodeados en config.py/user_store.py/make_jwt2.py (uno de ellos, en
+# make_jwt2.py, tracked en el repo público). En producción (Railway) es
+# obligatoria — sin fallback, para no firmar sesiones reales con una clave
+# adivinable. En local, si no está en .env, se genera una nueva cada
+# arranque (las sesiones no sobreviven un reinicio, aceptable en dev).
+if IS_PRODUCTION:
+    SECRET_KEY = os.environ["SECRET_KEY"]
+else:
+    import secrets as _secrets_cfg
+    SECRET_KEY = os.getenv("SECRET_KEY") or _secrets_cfg.token_hex(32)
 
 # Seed tokens for auto-recovery on deploy (Railway ephemeral storage)
 # Slot 1 usa MELI_USER_ID / MELI_REFRESH_TOKEN (backwards compat)

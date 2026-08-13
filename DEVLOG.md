@@ -7,6 +7,42 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 3) — SEGURIDAD CRÍTICA: APP_PIN protegía el refresh_token real de Amazon con el mismo valor hardcodeado en el repo público
+
+Mientras unificaba `SECRET_KEY` encontré algo más grave que el DIAG_TOKEN:
+`APP_PIN` (default hardcodeado `"8741"` en `app/config.py`, repo público)
+protege `/auth/amazon/export-token` y `/api/system-health/amazon-token-full`
+— endpoints que devuelven el **`refresh_token` real de Amazon (VECKTOR
+IMPORTS)**, una credencial viva con acceso a SP-API, no un endpoint de
+diagnóstico interno. Confirmé contra la API de Railway que el valor real
+configurado en producción era **exactamente el mismo `"8741"`** que el
+default impreso en GitHub — cualquiera podía pedir
+`https://apantallatemx.up.railway.app/auth/amazon/export-token?pin=8741`
+y recibir el refresh_token completo.
+
+Confirmé que no hay ninguna UI que pida este PIN tecleado a mano
+(`pin.html` existe pero no está referenciado por ninguna ruta — vestigial)
+así que no hay que mantenerlo corto/numérico. Rotado a un secreto largo
+random, seteado en Railway vía API, `.env`/`.env.production` actualizados.
+Verificado en vivo: PIN nuevo 200, PIN viejo (`8741`) 401.
+
+De paso: unifiqué las 3 fórmulas distintas de fallback de `SECRET_KEY`
+(`config.py`, `user_store.py`, `make_jwt2.py` — este último SÍ estaba
+tracked en git con su propio literal hardcodeado) en una sola fuente de
+verdad en `app/config.py`. En producción (`IS_PRODUCTION=True` vía
+`RAILWAY_ENVIRONMENT`) ahora es obligatorio — sin fallback, para nunca
+firmar sesiones reales con una clave adivinable si algún día se borra la
+variable de Railway por error. Confirmé que el `SECRET_KEY` real en
+Railway ya era un valor random fuerte (no el literal expuesto) — no hubo
+compromiso activo de sesiones, solo el riesgo de "si un día falta la
+variable, cae a algo débil". `.env.production` local también corregido
+(tenía un valor desincronizado de Railway, solo afectaba pruebas locales).
+
+Verificado en vivo tras cada cambio (servidor local): login real
+(`/login/verify`) sigue firmando/verificando bien con la clave unificada.
+
+---
+
 ## 2026-08-13 (cont. 2) — SEGURIDAD: DIAG_TOKEN rotado + bypass real de env var en 22 endpoints + cookies secure
 
 De la auditoría de seguridad del 2026-08-12: el token que abre ~60

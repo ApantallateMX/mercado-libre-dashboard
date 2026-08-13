@@ -17,14 +17,7 @@ import os
 import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional
-from app.config import DATABASE_PATH
-
-# JWT signing key — stable across container restarts if set as Railway env var.
-# If not set, derive a deterministic fallback from DB path so at least all
-# processes on the same host share the same key.
-_SECRET_KEY = os.getenv("SECRET_KEY") or (
-    hashlib.sha256(f"apantallate-dash:{DATABASE_PATH}".encode()).hexdigest()
-)
+from app.config import DATABASE_PATH, SECRET_KEY as _SECRET_KEY
 _SESSION_DAYS = 30
 
 
