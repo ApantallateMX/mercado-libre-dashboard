@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 8) — FEAT: precio de lista sugerido (recuperación real 80%/60% después de deal 20%) + fix "Optimizar Todo" poco claro
+
+**"Optimizar Todo" parecía atorado**: Jovan reportó que el botón se
+quedaba en "Optimizando..." sin entender qué hacía. Son 3 pasos
+secuenciales (título → descripción → atributos), cada uno con búsqueda
+web real (agregada hoy), 20-40s en total. Agregado: tooltip explicando
+qué hace, texto de progreso por paso ("1/3 Generando título...", "2/3
+Buscando info y generando descripción...", "3/3 Rellenando atributos..."),
+y `try/finally` para garantizar que el botón siempre se reactive aunque
+algún paso falle.
+
+**Precio de lista sugerido**: Jovan pidió calcular el precio de LISTA
+para TVs de forma que, si se le pone un deal del 20% de descuento
+después, el neto siga recuperando el 80% del retail real (después de fee
+ML + retenciones fiscales 9.05% + envío + 7% comisión de socio) — 60%
+para las demás categorías, mismas condiciones.
+
+- `_suggest_list_price()` (`app/api/items.py`) — búsqueda binaria (no
+  álgebra directa porque `_ml_fee()` es escalonado por tramo de precio,
+  pero SIEMPRE baja al subir el precio, nunca sube — converge sin
+  problema) que encuentra el precio de lista tal que, tras el descuento
+  del 20%, el % de recuperación real quede exacto en la meta (80%/60%
+  según si el SKU empieza con SNTV). Reusa exactamente la misma fórmula
+  de neto que `_calc_margins()` (fee escalonado + 9.05% retenciones +
+  envío + 7% socio) — mismo criterio en todo el sistema.
+- `token_store.get_bm_retail_ph(sku)` — nuevo helper puntual (lee
+  `bm_sku_master.retail_ph`, ya sincronizado, sin llamada nueva a BM).
+- `GET /api/items/{item_id}/suggested-price?sku=X` — nuevo endpoint.
+- Botón "💰 Sugerir precio (recuperación real)" en el modal de edición,
+  junto al campo de precio — muestra el precio sugerido, el precio con
+  deal aplicado, y el % de recuperación real, con un enlace "Usar este
+  precio" para aplicarlo directo al campo (sin guardar automático, el
+  usuario confirma con el botón "Guardar" de siempre).
+
+Verificado: matemática aislada converge exacto a 80.0%/60.0% en 3 casos
+(TV retail bajo, categoría normal, TV retail alto); endpoint HTTP real
+con 2 SKUs reales de BM (SNTV007716 TV, SHIL000030 categoría normal)
+confirma el mismo resultado con RetailPH y FX reales.
+
+---
+
 ## 2026-08-14 (cont. 7) — FIX: unificación de los 2 Quality Score + consistencia entre campos generados por IA
 
 Jovan pidió resolver los 2 pendientes que quedaron señalados (no solo

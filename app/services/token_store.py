@@ -1768,6 +1768,18 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     return len(rows)
 
 
+async def get_bm_retail_ph(sku: str) -> float | None:
+    """RetailPH (USD) de un solo SKU desde bm_sku_master (ya sincronizado,
+    sin llamada a BM) -- usado por /api/items/{id}/suggested-price (2026-08-14,
+    pedido por Jovan: precio de lista sugerido para recuperar 80%/60%)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute("SELECT retail_ph FROM bm_sku_master WHERE sku = ?", (sku,))
+        row = await cur.fetchone()
+    if not row or not row[0]:
+        return None
+    return float(row[0])
+
+
 async def get_bm_catalog_all() -> list[dict]:
     """Lee el maestro bm_sku_master (título/retail/costo). Usado al arrancar
     para popular cache en memoria."""

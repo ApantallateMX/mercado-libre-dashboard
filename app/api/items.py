@@ -1110,3 +1110,89 @@ def _classify_score(score: int) -> str:
     elif score <= 70:
         return "necesita_trabajo"
     return "bueno"
+
+
+def _suggest_list_price(retail_mxn: float, is_tv: bool, deal_discount_pct: float = 0.20,
+                         shipping_est: float | None = None) -> dict | None:
+    """Precio de LISTA sugerido -- pedido explicito de Jovan 2026-08-14:
+    "para televisores recuperando el 80% como minimo sumandole un 20% que
+    serian los deals... para las otras categorias 60%... con las mismas
+    condiciones del 20% extra". Es decir: el precio de LISTA debe quedar
+    lo bastante arriba para que, SI se le aplica despues un deal de 20% de
+    descuento, el neto resultante (mismo calculo que _calc_margins: fee ML
+    escalonado + retenciones fiscales 9.05% + envio + 7% comision de socio)
+    siga recuperando el 80% (TVs, SKU empieza con SNTV) o 60% (todo lo
+    demas) del retail real.
+
+    Busqueda binaria en vez de despejar algebraicamente porque _ml_fee()
+    es escalonado por tramo de precio -- converge sin problema porque el
+    fee % NUNCA sube al subir el precio (167-175: 18%->16%->14%->12%),
+    asi que recup% siempre crece con el precio de lista, sin zonas planas
+    ni saltos hacia atras.
+    """
+    if retail_mxn <= 0:
+        return None
+    target_pct = _main_module._RECOVERY_TARGET_TV if is_tv else _main_module._RECOVERY_TARGET_OTHER
+    if shipping_est is None:
+        if retail_mxn >= 5000:
+            shipping_est = 400
+        elif retail_mxn >= 2500:
+            shipping_est = 250
+        elif retail_mxn >= 1000:
+            shipping_est = 150
+        else:
+            shipping_est = 100
+
+    def _recup_pct_at(list_price: float) -> float:
+        sale_price = list_price * (1 - deal_discount_pct)
+        fee_pct = _main_module._ml_fee(sale_price)
+        net_ml = sale_price * (1 - fee_pct - 0.0905) - shipping_est
+        neto = net_ml * (1 - _main_module._PARTNER_COMMISSION_PCT)
+        return (neto / retail_mxn) * 100
+
+    lo, hi = retail_mxn * 0.3, retail_mxn * 25
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        if _recup_pct_at(mid) < target_pct:
+            lo = mid
+        else:
+            hi = mid
+    suggested = round(hi, 2)
+    sale_price_after_deal = round(suggested * (1 - deal_discount_pct), 2)
+    return {
+        "suggested_list_price": suggested,
+        "sale_price_after_deal": sale_price_after_deal,
+        "deal_discount_pct": deal_discount_pct * 100,
+        "target_recovery_pct": target_pct,
+        "actual_recovery_pct_after_deal": round(_recup_pct_at(suggested), 1),
+        "retail_mxn": round(retail_mxn, 2),
+        "shipping_est_mxn": shipping_est,
+        "is_tv": is_tv,
+    }
+
+
+@router.get("/{item_id}/suggested-price")
+async def get_suggested_price(item_id: str, sku: str = Query(..., description="SKU BM del item")):
+    """Precio de lista sugerido para que, tras un deal del 20%, se siga
+    recuperando el 80% (TVs) / 60% (otras categorias) del retail real.
+    Ver _suggest_list_price() para el detalle del calculo."""
+    from app.services.sku_utils import normalize_to_bm_sku
+    base_sku = normalize_to_bm_sku(sku)
+    if not base_sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+
+    retail_usd = await _token_store.get_bm_retail_ph(base_sku)
+    if not retail_usd:
+        return JSONResponse({"error": f"Sin RetailPH en BinManager para {base_sku}"}, status_code=404)
+
+    fx = _main_module._manual_fx_rate if _main_module._manual_fx_rate > 0 else _main_module._last_fx_rate
+    retail_mxn = retail_usd * fx
+    is_tv = base_sku.upper().startswith("SNTV")
+
+    result = _suggest_list_price(retail_mxn, is_tv)
+    if not result:
+        return JSONResponse({"error": "No se pudo calcular (retail invalido)"}, status_code=400)
+    result["sku"] = base_sku
+    result["retail_usd"] = round(retail_usd, 2)
+    result["fx_rate"] = round(fx, 4)
+    return result

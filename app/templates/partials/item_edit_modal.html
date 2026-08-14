@@ -52,6 +52,7 @@
             {% set has_issues = breakdown | selectattr("ok", "equalto", false) | list %}
             {% if has_issues %}
             <button onclick="editModalOptimizeAll('{{ item.id }}')"
+                    title="Genera con IA, en orden, lo que le falte a esta publicación: título → descripción (con búsqueda web real) → atributos. Tarda 20-40s porque son 3 pasos seguidos, cada uno investigando el producto real."
                     class="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1">
                 ⚡ Optimizar Todo
             </button>
@@ -385,6 +386,18 @@
                 <span id="price-hint" class="text-[10px] text-green-600">{% if item.price %} ${{ "{:,.2f}".format(item.price) }}{% endif %}</span>
             </div>
             <span id="msg-price" class="text-xs"></span>
+            {% if seller_sku %}
+            <!-- 2026-08-14: precio de lista sugerido para recuperar 80% (TVs)
+                 / 60% (otras categorias) del retail real DESPUES de un deal
+                 de 20% de descuento + fees + envio + comision de socio --
+                 pedido explicito de Jovan. -->
+            <button id="btn-suggest-price" onclick="editModalSuggestPrice('{{ seller_sku }}')"
+                    title="Calcula el precio de lista para que, si le pones un deal de 20%, sigas recuperando el 80% (TVs) o 60% (otras categorias) del retail real después de fees, envío y comisión de socio."
+                    class="mt-1.5 text-[10px] px-2 py-1 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded font-semibold transition">
+                💰 Sugerir precio (recuperación real)
+            </button>
+            <p id="suggest-price-result" class="text-[10px] mt-1 hidden"></p>
+            {% endif %}
         </div>
 
         <!-- Stock -->
@@ -760,6 +773,36 @@ function _editGetPhotoUrls() {
     return urls.slice(0, 4);
 }
 
+// ─── Precio sugerido (recuperación real 80%/60% + deal 20%) ───────────
+window.editModalSuggestPrice = async function(sku) {
+    var btn = document.getElementById('btn-suggest-price');
+    var resultEl = document.getElementById('suggest-price-result');
+    btn.disabled = true; btn.textContent = 'Calculando...';
+    resultEl.classList.remove('hidden');
+    resultEl.className = 'text-[10px] mt-1 text-gray-400';
+    resultEl.textContent = 'Consultando retail real en BinManager...';
+    try {
+        var resp = await fetch('/api/items/{{ item.id }}/suggested-price?sku=' + encodeURIComponent(sku));
+        var data = await resp.json();
+        if (data.error) {
+            resultEl.className = 'text-[10px] mt-1 text-red-500';
+            resultEl.textContent = data.error;
+        } else {
+            var price = data.suggested_list_price;
+            resultEl.className = 'text-[10px] mt-1 text-emerald-700';
+            resultEl.innerHTML =
+                'Sugerido: <b>$' + price.toLocaleString('es-MX', {minimumFractionDigits: 2}) + '</b>' +
+                ' (con deal 20% → $' + data.sale_price_after_deal.toLocaleString('es-MX', {minimumFractionDigits: 2}) + ')' +
+                ' — recupera ' + data.actual_recovery_pct_after_deal + '% de retail ($' + data.retail_mxn.toLocaleString('es-MX') + ' MXN, meta ' + data.target_recovery_pct + '%)' +
+                ' <button onclick="document.getElementById(\'edit-price\').value=' + price + '; checkModified(document.getElementById(\'edit-price\')); document.getElementById(\'price-hint\').textContent=\'$' + price.toLocaleString('es-MX', {minimumFractionDigits: 2}) + '\'; document.getElementById(\'price-hint\').className=\'text-[10px] text-green-600\';" class="underline font-semibold ml-1">Usar este precio</button>';
+        }
+    } catch(e) {
+        resultEl.className = 'text-[10px] mt-1 text-red-500';
+        resultEl.textContent = 'Error: ' + e.message;
+    }
+    btn.disabled = false; btn.textContent = '💰 Sugerir precio (recuperación real)';
+};
+
 // Abre el modal global de Higgsfield (definido en base.html/higgsfield_modal.html)
 // con el titulo/foto/sku de ESTE listing -- reusa el modal tal cual, no lo reimplementa.
 window.editModalOpenHiggsfield = function(sku) {
@@ -1074,18 +1117,28 @@ window.editModalGenVideo = async function(itemId) {
 };
 
 // ─── Optimizar Todo ─────────────────────────────────────────────
+// FIX 2026-08-14: Jovan reporto que se quedaba en "Optimizando..." sin
+// saber si estaba trabajando o atorado -- son 3 pasos seguidos, cada uno
+// con busqueda web real (agregada hoy mismo), 20-40s en total. Ahora
+// muestra en que paso va en vez de un texto estatico.
 window.editModalOptimizeAll = async function(itemId) {
     var btn = document.querySelector('[onclick*="editModalOptimizeAll"]');
-    if (btn) { btn.disabled = true; btn.textContent = '⚡ Optimizando...'; }
-    // 1. Title
-    await editModalAiTitle(true);
-    // 2. Description (small delay so title update is visible)
-    await new Promise(function(r) { setTimeout(r, 300); });
-    await editModalAiDesc();
-    // 3. Attributes
-    await new Promise(function(r) { setTimeout(r, 300); });
-    await editModalAiAttrs(itemId);
-    if (btn) { btn.disabled = false; btn.textContent = '⚡ Optimizar Todo'; }
+    if (btn) { btn.disabled = true; }
+    try {
+        // 1. Title
+        if (btn) btn.textContent = '⚡ 1/3 Generando título...';
+        await editModalAiTitle(true);
+        // 2. Description (small delay so title update is visible)
+        await new Promise(function(r) { setTimeout(r, 300); });
+        if (btn) btn.textContent = '⚡ 2/3 Buscando info y generando descripción...';
+        await editModalAiDesc();
+        // 3. Attributes
+        await new Promise(function(r) { setTimeout(r, 300); });
+        if (btn) btn.textContent = '⚡ 3/3 Rellenando atributos...';
+        await editModalAiAttrs(itemId);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '⚡ Optimizar Todo'; }
+    }
 };
 
 // ─── Video: Subir clip existente ─────────────────────────────────
