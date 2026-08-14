@@ -124,12 +124,13 @@
     </div>
 
     <!-- ══════════ TÍTULO ══════════ -->
+    {% set _title_locked = (item.get('sold_quantity', 0) or 0) > 0 or item.get('catalog_listing') %}
     <div>
         <div class="flex items-center justify-between mb-1">
             <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</label>
             <div class="flex items-center gap-2">
                 <span id="title-len" class="text-xs text-gray-400">{{ item.title|length }} chars</span>
-                {% if not item.family_name %}
+                {% if not _title_locked %}
                 <button id="btn-ai-title" onclick="editModalAiTitle()"
                         class="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1">
                     ✦ IA
@@ -137,29 +138,36 @@
                 {% endif %}
             </div>
         </div>
-        {% if item.family_name %}
-        <!-- FIX 2026-08-10: item de categoria catalogo -- ML define el titulo
-             automaticamente desde family_name + atributos de variacion, la
-             API rechaza cualquier PUT a title con "cannot modify the title
-             if the item has a family_name". Jovan pregunto si era por tener
-             una venta -- no, es esto. Se deshabilita el campo con explicacion
-             en vez de dejar que falle el guardado con el error crudo de ML. -->
+        {% if _title_locked %}
+        <!-- FIX 2026-08-14 (corrige el FIX 2026-08-10, que asumia mal que
+             family_name por si solo bloqueaba el titulo): el gate real,
+             documentado por ML ("Sync and modify listings"), es
+             sold_quantity > 0 -- una vez que el listing vendio, se bloquea
+             Titulo/Condicion/Buying mode, tenga o no family_name. Jovan lo
+             confirmo en vivo editando el titulo de un item con family_name
+             y 0 ventas sin problema. catalog_listing=true real es un
+             mecanismo aparte (sync permanente con ML, sin opt-out). -->
         <div class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 mb-2">
-            ⚠️ Este listing es de categoría catálogo — Mercado Libre genera el
-            título automáticamente desde <b>family_name</b> ("{{ item.family_name }}")
-            + los atributos de la variación. No se puede editar directo (la API
-            lo rechaza), y no depende de si el listing ya tuvo ventas.
+            {% if item.get('catalog_listing') %}
+            ⚠️ Este listing es de categoría catálogo real de Mercado Libre —
+            el título lo controla ML junto con el resto de la ficha, no se
+            puede editar directo desde aquí.
+            {% else %}
+            ⚠️ Este listing ya tiene ventas ({{ item.get('sold_quantity', 0) }}) —
+            Mercado Libre bloquea el título una vez que un listing vendió al
+            menos una unidad.
+            {% endif %}
         </div>
         {% endif %}
         <div id="ai-title-suggestions" class="hidden space-y-1 mb-2"></div>
         <div class="flex gap-2">
             <input type="text" id="edit-title" value="{{ item.title }}" maxlength="60"
-                   {% if item.family_name %}disabled{% endif %}
-                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field {{ 'bg-gray-100 text-gray-400' if item.family_name else '' }}"
+                   {% if _title_locked %}disabled{% endif %}
+                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field {{ 'bg-gray-100 text-gray-400' if _title_locked else '' }}"
                    data-field="title" data-original="{{ item.title }}"
                    oninput="checkModified(this); document.getElementById('title-len').textContent = this.value.length + ' chars'">
             <button id="btn-save-title"
-                    {% if item.family_name %}disabled{% endif %}
+                    {% if _title_locked %}disabled{% endif %}
                     onclick="saveField('{{ item.id }}', 'title', {title: document.getElementById('edit-title').value}, 'btn-save-title', 'msg-title')"
                     class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
         </div>
@@ -824,10 +832,12 @@ window.editModalAiTitle = async function(autoApply) {
     var btn = document.getElementById('btn-ai-title');
     var suggestionsDiv = document.getElementById('ai-title-suggestions');
     // FIX 2026-08-14: Jovan reporto "Optimizar Todo" atorado/sin hacer nada
-    // en listings de categoria CATALOGO -- ahi el titulo lo genera ML solo
-    // (via family_name) y el boton "btn-ai-title" ni siquiera existe en el
-    // HTML de arriba (esta detras de un condicional Jinja sobre family_name).
-    // Sin este guard, `btn.disabled=true` de la linea de abajo truena
+    // en listings con titulo bloqueado -- ahi el boton "btn-ai-title" ni
+    // siquiera existe en el HTML de arriba (esta detras de un condicional
+    // Jinja sobre sold_quantity>0 / catalog_listing, NO sobre family_name --
+    // family_name por si solo no bloquea nada, ver reference_ml_catalog_
+    // listing_vs_family_name.md). Sin este guard, `btn.disabled=true` de la
+    // linea de abajo truena
     // (btn=null) ANTES de entrar al try/catch -- la excepcion se escapa
     // completa y editModalOptimizeAll se detiene ahi, sin generar
     // descripcion ni atributos, sin ningun mensaje de error.
