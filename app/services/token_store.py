@@ -2106,16 +2106,6 @@ async def get_orders_without_stock(days: int = 14) -> dict:
     return {"days": days, "cutoff": cutoff, "rows": rows, "stock_snapshot_updated_at": last_snapshot}
 
 
-async def get_bm_sku_available_qty(sku: str) -> int | None:
-    """Lookup puntual de stock disponible para UN sku (usado por el webhook de
-    órdenes en tiempo real — volumen bajo, no necesita chunking). None = SKU
-    sin dato en el maestro (no confundir con 0 confirmado)."""
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        cur = await db.execute("SELECT available_qty FROM bm_sku_master WHERE sku = ?", (sku,))
-        row = await cur.fetchone()
-    return row[0] if row else None
-
-
 async def record_realtime_stock_alert(
     order_id: str, item_id: str, platform: str, account_id: str,
     sku: str, quantity: int, available_qty: int | None, order_date: str,

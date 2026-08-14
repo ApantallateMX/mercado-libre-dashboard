@@ -7,6 +7,63 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 — FIX: alerta "Sin Stock" (webhook ML) no detectaba órdenes realmente agotadas
+
+Jovan reportó (con captura de BinManager "Problem Items Today") 6 órdenes
+reales con problemas de fulfillment el mismo día que nuestra pantalla
+"Alertas de Stock" mostraba "0 alertas, todo con stock disponible".
+Investigación con datos reales (no supuestos) contra producción vía
+`/api/diag/order-lookup` y `/api/diag/ml-webhook-activity`:
+
+- Los 4 webhooks de ML SÍ llegaban y procesaban órdenes normalmente
+  (94/81/18/16 en 24h) — el hueco no era de recepción.
+- Causa raíz real: `_process_ml_order_webhook()` decidía si alertar
+  leyendo `bm_sku_master.available_qty` — una tabla donde solo 1,772 de
+  37,106 SKUs (4.8%) estaban realmente verificados/frescos en el ciclo
+  más reciente. El resto depende de una cola de reconciliación limitada
+  a 150 SKUs cada 120s (BM omite del archivo bulk cualquier SKU con
+  stock=0, así que un SKU recién agotado puede tardar horas — verificado
+  hasta 47h en 2 casos reales — en que su fila deje de mostrar el valor
+  viejo).
+- 2 de las 3 órdenes reales "Sin Stock" (SNTV007716, SNTV007884) SÍ
+  estaban ausentes del archivo bulk que ya tenemos en memoria en el
+  momento de verificar — la 3ra (SHIL000030-NEW) mostraba stock agregado
+  (4, sumando todas las condiciones) aunque BM falló al pickear
+  específicamente la condición NEW. Decisión de Jovan: ese 3er caso queda
+  fuera a propósito — es un límite operativo de BM (no poder sustituir
+  condición al pickear), no algo que debamos adivinar o replicar,
+  "no confío en la lógica de BM".
+- Se investigó también si BinManager expone directamente ese mismo
+  reporte "Problem Items Today" vía API/MCP para jalarlo tal cual en vez
+  de reconstruirlo — confirmado que NO existe tal endpoint, y que el log
+  crudo de BM ni siquiera distingue "Sin Stock" de "No Mapeado" (mismo
+  status interno `"Not Stock 0"` para ambos) — refuerza la decisión de no
+  depender de la categorización de BM.
+
+**Fix**: `_bm_bulk_available_qty()` (`app/main.py`, nueva función) busca
+el SKU directo en el archivo bulk que ya está en memoria
+(`_bm_bulk_gr_cache`/`_bm_bulk_all_cache`, el mismo que usa
+`_bm_master_sync_once_inner()`) — si no aparece, se trata como sin stock
+(por diseño de BM, "ausente del bulk" = "sin stock"). Cero llamadas
+nuevas a BM. Reemplaza el uso de `token_store.get_bm_sku_available_qty()`
+en la línea de decisión del webhook (única llamada a esa función en todo
+el proyecto — se eliminó por quedar muerta).
+
+De paso, bajado el intervalo del loop de prewarm (`_startup_prewarm`) de
+15 a 10 minutos (pedido explícito de Jovan) para que el archivo bulk se
+refresque más seguido — nota: ese loop hace mucho más que solo el bulk
+(sync de gaps, vigilancia Buy Box Amazon, backfill de zonas), así que se
+consideró pero se descartó separar el refresco del bulk en un loop
+independiente por ahora (mayor alcance de cambio sin necesidad real hoy).
+
+Verificado: test unitario aislado (mock de `_bm_bulk_gr_cache`/
+`_bm_bulk_all_cache` con los datos reales de producción) confirma
+ausente→None, presente→valor correcto, suma de variantes de condición, y
+cache vacío→None sin tronar. Servidor local levantado sin errores,
+`/partials/products-deals` responde 200, `/api/diag/sku` funcionando.
+
+---
+
 ## 2026-08-14 — OPERACION: remote `mi2` migrado de PAT a deploy key SSH (resuelve bloqueo del 2026-07-21)
 
 `git push mi2 main` fallaba desde el 21-jul por PAT expirado. Amir

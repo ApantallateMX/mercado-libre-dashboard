@@ -840,8 +840,11 @@ async def lifespan(app: FastAPI):
                 _cleanup_memory_caches()
             except Exception:
                 pass
-            # Retry rápido en fallo (2 min); ciclo normal 15 min (requests BM son secuenciales)
-            _sleep = 120 if _auto_fail_streak > 0 else 900
+            # Retry rápido en fallo (2 min); ciclo normal 10 min (bajado de 15 min
+            # 2026-08-14 -- pedido explícito de Jovan para refrescar más seguido
+            # el archivo bulk que ahora alimenta directo la alerta de "Sin Stock"
+            # del webhook, ver _bm_bulk_available_qty())
+            _sleep = 120 if _auto_fail_streak > 0 else 600
             await asyncio.sleep(_sleep)
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())
@@ -2155,6 +2158,33 @@ def _shipment_should_alert(shipment: dict) -> bool:
     )
 
 
+def _bm_bulk_available_qty(sku: str) -> int | None:
+    """Busca `sku` (ya normalizado a base BM) en el archivo bulk de BM que ya
+    tenemos en memoria (mismo _bm_bulk_gr_cache/_bm_bulk_all_cache que usa
+    _bm_master_sync_once_inner()). BM omite del bulk cualquier SKU con
+    stock=0 -- por diseño, "no aparece en el bulk" significa "sin stock",
+    no "no verificado todavía". Por eso esta función retorna None cuando el
+    SKU no aparece, y el caller trata None como 0 para efectos de alerta --
+    en vez de leer bm_sku_master, que puede tener un valor de una
+    reconciliación de hace horas (causa real de "Sin Stock" detectado en BM
+    sin alerta nuestra, ver DEVLOG 2026-08-14). Decisión de Jovan: no
+    intentar imitar la lógica de fulfillment de BM (condición específica
+    agotada dentro de un total agregado con stock) -- ese caso queda fuera
+    a propósito, es un límite operativo de BM, no algo que debamos adivinar."""
+    cache = _bm_bulk_all_cache if _bm_conditions_for_sku(sku) == "GRA,GRB,GRC,ICB,ICC,NEW" else _bm_bulk_gr_cache
+    if not cache:
+        return None
+    rows = cache[1] or []
+    sku_u = sku.upper()
+    exact = next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku_u), None)
+    if exact is not None:
+        return int(exact.get("AvailableQTY") or 0)
+    base_matches = [r for r in rows if _extract_base_sku((r.get("SKU") or "").upper().strip()) == sku_u]
+    if base_matches:
+        return sum(int(r.get("AvailableQTY") or 0) for r in base_matches)
+    return None
+
+
 async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
     """Procesa una notificación de ML — acepta tanto el topic "orders_v2"
     (resource=/orders/{id}) como "shipments" (resource=/shipments/{id}).
@@ -2231,13 +2261,13 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
                     continue
                 sku = normalize_to_bm_sku(sku_raw)
                 quantity = int(oi.get("quantity") or 1)
-                avail = await token_store.get_bm_sku_available_qty(sku)
+                avail = _bm_bulk_available_qty(sku)
                 if avail is None or avail <= 0:
                     await token_store.record_realtime_stock_alert(
                         order_id=str(order.get("id", "")),
                         item_id=str(item_info.get("id", "")),
                         platform="ml", account_id=user_id, sku=sku,
-                        quantity=quantity, available_qty=avail, order_date=order_date,
+                        quantity=quantity, available_qty=(avail or 0), order_date=order_date,
                         shipping_id=str(shipping_id),
                     )
         else:
