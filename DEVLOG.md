@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 3) — FIX: barrido de 24h no alcanzaba órdenes atoradas varios días
+
+Jovan preguntó por qué 2 órdenes reales (SNTV007716-GRB, order_date
+2026-08-11) seguían sin alerta pese al fix de reconciliación. Causa: esas
+órdenes ya tenían ~68h de antigüedad — fuera de la ventana de 24h del
+loop rápido, porque nunca recibieron una nueva notificación de ML que las
+hiciera re-entrar por el webhook.
+
+Barrido manual de verificación (`hours=96`, 846 órdenes, 0 errores)
+confirmó ambas órdenes + una tercera de 4 días atrás (SNTV007618) nunca
+antes vista. Como una pasada de ese tamaño tarda varios minutos, no es
+viable repetirla cada 5 min.
+
+Fix: extraída `_run_stock_reconcile_pass(hours)` (compartida por ambos
+loops + el diag manual). Nuevo `_realtime_stock_reconcile_wide_loop()` —
+barrido de 7 días cada 2h, además del loop rápido de 24h/5min que ya
+existía. Cubre el caso de una orden atorada por días sin sobrecargar el
+ciclo frecuente.
+
+---
+
 ## 2026-08-14 (cont. 2) — FIX: aviso "Ya hay stock — reactivar" quedaba obsoleto para siempre
 
 Jovan reportó (captura real) que el aviso de reactivación seguía

@@ -859,6 +859,7 @@ async def lifespan(app: FastAPI):
     # Red de seguridad de "Alertas de Stock" (2026-08-14) — re-evalúa órdenes
     # pagadas recientes que el webhook ya no vuelve a tocar por su cuenta.
     asyncio.create_task(_realtime_stock_reconcile_loop())
+    asyncio.create_task(_realtime_stock_reconcile_wide_loop())
 
     # ── Sync diario de catálogo BM (3am Monterrey CDT = 09:00 UTC) ──
     # Descarga retail_ph, brand, model, title para todos los SKUs del bulk cache.
@@ -2298,6 +2299,36 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
             await client.close()
 
 
+async def _run_stock_reconcile_pass(hours: int) -> tuple[int, list]:
+    """Una pasada de reconciliación: re-evalúa órdenes ML pagadas dentro de
+    la ventana dada con la lógica ya corregida (_evaluate_order_stock_alert).
+    Compartida por los 2 loops de fondo (rápido/24h y amplio/7d) y por el
+    diag manual /api/diag/trigger-stock-reconcile."""
+    candidates = await token_store.get_recent_paid_ml_orders(hours=hours)
+    sem = asyncio.Semaphore(3)
+    clients_cache: dict = {}
+    errors: list = []
+
+    async def _check(row):
+        uid = row["account_id"]
+        async with sem:
+            try:
+                client = clients_cache.get(uid)
+                if client is None:
+                    client = await get_meli_client(user_id=uid)
+                    if not client:
+                        return
+                    clients_cache[uid] = client
+                await _evaluate_order_stock_alert(row["order_id"], uid, client)
+            except Exception as _e:
+                errors.append({"order_id": row["order_id"], "error": str(_e)[:200]})
+
+    await asyncio.gather(*[_check(r) for r in candidates], return_exceptions=True)
+    for _c in clients_cache.values():
+        await _c.close()
+    return len(candidates), errors
+
+
 async def _realtime_stock_reconcile_loop():
     """Red de seguridad del webhook de 'Sin Stock' -- FIX 2026-08-14. El
     webhook solo evalúa una orden cuando ML manda una notificación de ESA
@@ -2312,31 +2343,28 @@ async def _realtime_stock_reconcile_loop():
     await asyncio.sleep(180)  # dejar que el bulk cache tenga su primer ciclo
     while True:
         try:
-            candidates = await token_store.get_recent_paid_ml_orders(hours=24)
-            sem = asyncio.Semaphore(3)
-            clients_cache: dict = {}
-
-            async def _check(row):
-                uid = row["account_id"]
-                async with sem:
-                    try:
-                        client = clients_cache.get(uid)
-                        if client is None:
-                            client = await get_meli_client(user_id=uid)
-                            if not client:
-                                return
-                            clients_cache[uid] = client
-                        await _evaluate_order_stock_alert(row["order_id"], uid, client)
-                    except Exception as _e:
-                        logger.warning(f"[STOCK-RECONCILE] Error orden {row['order_id']}: {_e}")
-
-            await asyncio.gather(*[_check(r) for r in candidates], return_exceptions=True)
-            for _c in clients_cache.values():
-                await _c.close()
-            logger.info(f"[STOCK-RECONCILE] Ciclo completo: {len(candidates)} órdenes re-evaluadas")
+            n, errors = await _run_stock_reconcile_pass(hours=24)
+            logger.info(f"[STOCK-RECONCILE] Ciclo rápido: {n} órdenes re-evaluadas ({len(errors)} errores)")
         except Exception as e:
-            logger.warning(f"[STOCK-RECONCILE] Error en ciclo: {e}")
+            logger.warning(f"[STOCK-RECONCILE] Error en ciclo rápido: {e}")
         await asyncio.sleep(300)  # cada 5 min
+
+
+async def _realtime_stock_reconcile_wide_loop():
+    """Barrido amplio (7 días) -- FIX 2026-08-14 (2): una orden que se queda
+    atorada varios DÍAS sin que ML reenvíe notificación (confirmado con 2
+    órdenes reales del 2026-08-11, seguían sin alerta 3 días después) nunca
+    entra a la ventana de 24h del loop rápido. Corre cada 2h en vez de cada
+    5 min -- 846 órdenes reales tardaron varios minutos en una pasada, muy
+    pesado para repetir cada 5 min."""
+    await asyncio.sleep(600)  # arrancar después del loop rápido
+    while True:
+        try:
+            n, errors = await _run_stock_reconcile_pass(hours=24 * 7)
+            logger.info(f"[STOCK-RECONCILE] Ciclo amplio (7d): {n} órdenes re-evaluadas ({len(errors)} errores)")
+        except Exception as e:
+            logger.warning(f"[STOCK-RECONCILE] Error en ciclo amplio: {e}")
+        await asyncio.sleep(2 * 3600)  # cada 2h
 
 
 @app.post("/webhooks/ml/orders")
@@ -18762,31 +18790,10 @@ async def diag_trigger_stock_reconcile(token: str = "", hours: int = 24):
     verificar el fix de 2026-08-14 sin esperar el ciclo de 5 min."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
-    candidates = await token_store.get_recent_paid_ml_orders(hours=hours)
-    sem = asyncio.Semaphore(3)
-    clients_cache: dict = {}
-    errors: list = []
-
-    async def _check(row):
-        uid = row["account_id"]
-        async with sem:
-            try:
-                client = clients_cache.get(uid)
-                if client is None:
-                    client = await get_meli_client(user_id=uid)
-                    if not client:
-                        return
-                    clients_cache[uid] = client
-                await _evaluate_order_stock_alert(row["order_id"], uid, client)
-            except Exception as _e:
-                errors.append({"order_id": row["order_id"], "error": str(_e)[:200]})
-
-    await asyncio.gather(*[_check(r) for r in candidates])
-    for _c in clients_cache.values():
-        await _c.close()
+    n, errors = await _run_stock_reconcile_pass(hours=hours)
     alerts_now = await token_store.get_realtime_stock_alerts(limit=100)
     return JSONResponse({
-        "candidates_checked": len(candidates),
+        "candidates_checked": n,
         "errors": errors,
         "current_alerts_count": len(alerts_now),
         "current_alerts": alerts_now,
