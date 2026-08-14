@@ -35,6 +35,29 @@ Campos que retorna: `TotalQty`, `Reserve`, `AvailableQTY`
 
 **Verificado:** SNTV001764 → TotalQty=215, Reserve=2, AvailableQTY=213 (con CONCEPTID=1+LOCATIONID=47,62,68)
 
+## ⚠️ ERROR REPETIDO A EVITAR — no sumes bins tú mismo y le llames "Available"
+
+**2026-08-13, dos veces el mismo día:** al usar tools tipo `inventory_by_sku`,
+`inventory_no_vendible` o cualquier desglose bin-por-bin (BinType, ubicación,
+condición) para investigar una posible discrepancia de stock, NO sumes
+manualmente las unidades que coinciden con una condición "vendible"
+(GRA/GRB/GRC/NEW) y reportes eso como "el Available que usa el dashboard".
+BM YA calcula y separa `Available` de `Not Sellable` como campos propios
+(confirmado con captura real de la UI Global Stock de BM: SNTV001764 mostró
+`Available 41` / `Reserve 2` / `Not Sellable 1,616` como 3 números ya
+netos, no una suma cruda por condición). Una suma manual de unidades
+por-bin-por-condición casi siempre da un número MUCHO más alto que el
+`Available` real, y reportar esa diferencia como "sobre-conteo del
+dashboard" es una falsa alarma — el dashboard usa `AvailableQTY` de
+`CONCEPTID=1` (ver arriba), que ya excluye lo no vendible.
+
+**Antes de reportar cualquier discrepancia de stock como bug real:**
+compara contra `AvailableQTY` (CONCEPTID=1) o contra la UI de BM
+(Global Stock: columnas Available/Reserve/Not Sellable), NUNCA contra
+una suma propia de unidades por condición ignorando BinType. Si no
+puedes consultar CONCEPTID=1 directamente, dilo explícitamente en el
+reporte en vez de usar tu propia suma como si fuera equivalente.
+
 ---
 
 ## Sistema y Acceso

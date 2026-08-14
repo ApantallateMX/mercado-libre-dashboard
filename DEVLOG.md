@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 — FEAT: Centro de notificaciones unificado (base.html)
+
+Consolida 3 banners globales sueltos (BM desactualizado, disco del servidor,
+salud del sistema) + la campana de sugerencias cruzadas ML en un solo
+dropdown accesible desde una campana en el nav — recomendado por el
+especialista UX en la auditoría de lógica de negocio del 2026-08-08,
+aprobado por Jovan tras ver un mockup (Artifact) antes de tocar código.
+
+- Nuevo agregador compartido (`window._setSysAlert`/`_updateNotifBadge`/
+  `_notifCheckEmpty`) al inicio de `base.html` — cada fuente (BM, disco,
+  salud) sigue con su propio fetch/cadencia de siempre (sin cambios),
+  solo cambia dónde se pinta el resultado: en vez de su propio banner fijo,
+  ahora registra un item con severidad (crítico/advertencia) en el
+  agregador, que renderiza agrupado dentro del panel de la campana.
+- Campana movida fuera del bloque "solo ML" — ahora aparece en ML Y
+  Amazon (antes Amazon no tenía ninguna campana, solo los banners sueltos
+  que sí eran cross-platform). La sección "Sugerencias" del panel sigue
+  siendo ML-only (`{% if active_platform != "amz" %}`), con guards
+  `if (!_list) return;` en las funciones JS para que no truene en Amazon.
+- Badge de la campana ahora suma alertas de sistema + sugerencias
+  pendientes en un solo contador.
+- Eliminados los 3 divs de banner fijo (`#bm-stale-banner`,
+  `#disk-stale-banner`, `#global-health-banner`) — sin referencias muertas
+  en el resto del proyecto (verificado con grep).
+- El badge del tab "Salud" (nav superior) y la franja "Alertas de Stock"
+  del Dashboard NO se tocaron — quedan igual, fuera de esta consolidación
+  (así se acordó en el mockup).
+
+Verificado en 2 niveles porque no había navegador conectado en la sesión:
+(1) sintaxis Jinja + JS extraído validada con `node --check`; (2) prueba
+funcional real con jsdom simulando el DOM de las páginas ML y Amazon
+renderizadas en local — alertas de sistema se agrupan y cuentan bien,
+badge combina ambas fuentes correctamente, estado vacío se calcula sobre
+las 2 listas, acciones de sugerencias no truenan, y en Amazon (sin
+`#notif-list`) nada se rompe. Sin acceso a navegador real en esta sesión
+para una verificación visual — pendiente que Jovan le eche un ojo en vivo.
+
+---
+
 ## 2026-08-13 (cont. 15) — FEAT: reversa de deuda de proveedor por reembolso real (ML + Amazon), no solo por cancelación
 
 Cierra el pendiente #4 de "3 4 5": la deuda de proveedor (`supplier_debt_ledger`)

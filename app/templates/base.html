@@ -37,6 +37,64 @@
 {% if user %}
 {% set _sec = dashboard_user.allowed_sections if dashboard_user else [] %}
 
+<script>
+// ── Centro de notificaciones unificado ───────────────────────────────────────
+// Agrega en un solo dropdown lo que antes eran 3 banners globales sueltos
+// (BM desactualizado, disco, salud del sistema) + la campana de sugerencias
+// cruzadas ML. Cada fuente sigue con su propio fetch/cadencia de siempre —
+// esto solo unifica DÓNDE se pinta el resultado y el contador de la campana.
+// FIX 2026-08-14: consolidación aprobada por Jovan (mockup previo).
+window._sysAlerts = {};
+window._sysAlertCount = 0;
+window._suggPendingCount = 0;
+
+window._updateNotifBadge = function() {
+    var b = document.getElementById('notif-bell-badge');
+    if (!b) return;
+    var total = (window._sysAlertCount || 0) + (window._suggPendingCount || 0);
+    if (total > 0) { b.textContent = total > 9 ? '9+' : total; b.classList.remove('hidden'); }
+    else { b.classList.add('hidden'); }
+};
+
+window._notifCheckEmpty = function() {
+    var empty = document.getElementById('notif-empty');
+    if (!empty) return;
+    var sysBox = document.getElementById('notif-list-system');
+    var suggBox = document.getElementById('notif-list');
+    var sysEmpty = !sysBox || sysBox.innerHTML.trim() === '';
+    var suggEmpty = !suggBox || suggBox.innerHTML.trim() === '';
+    empty.classList.toggle('hidden', !(sysEmpty && suggEmpty));
+};
+
+window._setSysAlert = function(key, item) {
+    if (item) window._sysAlerts[key] = item; else delete window._sysAlerts[key];
+    var box = document.getElementById('notif-list-system');
+    if (!box) return;
+    var keys = Object.keys(window._sysAlerts);
+    var order = {critical: 0, warning: 1};
+    keys.sort(function(a, b) { return (order[window._sysAlerts[a].severity] || 9) - (order[window._sysAlerts[b].severity] || 9); });
+    var labels = {critical: 'Crítico', warning: 'Advertencia'};
+    var colors = {critical: '#ef4444', warning: '#f59e0b'};
+    var groups = {critical: [], warning: []};
+    keys.forEach(function(k) { groups[window._sysAlerts[k].severity].push(window._sysAlerts[k]); });
+    var html = '';
+    ['critical', 'warning'].forEach(function(sev) {
+        if (!groups[sev].length) return;
+        html += '<div class="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400 bg-gray-50">' + labels[sev] + '</div>';
+        groups[sev].forEach(function(it) {
+            html += '<div class="flex gap-2 px-3 py-2.5 hover:bg-gray-50 border-b border-gray-50">' +
+                '<div class="w-[3px] rounded flex-shrink-0" style="background:' + colors[sev] + '"></div>' +
+                '<div class="flex-1 min-w-0 text-xs text-gray-700 leading-snug">' + it.msg + '</div>' +
+                '</div>';
+        });
+    });
+    box.innerHTML = html;
+    window._sysAlertCount = keys.length;
+    window._updateNotifBadge();
+    window._notifCheckEmpty();
+};
+</script>
+
 {# ════════════════════════════════════════════════════════════════════════════
    NAV UNIFICADO — fondo amarillo para ML y Amazon
    Las pestañas (desktop + mobile) vienen de nav_tabs (ver _build_nav_tabs en
@@ -161,13 +219,12 @@
 
     function _updateCacheAge(s, running) {
         var ageEl = document.getElementById('bm-cache-age');
-        var banner = document.getElementById('bm-stale-banner');
         if (!ageEl) return;
         if (running) {
             ageEl.textContent = '↻';
             ageEl.style.color = '#3b82f6';
             ageEl.classList.remove('hidden');
-            if (banner) banner.classList.add('hidden');
+            window._setSysAlert('bm', null);
             return;
         }
         if (s == null) { ageEl.classList.add('hidden'); return; }
@@ -182,20 +239,17 @@
         } else {               // > 20 min → rojo
             ageEl.style.color = '#dc2626';
         }
-        if (banner) {
-            if (s > 1500) { // > 25 min → mostrar
-                var isOld = s > 1800;
-                banner.className = 'px-4 py-2 text-xs flex items-center justify-between gap-3 ' +
-                    (isOld ? 'bg-red-50 border-b border-red-200 text-red-700' : 'bg-yellow-50 border-b border-yellow-200 text-yellow-700');
-                var adminHint = _bmCanUpdate
-                    ? ' <button onclick="window._forceBmUpdate()" class="underline font-semibold ml-1">Actualizar ahora</button>'
-                    : ' Consulta a tu administrador.';
-                banner.innerHTML = '<span>⚠ Datos de inventario BM sin actualizar desde hace <strong>' + mins + ' minutos</strong>.' + adminHint + '</span>' +
-                    '<button onclick="document.getElementById(\'bm-stale-banner\').classList.add(\'hidden\')" class="text-xs opacity-50 hover:opacity-100 flex-shrink-0">✕</button>';
-                banner.classList.remove('hidden');
-            } else {
-                banner.classList.add('hidden');
-            }
+        if (s > 1500) { // > 25 min → alertar
+            var isOld = s > 1800;
+            var adminHint = _bmCanUpdate
+                ? ' <button onclick="window._forceBmUpdate()" class="underline font-semibold ml-1">Actualizar ahora</button>'
+                : ' Consulta a tu administrador.';
+            window._setSysAlert('bm', {
+                severity: isOld ? 'critical' : 'warning',
+                msg: '⚠ Datos de inventario BM sin actualizar desde hace <strong>' + mins + ' minutos</strong>.' + adminHint
+            });
+        } else {
+            window._setSysAlert('bm', null);
         }
     }
 
@@ -221,17 +275,15 @@
     // que algo truena (ya pasó 2 veces: fotos de reclamos, luego facturas).
     function _checkDiskUsage() {
         fetch('/api/system/disk-usage').then(function(r){ return r.json(); }).then(function(d){
-            var banner = document.getElementById('disk-stale-banner');
-            if (!banner || d.error || typeof d.pct_used !== 'number') return;
+            if (d.error || typeof d.pct_used !== 'number') { window._setSysAlert('disk', null); return; }
             if (d.pct_used >= 85) {
                 var isCritical = d.pct_used >= 95;
-                banner.className = 'px-4 py-2 text-xs flex items-center justify-between gap-3 ' +
-                    (isCritical ? 'bg-red-50 border-b border-red-200 text-red-700' : 'bg-yellow-50 border-b border-yellow-200 text-yellow-700');
-                banner.innerHTML = '<span>⚠ Disco del servidor al <strong>' + d.pct_used + '%</strong> (' + d.free_mb.toLocaleString('es-MX') + ' MB libres) — contacta al administrador antes de que se llene.</span>' +
-                    '<button onclick="document.getElementById(\'disk-stale-banner\').classList.add(\'hidden\')" class="text-xs opacity-50 hover:opacity-100 flex-shrink-0">✕</button>';
-                banner.classList.remove('hidden');
+                window._setSysAlert('disk', {
+                    severity: isCritical ? 'critical' : 'warning',
+                    msg: '⚠ Disco del servidor al <strong>' + d.pct_used + '%</strong> (' + d.free_mb.toLocaleString('es-MX') + ' MB libres) — contacta al administrador antes de que se llene.'
+                });
             } else {
-                banner.classList.add('hidden');
+                window._setSysAlert('disk', null);
             }
         }).catch(function(){});
     }
@@ -296,9 +348,10 @@
                   setInterval(loadFx, 300000);
                 })();
                 </script>
-                <!-- Campana de sugerencias cruzadas — solo ML -->
+                {% endif %}{# end FX widget, ML-only #}
+                <!-- Campana de notificaciones — ML + Amazon (unifica alertas de sistema + sugerencias cruzadas ML) -->
                 <div class="relative">
-                    <button onclick="window.toggleNotifPanel()" title="Sugerencias recibidas"
+                    <button onclick="window.toggleNotifPanel()" title="Notificaciones"
                             class="relative p-1.5 rounded-lg text-gray-700 hover:bg-yellow-300 transition">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -307,7 +360,6 @@
                         <span id="notif-bell-badge" class="hidden absolute -top-0.5 -right-0.5 bg-gray-800 text-white rounded-full flex items-center justify-center font-bold" style="font-size:9px;min-width:16px;height:16px;padding:0 3px"></span>
                     </button>
                 </div>
-                {% endif %}{# end ML-only widgets #}
 
                 <!-- Selector de cuentas (unificado ML + Amazon) -->
                 <div class="relative" id="account-menu-wrap">
@@ -523,33 +575,13 @@ document.addEventListener('click', function(e) {
 <!-- Notification Toast Container -->
 <div id="notif-container" class="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm z-50 flex flex-col gap-2"></div>
 
-<!-- Banner global de errores del sistema — aparece automáticamente en TODAS las páginas -->
-<div id="global-health-banner" class="hidden fixed bottom-0 left-0 right-0 z-40 shadow-lg" style="background:#1e293b;border-top:2px solid #ef4444">
-    <div class="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between gap-3">
-        <div class="flex items-center gap-2 min-w-0">
-            <svg class="w-4 h-4 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-            </svg>
-            <span id="global-health-msg" class="text-xs text-red-300 truncate">Error detectado en el sistema</span>
-        </div>
-        <div class="flex items-center gap-2 flex-shrink-0">
-            <button onclick="_globalHealthFix()" id="global-health-fix-btn"
-                    class="text-xs px-3 py-1 rounded font-semibold bg-red-500 text-white hover:bg-red-600 transition hidden">
-            </button>
-            <button onclick="document.getElementById('global-health-banner').classList.add('hidden')"
-                    class="text-gray-400 hover:text-white text-xs px-2">✕</button>
-        </div>
-    </div>
-</div>
+<!-- Alertas del sistema (DB, tokens, BinManager, Amazon, etc.) ahora viven en el
+     centro de notificaciones (campana) en vez de un banner fijo propio. -->
 <script>
 (function() {
     var _fixAction = null;
     function _checkGlobalHealth() {
         fetch('/api/system-health/status').then(function(r){ return r.json(); }).then(function(d) {
-            var banner = document.getElementById('global-health-banner');
-            var msg = document.getElementById('global-health-msg');
-            var fixBtn = document.getElementById('global-health-fix-btn');
-            if (!banner) return;
             if (d.overall === 'error') {
                 var failed = [];
                 var checks = d.checks || {};
@@ -566,21 +598,15 @@ document.addEventListener('click', function(e) {
                         }
                     }
                 }
-                if (msg) msg.textContent = failed.slice(0,2).join(' | ');
-                if (fixBtn) {
-                    if (_fixAction) { fixBtn.textContent = _fixAction.label; fixBtn.classList.remove('hidden'); }
-                    else { fixBtn.classList.add('hidden'); }
-                }
-                if (d.overall === 'error') {
-                    banner.style.borderTopColor = '#ef4444';
-                    banner.style.background = '#1e293b';
-                } else {
-                    banner.style.borderTopColor = '#f59e0b';
-                    banner.style.background = '#292524';
-                }
-                banner.classList.remove('hidden');
+                var btnHtml = _fixAction
+                    ? ' <button onclick="_globalHealthFix()" id="global-health-fix-btn" class="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 ml-1">' + _fixAction.label + '</button>'
+                    : '';
+                window._setSysAlert('health', {
+                    severity: 'critical',
+                    msg: '⚠ <span id="global-health-msg">' + failed.slice(0,2).join(' | ') + '</span>' + btnHtml
+                });
             } else {
-                banner.classList.add('hidden');
+                window._setSysAlert('health', null);
             }
         }).catch(function(){});
     }
@@ -625,19 +651,24 @@ document.addEventListener('click', function(e) {
 })();
 </script>
 
-<!-- Panel de sugerencias cruzadas -->
+<!-- Panel del centro de notificaciones (alertas de sistema + sugerencias cruzadas ML) -->
 {% if user %}
 <div id="notif-panel" class="hidden fixed right-0 z-50 bg-white shadow-2xl border-l border-gray-200 flex flex-col"
      style="top:56px;width:min(420px,100vw);max-height:calc(100vh - 56px)">
     <div class="flex items-center justify-between px-4 py-3 border-b bg-gray-50 flex-shrink-0">
         <div>
-            <div class="text-xs text-gray-400 font-medium uppercase tracking-wide">Sugerencias recibidas</div>
+            <div class="text-xs text-gray-400 font-medium uppercase tracking-wide">Notificaciones</div>
             <div class="text-sm font-semibold text-gray-800">{{ user.nickname }}</div>
         </div>
         <button onclick="window.toggleNotifPanel()" class="text-gray-400 hover:text-gray-700 text-xl font-bold ml-3">×</button>
     </div>
-    <div id="notif-list" class="flex-1 overflow-y-auto divide-y divide-gray-50"></div>
-    <div id="notif-empty" class="hidden flex-1 flex items-center justify-center text-sm text-gray-400 py-10">Sin sugerencias pendientes</div>
+    <div class="flex-1 overflow-y-auto">
+        <div id="notif-list-system"></div>
+        {% if active_platform != "amz" %}
+        <div id="notif-list" class="divide-y divide-gray-50"></div>
+        {% endif %}
+    </div>
+    <div id="notif-empty" class="hidden flex-1 flex items-center justify-center text-sm text-gray-400 py-10">Sin notificaciones</div>
 </div>
 <div id="notif-overlay" onclick="window.toggleNotifPanel()" class="hidden fixed inset-0 bg-black/10 z-40"></div>
 <script>
@@ -666,13 +697,13 @@ document.addEventListener('click', function(e) {
     }
 
     function _renderList(items) {
+        if (!_list) return;
         if (!items || items.length === 0) {
             _list.innerHTML = '';
-            _empty.classList.remove('hidden');
+            window._notifCheckEmpty();
             return;
         }
-        _empty.classList.add('hidden');
-        _list.innerHTML = items.map(function(s) {
+        _list.innerHTML = '<div class="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400 bg-gray-50">Sugerencias</div>' + items.map(function(s) {
             var aCls = _actionColors[s.action] || 'bg-gray-100 text-gray-500';
             var isPending = s.status === 'pending' || s.status === 'in_progress';
             return '<div class="p-3 ' + (isPending ? '' : 'opacity-60') + '">' +
@@ -695,9 +726,11 @@ document.addEventListener('click', function(e) {
                 '</div>' +
                 '</div>';
         }).join('');
+        window._notifCheckEmpty();
     }
 
     function _loadNotifs(showAll) {
+        if (!_list) return;
         var url = '/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + (showAll ? '&status=all' : '&status=pending');
         fetch(url).then(function(r){return r.json();}).then(function(data) {
             if (!showAll) {
@@ -713,12 +746,11 @@ document.addEventListener('click', function(e) {
     }
 
     function _refreshBadge() {
+        if (!_list) return;
         fetch('/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + '&status=pending')
             .then(function(r){return r.json();}).then(function(d) {
-                var n = (d||[]).length;
-                if (!_badge) return;
-                if (n > 0) { _badge.textContent = n > 9 ? '9+' : n; _badge.classList.remove('hidden'); }
-                else { _badge.classList.add('hidden'); }
+                window._suggPendingCount = (d||[]).length;
+                window._updateNotifBadge();
             }).catch(function(){});
     }
 
@@ -747,12 +779,6 @@ document.addEventListener('click', function(e) {
 {% endif %}
 
 {% endif %}{# end if user #}
-
-<!-- Banner global: caché BM desactualizado (mostrado/ocultado por JS) -->
-<div id="bm-stale-banner" class="hidden px-4 py-2 text-xs bg-yellow-50 border-b border-yellow-200 text-yellow-700"></div>
-
-<!-- Banner global: disco del volumen Railway cerca de llenarse -->
-<div id="disk-stale-banner" class="hidden px-4 py-2 text-xs bg-yellow-50 border-b border-yellow-200 text-yellow-700"></div>
 
 <!-- Modal global: confirmar cambio de precio Amazon (reemplaza prompt() nativo,
      que publicaba con el primer "Aceptar" sin mostrar antes/después) -->
