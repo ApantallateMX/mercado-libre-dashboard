@@ -162,7 +162,7 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     return system, user, 800
 
 
-def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title, days_open, issues, suggestions, bm_product=None):
+def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title, days_open, issues, suggestions, bm_product=None, user_context=None):
     system = (
         "Eres un gestor de reclamos profesional en Mercado Libre Mexico. "
         "Tu objetivo es resolver reclamos rapidamente manteniendo la reputacion del vendedor.\n"
@@ -176,6 +176,13 @@ def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title,
     issues_str = "; ".join(issues) if issues else "No especificados"
     suggestions_str = "; ".join(suggestions) if suggestions else "Ninguna"
     bm_block = _bm_product_block(bm_product or {})
+    context = ""
+    if user_context:
+        context = (
+            f"\n⚠️ MANDATO DEL VENDEDOR (PRIORIDAD MAXIMA -- ANULA TODO LO DEMAS): "
+            f"{user_context}\n"
+            "Esta instruccion es definitiva. Construye tu respuesta basandote en esto como hecho absoluto.\n"
+        )
     user = (
         f"Reclamo #{claim_id}\n"
         f"Razon: {reason_desc} (ID: {reason_id})\n"
@@ -183,7 +190,8 @@ def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title,
         + (bm_block if bm_block else "")
         + f"Dias abierto: {days_open}\n"
         f"Problemas detectados: {issues_str}\n"
-        f"Sugerencias del sistema: {suggestions_str}\n\n"
+        f"Sugerencias del sistema: {suggestions_str}\n"
+        f"{context}\n"
         "Genera un mensaje empatico y con solucion concreta para el comprador:"
     )
     return system, user, 300

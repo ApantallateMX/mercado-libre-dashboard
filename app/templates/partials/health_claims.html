@@ -217,7 +217,7 @@
         </div>
 
         <!-- AI Action Buttons -->
-        <div class="flex gap-2 mb-3">
+        <div class="flex items-center gap-2 mb-3 flex-wrap">
             <button onclick="analyzeClaimAi(this)"
                     data-id="{{ claim.id }}"
                     data-reason-desc="{{ claim.reason_desc }}"
@@ -230,7 +230,7 @@
                     data-claims-status=""
                     data-sale-fee="0"
                     data-shipping-cost="0"
-                    class="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full hover:bg-blue-200 font-semibold transition-colors">
+                    class="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full hover:bg-blue-200 font-semibold transition-colors flex-shrink-0">
                 <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>Analisis IA
             </button>
             <button onclick="suggestClaimResponse(this)"
@@ -242,9 +242,12 @@
                     data-days-open="{{ claim.days_open }}"
                     data-issues='{{ claim.issues | tojson }}'
                     data-suggestions='{{ claim.suggestions | tojson }}'
-                    class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">
+                    class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors flex-shrink-0">
                 <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir Respuesta
             </button>
+            <input type="text" id="ai-context-claim-{{ claim.id }}"
+                   placeholder="Instrucciones para la IA (ej: dile que sí se puede, menciona garantía...)"
+                   class="flex-1 min-w-[160px] border border-purple-200 rounded-full px-3 py-1 text-xs text-gray-700 focus:ring-1 focus:ring-purple-400 focus:outline-none placeholder-gray-400">
         </div>
 
         <!-- AI Analysis Panel -->

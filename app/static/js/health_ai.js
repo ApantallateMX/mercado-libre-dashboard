@@ -303,6 +303,9 @@ window.suggestClaimResponse = function (btn) {
     try { issues = JSON.parse(btn.getAttribute('data-issues') || '[]'); } catch (e) { }
     try { suggestions = JSON.parse(btn.getAttribute('data-suggestions') || '[]'); } catch (e) { }
 
+    var contextInput = document.getElementById('ai-context-claim-' + id);
+    var userContext = contextInput ? contextInput.value.trim() : '';
+
     var payload = {
         claim_id: btn.getAttribute('data-id'),
         reason_id: btn.getAttribute('data-reason-id'),
@@ -311,7 +314,8 @@ window.suggestClaimResponse = function (btn) {
         sku: btn.getAttribute('data-sku') || '',
         days_open: parseInt(btn.getAttribute('data-days-open')) || 0,
         issues: issues,
-        suggestions: suggestions
+        suggestions: suggestions,
+        user_context: userContext
     };
 
     streamAiResponse('/api/health-ai/suggest-claim-response', payload, textId, function (fullText) {

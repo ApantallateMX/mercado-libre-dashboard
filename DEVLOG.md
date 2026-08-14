@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 4) — FEAT: instrucciones personalizadas para IA en Reclamos (mismo patrón de Mensajes)
+
+Jovan pidió que "Sugerir Respuesta" en Reclamos permita agregar
+instrucciones extra a la IA, igual que ya existe en Mensajes/Preguntas.
+Replicado el patrón exacto (`ai-context-*` input + `user_context` en el
+payload + bloque "MANDATO DEL VENDEDOR" en el prompt):
+
+- `app/templates/partials/health_claims.html`: input de texto junto al
+  botón "Sugerir Respuesta".
+- `app/static/js/health_ai.js` (`suggestClaimResponse`): lee el input y
+  lo agrega al payload.
+- `app/api/health_ai.py` (`suggest_claim_response`): pasa `user_context`
+  a `build_claim_response_prompt`.
+- `app/services/health_ai.py` (`build_claim_response_prompt`): nuevo
+  parámetro `user_context`, mismo bloque de mandato que
+  `build_message_reply_prompt`.
+
+No hay equivalente en Amazon (A-to-z Claims no tiene sugerencia de IA
+hoy) — fuera de alcance de lo pedido, no se inventó nada nuevo ahí.
+
+Verificado end-to-end en local: instrucción "ofrece devolución total y
+discúlpate por la demora" → la IA generó la respuesta siguiendo
+exactamente esa instrucción.
+
+---
+
 ## 2026-08-14 (cont. 3) — FIX: barrido de 24h no alcanzaba órdenes atoradas varios días
 
 Jovan preguntó por qué 2 órdenes reales (SNTV007716-GRB, order_date

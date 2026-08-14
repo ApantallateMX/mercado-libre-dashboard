@@ -353,6 +353,7 @@ async def suggest_claim_response(request: Request):
         body.get("issues", []),
         body.get("suggestions", []),
         bm_product=bm_product,
+        user_context=body.get("user_context", ""),
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),
