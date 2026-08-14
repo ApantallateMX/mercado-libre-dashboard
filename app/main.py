@@ -2547,6 +2547,13 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                         if not claim_id:
                             return
                         resource_id = str(c.get("resource_id", "")) if c.get("resource") == "order" else ""
+                        # Reembolso real al comprador -- señal para reversar deuda de
+                        # proveedor (project_gap_scan.../supplier_debt_ledger, ver
+                        # reverse en upsert_claims_history). Confirmado con datos
+                        # reales de ML: resolution.reason == "payment_refunded".
+                        _resolution = c.get("resolution") or {}
+                        _resolution_reason = _resolution.get("reason", "")
+                        _refunded_buyer = _resolution_reason == "payment_refunded"
                         sku = ""
                         item_id_ml = ""
                         amount_mxn = 0.0
@@ -2600,6 +2607,7 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                             "status": c.get("status", ""), "quantity": 1,
                             "amount_mxn": amount_mxn, "buyer_comment": buyer_comment,
                             "date_created": (c.get("date_created") or "")[:10],
+                            "resolution_reason": _resolution_reason, "refunded_buyer": _refunded_buyer,
                         })
 
                 claim_results = await asyncio.gather(*[_process_claim(c) for c in claims], return_exceptions=True)

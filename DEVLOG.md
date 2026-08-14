@@ -7,6 +7,52 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 15) — FEAT: reversa de deuda de proveedor por reembolso real (ML + Amazon), no solo por cancelación
+
+Cierra el pendiente #4 de "3 4 5": la deuda de proveedor (`supplier_debt_ledger`)
+ya se revertía cuando la orden se cancelaba (`upsert_order_history()`,
+`_DEBT_CANCEL_STATUSES`), pero NO cuando el reembolso ocurre DESPUÉS de
+enviado — ahí el `status` de la orden nunca cambia a "cancelled", así que
+ese caso quedaba sin cubrir y la deuda seguía viva aunque el proveedor ya
+no debiera cobrarse.
+
+**ML**: el dato ya existía en el claim, solo faltaba extraerlo y usarlo.
+`_process_claim()` (`app/main.py`) ahora lee `resolution.reason` del claim
+real de ML y marca `refunded_buyer=1` cuando `resolution.reason ==
+"payment_refunded"` (confirmado con datos reales, no supuesto). Columnas
+nuevas `resolution_reason`/`refunded_buyer` en `claims_history`.
+`upsert_claims_history()` (`token_store.py`) revierte automáticamente
+(`amount_mxn=0, reversed_at=<ts>`) cualquier fila de `supplier_debt_ledger`
+con ese `order_id` que siga con deuda activa.
+
+Nota de corrección: al investigar esto sospeché que `claims_history.order_id`
+podía traer mal el `shipment_id` para reclamos tipo "shipment" (un bug real
+en potencia). Al revisar con más cuidado el código de persistencia real
+(`app/main.py` línea 2549) confirmé que YA filtra correctamente
+(`resource_id if c.get("resource") == "order" else ""`) — no había bug ahí,
+solo en 2 funciones de display separadas que no tocan la reversa de deuda
+(cosmético, no bloqueante, no se tocó).
+
+**Amazon**: no hay un campo "resolution" como en ML — la señal real es la
+Finances API (`RefundEventList`), ya expuesta por
+`amazon_client.get_refunds_detail(days)` y cacheada 3h vía
+`_fetch_amazon_refunds_cached()` en `main.py`. Función nueva genérica
+`reverse_debt_by_order_ids(order_ids, platform)` en `token_store.py`
+(reusa el mismo patrón idempotente: solo toca filas `amount_mxn>0 AND
+reversed_at=0`). Caller nuevo `_run_debt_reversal_background()` en
+`amazon_listing_sync.py`: recorre todas las cuentas Amazon, junta
+`order_id` de reembolsos de los últimos 90 días, y llama la reversa —
+conectado al mismo ciclo de gap scan (cada 3h, ver cont. 13) para no
+agregar un scheduler nuevo.
+
+Verificado end-to-end con datos sintéticos (`reverse_debt_by_order_ids`):
+inserta deuda con `amount_mxn=1234.56`, reversa → `amount_mxn=0` +
+`reversed_at` con timestamp real, segunda corrida sobre la misma orden
+reversa 0 filas (idempotente, no doble-cuenta). Servidor local levantado
+sin errores nuevos, `/partials/products-deals` responde 200.
+
+---
+
 ## 2026-08-13 (cont. 14) — FEAT: envío promedio histórico real por SKU (reemplaza estimado fijo/escalonado)
 
 Cierra el pendiente de "otros hallazgos" (cont. 3): el envío en Deals

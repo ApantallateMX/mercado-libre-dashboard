@@ -426,14 +426,44 @@ async def _loop():
                 await run_amazon_listing_sync()
                 await asyncio.sleep(5)
                 await _run_gap_scan_background()
+                await _run_debt_reversal_background()
             except Exception as e:
                 logger.error(f"[AMZ-LISTING-SYNC-LOOP] Error: {e}")
         # gap scan independiente si pasaron ≥6h (sin full sync)
         elif (_time.time() - _last_gap_scan_ts) >= _GAP_SCAN_INTERVAL:
             try:
                 await _run_gap_scan_background()
+                await _run_debt_reversal_background()
             except Exception as e:
                 logger.error(f"[AMZ-GAP-SCAN-LOOP] Error: {e}")
+
+
+async def _run_debt_reversal_background() -> None:
+    """Revisa reembolsos reales (Finances API RefundEventList) de todas las
+    cuentas Amazon y revierte la deuda de proveedor ya registrada para esas
+    órdenes -- mismo patrón que el lado ML (claims_history.refunded_buyer),
+    ver reverse_debt_by_order_ids() en token_store.py. Corre en el mismo
+    ritmo que el gap scan (c/3h) para no agregar un scheduler nuevo."""
+    try:
+        from app.services import token_store as _ts_dbt
+        from app.main import _fetch_amazon_refunds_cached as _fetch_refunds
+        accounts = await _ts_dbt.get_all_amazon_accounts()
+        order_ids: set = set()
+        for acc in accounts:
+            seller_id = acc.get("seller_id", "")
+            if not seller_id:
+                continue
+            refunds = await _fetch_refunds(seller_id, 90)
+            for r in refunds:
+                oid = r.get("order_id")
+                if oid:
+                    order_ids.add(oid)
+        if order_ids:
+            n = await _ts_dbt.reverse_debt_by_order_ids(list(order_ids), "amazon")
+            if n:
+                logger.info(f"[AMZ-DEBT-REVERSAL] {n} filas de deuda revertidas por reembolso confirmado")
+    except Exception as e:
+        logger.error(f"[AMZ-DEBT-REVERSAL] Error: {e}")
 
 
 def start_amazon_listing_sync():

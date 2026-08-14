@@ -1336,6 +1336,19 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ch_sku ON claims_history(sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ch_account ON claims_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ch_date ON claims_history(date_created)")
+        # Migración 2026-08-13: dato de resolución del reclamo -- necesario para
+        # reversar supplier_debt_ledger cuando el reembolso pasa DESPUÉS de
+        # enviado (status de la orden no cambia en ese caso, la única señal
+        # real es resolution.reason=="payment_refunded" del reclamo). Ver
+        # reverse_debt_for_refunded_claims().
+        for _col, _def in (
+            ("resolution_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("refunded_buyer", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            try:
+                await db.execute(f"ALTER TABLE claims_history ADD COLUMN {_col} {_def}")
+            except Exception:
+                pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: claim_photos — fotos de reclamos, mirror local en /app/data/claim_photos/
         # (Railway Volume persistente — ver reference_railway_volume_persistence).
@@ -5249,6 +5262,36 @@ async def get_avg_shipping_cost_map(skus: list[str], platform: str, days: int = 
     return result
 
 
+async def reverse_debt_by_order_ids(order_ids: list[str], platform: str) -> int:
+    """Revierte (amount_mxn=0) la deuda de proveedor ya registrada para estos
+    order_id en la plataforma dada -- usado por Amazon para reembolsos reales
+    (Finances API RefundEventList, ver reverse_amazon_refund_debt() en
+    amazon_orders.py) y reusable para cualquier otro caso futuro de "aquí hay
+    una lista de órdenes confirmadas reembolsadas". Idempotente: solo toca
+    filas con amount_mxn>0 y reversed_at=0 -- no re-reversa dos veces.
+    Retorna cuántas filas se revirtieron."""
+    if not order_ids:
+        return 0
+    import time as _t
+    now = _t.time()
+    reversed_count = 0
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        for i in range(0, len(order_ids), 500):
+            chunk = order_ids[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""UPDATE supplier_debt_ledger SET amount_mxn = 0, reversed_at = ?
+                    WHERE platform = ? AND order_id IN ({placeholders})
+                      AND amount_mxn > 0 AND reversed_at = 0""",
+                [now, platform] + chunk,
+            )
+            reversed_count += cur.rowcount
+        await db.commit()
+    if reversed_count:
+        logger.info(f"[SUPPLIER-DEBT] Reversadas {reversed_count} filas por reembolso confirmado ({platform})")
+    return reversed_count
+
+
 async def has_deep_order_history(account_id: str, platform: str, min_days: int = 20) -> bool:
     """True si order_history ya tiene al menos una fila de hace min_days días o más
     para esta cuenta — señal de que ya se hizo un backfill inicial y el loop de
@@ -5442,7 +5485,17 @@ async def get_reputation_trend(account_id: str, days: int = 14) -> dict | None:
 
 async def upsert_claims_history(rows: list[dict]) -> int:
     """Guarda/actualiza reclamos ML persistidos. ON CONFLICT actualiza status/stage/comentario
-    (un claim puede seguir evolucionando — abrirse, cerrarse, cambiar de stage)."""
+    (un claim puede seguir evolucionando — abrirse, cerrarse, cambiar de stage).
+
+    resolution_reason/refunded_buyer (2026-08-13): si el reclamo trae
+    resolution.reason=='payment_refunded' (reembolso real al comprador,
+    confirmado con datos reales de ML), se marca refunded_buyer=1 y se
+    revierte cualquier deuda de proveedor ya registrada para esa orden --
+    ver reverse_debt_for_refunded_claims(), llamada al final de esta función.
+    Cubre el caso que la reversa por cancelación (upsert_order_history) NO
+    cubre: reembolso DESPUÉS de enviado, donde el status de la orden nunca
+    cambia a 'cancelled'.
+    """
     import time as _t
     if not rows:
         return 0
@@ -5452,8 +5505,9 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                 INSERT INTO claims_history
                     (claim_id, platform, account_id, order_id, item_id, sku,
                      reason_id, stage, status, quantity, amount_mxn,
-                     buyer_comment, date_created, synced_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     buyer_comment, date_created, synced_at,
+                     resolution_reason, refunded_buyer)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(claim_id, platform) DO UPDATE SET
                     account_id    = excluded.account_id,
                     stage         = excluded.stage,
@@ -5462,14 +5516,28 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                     buyer_comment = CASE WHEN excluded.buyer_comment != '' THEN excluded.buyer_comment ELSE claims_history.buyer_comment END,
                     sku           = CASE WHEN excluded.sku != '' THEN excluded.sku ELSE claims_history.sku END,
                     item_id       = CASE WHEN excluded.item_id != '' THEN excluded.item_id ELSE claims_history.item_id END,
-                    synced_at     = excluded.synced_at
+                    synced_at     = excluded.synced_at,
+                    resolution_reason = CASE WHEN excluded.resolution_reason != '' THEN excluded.resolution_reason ELSE claims_history.resolution_reason END,
+                    refunded_buyer    = CASE WHEN excluded.refunded_buyer = 1 THEN 1 ELSE claims_history.refunded_buyer END
             """, (
                 r.get("claim_id", ""), r.get("platform", "ml"), r.get("account_id", ""),
                 r.get("order_id", ""), r.get("item_id", ""), r.get("sku", ""),
                 r.get("reason_id", ""), r.get("stage", ""), r.get("status", ""),
                 r.get("quantity", 1), r.get("amount_mxn", 0),
                 r.get("buyer_comment", ""), r.get("date_created", ""), _t.time(),
+                r.get("resolution_reason", ""), 1 if r.get("refunded_buyer") else 0,
             ))
+            if r.get("refunded_buyer") and r.get("order_id"):
+                try:
+                    cur_rev = await db.execute("""
+                        UPDATE supplier_debt_ledger SET amount_mxn = 0, reversed_at = ?
+                        WHERE order_id = ? AND platform = ?
+                          AND amount_mxn > 0 AND reversed_at = 0
+                    """, (_t.time(), r.get("order_id", ""), r.get("platform", "ml")))
+                    if cur_rev.rowcount:
+                        logger.info(f"[SUPPLIER-DEBT] Reversada deuda por reembolso post-envío, orden {r.get('order_id')} ({r.get('platform')}, claim {r.get('claim_id')})")
+                except Exception as _e_rev:
+                    logger.warning(f"[SUPPLIER-DEBT] Error reversando por reembolso claim {r.get('claim_id')}: {_e_rev}")
         await db.commit()
     return len(rows)
 
