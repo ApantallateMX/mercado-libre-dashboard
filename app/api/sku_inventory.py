@@ -932,6 +932,30 @@ def _title_case_ml(text: str) -> str:
     return " ".join(result)
 
 
+def _pack_title_from_chunks(chunks, max_len: int = 60) -> str:
+    """Ensambla un titulo sumando chunks (palabras/frases cortas) en el
+    orden de prioridad que dio la IA, sin nunca cortar uno a la mitad: si
+    un chunk no cabe en el espacio que queda, se omite y se prueba el
+    siguiente (que puede ser mas corto y si caber) -- asi se aprovecha el
+    limite real de la plataforma (max_len) sin arriesgar una palabra rota.
+    2026-08-14: reemplaza el patron anterior de "generar un titulo ya
+    armado y despues .slice(0, 60)" (Jovan lo reporto con un caso real:
+    "...Triple Fi" en vez de "...Triple Filtro") -- construir es
+    responsabilidad del codigo (determinista), no del LLM (no siempre
+    cuenta caracteres bien aunque se le pida)."""
+    out = []
+    length = 0
+    for raw in chunks:
+        chunk = _title_case_ml(str(raw).strip())
+        if not chunk:
+            continue
+        add_len = len(chunk) + (1 if out else 0)
+        if length + add_len <= max_len:
+            out.append(chunk)
+            length += add_len
+    return " ".join(out)
+
+
 def _strip_markdown_noise(text: str) -> str:
     """Red de seguridad server-side (mismo patron que _title_case_ml): MeLi
     no renderiza markdown, pero el modelo a veces deja **negrita**, __texto__
@@ -988,15 +1012,18 @@ async def ai_improve(body: dict):
     )
 
     if field == "title":
-        # FIX 2026-08-10: Jovan reporto (con screenshot) titulos generados todo
-        # en minusculas ("home depot decoracion navideña grinch...") y con
-        # unidades truncadas a media palabra ("36 pulga"). Causa raiz: la
-        # regla "SIN mayusculas innecesarias" quedaba ambigua justo al lado
-        # de un ejemplo en Mayuscula Inicial -- el modelo interpreto "sin
-        # mayusculas" literal (todo minusculas) en vez de "sin ALT/GRITOS".
-        # Se separa explicitamente capitalizacion de "no usar mayusculas
-        # como grito" y se prohibe truncar palabras/unidades a medias.
-        prompt = f"""Genera exactamente 3 titulos SEO para Mercado Libre Mexico.
+        # FIX 2026-08-14 (reemplaza el enfoque anterior de "titulo ya armado
+        # + .slice(0,60)"): Jovan reporto un titulo real cortado a media
+        # palabra ("...Triple Fi" en vez de "...Triple Filtro") -- la IA SI
+        # habia escrito una frase completa (63 caracteres), pero el corte
+        # ciego de caracteres en el frontend la partio igual. Un LLM no
+        # cuenta caracteres de forma confiable aunque se le pida un rango
+        # exacto, asi que ya no se le pide "escribe el titulo final": se le
+        # pide la lista de palabras/frases YA priorizadas de mas a menos
+        # esenciales, y el ensamblado final (que SI garantiza no cortar
+        # nunca una palabra y respetar el limite real de 60) lo hace
+        # _pack_title_from_chunks() en codigo, de forma determinista.
+        prompt = f"""Genera exactamente 3 propuestas de titulo SEO para Mercado Libre Mexico.
 
 PRODUCTO:
 - Titulo actual: {current_value}
@@ -1004,40 +1031,66 @@ PRODUCTO:
 - Modelo: {model}
 - Categoria: {category}
 {_facts_anchor_note if _has_confirmed_facts else ""}
-{"" if _has_confirmed_facts else "Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha tecnica real de este producto (marca+modelo) antes de elegir las palabras clave del titulo, para incluir la caracteristica/tecnologia mas relevante y real (no generica) en el espacio disponible."}
+{"" if _has_confirmed_facts else "Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha tecnica real de este producto (marca+modelo) antes de elegir las palabras clave, para incluir la caracteristica/tecnologia mas relevante y real (no generica)."}
 
-REGLAS CRITICAS (MeLi 2026):
-1. TITULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible.
-   Formato: Marca + Tipo de producto + Tecnologia/Caracteristica clave + Tamaño/Capacidad.
-   - SIN numero de modelo (va en ficha tecnica)
-   - SIN signos de puntuacion (ni comas, ni guiones, ni parentesis)
-   - Capitalizacion: Mayuscula Inicial En Cada Palabra Significativa (Title
-     Case), igual que el ejemplo de abajo -- NUNCA todo en minusculas, NUNCA
-     TODO EN MAYUSCULAS (eso es "mayusculas innecesarias": usarlas como
-     grito, no la capitalizacion normal de cada palabra)
-   - NUNCA truncar una palabra o unidad a la mitad para ajustar el largo
-     (ej. "Pulga" en vez de "Pulgadas" esta PROHIBIDO) -- si no cabe con la
-     palabra completa, quita otra palabra menos esencial, nunca cortes una
-     palabra
-   - SIN palabras como "nuevo", "oferta", "envio gratis"
-   - Ejemplo correcto (57 chars): "Samsung Televisor QLED 4K Smart HDR 65 Pulgadas Google TV"
-   - Si queda corto, agrega: Smart, WiFi, Negro, 127V, Para Casa, etc.
+IMPORTANTE: el limite real de MeLi es 60 caracteres EXACTOS. NO vas a
+escribir el titulo final tu -- vamos a ensamblarlo con codigo para
+garantizar que nunca se corte una palabra a la mitad. Para eso, en vez
+de una frase ya armada, dame las palabras/frases cortas que la componen,
+en un ARREGLO, en ORDEN de MAS a MENOS esencial (si al final no caben
+todas en 60 caracteres, se quitan las ultimas de tu lista -- nunca se
+parte una palabra).
 
-Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas, cada
-uno ya con la capitalizacion correcta (Title Case) aplicada. NO agregues
-notas, explicaciones, citas de fuentes ni enlaces -- SOLO las 3 lineas
-con los titulos, nada mas."""
+Orden esperado de mas a menos esencial: Marca, Tipo de producto,
+Tecnologia/Caracteristica clave real (investigada), Tamaño/Capacidad,
+y solo si sobra espacio, atributos secundarios (Color, Voltaje, Smart,
+WiFi, Para Casa, etc. -- para aprovechar el espacio disponible).
+
+REGLAS por cada elemento del arreglo:
+- Ya en Title Case (Mayuscula Inicial En Cada Palabra Significativa) --
+  NUNCA todo en minusculas, NUNCA TODO EN MAYUSCULAS
+- SIN numero de modelo, SIN signos de puntuacion (comas, guiones, parentesis)
+- SIN "nuevo", "oferta", "envio gratis"
+- Frases de 2-3 palabras estan bien si van juntas semanticamente (ej.
+  "Google TV" si, pero NO "Envio Gratis")
+
+Responde SOLO con JSON valido: un arreglo de 3 arreglos de strings, nada
+mas (sin texto antes/despues, sin backticks, sin notas ni citas de fuentes).
+Ejemplo de formato (no copies el contenido, solo la forma):
+[["Samsung","Televisor","QLED 4K","Smart HDR","65 Pulgadas","Google TV"],["..."],["..."]]"""
 
         try:
-            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model(), web_search=not _has_confirmed_facts)
-            candidates = [_title_case_ml(t.strip()) for t in raw.strip().split("\n") if t.strip()]
-            # Red de seguridad: aun con la instruccion explicita, el modelo a
-            # veces agrega una linea de "nota"/cita con fuente (2026-08-14,
-            # visto en produccion) -- un titulo real de MeLi nunca pasa de
-            # ~65 caracteres ni trae markdown, asi que se descarta cualquier
-            # linea que no luzca como un titulo real.
-            titles = [t for t in candidates if len(t) <= 70 and "[" not in t and "http" not in t.lower()][:3]
-            return {"titles": titles}
+            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=400, model=_or_client.get_premium_model(), web_search=not _has_confirmed_facts)
+            import re as _re
+            try:
+                _match = _re.search(r'\[\s*\[.*\]\s*\]', raw, _re.DOTALL)
+                candidates_chunks = json.loads(_match.group(0) if _match else raw)
+            except Exception:
+                # Red de seguridad: si la IA no devolvio JSON valido, se trata
+                # cada linea de su respuesta como una lista de palabras sueltas
+                # (separadas por espacio) -- sigue empacandose sin cortar
+                # ninguna a la mitad, solo pierde la priorizacion explicita.
+                candidates_chunks = [
+                    [w for w in line.strip().split(" ") if w]
+                    for line in raw.strip().split("\n") if line.strip()
+                ]
+
+            titles = []
+            for chunks in candidates_chunks[:3] if isinstance(candidates_chunks, list) else []:
+                if not isinstance(chunks, list) or not chunks:
+                    continue
+                packed = _pack_title_from_chunks(chunks)
+                if len(packed) < 20:
+                    # Los chunks no empacaron bien (ej. alguno ya venia como
+                    # una frase larga en vez de piezas cortas) -- reintenta
+                    # empacando palabra por palabra en vez de chunk por chunk.
+                    words = []
+                    for c in chunks:
+                        words.extend(str(c).split(" "))
+                    packed = _pack_title_from_chunks(words)
+                if packed:
+                    titles.append(packed)
+            return {"titles": titles[:3]}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 

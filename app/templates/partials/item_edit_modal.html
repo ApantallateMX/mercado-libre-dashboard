@@ -826,6 +826,20 @@ window.editModalOpenHiggsfield = function(sku) {
     }
 };
 
+// El backend ya arma el titulo completo por palabras (ver
+// _pack_title_from_chunks en sku_inventory.py) y garantiza <=60 chars sin
+// cortar ninguna a la mitad -- esto es solo una red de seguridad extra por
+// si algun dia llega un texto mas largo de lo esperado (nunca .slice() en
+// seco, siempre a la ultima palabra completa que quepa).
+function _trimTitleWordSafe(str, maxLen) {
+    str = (str || '').trim();
+    if (str.length <= maxLen) return str;
+    var cut = str.slice(0, maxLen);
+    var lastSpace = cut.lastIndexOf(' ');
+    if (lastSpace > 0) cut = cut.slice(0, lastSpace);
+    return cut.trim();
+}
+
 // ─── AI: Título ─────────────────────────────────────────────────
 window.editModalAiTitle = async function(autoApply) {
     var titleInput = document.getElementById('edit-title');
@@ -869,13 +883,13 @@ window.editModalAiTitle = async function(autoApply) {
         var titles = (data.titles || []).filter(function(t) { return t.trim().length >= 40; });
         if (titles.length > 0) {
             if (autoApply) {
-                var best = titles.map(function(t) { return t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60); })
+                var best = titles.map(function(t) { return _trimTitleWordSafe(t.trim().replace(/^["'\-•\d.]+\s*/, ''), 60); })
                                  .sort(function(a,b) { return b.length - a.length; })[0];
                 applyAiTitle(best);
                 suggestionsDiv.classList.add('hidden');
             } else {
                 suggestionsDiv.innerHTML = titles.map(function(t) {
-                    var clean = t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60);
+                    var clean = _trimTitleWordSafe(t.trim().replace(/^["'\-•\d.]+\s*/, ''), 60);
                     return '<button onclick="applyAiTitle(\'' + clean.replace(/'/g, "\\'") + '\')" ' +
                         'class="w-full text-left text-xs px-2 py-1.5 bg-white border border-purple-200 rounded hover:bg-purple-50 transition">' +
                         '<span class="font-mono">' + clean + '</span>' +

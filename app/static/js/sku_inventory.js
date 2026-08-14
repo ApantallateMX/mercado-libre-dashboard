@@ -13,6 +13,18 @@
     var researchData = null;
     var researchSkipped = false;
     var validationPassed = false;
+
+    // El backend ya arma el titulo por palabras respetando 60 chars sin
+    // cortar ninguna a la mitad (ver _pack_title_from_chunks en
+    // sku_inventory.py) -- red de seguridad extra, nunca .slice() en seco.
+    function _trimTitleWordSafe(str, maxLen) {
+        str = (str || '').trim();
+        if (str.length <= maxLen) return str;
+        var cut = str.slice(0, maxLen);
+        var lastSpace = cut.lastIndexOf(' ');
+        if (lastSpace > 0) cut = cut.slice(0, lastSpace);
+        return cut.trim();
+    }
     var aiAvailable = false;
     var activeAiController = null; // AbortController for cancelling AI requests
 
@@ -597,7 +609,7 @@
                 if (d.result) {
                     var suggestions = d.result.trim().split('\n').filter(function(l) { return l.trim().length > 10; });
                     if (suggestions.length > 0) {
-                        var best = suggestions[0].trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60);
+                        var best = _trimTitleWordSafe(suggestions[0].trim().replace(/^["'\-•\d.]+\s*/, ''), 60);
                         if (best.length >= 40) {
                             document.getElementById('item-title').value = best;
                             markAutoFilled('item-title');
