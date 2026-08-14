@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 12) — FEAT: garantía estandarizada a 3 meses (defectos de fábrica) en descripción IA
+
+Jovan notó en una descripción generada que la IA prometía "garantía de
+12 meses respaldada por Eufy" — un compromiso que la empresa no puede
+garantizar al no ser el fabricante. Pidió estandarizar a 3 meses por
+defectos de fábrica, respaldada por el vendedor (no por la marca).
+
+Regla agregada al prompt de descripción (`app/api/sku_inventory.py`):
+siempre 3 meses por defectos de fábrica, ofrecida por el vendedor —
+nunca mencionar marca/fabricante ni otro plazo, aunque la investigación
+real del producto encuentre un dato distinto (ese dato solo aplica a la
+sección de características técnicas).
+
+Verificado con generación real, en local y contra producción ya
+desplegada: la sección de garantía ahora dice exactamente "garantía de 3
+meses por defectos de fábrica directamente por el vendedor", sin
+mencionar la marca.
+
+Solo aplica a Mercado Libre por ahora — Amazon no tiene esta feature de
+descripción con IA conectada todavía (si se conecta en el futuro, aplicar
+la misma regla ahí, por la regla de CLAUDE.md de features en todas las
+plataformas).
+
+---
+
 ## 2026-08-14 (cont. 11) — FIX: el título se bloqueaba por `family_name`, el gate real de ML es `sold_quantity>0`
 
 Jovan corrigió directamente un hallazgo de hoy (cont. 9): mandó capturas
