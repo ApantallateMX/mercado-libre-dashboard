@@ -7,6 +7,62 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 9) — FIX: "Optimizar Todo" truena sin avisar en listings con `family_name` (catálogo/User Product)
+
+Jovan reportó que después del fix anterior (cont. 8), "Optimizar Todo"
+seguía sin funcionar: la primera vez se quedaba pensando, la segunda no
+hacía nada — y exigió explícitamente que antes de seguir parchando se
+investigara bien cómo funciona ML en vez de adivinar código a ciegas.
+
+**Investigación previa (agente `marketplace-strategist`, antes de tocar
+código):** ML tiene 2 mecanismos de listing distintos, con reglas de
+edición diferentes:
+- `catalog_listing: true` + `catalog_product_id` — buy-box real
+  compartido entre varios vendedores. ML documenta (Help Center) que
+  bloquea título, descripción, fotos y ficha técnica por completo.
+- Solo `family_name` en la raíz (`catalog_listing: false`) — "User
+  Product". ML solo bloquea el **título** (doc oficial: *"the title
+  field should not be sent by the seller... automatically completed
+  based on domain, attributes, family_name"*, y confirmado por un error
+  real histórico de este mismo código: *"You cannot modify the title if
+  the item has a family_name"*). La descripción SÍ es editable.
+
+**Causa raíz real:** `editModalAiTitle`/`editModalAiDesc` hacían
+`btn.disabled = true` sobre `document.getElementById('btn-ai-title'/'btn-ai-desc')`
+**antes** de entrar a su propio `try/catch`. Para un item con
+`family_name` el botón de título ni se renderiza (guardia `{% if not
+item.family_name %}` ya existente), así que `btn` era `null` y
+`btn.disabled = true` lanzaba un `TypeError` sin capturar. Como
+`editModalOptimizeAll` solo tenía `try { ... } finally { ... }` (sin
+`catch`), la excepción mataba la secuencia completa: paso 1 (título)
+truena de inmediato — de ahí el "se queda pensando" del primer intento —
+y los pasos 2 y 3 (descripción, atributos) nunca llegaban a ejecutarse —
+de ahí el "no hace nada" del segundo intento.
+
+**Verificación en vivo (antes de dar por bueno el fix):** se consultó
+directo contra la API real de ML el item reportado por Jovan
+(`MLM3322101329`): `family_name` presente, `catalog_listing: False` —
+confirma que es un "User Product", no catálogo real, y que su
+descripción sí debería ser editable. Se renderizó el template real con
+esos datos y se simuló la secuencia completa de "Optimizar Todo" con
+jsdom: ya no truena, título se omite con mensaje explicativo, descripción
+y atributos sí corren, el botón se reactiva correctamente al final.
+
+**Fix (`item_edit_modal.html`):**
+- `editModalAiTitle`/`editModalAiDesc`: guardia `if (!btn || ...) return;`
+  antes de tocar cualquier elemento del DOM.
+- `editModalOptimizeAll`: detecta con `!!document.getElementById(...)`
+  qué pasos aplican a este item concreto, y si un paso se omite muestra
+  el motivo real al usuario ("Título omitido: ML lo genera solo...",
+  "Descripción omitida: catálogo real de ML...") en vez de fallar en
+  silencio.
+- Botón de descripción ahora solo se oculta cuando `catalog_listing` es
+  `true` de verdad (antes no distinguía este caso del `family_name`-only,
+  dejando pasar un botón roto en el peor caso y bloqueando de más en el
+  mejor).
+
+---
+
 ## 2026-08-14 (cont. 8) — FEAT: precio de lista sugerido (recuperación real 80%/60% después de deal 20%) + fix "Optimizar Todo" poco claro
 
 **"Optimizar Todo" parecía atorado**: Jovan reportó que el botón se
