@@ -930,7 +930,11 @@ window.editModalAiDesc = async function() {
                 if (line.startsWith('data: ')) {
                     var data = line.slice(6);
                     if (data === '[DONE]') break;
-                    if (!data.startsWith('[ERROR]')) { result += data; descInput.value = result; }
+                    if (data.startsWith('[ERROR]')) continue;
+                    try {
+                        var parsed = JSON.parse(data);
+                        if (parsed.text) { result += parsed.text; descInput.value = result; }
+                    } catch (e) { /* fragmento incompleto, se completa en el siguiente chunk */ }
                 }
             }
         }

@@ -1020,9 +1020,9 @@
                         }
                         try {
                             var parsed = JSON.parse(payload);
-                            if (parsed.token) fullText += parsed.token;
+                            if (parsed.text) fullText += parsed.text;
                         } catch(e) {
-                            fullText += payload;
+                            /* fragmento incompleto, se completa en el siguiente chunk */
                         }
                     }
                 }

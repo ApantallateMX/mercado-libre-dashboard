@@ -2,6 +2,7 @@
 import asyncio
 import io
 import csv
+import json
 from typing import Optional
 from fastapi import APIRouter, Query, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -1084,7 +1085,14 @@ con los titulos, nada mas."""
             try:
                 if image_urls:
                     text = await _or_client.generate_with_images(prompt, image_urls, system_prompt, max_tokens=1500)
-                    yield f"data: {_strip_markdown_noise(text)}\n\n"
+                    # FIX 2026-08-14: el texto real trae saltos de linea (parrafos,
+                    # lista de caracteristicas) -- mandarlo crudo en un solo
+                    # "data: {texto}" rompe el framing SSE (cada linea de un
+                    # mensaje multilinea necesita su propio prefijo "data: "),
+                    # y el parser del frontend descartaba todo lo que venia
+                    # despues del primer salto de linea. JSON-encode (mismo
+                    # patron ya usado en health_ai.py) evita el problema de raiz.
+                    yield f"data: {json.dumps({'text': _strip_markdown_noise(text)}, ensure_ascii=False)}\n\n"
                 else:
                     async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=1500, model=_or_client.get_premium_model(), web_search=True):
                         # AGREGADO 2026-08-14: aun con la regla explicita en el
@@ -1093,7 +1101,8 @@ con los titulos, nada mas."""
                         # literales rotos). Limpieza best-effort por chunk;
                         # ver _strip_markdown_noise() para el paso final
                         # completo si algun caso cruza el limite de un chunk.
-                        yield f"data: {chunk.replace('**', '').replace('__', '')}\n\n"
+                        cleaned = chunk.replace('**', '').replace('__', '')
+                        yield f"data: {json.dumps({'text': cleaned}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 yield f"data: [ERROR] {str(e)}\n\n"
@@ -1183,7 +1192,10 @@ con los titulos, nada mas."""
         async def script_stream():
             try:
                 async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=600, model=_or_client.get_premium_model(), web_search=not _has_confirmed_facts):
-                    yield f"data: {chunk}\n\n"
+                    # FIX 2026-08-14: mismo bug de framing SSE que description
+                    # (ver comentario ahi) -- JSON-encode evita que un chunk con
+                    # salto de linea corte el mensaje a la mitad.
+                    yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 yield f"data: [ERROR] {str(e)}\n\n"

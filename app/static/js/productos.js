@@ -859,7 +859,11 @@
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
             if (data === '[DONE]') break;
-            if (!data.startsWith('[ERROR]')) { result += data; scriptEl.value = result; }
+            if (data.startsWith('[ERROR]')) continue;
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.text) { result += parsed.text; scriptEl.value = result; }
+            } catch (e) { /* fragmento incompleto, se completa en el siguiente chunk */ }
           }
         }
       }
