@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont.) — FIX: faltaba la red de seguridad — el webhook nunca vuelve a evaluar una orden sin nueva notificación de ML
+
+Tras el fix anterior (mismo día), Jovan reportó con captura real que la
+pantalla de "Alertas de Stock" seguía en 0. Causa: el webhook de ML es
+100% reactivo a eventos — si una orden ya se procesó una vez (antes o
+después del fix) y ML no vuelve a notificar un cambio de esa MISMA orden
+(status se queda "pending" sin cambiar), nunca se re-evalúa. El botón
+"Actualizar" de la pantalla solo re-lee lo que ya está guardado en DB, no
+dispara una revisión nueva contra BM.
+
+- Extraída la lógica de "evaluar 1 orden" del webhook a
+  `_evaluate_order_stock_alert(order_id, user_id, client)` — compartida.
+- Nuevo `_realtime_stock_reconcile_loop()`: cada 5 min, re-evalúa las
+  órdenes ML pagadas de las últimas 24h (leídas de `order_history`, sin
+  gastar una llamada nueva de búsqueda a ML) con la misma lógica ya
+  corregida. Como `_bm_bulk_available_qty()` es 100% en memoria, esto no
+  agrega carga a BM — solo las llamadas normales a la API de ML
+  (`resolve_order`/`get_shipment`, semáforo de concurrencia 3).
+- `token_store.get_recent_paid_ml_orders(hours=24)` — nueva, lee
+  order_id/account_id de `order_history` en la ventana.
+- Diag temporal `/api/diag/trigger-stock-reconcile?hours=N` para forzar
+  una pasada manual sin esperar el ciclo de 5 min (útil para verificar
+  sin esperar, y como palanca manual futura si hace falta).
+
+---
+
 ## 2026-08-14 — FIX: alerta "Sin Stock" (webhook ML) no detectaba órdenes realmente agotadas
 
 Jovan reportó (con captura de BinManager "Problem Items Today") 6 órdenes

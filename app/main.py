@@ -856,6 +856,9 @@ async def lifespan(app: FastAPI):
     # reemplaza nada) — ver project_bm_sku_master.md
     if not _BM_DISABLED:
         asyncio.create_task(_bm_master_sync_loop())
+    # Red de seguridad de "Alertas de Stock" (2026-08-14) — re-evalúa órdenes
+    # pagadas recientes que el webhook ya no vuelve a tocar por su cuenta.
+    asyncio.create_task(_realtime_stock_reconcile_loop())
 
     # ── Sync diario de catálogo BM (3am Monterrey CDT = 09:00 UTC) ──
     # Descarga retail_ph, brand, model, title para todos los SKUs del bulk cache.
@@ -2185,6 +2188,80 @@ def _bm_bulk_available_qty(sku: str) -> int | None:
     return None
 
 
+async def _evaluate_order_stock_alert(order_id: str, user_id: str, client) -> None:
+    """Núcleo compartido: dado un order_id ya conocido, decide si la orden
+    necesita alerta de "sin stock" y escribe/limpia realtime_stock_alerts.
+    Usado por el webhook (evento único, apenas entra la orden) Y por
+    _realtime_stock_reconcile_loop() (barrido periódico de órdenes abiertas
+    recientes) -- FIX 2026-08-14: el webhook por sí solo NUNCA vuelve a
+    evaluar una orden si ML no reenvía otra notificación de esa misma orden
+    (ej. status se queda en "pending" sin cambiar) -- el barrido periódico
+    es la red de seguridad que faltaba, ver DEVLOG."""
+    from app.services.sku_utils import normalize_to_bm_sku
+
+    order = await client.resolve_order(order_id)
+    if order.get("status") not in ("paid", "delivered"):
+        return
+
+    usd_to_mxn = await _get_usd_to_mxn(client)
+    _save_ml_orders_history_bg([order], user_id, usd_to_mxn)
+
+    # La alerta de "sin stock" solo aplica a órdenes PENDIENTES de enviar,
+    # merchant (no FULL) — FULL lo despacha ML desde su propio almacén
+    # (no depende de nuestro stock BM), y una orden ya enviada/entregada
+    # ya no es accionable, mostrarla solo confunde. El status/logistic_type
+    # real vive en /shipments/{id} — el objeto "shipping" de la orden solo
+    # trae el id de referencia, NO el estado (confirmado contra un caso real).
+    #
+    # Race condition confirmada con 2 órdenes reales: la notificación de
+    # "orders_v2" a veces llega ANTES de que ML termine de asignar el
+    # shipment (shipping.id todavía vacío) — sin reintento, la orden se
+    # guardaba en order_history pero NUNCA se generaba la alerta, porque
+    # ML no vuelve a notificar solo por el cambio de shipment (no estamos
+    # suscritos al topic "shipments"). Reintenta una vez tras una pausa
+    # corta antes de rendirse.
+    shipping_id = (order.get("shipping") or {}).get("id")
+    if not shipping_id:
+        await asyncio.sleep(8)
+        order = await client.resolve_order(order_id)
+        shipping_id = (order.get("shipping") or {}).get("id")
+
+    if shipping_id:
+        try:
+            shipment = await client.get_shipment(str(shipping_id))
+        except Exception as _ship_exc:
+            logger.warning(f"[STOCK-ALERT] No se pudo obtener shipment {shipping_id}: {_ship_exc}")
+            return  # sin dato confiable de envío, mejor no alertar que alertar mal
+    else:
+        logger.warning(f"[STOCK-ALERT] Orden {order_id} sin shipping.id tras reintento — sin dato de envío")
+        return
+    should_alert = _shipment_should_alert(shipment)
+
+    if should_alert:
+        order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
+        for oi in order.get("order_items", []):
+            item_info = oi.get("item", {})
+            sku_raw = (item_info.get("seller_sku") or item_info.get("seller_custom_field") or "").strip()
+            if not sku_raw:
+                continue
+            sku = normalize_to_bm_sku(sku_raw)
+            quantity = int(oi.get("quantity") or 1)
+            avail = _bm_bulk_available_qty(sku)
+            if avail is None or avail <= 0:
+                await token_store.record_realtime_stock_alert(
+                    order_id=str(order.get("id", "")),
+                    item_id=str(item_info.get("id", "")),
+                    platform="ml", account_id=user_id, sku=sku,
+                    quantity=quantity, available_qty=(avail or 0), order_date=order_date,
+                    shipping_id=str(shipping_id),
+                )
+    else:
+        # ML reenvía la notificación en cada cambio de estado de la misma
+        # orden — si ya se había alertado antes y ahora es FULL o pasó a
+        # enviado/entregado/cancelado, ya no es accionable: se limpia.
+        await token_store.delete_realtime_stock_alerts_for_order(str(order.get("id", "")), platform="ml")
+
+
 async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
     """Procesa una notificación de ML — acepta tanto el topic "orders_v2"
     (resource=/orders/{id}) como "shipments" (resource=/shipments/{id}).
@@ -2194,7 +2271,6 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
     order_history pero nunca generaron alerta porque ML no reavisa solo por
     el cambio de shipment si no estamos suscritos a ese topic. El de
     shipments cubre exactamente ese caso."""
-    from app.services.sku_utils import normalize_to_bm_sku
     client = None
     try:
         client = await get_meli_client(user_id=user_id)
@@ -2214,72 +2290,53 @@ async def _process_ml_order_webhook(resource: str, user_id: str) -> None:
             if not order_id.isdigit():
                 return
 
-        order = await client.resolve_order(order_id)
-        if order.get("status") not in ("paid", "delivered"):
-            return
-
-        usd_to_mxn = await _get_usd_to_mxn(client)
-        _save_ml_orders_history_bg([order], user_id, usd_to_mxn)
-
-        # La alerta de "sin stock" solo aplica a órdenes PENDIENTES de enviar,
-        # merchant (no FULL) — FULL lo despacha ML desde su propio almacén
-        # (no depende de nuestro stock BM), y una orden ya enviada/entregada
-        # ya no es accionable, mostrarla solo confunde. El status/logistic_type
-        # real vive en /shipments/{id} — el objeto "shipping" de la orden solo
-        # trae el id de referencia, NO el estado (confirmado contra un caso real).
-        #
-        # Race condition confirmada con 2 órdenes reales: la notificación de
-        # "orders_v2" a veces llega ANTES de que ML termine de asignar el
-        # shipment (shipping.id todavía vacío) — sin reintento, la orden se
-        # guardaba en order_history pero NUNCA se generaba la alerta, porque
-        # ML no vuelve a notificar solo por el cambio de shipment (no estamos
-        # suscritos al topic "shipments"). Reintenta una vez tras una pausa
-        # corta antes de rendirse.
-        shipping_id = (order.get("shipping") or {}).get("id")
-        if not shipping_id:
-            await asyncio.sleep(8)
-            order = await client.resolve_order(order_id)
-            shipping_id = (order.get("shipping") or {}).get("id")
-
-        if shipping_id:
-            try:
-                shipment = await client.get_shipment(str(shipping_id))
-            except Exception as _ship_exc:
-                logger.warning(f"[WEBHOOK-ML] No se pudo obtener shipment {shipping_id}: {_ship_exc}")
-                return  # sin dato confiable de envío, mejor no alertar que alertar mal
-        else:
-            logger.warning(f"[WEBHOOK-ML] Orden {order_id} sin shipping.id tras reintento — sin dato de envío")
-            return
-        should_alert = _shipment_should_alert(shipment)
-
-        if should_alert:
-            order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
-            for oi in order.get("order_items", []):
-                item_info = oi.get("item", {})
-                sku_raw = (item_info.get("seller_sku") or item_info.get("seller_custom_field") or "").strip()
-                if not sku_raw:
-                    continue
-                sku = normalize_to_bm_sku(sku_raw)
-                quantity = int(oi.get("quantity") or 1)
-                avail = _bm_bulk_available_qty(sku)
-                if avail is None or avail <= 0:
-                    await token_store.record_realtime_stock_alert(
-                        order_id=str(order.get("id", "")),
-                        item_id=str(item_info.get("id", "")),
-                        platform="ml", account_id=user_id, sku=sku,
-                        quantity=quantity, available_qty=(avail or 0), order_date=order_date,
-                        shipping_id=str(shipping_id),
-                    )
-        else:
-            # ML reenvía la notificación en cada cambio de estado de la misma
-            # orden — si ya se había alertado antes y ahora es FULL o pasó a
-            # enviado/entregado/cancelado, ya no es accionable: se limpia.
-            await token_store.delete_realtime_stock_alerts_for_order(str(order.get("id", "")), platform="ml")
+        await _evaluate_order_stock_alert(order_id, user_id, client)
     except Exception as e:
         logger.warning(f"[WEBHOOK-ML] Error procesando resource={resource} uid={user_id}: {e}")
     finally:
         if client:
             await client.close()
+
+
+async def _realtime_stock_reconcile_loop():
+    """Red de seguridad del webhook de 'Sin Stock' -- FIX 2026-08-14. El
+    webhook solo evalúa una orden cuando ML manda una notificación de ESA
+    orden; si el status se queda quieto (ej. sigue "pending" sin cambiar),
+    ML nunca vuelve a avisar y la orden nunca se re-evalúa, aunque el
+    stock cambie después. Jovan reportó con datos reales (captura de
+    BinManager "Problem Items Today") que la pantalla de alertas seguía en
+    0 pese al fix del webhook -- esta es la pieza que faltaba: re-evalúa
+    las órdenes pagadas de las últimas 24h cada 5 min, usando la MISMA
+    lógica ya corregida (_evaluate_order_stock_alert -> _bm_bulk_available_qty,
+    100% en memoria, cero llamadas nuevas a BM)."""
+    await asyncio.sleep(180)  # dejar que el bulk cache tenga su primer ciclo
+    while True:
+        try:
+            candidates = await token_store.get_recent_paid_ml_orders(hours=24)
+            sem = asyncio.Semaphore(3)
+            clients_cache: dict = {}
+
+            async def _check(row):
+                uid = row["account_id"]
+                async with sem:
+                    try:
+                        client = clients_cache.get(uid)
+                        if client is None:
+                            client = await get_meli_client(user_id=uid)
+                            if not client:
+                                return
+                            clients_cache[uid] = client
+                        await _evaluate_order_stock_alert(row["order_id"], uid, client)
+                    except Exception as _e:
+                        logger.warning(f"[STOCK-RECONCILE] Error orden {row['order_id']}: {_e}")
+
+            await asyncio.gather(*[_check(r) for r in candidates], return_exceptions=True)
+            for _c in clients_cache.values():
+                await _c.close()
+            logger.info(f"[STOCK-RECONCILE] Ciclo completo: {len(candidates)} órdenes re-evaluadas")
+        except Exception as e:
+            logger.warning(f"[STOCK-RECONCILE] Error en ciclo: {e}")
+        await asyncio.sleep(300)  # cada 5 min
 
 
 @app.post("/webhooks/ml/orders")
@@ -18696,6 +18753,44 @@ async def diag_trigger_bm_master_sync(token: str = ""):
         return JSONResponse({"error": "token inválido"}, status_code=403)
     asyncio.create_task(_bm_master_sync_once())
     return JSONResponse({"ok": True, "message": "bm_master_sync disparado en background"})
+
+
+@app.get("/api/diag/trigger-stock-reconcile")
+async def diag_trigger_stock_reconcile(token: str = "", hours: int = 24):
+    """Dispara UNA pasada del barrido de _realtime_stock_reconcile_loop()
+    de forma síncrona (no en background) y devuelve un resumen -- para
+    verificar el fix de 2026-08-14 sin esperar el ciclo de 5 min."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    candidates = await token_store.get_recent_paid_ml_orders(hours=hours)
+    sem = asyncio.Semaphore(3)
+    clients_cache: dict = {}
+    errors: list = []
+
+    async def _check(row):
+        uid = row["account_id"]
+        async with sem:
+            try:
+                client = clients_cache.get(uid)
+                if client is None:
+                    client = await get_meli_client(user_id=uid)
+                    if not client:
+                        return
+                    clients_cache[uid] = client
+                await _evaluate_order_stock_alert(row["order_id"], uid, client)
+            except Exception as _e:
+                errors.append({"order_id": row["order_id"], "error": str(_e)[:200]})
+
+    await asyncio.gather(*[_check(r) for r in candidates])
+    for _c in clients_cache.values():
+        await _c.close()
+    alerts_now = await token_store.get_realtime_stock_alerts(limit=100)
+    return JSONResponse({
+        "candidates_checked": len(candidates),
+        "errors": errors,
+        "current_alerts_count": len(alerts_now),
+        "current_alerts": alerts_now,
+    })
 
 
 @app.get("/api/diag/bm-master-status")

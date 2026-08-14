@@ -2106,6 +2106,25 @@ async def get_orders_without_stock(days: int = 14) -> dict:
     return {"days": days, "cutoff": cutoff, "rows": rows, "stock_snapshot_updated_at": last_snapshot}
 
 
+async def get_recent_paid_ml_orders(hours: int = 24) -> list[dict]:
+    """Órdenes ML pagadas recientes (order_id, account_id), para el barrido
+    periódico de _realtime_stock_reconcile_loop() -- red de seguridad que
+    re-evalúa órdenes que el webhook ya procesó una vez pero nunca vuelve a
+    tocar si ML no reenvía otra notificación de esa misma orden (ver
+    DEVLOG 2026-08-14). Usa order_history en vez de volver a pedirle a ML
+    la lista completa -- ya la tenemos guardada del webhook original."""
+    import time as _t
+    cutoff = _t.time() - hours * 3600
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT DISTINCT order_id, account_id
+            FROM order_history
+            WHERE platform = 'ml' AND status = 'paid' AND created_at >= ?
+        """, (cutoff,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def record_realtime_stock_alert(
     order_id: str, item_id: str, platform: str, account_id: str,
     sku: str, quantity: int, available_qty: int | None, order_date: str,
