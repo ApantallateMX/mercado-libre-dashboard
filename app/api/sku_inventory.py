@@ -1078,7 +1078,14 @@ con los titulos, nada mas."""
             f"asteriscos (**negrita**), guiones bajos, ni enlaces [texto](url)\n"
             f"- Usa saltos de linea para separar secciones\n"
             f"- Minimo 300 palabras, maximo 800\n"
-            f"- Tono profesional pero accesible"
+            f"- Tono profesional pero accesible\n"
+            f"- GARANTIA (obligatorio): siempre 3 meses por defectos de fabrica, "
+            f"ofrecida directamente por el vendedor. NUNCA menciones una garantia "
+            f"del fabricante/marca (ej. 'respaldada por [marca]', '12 meses de "
+            f"fabrica', etc.) ni un plazo distinto a 3 meses, aunque encuentres "
+            f"otro plazo en la ficha tecnica real del producto durante tu "
+            f"investigacion -- ese dato es solo para las caracteristicas tecnicas, "
+            f"no para la seccion de garantia."
         )
 
         async def desc_stream():
