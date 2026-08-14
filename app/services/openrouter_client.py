@@ -277,11 +277,18 @@ async def generate_stream(
     system: str = "",
     max_tokens: int = 512,
     model: str = "",
+    web_search: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Genera respuesta en streaming con retry en cascade de modelos.
     Si todos los modelos gratuitos fallan → Claude Haiku (non-streaming → yield único).
-    """
+
+    web_search=True (2026-08-14, agregado sin tocar el comportamiento default):
+    activa el plugin nativo de búsqueda web de OpenRouter (via Exa) -- el
+    modelo busca en internet de verdad antes de responder, en vez de
+    inventar/adivinar. Costo aparte de tokens (~$0.02 por búsqueda de 5
+    resultados) -- por eso queda OFF por default, solo se prende
+    explícitamente donde hace falta info real (ej. descripción de producto)."""
     primary = model or _OR_MODEL
     all_free = await _get_free_models()
     cascade_all = [primary] + [m for m in all_free if m != primary]
@@ -295,6 +302,8 @@ async def generate_stream(
             "max_tokens": max_tokens,
             "stream":     True,
         }
+        if web_search:
+            payload["plugins"] = [{"id": "web", "max_results": 5}]
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(

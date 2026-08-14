@@ -931,6 +931,17 @@ def _title_case_ml(text: str) -> str:
     return " ".join(result)
 
 
+def _strip_markdown_noise(text: str) -> str:
+    """Red de seguridad server-side (mismo patron que _title_case_ml): MeLi
+    no renderiza markdown, pero el modelo a veces deja **negrita**, __texto__
+    o [enlace](url) sueltos aunque el prompt lo prohiba explicitamente --
+    2026-08-14, reportado por Jovan con un caso real."""
+    import re
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # [texto](url) -> texto
+    text = text.replace("**", "").replace("__", "")
+    return text
+
+
 @router.post("/ai-improve")
 async def ai_improve(body: dict):
     """
@@ -1005,18 +1016,37 @@ uno ya con la capitalizacion correcta (Title Case) aplicada."""
         vision_note = ""
         if image_urls:
             vision_note = "\nMIRAS las imagenes reales del producto. Usa lo que ves (colores, dimensiones, accesorios incluidos, pantalla, botones) para hacer la descripcion precisa y convincente.\n"
+        # FIX 2026-08-14 (pedido por Jovan: la descripcion salia generica/pobre
+        # porque solo se le daba marca/modelo/titulo, sin buscar nada real del
+        # producto) -- AGREGADO sin tocar el flujo de imagenes ni la estructura
+        # de arriba: cuando no hay fotos que analizar, se activa el plugin de
+        # busqueda web de OpenRouter (ver web_search en openrouter_client.py)
+        # para que el modelo busque specs/caracteristicas reales antes de escribir.
+        web_search_note = ""
+        if not image_urls:
+            web_search_note = (
+                "\nTienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
+                "tecnica real de este producto (marca+modelo) antes de escribir, "
+                "y usa esa informacion real (especificaciones, capacidad, "
+                "materiales, medidas) en vez de inventar datos genericos. "
+                "NO cites las fuentes ni pongas enlaces en la respuesta final "
+                "(ninguna linea tipo 'Fuente:' ni '[sitio](url)') -- la "
+                "investigacion es solo para que TU sepas los datos reales, "
+                "el texto final es una descripcion de venta normal.\n"
+            )
         prompt = (
             f"Genera una descripcion profesional para Mercado Libre Mexico.\n"
             f"Titulo: {current_value}\n"
             f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\nSKU: {sku}\n"
-            f"{vision_note}\n"
+            f"{vision_note}{web_search_note}\n"
             f"Estructura:\n"
             f"- Parrafo de apertura (beneficios principales, lo que ve el comprador)\n"
             f"- Caracteristicas tecnicas en lista\n"
             f"- Contenido del paquete\n"
             f"- Garantia y soporte\n\n"
             f"Reglas:\n"
-            f"- Solo texto plano (MeLi no soporta HTML)\n"
+            f"- Solo texto plano -- MeLi NO soporta HTML ni markdown: NADA de "
+            f"asteriscos (**negrita**), guiones bajos, ni enlaces [texto](url)\n"
             f"- Usa saltos de linea para separar secciones\n"
             f"- Minimo 300 palabras, maximo 800\n"
             f"- Tono profesional pero accesible"
@@ -1026,10 +1056,16 @@ uno ya con la capitalizacion correcta (Title Case) aplicada."""
             try:
                 if image_urls:
                     text = await _or_client.generate_with_images(prompt, image_urls, system_prompt, max_tokens=1500)
-                    yield f"data: {text}\n\n"
+                    yield f"data: {_strip_markdown_noise(text)}\n\n"
                 else:
-                    async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=1500, model=_or_client.get_premium_model()):
-                        yield f"data: {chunk}\n\n"
+                    async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=1500, model=_or_client.get_premium_model(), web_search=True):
+                        # AGREGADO 2026-08-14: aun con la regla explicita en el
+                        # prompt, el modelo a veces deja **negrita** sueltas
+                        # (MeLi no las renderiza -- se ven como asteriscos
+                        # literales rotos). Limpieza best-effort por chunk;
+                        # ver _strip_markdown_noise() para el paso final
+                        # completo si algun caso cruza el limite de un chunk.
+                        yield f"data: {chunk.replace('**', '').replace('__', '')}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 yield f"data: [ERROR] {str(e)}\n\n"

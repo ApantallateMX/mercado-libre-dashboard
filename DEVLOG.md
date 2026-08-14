@@ -7,6 +7,50 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 5) — FEAT: descripción de producto con búsqueda web real (no más texto genérico)
+
+Jovan reportó (screenshot) que la descripción generada por "✦ IA" en la
+edición de un producto salía pobre/genérica ("patético") — solo se le
+daba marca/modelo/título a la IA, sin buscar nada real del producto.
+
+Antes de reusar el scraper de DuckDuckGo que ya existe (`product_researcher.py`,
+usado hoy solo en el wizard de publicación nueva), Jovan preguntó por
+mejores opciones. Investigado: OpenRouter (el proveedor que ya usamos)
+tiene un plugin nativo de búsqueda web (`plugins: [{"id":"web"}]`, ~$4 por
+1000 resultados vía Exa) — más confiable que mantener scraping propio, sin
+dar de alta un proveedor nuevo. Se evaluó también APIs de UPC (Go-UPC,
+Barcode Lookup) — mejor para datos estructurados exactos, pero requieren
+cuenta nueva; quedó fuera de alcance por ahora.
+
+**Agregado (sin tocar nada existente, pedido explícito de Jovan
+"agrega, no cambies")**:
+- `openrouter_client.generate_stream()`: nuevo parámetro `web_search: bool
+  = False` — activa el plugin de búsqueda de OpenRouter. Default False,
+  cero impacto en cualquier otro caller existente.
+- `sku_inventory.py` (`ai_improve`, rama `description`, sin imágenes):
+  `web_search=True` + instrucción explícita de buscar la ficha técnica
+  real antes de escribir.
+- Reglas reforzadas: no citar fuentes en el texto final (una vez se filtró
+  "Fuente: [eufy.com](url)" en el resultado) y prohibición explícita de
+  markdown (`**negrita**`) — MeLi no lo renderiza.
+- `_strip_markdown_noise()` nueva (mismo patrón que `_title_case_ml`: red
+  de seguridad server-side) — limpia `**`/`__`/enlaces markdown aunque el
+  modelo no siga la instrucción al 100%.
+
+Verificado end-to-end con el producto real del reporte (Eufy Omni S1
+Pro): la descripción pasó de un encabezado vacío a incluir specs reales
+y verificables (succión 8,000 Pa, tecnología HydroJet™, capacidades de
+tanques, autonomía, dimensiones exactas, contenido del paquete) — sin
+asteriscos ni citas de fuente en el texto final.
+
+Pendiente (pedido más amplio de Jovan, mismo día): aplicar el mismo
+criterio de "mejores prácticas ML + buscar información real" a TODOS los
+campos de un listado (título, atributos/bullets, e imágenes — buscar en
+línea o generar si faltan) — queda como conversación de alcance/prioridad
+para una siguiente sesión, no implementado todavía.
+
+---
+
 ## 2026-08-14 (cont. 4) — FEAT: instrucciones personalizadas para IA en Reclamos (mismo patrón de Mensajes)
 
 Jovan pidió que "Sugerir Respuesta" en Reclamos permita agregar
