@@ -963,6 +963,24 @@ async def ai_improve(body: dict):
     model = context.get("model", "")
     category = context.get("category", "")
 
+    # FIX 2026-08-14 (pedido por Jovan: "resolver todo" -- la busqueda web no
+    # es 100% determinista, titulo/descripcion/guion podian encontrar specs
+    # DISTINTAS para el mismo producto en busquedas independientes, ej.
+    # "8,000 Pa" en descripcion vs "15,000 Pa" en el guion de video). Si ya
+    # existe una descripcion con datos reales confirmados (generada antes en
+    # esta misma sesion de edicion), se ancla el resto de los campos a ESOS
+    # mismos hechos en vez de disparar una busqueda nueva e independiente.
+    existing_description = (context.get("existing_description") or "").strip()
+    _has_confirmed_facts = len(existing_description) > 80
+    _facts_anchor_note = ""
+    if _has_confirmed_facts:
+        _facts_anchor_note = (
+            "\nYa existe esta descripcion con datos REALES ya confirmados de "
+            "este producto -- USA ESTOS MISMOS DATOS/CIFRAS, no busques de "
+            "nuevo ni inventes cifras distintas (evita inconsistencias entre "
+            "campos del mismo listado):\n---\n" + existing_description[:1500] + "\n---\n"
+        )
+
     system_prompt = (
         "Eres un experto en optimizacion de publicaciones para Mercado Libre Mexico. "
         "Responde siempre en espanol. Se conciso y directo."
@@ -984,11 +1002,8 @@ PRODUCTO:
 - Marca: {brand}
 - Modelo: {model}
 - Categoria: {category}
-
-Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha tecnica real
-de este producto (marca+modelo) antes de elegir las palabras clave del
-titulo, para incluir la caracteristica/tecnologia mas relevante y real
-(no generica) en el espacio disponible.
+{_facts_anchor_note if _has_confirmed_facts else ""}
+{"" if _has_confirmed_facts else "Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha tecnica real de este producto (marca+modelo) antes de elegir las palabras clave del titulo, para incluir la caracteristica/tecnologia mas relevante y real (no generica) en el espacio disponible."}
 
 REGLAS CRITICAS (MeLi 2026):
 1. TITULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible.
@@ -1013,7 +1028,7 @@ notas, explicaciones, citas de fuentes ni enlaces -- SOLO las 3 lineas
 con los titulos, nada mas."""
 
         try:
-            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model(), web_search=True)
+            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model(), web_search=not _has_confirmed_facts)
             candidates = [_title_case_ml(t.strip()) for t in raw.strip().split("\n") if t.strip()]
             # Red de seguridad: aun con la instruccion explicita, el modelo a
             # veces agrega una linea de "nota"/cita con fuente (2026-08-14,
@@ -1115,13 +1130,17 @@ con los titulos, nada mas."""
             return JSONResponse({"error": str(e)}, status_code=500)
 
     elif field == "attributes":
+        _attrs_search_note = (
+            _facts_anchor_note if _has_confirmed_facts else
+            "Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
+            "tecnica real de este producto (marca+modelo) antes de responder. "
+            "Usa esos datos reales para los valores, no los inventes.\n"
+        )
         prompt = (
             f"Dado este producto:\n"
             f"Titulo: {context.get('title', '')}\n"
             f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\n\n"
-            f"Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
-            f"tecnica real de este producto (marca+modelo) antes de responder. "
-            f"Usa esos datos reales para los valores, no los inventes.\n\n"
+            f"{_attrs_search_note}\n"
             f"Sugiere valores para estos atributos vacios de Mercado Libre:\n"
             f"{current_value}\n\n"
             f"Responde SOLO en formato JSON: un array de objetos con {{\"id\": \"ATTR_ID\", \"value_name\": \"valor sugerido\"}}\n"
@@ -1129,20 +1148,24 @@ con los titulos, nada mas."""
         )
 
         try:
-            result = await _or_client.generate(prompt, system_prompt, max_tokens=800, model=_or_client.get_premium_model(), web_search=True)
+            result = await _or_client.generate(prompt, system_prompt, max_tokens=800, model=_or_client.get_premium_model(), web_search=not _has_confirmed_facts)
             return {"result": result}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     elif field == "video_script":
         title = context.get("title", current_value)
+        _script_search_note = (
+            _facts_anchor_note if _has_confirmed_facts else
+            "Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
+            "tecnica real de este producto antes de escribir, para que los "
+            "beneficios que menciones sean reales y especificos, no genericos.\n"
+        )
         prompt = (
             f"Crea el texto de narracion para un video comercial de 40-50 segundos.\n\n"
             f"Producto: {title}\n"
             f"Marca: {brand}\n\n"
-            f"Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
-            f"tecnica real de este producto antes de escribir, para que los "
-            f"beneficios que menciones sean reales y especificos, no genericos.\n\n"
+            f"{_script_search_note}\n"
             f"REQUISITOS:\n"
             f"- Entre 110 y 130 palabras exactamente (para 40-50 segundos hablados)\n"
             f"- Espanol de Mexico, tono energico, aspiracional y persuasivo — que den ganas de comprarlo\n"
@@ -1159,7 +1182,7 @@ con los titulos, nada mas."""
 
         async def script_stream():
             try:
-                async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=600, model=_or_client.get_premium_model(), web_search=True):
+                async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=600, model=_or_client.get_premium_model(), web_search=not _has_confirmed_facts):
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:

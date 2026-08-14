@@ -7,6 +7,58 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 7) — FIX: unificación de los 2 Quality Score + consistencia entre campos generados por IA
+
+Jovan pidió resolver los 2 pendientes que quedaron señalados (no solo
+documentados): la duplicidad de Score de Calidad, y la inconsistencia de
+la búsqueda web entre campos.
+
+**Unificación del Score de Calidad**: confirmado que el multiget del gap
+scan (`/items?ids=...` en `_get_meli_sku_set()`, `lanzar.py`) YA trae el
+body completo del item (fotos/video/envío/atributos/status/tipo) sin
+llamadas extra — lo único que ese contexto no tiene es la descripción
+real (endpoint aparte por item, pedirla para miles de items en bulk
+sería caro) y el precio-vs-competencia (cache aparte, solo top-20).
+
+- `_calculate_health_score()` (`app/api/items.py:971`) ahora acepta
+  `description=None` como "dato no disponible, omitir sin penalizar"
+  (distinto de `description=""`, que SÍ penaliza como antes — cambio
+  retrocompatible, ningún caller existente pasaba `None`).
+- `_process_item_body()` (`app/api/lanzar.py`) ya NO calcula su propia
+  fórmula reducida (solo título/fotos/GTIN+BRAND/precio>0) — ahora llama
+  a la MISMA `_calculate_health_score()` que ve el usuario en el modal de
+  edición, con `description=None, price_delta_pct=None`. Cero llamadas
+  nuevas a la API de ML.
+- Corregido de paso un bug real que se habría introducido con la
+  unificación ingenua: la fórmula vieja reescalaba el estático a 70 pts
+  a propósito, para dejar 30 pts de margen a las señales dinámicas
+  (stock BM real/precio-vs-competencia/reclamos) sin pasarse de 100. Con
+  el estático ahora en escala completa 0-100, sumar+clamp ocultaba
+  señales dinámicas malas detrás de un estático ya perfecto (ej.
+  contenido 100/100 + SIN stock real + reclamo abierto seguía dando
+  100/100). Cambiado a promedio ponderado 70/30 real (ambos lados en
+  escala 0-100) en vez de suma+`min(100,...)`.
+
+**Consistencia entre campos generados por IA**: en vez de que cada campo
+(título/atributos/guion de video) dispare su propia búsqueda web
+independiente (pudiendo encontrar cifras distintas para el mismo
+producto — visto en pruebas: "8,000 Pa" en descripción vs "15,000 Pa" en
+guion de video), ahora el frontend (`item_edit_modal.html`,
+`productos.js`) manda el contenido de la descripción YA generada como
+`existing_description` en el contexto. Si hay una descripción sustancial
+ya generada (>80 caracteres), título/atributos/guion la usan como ancla
+de hechos confirmados en vez de disparar una búsqueda nueva (`web_search`
+se desactiva automáticamente en ese caso — también ahorra costo).
+Verificado: con una descripción real mencionando "HydroJet" y "3.6
+horas", el título generado después usó esos MISMOS datos, no cifras
+nuevas.
+
+No elimina el 100% del riesgo (si el usuario genera título ANTES que
+descripción, título sigue haciendo su propia búsqueda) pero cubre el
+flujo natural de edición (descripción primero, luego el resto).
+
+---
+
 ## 2026-08-14 (cont. 6) — FEAT: mismo criterio de "info real, no inventada" en título, atributos, GTIN, video e imágenes IA
 
 Continuación del pedido de Jovan: "analiza todas las opciones al crear/

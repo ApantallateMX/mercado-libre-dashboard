@@ -835,6 +835,7 @@
     const item = state.panelItem;
     const brand = (item?.attributes || []).find(a => a.id === 'BRAND')?.value_name || '';
     const model = (item?.attributes || []).find(a => a.id === 'MODEL')?.value_name || '';
+    const existingDescription = item?.description || item?.plain_text || '';
 
     btn.disabled = true; btn.textContent = 'Generando...';
     if (statusEl) { statusEl.textContent = 'La IA está escribiendo el guion...'; statusEl.classList.remove('hidden'); }
@@ -844,7 +845,7 @@
       const resp = await fetch('/api/sku-inventory/ai-improve', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ field: 'video_script', current_value: title, context: { brand, model, title } })
+        body: JSON.stringify({ field: 'video_script', current_value: title, context: { brand, model, title, existing_description: existingDescription } })
       });
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();

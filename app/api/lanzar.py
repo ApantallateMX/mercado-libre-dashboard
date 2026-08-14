@@ -356,15 +356,24 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                         attrs = body.get("attributes") or []
                         has_gtin  = any(a.get("id") in ("GTIN", "EAN", "UPC") for a in attrs)
                         has_brand = any(a.get("id") == "BRAND" for a in attrs)
-                        # Estático, reescalado a 70 pts (antes 100) — deja 30 pts para
-                        # señales dinámicas (stock/precio-vs-competencia/reclamos), que
-                        # se agregan más abajo donde ya hay acceso a bm_map/claims por
-                        # cuenta (aquí solo se tiene el body del item, no ese contexto).
-                        title_score  = min(len(title), 60) / 60 * 17.5
-                        pics_score   = min(pics, 6) / 6 * 17.5
-                        attr_score   = ((10 if has_brand else 0) + (15 if has_gtin else 0)) * 0.7
-                        price_score  = 17.5 if price > 0 else 0
-                        quality_score = int(title_score + pics_score + attr_score + price_score)
+                        # FIX 2026-08-14 (unificacion de los 2 "Quality Score" que
+                        # convivian sin relacion, senalado por Jovan): antes esta
+                        # formula era una version reducida propia (solo titulo/fotos/
+                        # GTIN+BRAND/precio>0, reescalada a 100). Ahora reusa
+                        # _calculate_health_score() -- la MISMA formula que ve el
+                        # usuario en el modal de edicion de un item -- sin costo
+                        # extra de red: el multiget de arriba (/items?ids=...) YA
+                        # trae pictures/video_id/shipping/attributes/status/
+                        # listing_type_id en `body`, lo unico que este contexto no
+                        # tiene es la descripcion real (endpoint aparte por item,
+                        # pedirla para miles de items en bulk seria caro) y el
+                        # precio-vs-competencia (cache aparte, solo top-20) -- ambos
+                        # se pasan como None, que la funcion ya sabe omitir sin
+                        # penalizar (mismo patron que ya tenia price_delta_pct).
+                        from app.api.items import _calculate_health_score as _health_score_fn
+                        quality_score, _hs_problems, _hs_breakdown = _health_score_fn(
+                            body, description=None, price_delta_pct=None
+                        )
                         if price > 0:
                             active_prices_map.setdefault(base, [])
                             if not any(e["item_id"] == iid for e in active_prices_map[base]):
@@ -857,7 +866,18 @@ async def _run_gap_scan(user_id: str | None = None):
                             else:
                                 price_comp_score = 10  # sin dato de competencia — neutral, no penaliza
                             dynamic_total = stock_score + price_comp_score + claims_score
-                            final_score = min(100, int(item_info.get("quality_score", 0)) + dynamic_total)
+                            # FIX 2026-08-14 (parte de la unificacion de los 2 Quality
+                            # Score): antes el estatico ya venia reescalado a 70 pts
+                            # para que static+dynamic(max 30) sumaran 100 exacto. Ahora
+                            # el estatico es _calculate_health_score() completo (0-100),
+                            # asi que sumar dynamic encima y solo hacer min(100,...)
+                            # ocultaba senales dinamicas malas detras de un estatico ya
+                            # perfecto (ej. contenido 100/100 + SIN stock real + reclamo
+                            # abierto seguia dando 100 con min()). Promedio ponderado
+                            # 70/30 en vez de suma+clamp: ambos lados en escala 0-100.
+                            static_full = int(item_info.get("quality_score", 0))
+                            dynamic_pct = dynamic_total / 30 * 100
+                            final_score = round(static_full * 0.7 + dynamic_pct * 0.3)
                             await db.execute("""
                                 INSERT OR REPLACE INTO ml_listing_quality
                                     (user_id, nickname, sku, item_id, product_title, ml_price,

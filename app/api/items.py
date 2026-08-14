@@ -968,7 +968,7 @@ async def get_item_history(item_id: str, limit: int = Query(50, ge=1, le=200)):
     return {"item_id": item_id, "history": rows, "count": len(rows)}
 
 
-def _calculate_health_score(body: dict, description: str = "", price_delta_pct: float | None = None) -> tuple:
+def _calculate_health_score(body: dict, description: str | None = "", price_delta_pct: float | None = None) -> tuple:
     """Calcula health score (0-100), lista de problemas y breakdown detallado.
 
     price_delta_pct: % del precio actual vs. precio sugerido/top-3 de categoria
@@ -977,7 +977,15 @@ def _calculate_health_score(body: dict, description: str = "", price_delta_pct: 
     no se penaliza por falta de dato). Antes el score no consideraba precio en
     absoluto: un listing podia sacar 95/100 y estar 25% caro, quemando
     presupuesto de Ads en clics que no convierten sin que el score lo reflejara.
-    """
+
+    description=None (2026-08-14, unificacion con el "Quality Score ML" del
+    gap scan, ver lanzar.py _process_item_body): significa "dato no
+    disponible en este contexto" (el multiget de items NO trae descripcion,
+    es un endpoint aparte por item -- pedirla en bulk para miles de items
+    seria caro) -- el check se OMITE sin penalizar, mismo patron que
+    price_delta_pct=None. description="" (string vacio, el default de
+    siempre) SI penaliza -- ahi el caller SI tiene el dato y de verdad esta
+    vacia."""
     score = 100
     problems = []
     breakdown = []  # list of {label, impact, ok, tip}
@@ -1038,16 +1046,19 @@ def _calculate_health_score(body: dict, description: str = "", price_delta_pct: 
     else:
         breakdown.append({"label": f"Titulo ({tlen} chars)", "impact": 0, "ok": True, "tip": "", "key": ""})
 
-    # Descripcion
-    desc_words = len(description.split()) if description and description.strip() else 0
-    if desc_words < 50:
-        score -= 10; problems.append(f"Descripcion muy corta ({desc_words} palabras)")
-        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -10, "ok": False, "tip": "Genera descripcion con IA (min 200 palabras)", "key": "description"})
-    elif desc_words < 150:
-        score -= 5; problems.append(f"Descripcion corta ({desc_words} palabras)")
-        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -5, "ok": False, "tip": "Ampliar descripcion a 200+ palabras mejora visibilidad", "key": "description"})
+    # Descripcion -- None = dato no disponible en este contexto, se omite sin penalizar
+    if description is None:
+        breakdown.append({"label": "Descripcion (no verificada)", "impact": 0, "ok": True, "tip": "", "key": ""})
     else:
-        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": 0, "ok": True, "tip": "", "key": ""})
+        desc_words = len(description.split()) if description and description.strip() else 0
+        if desc_words < 50:
+            score -= 10; problems.append(f"Descripcion muy corta ({desc_words} palabras)")
+            breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -10, "ok": False, "tip": "Genera descripcion con IA (min 200 palabras)", "key": "description"})
+        elif desc_words < 150:
+            score -= 5; problems.append(f"Descripcion corta ({desc_words} palabras)")
+            breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -5, "ok": False, "tip": "Ampliar descripcion a 200+ palabras mejora visibilidad", "key": "description"})
+        else:
+            breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": 0, "ok": True, "tip": "", "key": ""})
 
     # GTIN
     attrs = body.get("attributes", [])

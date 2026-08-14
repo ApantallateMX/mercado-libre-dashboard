@@ -790,7 +790,7 @@ window.editModalAiTitle = async function(autoApply) {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({field: 'title', current_value: titleInput.value,
-                                  context: {brand: brand, model: model}})
+                                  context: {brand: brand, model: model, existing_description: (document.getElementById('edit-description').value || '')}})
         });
         var data = await resp.json();
         if (data.error) {
@@ -912,7 +912,7 @@ window.editModalAiAttrs = async function(itemId) {
             body: JSON.stringify({
                 field: 'attributes',
                 current_value: emptyAttrs.join(', '),
-                context: {brand: brand, model: model, title: title}
+                context: {brand: brand, model: model, title: title, existing_description: (document.getElementById('edit-description').value || '')}
             })
         });
         var data = await resp.json();
