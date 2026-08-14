@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 13) — FEAT: título IA se ensambla por palabras priorizadas, ya no corta a media palabra
+
+Jovan reportó un título real cortado a mitad de palabra ("...Triple Fi"
+en vez de "...Triple Filtro") y pidió explícitamente la mejor solución,
+no otro parche.
+
+**Causa real:** la IA sí escribía una frase completa (63 caracteres),
+pero el frontend le aplicaba encima un `.slice(0, 60)` ciego por
+caracter — cortando lo que fuera que cayera justo en la posición 60,
+palabra completa o no.
+
+**Solución (cambio de arquitectura, no un trim más agresivo):** un LLM no
+cuenta caracteres de forma confiable aunque se le pida un rango exacto,
+así que se dejó de pedirle "escribe el título final de 55-60
+caracteres". Ahora se le pide un **arreglo de palabras/frases cortas ya
+priorizadas** de más a menos esenciales (Marca > Tipo > Característica
+clave real > Tamaño > relleno opcional). El ensamblado final lo hace
+código determinista (`_pack_title_from_chunks`, `app/api/sku_inventory.py`):
+suma chunks en ese orden hasta topar el límite real de 60, **omitiendo
+entero** cualquier chunk que no quepa completo — nunca corta uno a la
+mitad, y sigue probando el siguiente (más corto) para aprovechar el
+espacio que quede.
+
+Fallback en 2 capas si la IA no responde JSON válido (parsea línea por
+línea como palabras sueltas; si un candidato empaca muy corto, reintenta
+palabra por palabra en vez de chunk por chunk) — nunca se cae de vuelta
+al corte crudo de caracteres.
+
+Frontend (`item_edit_modal.html`, `sku_inventory.js`): el `.slice(0,60)`
+se reemplazó por `_trimTitleWordSafe()` (corta a la última palabra
+completa) como red de seguridad adicional, ya no como mecanismo
+principal.
+
+Verificado: función aislada con el caso real reportado + generación real
+end-to-end en local y contra producción ya desplegada — títulos de
+50-58 caracteres, todos con palabras completas, incluyendo un caso que
+sí logró meter "Triple Filtro" completo.
+
+---
+
 ## 2026-08-14 (cont. 12) — FEAT: garantía estandarizada a 3 meses (defectos de fábrica) en descripción IA
 
 Jovan notó en una descripción generada que la IA prometía "garantía de
