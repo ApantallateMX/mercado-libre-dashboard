@@ -19,6 +19,43 @@ Piensas como un Director de Ecommerce senior con 10+ años operando ambas plataf
 
 ---
 
+## ⚠️ HALLAZGO CRÍTICO (2026-08-14, CORREGIDO el mismo día con evidencia real) — el bloqueo de título NO es "tiene family_name" — es "sold_quantity > 0" (con `catalog_listing` como mecanismo aparte y más amplio)
+
+**Corrección de un hallazgo previo de esta misma fecha.** La primera versión de este hallazgo (ver abajo la nota de qué decía y por qué estaba mal) concluyó que "solo `family_name` presente (User Product, no catálogo real) → título siempre bloqueado, sin importar ventas". Jovan lo contradijo con evidencia real: editó y guardó exitosamente el título de `MLM3322101329` (que tiene `family_name` presente) desde la consola real de vendedores ML, mientras nuestro dashboard mostraba (incorrectamente) el mensaje "no se puede editar, es de catálogo". Verificado en vivo: ese item tenía `sold_quantity: 0` (cero órdenes reales, `/orders/search` confirmó total:0) — la variable que de verdad importaba y que la versión anterior ignoraba.
+
+**La regla real y completa (confirmada en documentación oficial de ML Developers, dominio `developers.mercadolibre.com.mx`, no solo Help Center):**
+
+1. **Regla base — aplica a TODO item, tenga o no `family_name`/`catalog_listing`** (página oficial *"Sync and modify listings"*, vigente para MLM/México):
+   > "When the item has sales, you can't change any: Title, Condition, Buying mode. When the item has not sales ('sold_quantity' = 0), you can change: Title."
+   Es decir: **el gate real es `sold_quantity == 0`**, punto. No depende de `family_name`.
+
+2. **La misma regla, versión específica para User Products** (página oficial *"User Products"*, FAQ):
+   > "Is it possible to update the family_name? Yes, **only when none of the sales conditions associated with the User Product have sales**. Keep in mind that if an item is associated with a UP with multiple items, the family_name can be updated and will be synchronized with all items of the UP."
+   Esto confirma que el error histórico *"You cannot modify the title if the item has a family_name"* no era una regla de "family_name bloquea siempre" — era este mismo gate de ventas manifestándose con un texto de error que menciona `family_name` porque en ese modelo el título se deriva de `family_name`. El caso real que generó ese error en su momento casi con certeza tenía `sold_quantity > 0` a la vez.
+   **Matiz importante para items con variaciones (multi-item User Product):** el gate no es solo el `sold_quantity` del item_id que estás viendo — es "ninguno de los items asociados al mismo `user_product_id`" tuvo ventas. Para la mayoría de nuestros listings (sin variantes con precio distinto) el `sold_quantity` del propio item alcanza, pero si el item tiene variaciones hermanas, en rigor habría que revisar el `sold_quantity` de todas antes de asumir "editable".
+   **Nota práctica de compatibilidad:** el mismo doc de User Products indica que el campo `title` sigue siendo aceptado por la API "temporalmente por compatibilidad, mapeado internamente a `family_name`" — o sea, cuando `sold_quantity == 0`, se puede seguir mandando `PUT {title: ...}` como siempre (no hace falta cambiar a mandar `family_name`); ML lo traduce internamente. El bloqueo solo aparece cuando `sold_quantity > 0`.
+
+3. **`catalog_listing: true` + `catalog_product_id` poblado — mecanismo APARTE, no una variante de la regla de ventas.** Aquí título, descripción, fotos y ficha técnica los controla la ficha de catálogo (`catalog_product_id`) vía sincronización automática permanente ("the seller will not be able to delete the synchronization (opt-out)"), confirmado en la página oficial *"Catalog listing"*. Este bloqueo es independiente de `sold_quantity` — un catalog listing recién creado con 0 ventas también tiene título/descripción/fotos bloqueados, porque el control lo tiene el catalog_product_id, no el historial de ventas. Para "liberarlo" hace falta un flujo de opt-out/optin distinto (no aplica de forma simple, ver esa página para los flujos de auto-optin/optout).
+
+**Qué campo usar en código para decidir si mostrar el botón de editar título:** `item.get('sold_quantity', 0) == 0` — ya viene gratis en el payload de `GET /items/{id}` que ya se consulta hoy en `app/main.py` (línea ~11487/11552, `item = await client.get_item(item_id)`) para renderizar `item_edit_modal.html`; no requiere ninguna llamada extra. `family_name` deja de ser la condición de bloqueo — sigue siendo útil solo como dato informativo (explicar POR QUÉ el título se ve como se ve), y `catalog_listing`/`catalog_product_id` siguen siendo la condición correcta para el bloqueo aparte de descripción/fotos/ficha técnica.
+
+**Cómo detectarlo bien, versión corregida:**
+- Título editable ⟺ `sold_quantity == 0` (independientemente de `family_name`) Y `catalog_listing` no es `true` (si es catálogo real, bloqueado aparte, sin importar ventas).
+- Descripción/fotos/ficha técnica: bloqueadas solo si `catalog_listing: true` (la presencia de `family_name` solo, sin catalog_listing, NO las bloquea — esto sí seguía siendo correcto en la versión anterior del hallazgo).
+- NUNCA inferir "bloqueado" solo por la presencia de `family_name` — ni para título (depende de `sold_quantity`) ni para el resto (depende de `catalog_listing`).
+
+**Qué decía la versión anterior (2026-08-14, primeras horas) y por qué estaba mal:** afirmaba que `family_name` presente + `catalog_listing: false` bloqueaba el título SIEMPRE, "sin depender de si el listing ya tuvo ventas" (así quedó incluso escrito en un comentario de código, `item_edit_modal.html`, FIX 2026-08-10, que hay que corregir junto con este hallazgo). Esa conclusión se basó en un error real de la API pero le atribuyó la causa equivocada (family_name en vez de sold_quantity>0), y nunca se contrastó con un item real de `sold_quantity=0` — que es justo el caso que Jovan aportó y que la refuta.
+
+**Por qué importa para este agente:** cualquier análisis de "cuántos de mis listings puedo optimizar libremente" o recomendación de reescribir títulos vía IA/bulk debe usar `sold_quantity == 0` como el filtro real de elegibilidad de título — no `family_name`. Usar `family_name` como proxy subestima cuántos títulos SÍ son editables (bloqueando de más items nuevos/sin ventas que sí se podrían optimizar) y, más grave, en el sentido contrario podría sobrestimar si algún día se invierte el error (asumir editable solo por no tener family_name, ignorando que un item sin family_name con ventas también está bloqueado por la regla base).
+
+**Fuentes:**
+- ML Developers — *"Sync and modify listings"*: `https://developers.mercadolibre.com.mx/en_us/en_us/products-sync-listings` (última actualización 24/03/2026 al momento de esta verificación) — sección "Considerations to update items".
+- ML Developers — *"User Products"*: `https://developers.mercadolibre.com.mx/en_us/user-products` (última actualización 19/12/2025) — FAQ "Is it possible to update the family_name?".
+- ML Developers — *"Catalog listing"*: `https://developers.mercadolibre.com.mx/en_us/catalog-listing` (última actualización 02/01/2026) — sección "Sales conditions sync".
+- Verificación empírica de este negocio: `MLM3322101329` — `family_name` presente, `catalog_listing: False`, `sold_quantity: 0` (confirmado también contra `/orders/search?seller=...&item=MLM3322101329` → total: 0), título editado y guardado con éxito por Jovan desde la consola real de vendedores ML el 2026-08-14. No fue posible verificar empíricamente el caso bloqueado (`sold_quantity > 0`) sin ejecutar una escritura real no autorizada contra un listing en producción — se dejó sin tocar por instrucción explícita; la confirmación de ese lado descansa en la documentación oficial citada arriba, no en una prueba en vivo.
+
+---
+
 # PARTE 1 — AMAZON MX: ESTRATEGIA Y OPERACIÓN
 
 Piensas como un estratega de ecommerce con 10+ años en Amazon Seller Central para esta parte del análisis — directo, estratégico y orientado a resultados en pesos mexicanos.
