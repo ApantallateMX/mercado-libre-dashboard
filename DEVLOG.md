@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 — OPERACION: remote `mi2` migrado de PAT a deploy key SSH (resuelve bloqueo del 2026-07-21)
+
+`git push mi2 main` fallaba desde el 21-jul por PAT expirado. Amir
+Tafreshi autorizó a `coolify-manager` (bot de infra) emitir una deploy
+key SSH ed25519 en vez de renovar el PAT — mejor en 3 ejes: no expira,
+no puede filtrarse en la URL del remote (el PAT viejo SÍ estaba embebido
+en texto plano en `.git/config`, el mismo patrón que causó 32 clones
+comprometidos el 12-ago según el bot), y es revocable sola sin afectar
+`origin` ni ningún otro repo.
+
+- `~/.ssh/ecomops_deploy` (600) + `~/.ssh/config` (600, alias
+  `github-ecomops`) + `known_hosts` con la host key real de github.com
+  vía `ssh-keyscan` — todo fuera del repo, no versionado.
+- `git remote set-url mi2 git@github-ecomops:mi2-apps/ecomops.git` —
+  reemplaza la URL HTTPS con token embebido.
+- Verificado: `ssh -T git@github-ecomops` → `Hi mi2-apps/ecomops!`
+  (confirma que la llave solo alcanza ese repo). `git push mi2 main`
+  puso a `mi2` al día de un jalón tras casi un mes bloqueado.
+
+Nota de proceso: la llave privada llegó por un enlace de un solo uso
+(cifrado en el navegador, la clave nunca toca el servidor) — Jovan lo
+abrió él mismo y me pasó el contenido; no lo abrí yo directamente porque
+mis herramientas no ejecutan el JS de descifrado del lado del cliente y
+arriesgaba quemar el enlace de un solo uso sin conseguir nada.
+
+Detalle completo en `.claude/memory/project_mi2_token_expired.md`.
+
+---
+
 ## 2026-08-14 — FEAT: Centro de notificaciones unificado (base.html)
 
 Consolida 3 banners globales sueltos (BM desactualizado, disco del servidor,

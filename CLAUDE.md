@@ -194,8 +194,9 @@ YO configuro Railway/env vars/APIs. El usuario NO debe hacer configuraciones té
   El exit 137 (OOM) de antes ya no ocurre — no hace falta seguir esperando a Amir por esto.
   Pendiente menor sin urgencia: `health_check_enabled` sigue en `false` (apagado desde abril
   como workaround de cold-start), no reactivado.
-- `git push mi2 main` sigue bloqueado por el PAT vencido — ver `.claude/memory/project_mi2_token_expired.md`
-  (mensaje ya enviado a Amir Tafreshi en #it-help 2026-08-13, sin respuesta aún)
+- `git push mi2 main` — RESUELTO 2026-08-14: remote `mi2` usa deploy key SSH (`~/.ssh/ecomops_deploy`,
+  alias `github-ecomops`) en vez de PAT — no expira, no puede filtrarse en la URL. Ver
+  `.claude/memory/project_mi2_token_expired.md`
 - `DISABLE_BM_MONITOR=true` → BM sync 1x/semana (viernes 9pm Monterrey)
 - Status panel: status-dashboard.mi2.com.mx
 
