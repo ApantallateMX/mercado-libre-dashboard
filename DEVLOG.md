@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 11) — FIX: el título se bloqueaba por `family_name`, el gate real de ML es `sold_quantity>0`
+
+Jovan corrigió directamente un hallazgo de hoy (cont. 9): mandó capturas
+de la consola real de vendedores ML mostrando que SÍ pudo editar y
+guardar el título de un listing con `family_name` — algo que nuestro
+código (y el especialista, basado en un doc leído fuera de contexto)
+había concluido como imposible.
+
+Re-investigado con `marketplace-strategist`, con la nueva evidencia como
+punto de partida (no descartando la investigación anterior, corrigiéndola).
+Confirmado con la documentación oficial de ML Developers ("Sync and
+modify listings"): el bloqueo real es `sold_quantity > 0` — una vez que
+un listing vendió, se bloquea Título/Condición/Buying mode, tenga o no
+`family_name`. El error histórico "cannot modify the title if the item
+has a family_name" que motivó la conclusión de hoy casi seguro ocurrió en
+un item que TAMBIÉN tenía ventas al mismo tiempo — `family_name` solo
+indica de dónde sale el título sugerido, no bloquea su edición.
+
+`catalog_listing: true` (buy-box real, distinto de `family_name`-only)
+sigue siendo un bloqueo aparte y sí es correcto tal como estaba.
+
+**Fix (`item_edit_modal.html`):** el botón/input/mensaje de título ahora
+gatean con `sold_quantity > 0 or catalog_listing` en vez de solo
+`family_name`. El mensaje de advertencia distingue "ya tiene ventas" de
+"es catálogo real de ML".
+
+Verificado: 4 escenarios (family_name+0 ventas, family_name+ventas,
+catalog_listing real, item normal) con Jinja directo — los 4 se
+comportan correctamente. Item real de Jovan (`MLM3322101329`,
+`family_name` presente, `sold_quantity: 0` confirmado vía API) renderiza
+con el botón de título visible tras el fix, coincidiendo con lo que él
+demostró en la consola real de ML.
+
+**Lección para el especialista** (ya aplicada en su archivo y en memoria
+del proyecto): una fuente oficial citada fuera de contexto puede llevar
+a una regla incorrecta aunque suene bien fundamentada — cuando el dueño
+del negocio aporta evidencia empírica directa que contradice un hallazgo
+"investigado", esa evidencia gana, y toca re-investigar con esa pista
+en vez de descartarla.
+
+---
+
 ## 2026-08-14 (cont. 10) — FIX: descripción/guion de video generados por IA se truncaban al primer párrafo
 
 Jovan reportó que la descripción generada por IA se veía "patética" —
