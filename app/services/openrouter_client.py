@@ -214,12 +214,16 @@ async def generate(
     system: str = "",
     max_tokens: int = 512,
     model: str = "",
+    web_search: bool = False,
 ) -> str:
     """
     Genera respuesta completa con retry automático y cascade de modelos.
     429/404 → siguiente modelo → Claude Haiku como último recurso.
     Los modelos con 404 se marcan como muertos por 1h (circuit breaker).
-    """
+
+    web_search=True: mismo plugin nativo de OpenRouter que generate_stream()
+    (ver ahí el detalle) -- agregado 2026-08-14, default False, no afecta
+    ningun caller existente."""
     primary = model or _OR_MODEL
     all_free = await _get_free_models()
     cascade_all = [primary] + [m for m in all_free if m != primary]
@@ -232,6 +236,8 @@ async def generate(
             "messages":   _build_messages(prompt, system),
             "max_tokens": max_tokens,
         }
+        if web_search:
+            payload["plugins"] = [{"id": "web", "max_results": 5}]
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(

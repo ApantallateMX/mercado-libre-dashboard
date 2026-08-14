@@ -985,6 +985,11 @@ PRODUCTO:
 - Modelo: {model}
 - Categoria: {category}
 
+Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha tecnica real
+de este producto (marca+modelo) antes de elegir las palabras clave del
+titulo, para incluir la caracteristica/tecnologia mas relevante y real
+(no generica) en el espacio disponible.
+
 REGLAS CRITICAS (MeLi 2026):
 1. TITULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible.
    Formato: Marca + Tipo de producto + Tecnologia/Caracteristica clave + Tamaño/Capacidad.
@@ -1003,11 +1008,19 @@ REGLAS CRITICAS (MeLi 2026):
    - Si queda corto, agrega: Smart, WiFi, Negro, 127V, Para Casa, etc.
 
 Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas, cada
-uno ya con la capitalizacion correcta (Title Case) aplicada."""
+uno ya con la capitalizacion correcta (Title Case) aplicada. NO agregues
+notas, explicaciones, citas de fuentes ni enlaces -- SOLO las 3 lineas
+con los titulos, nada mas."""
 
         try:
-            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model())
-            titles = [_title_case_ml(t.strip()) for t in raw.strip().split("\n") if t.strip()]
+            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model(), web_search=True)
+            candidates = [_title_case_ml(t.strip()) for t in raw.strip().split("\n") if t.strip()]
+            # Red de seguridad: aun con la instruccion explicita, el modelo a
+            # veces agrega una linea de "nota"/cita con fuente (2026-08-14,
+            # visto en produccion) -- un titulo real de MeLi nunca pasa de
+            # ~65 caracteres ni trae markdown, asi que se descarta cualquier
+            # linea que no luzca como un titulo real.
+            titles = [t for t in candidates if len(t) <= 70 and "[" not in t and "http" not in t.lower()][:3]
             return {"titles": titles}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -1106,14 +1119,17 @@ uno ya con la capitalizacion correcta (Title Case) aplicada."""
             f"Dado este producto:\n"
             f"Titulo: {context.get('title', '')}\n"
             f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\n\n"
+            f"Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
+            f"tecnica real de este producto (marca+modelo) antes de responder. "
+            f"Usa esos datos reales para los valores, no los inventes.\n\n"
             f"Sugiere valores para estos atributos vacios de Mercado Libre:\n"
             f"{current_value}\n\n"
             f"Responde SOLO en formato JSON: un array de objetos con {{\"id\": \"ATTR_ID\", \"value_name\": \"valor sugerido\"}}\n"
-            f"Solo incluye atributos para los que tengas alta confianza. No inventes datos."
+            f"Solo incluye atributos para los que tengas alta confianza (encontrados en la busqueda o de conocimiento certero). No inventes datos."
         )
 
         try:
-            result = await _or_client.generate(prompt, system_prompt, max_tokens=800, model=_or_client.get_premium_model())
+            result = await _or_client.generate(prompt, system_prompt, max_tokens=800, model=_or_client.get_premium_model(), web_search=True)
             return {"result": result}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -1124,11 +1140,14 @@ uno ya con la capitalizacion correcta (Title Case) aplicada."""
             f"Crea el texto de narracion para un video comercial de 40-50 segundos.\n\n"
             f"Producto: {title}\n"
             f"Marca: {brand}\n\n"
+            f"Tienes acceso a busqueda web en tiempo real -- BUSCA la ficha "
+            f"tecnica real de este producto antes de escribir, para que los "
+            f"beneficios que menciones sean reales y especificos, no genericos.\n\n"
             f"REQUISITOS:\n"
             f"- Entre 110 y 130 palabras exactamente (para 40-50 segundos hablados)\n"
             f"- Espanol de Mexico, tono energico, aspiracional y persuasivo — que den ganas de comprarlo\n"
             f"- Empieza con una pregunta o afirmacion poderosa que enganche al espectador\n"
-            f"- Describe 2 o 3 beneficios concretos y reales del producto\n"
+            f"- Describe 2 o 3 beneficios concretos y reales del producto (basados en la busqueda)\n"
             f"- Menciona la marca de forma natural\n"
             f"- Incluye una llamada a la accion clara al final\n"
             f"- Sin corchetes, sin asteriscos, sin guiones, sin marcadores de escena\n"
@@ -1140,7 +1159,7 @@ uno ya con la capitalizacion correcta (Title Case) aplicada."""
 
         async def script_stream():
             try:
-                async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=600, model=_or_client.get_premium_model()):
+                async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=600, model=_or_client.get_premium_model(), web_search=True):
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:

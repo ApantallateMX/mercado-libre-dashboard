@@ -7,6 +7,68 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 6) — FEAT: mismo criterio de "info real, no inventada" en título, atributos, GTIN, video e imágenes IA
+
+Continuación del pedido de Jovan: "analiza todas las opciones al crear/
+modificar un listado, buscando mejores prácticas ML y dando solución a
+cada una — mejor título, descripción, bullets, características, y si no
+hay imágenes buscarlas o generarlas."
+
+Mapeo previo (agente Explore, solo lectura) confirmó: existen 2 sistemas
+de Score de Calidad paralelos y no unificados —
+`_calculate_health_score()` (`app/api/items.py:971`, el completo:
+fotos/video/envío/título/descripción/GTIN/SKU/tipo, usado por el modal
+de edición) y el de `_run_gap_scan()`/`ml_listing_quality`
+(`app/api/lanzar.py`, más simple, usado en el radar de gaps). **No se
+unificaron** — es una decisión de arquitectura aparte, señalada a Jovan,
+no resuelta hoy.
+
+**Agregado (mismo patrón `web_search=True`, sin tocar nada existente):**
+- **Título** (`ai_improve`, campo `title`): ahora busca la ficha técnica
+  real antes de elegir palabras clave. Filtro de seguridad nuevo: el
+  modelo a veces agrega una "nota" con cita de fuente como 4ta línea —
+  se descarta cualquier candidato >70 chars o con `[`/`http` antes de
+  devolver los títulos (verificado en vivo: sin el filtro, esa nota se
+  colaba como si fuera un 4to título).
+- **Atributos** (`ai_improve`, campo `attributes`): mismo tratamiento —
+  busca specs reales antes de sugerir valores.
+- **Guion de video** (`ai_improve`, campo `video_script`): mismo
+  tratamiento — los 2-3 beneficios que menciona ahora se basan en specs
+  reales encontradas, no genéricas.
+- `openrouter_client.generate()` (no-streaming, la usan título/atributos):
+  mismo parámetro `web_search=False` por default que ya se agregó a
+  `generate_stream()` para descripción.
+
+**GTIN real** (`item_edit_modal.html`): nuevo botón "🔍 Buscar GTIN real"
+junto a "✦ Rellenar con IA" de atributos — reusa `POST /api/lanzar/
+search-upc` (UPCItemDB, ya existía pero solo en el wizard de publicación
+nueva) para llenar el campo GTIN con un código real verificado, no
+generado por IA. Verificado con el producto real del reporte: GTIN
+0194644035570 encontrado y confirmado contra el título real del
+fabricante.
+
+**Generar foto/video con IA en listing ya publicado**: nuevo botón
+"✨ Generar foto o video con IA" en la sección de fotos del modal de
+edición — conecta el modal global de Higgsfield (`openHiggsfieldModal()`,
+ya existía en `base.html`/wizard de Amazon/gaps, nunca alcanzable desde
+la edición de un listing ya publicado) sin reimplementar nada.
+
+**Nota importante, limitación conocida**: la búsqueda web no es 100%
+determinista — en las pruebas, la descripción encontró "8,000 Pa" de
+succión para el Eufy Omni S1 Pro y el guion de video encontró
+"15,000 Pa" para el mismo producto en una búsqueda distinta. Es un
+riesgo inherente de depender de resultados de búsqueda variables, no
+algo que se pueda eliminar por completo — vale la pena que quien revise
+el contenido generado lo tenga en cuenta antes de publicar.
+
+Verificado end-to-end con datos reales (Eufy Omni S1 Pro): título con 3
+opciones limpias y specs reales (HydroJet, 8000Pa, WiFi), atributos con
+valores reales de fuente, guion de video sin asteriscos ni citas, GTIN
+real confirmado, template del modal de edición renderiza correctamente
+con los 5 elementos nuevos presentes.
+
+---
+
 ## 2026-08-14 (cont. 5) — FEAT: descripción de producto con búsqueda web real (no más texto genérico)
 
 Jovan reportó (screenshot) que la descripción generada por "✦ IA" en la
