@@ -7,6 +7,50 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 10) — FIX: descripción/guion de video generados por IA se truncaban al primer párrafo
+
+Jovan reportó que la descripción generada por IA se veía "patética" —
+un renglón corto tipo eslogan, sin las características/specs que se
+supone la IA debía investigar y detallar (feature de búsqueda web real
+del mismo día, cont. 6/7). Investigado antes de tocar código: la IA SÍ
+estaba investigando y escribiendo bien — el problema era de transporte,
+no de contenido.
+
+**Causa raíz:** el streaming SSE (`app/api/sku_inventory.py`, campos
+`description` y `video_script`) mandaba el texto generado tal cual en
+una sola línea `data: {texto}`. Cuando ese texto trae saltos de línea
+internos (siempre — párrafo + lista de características + contenido del
+paquete + garantía, tal como pide el prompt), el formato SSE se rompe:
+solo la primera línea física lleva el prefijo `data: ` que el parser del
+frontend reconoce, y todo lo que sigue se descarta en silencio.
+
+Reproducido con datos reales antes de proponer el fix: la IA generaba
+~2000 caracteres completos y correctos (specs reales del producto,
+2000Pa, BoostIQ, etc.) para el item MLM3322101329 (Aspiradora Eufy con
+fotos reales), pero el frontend solo mostraba ~600 (un párrafo).
+
+**Fix:** empacar cada fragmento en JSON (`json.dumps({"text": ...})`)
+antes de mandarlo por SSE — mismo patrón ya usado correctamente en
+`health_ai.py` (Mensajes/Reclamos) — en los 3 puntos del backend con el
+bug (descripción con imágenes, descripción con búsqueda web sin
+imágenes, guion de video) y sus 3 consumidores en frontend
+(`item_edit_modal.html`, `productos.js`, `sku_inventory.js`) que ahora
+hacen `JSON.parse(data).text` en vez de concatenar el texto crudo.
+
+Verificado: la misma petición real re-ejecutada tras el fix, tanto en
+local como contra producción (Railway) ya desplegada, entrega el texto
+completo (~1500-2000 caracteres, con "Características técnicas" /
+"Contenido del paquete" / "Garantía" incluidos) en vez de cortarse al
+primer párrafo.
+
+**Nota:** el panel de sugerencias de título en `sku_inventory.js` (línea
+~880-919) tiene un bug NO relacionado — llama a `field: 'title'` como si
+fuera streaming SSE, pero ese campo del backend responde JSON plano, no
+un stream. No se tocó porque está fuera del alcance aprobado hoy; queda
+pendiente si se vuelve a reportar.
+
+---
+
 ## 2026-08-14 (cont. 9) — FIX: "Optimizar Todo" truena sin avisar en listings con `family_name` (catálogo/User Product)
 
 Jovan reportó que después del fix anterior (cont. 8), "Optimizar Todo"
