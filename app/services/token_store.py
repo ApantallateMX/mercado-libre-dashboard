@@ -2300,9 +2300,34 @@ async def get_pending_restock_watches() -> list[dict]:
     disponible de nuevo en BM (bm_sku_master, sincronizado periódicamente
     — no es llamada en vivo a BM) — para el aviso 'Ya hay stock, reactivar'.
     Solo el evento de zeroed_stock más reciente por SKU que no se haya
-    marcado como reactivado."""
+    marcado como reactivado.
+
+    FIX 2026-08-14: si el listing de esa cuenta ya está activo con stock
+    real (reactivado por otra vía — restock normal, edición manual en ML —
+    sin pasar por el botón "Descartar" de aquí), se auto-marca como
+    reactivado en vez de seguir mostrando un aviso obsoleto. Reportado por
+    Jovan con evidencia real: SNTV004097 ya tenía 12 listings activos con
+    stock real en las 4 cuentas y el aviso seguía apareciendo."""
+    import time as _t
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
+        # Auto-resolver primero: si el listing de esa cuenta ya tiene stock
+        # real activo, ya no hace falta que un humano lo confirme a mano.
+        await db.execute("""
+            UPDATE stock_alert_resolutions
+            SET reactivated_at = ?, reactivated_by = 'auto (listing ya activo)'
+            WHERE resolution_type = 'zeroed_stock'
+              AND reactivated_at IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM ml_listings ml
+                  WHERE ml.base_sku = stock_alert_resolutions.original_sku
+                    AND ml.account_id = stock_alert_resolutions.account_id
+                    AND ml.status = 'active'
+                    AND ml.available_qty > 0
+              )
+        """, (_t.time(),))
+        await db.commit()
+
         cur = await db.execute("""
             SELECT sar.id, sar.original_sku, sar.order_id, sar.username, sar.ts,
                    COALESCE(bsm.title, '') AS titulo,

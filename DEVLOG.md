@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 2) — FIX: aviso "Ya hay stock — reactivar" quedaba obsoleto para siempre
+
+Jovan reportó (captura real) que el aviso de reactivación seguía
+mostrando SNTV004097 aunque el producto YA tenía stock. Verificado contra
+producción (`/api/diag/bm-sku-master-lookup`): SNTV004097 tenía **12
+listings activos con stock real** (1-3 unidades c/u) en las 4 cuentas ML.
+
+Causa: `get_pending_restock_watches()` solo deja de mostrar un aviso si
+alguien hace clic en "Descartar" (marca `reactivated_at`) — si el SKU se
+reactiva por CUALQUIER otra vía (sync normal de restock, edición manual
+en ML), nada limpia el registro y el aviso queda obsoleto para siempre.
+
+Fix: antes de listar los avisos pendientes, se auto-marca como
+reactivado cualquier registro cuya cuenta YA tenga un listing activo con
+`available_qty > 0` para ese SKU — sin esperar a que un humano lo
+confirme a mano. Self-healing: la próxima vez que se pida la lista, el
+dato ya está limpio.
+
+---
+
 ## 2026-08-14 (cont.) — FIX: faltaba la red de seguridad — el webhook nunca vuelve a evaluar una orden sin nueva notificación de ML
 
 Tras el fix anterior (mismo día), Jovan reportó con captura real que la
