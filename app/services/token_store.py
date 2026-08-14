@@ -1004,6 +1004,16 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_sku ON order_history(sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
+        # Migración 2026-08-13: costo de envío REAL por orden (ML: get_shipment_costs()
+        # ya se llamaba pero se descartaba tras el cálculo; Amazon: costo por item ya
+        # calculado en _save_amazon_items_history_bg). Antes _calc_margins() usaba un
+        # estimado fijo/escalonado (envio=150 o por tramo de retail) para TODOS los
+        # SKUs -- ahora se puede promediar el costo real histórico por SKU+plataforma
+        # (ver get_avg_shipping_cost_map) y usar ESE promedio en vez del estimado.
+        try:
+            await db.execute("ALTER TABLE order_history ADD COLUMN shipping_cost_mxn REAL NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # Migration: zona geográfica del comprador (ship_state_code = "MX-NLE" etc,
         # ship_zone = "MTY"/"CDMX"/"TJ") — para cruzar demanda por zona vs almacén
         # físico (feature de transferencias sugeridas). Solo ML por ahora: Amazon
@@ -5120,8 +5130,8 @@ async def upsert_order_history(rows: list[dict]) -> int:
                      costo_usd, costo_mxn, retail_ph_usd,
                      ganancia_neta, margen_pct, recup_retail_pct,
                      fx_rate, currency, order_date, order_month,
-                     status, data_source, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     status, data_source, created_at, shipping_cost_mxn)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
                     unit_price       = excluded.unit_price,
                     sale_fee         = CASE WHEN excluded.data_source = 'real' THEN excluded.sale_fee ELSE MAX(order_history.sale_fee, excluded.sale_fee) END,
@@ -5133,7 +5143,8 @@ async def upsert_order_history(rows: list[dict]) -> int:
                     margen_pct       = excluded.margen_pct,
                     recup_retail_pct = excluded.recup_retail_pct,
                     status           = excluded.status,
-                    data_source      = CASE WHEN excluded.data_source = 'real' THEN 'real' ELSE order_history.data_source END
+                    data_source      = CASE WHEN excluded.data_source = 'real' THEN 'real' ELSE order_history.data_source END,
+                    shipping_cost_mxn = CASE WHEN excluded.shipping_cost_mxn > 0 THEN excluded.shipping_cost_mxn ELSE order_history.shipping_cost_mxn END
             """, (
                 r.get("order_id", ""), r.get("account_id", ""), r.get("platform", "ml"),
                 r.get("item_id", ""), r.get("sku", ""),
@@ -5144,7 +5155,7 @@ async def upsert_order_history(rows: list[dict]) -> int:
                 r.get("fx_rate", 17.0), r.get("currency", "MXN"),
                 r.get("order_date", ""), r.get("order_month", ""),
                 r.get("status", ""), r.get("data_source", "estimated"),
-                _t.time(),
+                _t.time(), r.get("shipping_cost_mxn", 0),
             ))
             try:
                 sku = (r.get("sku") or "").upper()
@@ -5198,6 +5209,44 @@ async def upsert_order_history(rows: list[dict]) -> int:
                 pass  # el ledger de deuda nunca debe tumbar el guardado de order_history
         await db.commit()
     return len(rows)
+
+
+async def get_avg_shipping_cost_map(skus: list[str], platform: str, days: int = 90, min_samples: int = 3) -> dict:
+    """Promedio de costo REAL de envío (shipping_cost_mxn, ya persistido por
+    orden real en ML/Amazon) por SKU, en la plataforma dada, sobre los
+    últimos `days` días. Reemplaza el estimado fijo/escalonado que usaba
+    _calc_margins() (envio=150 o por tramo de retail) -- Jovan, 2026-08-13:
+    "agarrar un histórico de las ventas y poder definir un envío promedio
+    para cada sku actualizando cada x tiempo".
+
+    Requiere al menos `min_samples` órdenes reales con shipping_cost_mxn>0
+    para ese SKU -- si no hay suficiente historial (SKU nuevo, o nunca se
+    capturó un costo real), simplemente NO aparece en el dict devuelto y el
+    caller debe caer a su estimado de siempre.
+
+    Retorna {sku: avg_shipping_mxn}.
+    """
+    if not skus:
+        return {}
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    result: dict = {}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        uniq = list(set(skus))
+        for i in range(0, len(uniq), 500):
+            chunk = uniq[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""SELECT sku, AVG(shipping_cost_mxn) AS avg_ship, COUNT(*) AS n
+                    FROM order_history
+                    WHERE platform = ? AND order_date >= ? AND shipping_cost_mxn > 0
+                      AND sku IN ({placeholders})
+                    GROUP BY sku
+                    HAVING COUNT(*) >= ?""",
+                [platform, cutoff] + chunk + [min_samples],
+            )
+            for sku, avg_ship, _n in await cur.fetchall():
+                result[sku] = round(avg_ship, 2)
+    return result
 
 
 async def has_deep_order_history(account_id: str, platform: str, min_days: int = 20) -> bool:

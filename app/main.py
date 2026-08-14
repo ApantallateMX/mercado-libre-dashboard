@@ -184,8 +184,17 @@ _RECOVERY_TARGET_TV = 80.0
 _RECOVERY_TARGET_OTHER = 60.0
 
 
-def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.15, retail_target_pct: float = 1.0):
-    """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto."""
+def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.15, retail_target_pct: float = 1.0,
+                   shipping_avg_map: dict | None = None):
+    """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto.
+
+    shipping_avg_map: {sku: avg_shipping_mxn} — costo REAL histórico de envío
+    por SKU (ver get_avg_shipping_cost_map(), pre-cargado por el caller antes
+    de llamar esta función porque esta función es síncrona). Si el SKU no
+    tiene suficiente historial, se cae al estimado fijo/escalonado de
+    siempre (envio=150 / _ship_est por tramo de retail).
+    """
+    shipping_avg_map = shipping_avg_map or {}
     for p in products:
         avg_cost = p.get("_bm_avg_cost", 0) or 0
         retail = p.get("_bm_retail_price", 0) or 0
@@ -220,7 +229,9 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
         if _sale_price > 0 and p["_costo_mxn"] > 0:
             comision = _sale_price * _ml_fee(_sale_price)
             iva_comision = comision * 0.16
-            envio = 150
+            # Envío: promedio real histórico por SKU si hay suficiente historial
+            # (get_avg_shipping_cost_map), si no, estimado fijo de siempre.
+            envio = shipping_avg_map.get(p.get("sku", ""), 150)
             ganancia = _sale_price - p["_costo_mxn"] - comision - iva_comision - envio
             p["_ganancia_est"] = round(ganancia, 2)
             p["_margen_pct"] = round((ganancia / _sale_price) * 100, 1)
@@ -238,9 +249,13 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
                 _neto = _sale_price * _hist_ratio
             else:
                 # Fee real por tramo + retenciones fiscales ML Mexico ~9.05% (IVA 6.9% + ISR 2.15%)
-                # Envío estimado: producto mayor retail = más grande/pesado
+                # Envío: promedio real histórico por SKU si existe; si no, estimado
+                # por tramo de retail (producto mayor retail = más grande/pesado).
                 _fee_pct = _ml_fee(_sale_price)
-                if _retail_mxn >= 5000:
+                _sku_ship_avg = shipping_avg_map.get(p.get("sku", ""))
+                if _sku_ship_avg is not None:
+                    _ship_est = _sku_ship_avg
+                elif _retail_mxn >= 5000:
                     _ship_est = 400
                 elif _retail_mxn >= 2500:
                     _ship_est = 250
@@ -4748,6 +4763,10 @@ async def orders_table_partial(
                     continue
                 _ratio_oh    = (_up_oh * _qty_oh / _total_eo) if _total_eo > 0 else 1.0
                 _neto_real_oh = round((_eo.net_amount or 0) * _ratio_oh, 2)
+                # Costo de envío REAL prorrateado por item (mismo criterio que
+                # neto_plat arriba) -- ver get_avg_shipping_cost_map(), reemplaza
+                # el estimado fijo/escalonado en _calc_margins().
+                _ship_real_oh = round((getattr(_eo, "shipping_cost", 0) or 0) * _ratio_oh, 2)
                 _oh_real_batch.append({
                     "order_id": _oid_oh, "account_id": str(client.user_id), "platform": "ml",
                     "item_id": _iid_oh, "sku": _sku_oh,
@@ -4758,6 +4777,7 @@ async def orders_table_partial(
                     "fx_rate": round(_fx_oh, 4), "currency": "MXN",
                     "order_date": _odate_oh, "order_month": _omonth_oh,
                     "status": _eo.status, "data_source": "real",
+                    "shipping_cost_mxn": _ship_real_oh,
                 })
         if _oh_real_batch:
             async def _do_oh_real_upsert(_batch=_oh_real_batch):
@@ -9378,7 +9398,10 @@ async def products_deals_partial(request: Request):
         _bundles_deals = await token_store.get_all_bundles()
         _apply_bundle_stock_override(all_to_enrich, _bundles_deals)
         _deal_cfg = await token_store.get_deal_config(str(client.user_id))
-        _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"])
+        _deal_skus = [p.get("sku", "") for p in all_to_enrich if p.get("sku")]
+        _shipping_avg_map = await token_store.get_avg_shipping_cost_map(_deal_skus, "ml")
+        _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"],
+                      shipping_avg_map=_shipping_avg_map)
         _apply_bundle_margin_override(all_to_enrich, _bundles_deals)
 
         # Persistir historial de ventas en background (no bloquea el render)

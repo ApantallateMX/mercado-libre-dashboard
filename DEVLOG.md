@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-13 (cont. 14) — FEAT: envío promedio histórico real por SKU (reemplaza estimado fijo/escalonado)
+
+Cierra el pendiente de "otros hallazgos" (cont. 3): el envío en Deals
+(`_calc_margins()`) usaba un estimado fijo ($150) o escalonado por tramo
+de retail (400/250/150/100) — nunca el costo real. Ambas plataformas YA
+calculaban el costo REAL de envío por orden (ML: `get_shipment_costs()`,
+usado en `/api/orders` para el neto real pero descartado después sin
+persistir; Amazon: costo por item ya calculado en
+`_save_amazon_items_history_bg`) — solo faltaba guardarlo y promediarlo.
+
+- Columna nueva `shipping_cost_mxn` en `order_history` (migración).
+- `upsert_order_history()` la guarda ahora (ON CONFLICT prefiere el valor
+  no-cero, mismo patrón que `costo_mxn`).
+- ML (`app/main.py`, endpoint `/api/orders`): `_eo.shipping_cost` (ya
+  calculado ahí) se prorratea por item con el mismo ratio que `neto_plat`
+  y se persiste.
+- Amazon (`amazon_orders.py`): el `ship` por item (ya calculado) se
+  persiste directo.
+- `get_avg_shipping_cost_map(skus, platform, days=90, min_samples=3)` en
+  `token_store.py`: promedia `shipping_cost_mxn` real de los últimos 90
+  días por SKU, requiere mínimo 3 órdenes reales — si no hay suficiente
+  historial, el SKU simplemente no aparece en el mapa y el caller cae al
+  estimado de siempre (SKU nuevo, sin ventas todavía).
+- `_calc_margins()` acepta `shipping_avg_map` opcional — lo usa en los 2
+  lugares que antes tenían el estimado fijo/escalonado. Conectado en el
+  endpoint de Deals (`products_deals_partial`) — los otros 3 call-sites
+  de `_calc_margins()` (production-kpis auxiliar, sku-history, etc.)
+  siguen con el estimado de siempre por ahora (parámetro opcional,
+  compatible hacia atrás).
+
+Verificado end-to-end con datos sintéticos: promedio de 4 órdenes reales
+calcula bien (126.25), 1 sola orden correctamente NO alcanza el mínimo de
+3 muestras (mapa vacío, cae al estimado), y `_calc_margins()` usa el
+valor correcto en ambas ramas cuando el mapa trae datos. Probado también
+en vivo local: `/partials/products-deals` responde 200 sin errores
+nuevos.
+
+Pendiente (no parte de este cambio, señalado a Jovan): Amazon no tiene
+un desglose de costo de envío tan limpio como ML para casos FBM —
+`_build_finanzas()` (rentabilidad por orden Amazon) no se tocó porque su
+fórmula ya usa fees reales de Finances API (`fba_fee`) de forma distinta
+y agregar el promedio ahí podría duplicar el descuento de envío.
+
+---
+
 ## 2026-08-13 (cont. 13) — INVESTIGACIÓN + FIX: gap scan (Sin Publicar) subía solo 1x/día en ambas plataformas
 
 Jovan reportó 2 SKUs reales (SNVC000743, SNVC000747) que no aparecían en

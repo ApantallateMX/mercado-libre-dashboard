@@ -84,6 +84,7 @@ def _save_amazon_items_history_bg(
                     "fx_rate": round(fx, 4), "currency": currency or "MXN",
                     "order_date": order_date, "order_month": order_month,
                     "status": status_es, "data_source": data_src,
+                    "shipping_cost_mxn": round(ship, 2),
                 })
             if rows:
                 await _ts.upsert_order_history(rows)
