@@ -7,6 +7,57 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-15 — FIX+FEAT: video comercial real (no slideshow) + galería de imágenes IA ancladas a la foto real
+
+Jovan reportó (de nuevo, ya lo había mencionado antes) que el video generado
+seguía siendo un "slideshow" tipo collage en vez de un video real con
+movimiento, y que la generación de imágenes con IA solo daba 1 foto —
+debía dar mínimo 5 — y no se basaba en la foto real del producto (riesgo
+real de reclamos si el cliente recibe algo distinto a lo que ve).
+
+**VIDEO — causa raíz:** `_t2v_ltx` (`app/services/replicate_client.py`)
+usaba un payload obsoleto (`width`/`height`/`num_frames`/`frame_rate`/
+`guidance_scale`/`num_inference_steps`) contra la ruta corta
+`/v1/models/{owner}/{name}/predictions` — ese modelo (LTX-Video) no es
+"oficial" en Replicate, esa ruta le devuelve 404 siempre, y ninguno de
+esos campos existe ya en su schema real. Por eso el pipeline de video
+comercial (guion en español + narración con ElevenLabs + 3 escenas
+cinematográficas con personas usando el producto) SIEMPRE fallaba en
+silencio y caía al respaldo de zoompan/slideshow — nunca se había
+generado un video real por este camino, posiblemente desde que se
+construyó esta feature.
+
+Corregido a `/v1/predictions` con `version` explícita + el schema real
+(`target_size`/`aspect_ratio`/`length`/`cfg`/`steps`). Verificado con una
+predicción real completa antes de tocar código, y de nuevo end-to-end a
+través de `generate_video_t2v()` ya corregido: video real con movimiento
+de cámara generado con éxito, dos veces. De paso corregido `_t2v_wan`
+(el fallback) al schema real también, aunque ese modelo devolvió un
+error interno de Replicate (E002) en las pruebas — anotado por si
+persiste, no parece relacionado a nuestros parámetros.
+
+**IMÁGENES — causa raíz:** el modo "imagen" de Higgsfield
+(`higgsfield_client.py`) generaba 1 sola foto usando `soul/standard`
+(solo texto) — sin ninguna referencia real del producto. Investigado el
+API real de Higgsfield (OpenAPI spec): existe `soul/reference`, que
+exige una foto de referencia real y permite hasta 4 imágenes por lote.
+
+Cambiado a `soul/reference` con la foto real del producto como
+referencia obligatoria + 2 lotes de 4 (8 imágenes, sobre el "mínimo 5"
+pedido) vía un nuevo endpoint tipo job (`POST /api/higgsfield/generate-images`
++ `GET /image-job/{id}`, mismo patrón que `_video_jobs` en `lanzar.py`).
+Nueva galería en `higgsfield_modal.html`: grid de miniaturas clickeables
+(mismo patrón ya usado en "Buscar fotos"/"Buscar automáticamente"), cada
+clic agrega la foto directo al listing — antes no existía forma de
+"usar" el resultado sin descargarlo y volver a subirlo a mano.
+
+Verificado con datos reales (local y producción): 8 imágenes generadas
+para el mismo producto de prueba, inspección visual confirma que el
+resultado es virtualmente idéntico al producto real (mismo logo, forma,
+botón) — no un producto "parecido" genérico.
+
+---
+
 ## 2026-08-14 (cont. 14) — FIX: guardar título en items con `family_name` (PUT al endpoint de familia de ML, no al item directo)
 
 Después de arreglar cuándo se muestra el botón de editar título (cont.
