@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-14 (cont. 14) — FIX: guardar título en items con `family_name` (PUT al endpoint de familia de ML, no al item directo)
+
+Después de arreglar cuándo se muestra el botón de editar título (cont.
+11), Jovan intentó guardar el título real de `MLM3322101329` y ML lo
+siguió rechazando con el mismo error de siempre — la corrección de hoy
+resolvía CUÁNDO se debería poder editar, pero el guardado seguía yendo
+al endpoint equivocado.
+
+Investigado de nuevo con `marketplace-strategist` (tercera vuelta sobre
+el mismo tema el mismo día) + 2 pruebas reales autorizadas por Jovan
+(payload no-destructivo, mismo valor actual, sin cambio de contenido):
+
+- `PUT /items/{id}` con `title` **o** `family_name` directo: SIEMPRE
+  falla (400, cause 374, "BODY_INVALID_FIELDS") para items con
+  `family_name`, sin importar `sold_quantity`.
+- `PUT /user-products-families/{family_id}` con `family_name`: **201
+  Created** — este es el camino real, documentado oficialmente (página
+  "Price per variation" de ML Developers), y coincide con la URL que usa
+  la propia consola de vendedores de ML (`MLMU...` = `user_product_id`).
+
+**Fix (`app/services/meli_client.py`, `update_item_title`):** ahora
+detecta si el item tiene `family_name`; si es así, resuelve
+`user_product_id → family_id` y manda el nuevo texto como `family_name`
+al endpoint de familia en vez de `title` al item. Items sin `family_name`
+siguen el camino directo de siempre, sin cambio.
+
+Nota para el futuro: el título final visible = lo que guardemos +
+atributos de variación que ML agrega después (ej. color) — no está bajo
+control exacto nuestro, es el mismo comportamiento que tiene la consola
+real de ML.
+
+Verificado con prueba real no-destructiva a través del método ya
+corregido (no solo un script suelto): 200/201 en todo el flujo, sin
+alterar el contenido real del item.
+
+---
+
 ## 2026-08-14 (cont. 13) — FEAT: título IA se ensambla por palabras priorizadas, ya no corta a media palabra
 
 Jovan reportó un título real cortado a mitad de palabra ("...Triple Fi"
