@@ -7,6 +7,62 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-15 (cont. 2) — FIX: video comercial usa minimax (producto real, sin distorsión) + prompt de imágenes no-competitivo
+
+Jovan reportó, justo después del fix anterior (cont. 1, mismo día): "que
+bueno por que las imagenes que se generaron horribles y el video peor"
+— confirmando que arreglar el bug técnico no bastó, la calidad/fidelidad
+real seguía mal. Se usó el nuevo agente `ecommerce-creative-director`
+para diagnosticar, y luego se verificó todo en vivo, frame a frame, antes
+de decidir la solución final (2 intentos descartados con evidencia real
+antes de llegar al que funciona).
+
+**Diagnóstico del agente (verificado en código):** el pipeline de video
+comercial (`_run_video_pipeline`) nunca ancló el video a la foto real del
+producto — el fix de la mañana (cont. de ayer) solo hizo que el
+texto-a-video "funcionara técnicamente", pero seguía imaginando el
+producto desde cero. Además, el prompt de imágenes de Higgsfield le
+pedía al modelo dos cosas que compiten: "mantén el producto igual" Y
+"ponlo en una escena nueva", en la misma instrucción — mismo patrón ya
+resuelto en otro lado de este proyecto (`generate_product_prompts_endpoint`,
+modo Kontext) que no se había reutilizado aquí.
+
+**Video — 2 intentos antes de la solución real:**
+1. Cambiar a `generate_video_img2vid` (LTX-Video/Wan2.1, imagen-a-video):
+   verificado en vivo, frame a frame, que el producto arranca correcto
+   pero se distorsiona gravemente ya en el frame ~20 de 97 — peor que el
+   texto-a-video en algunos sentidos (ni siquiera se mantiene coherente
+   todo el clip). Descartado con evidencia visual real, no solo hipótesis.
+2. **Solución real: `minimax/video-01`** (`replicate_client.generate_video()`,
+   ya usado correctamente en el endpoint más simple `/generate-video` de
+   este mismo archivo — nunca conectado al pipeline de comercial completo).
+   Verificado en vivo, frame a frame (0, 40, 120 de ~150+), que el
+   producto se mantiene 100% intacto durante todo el clip, con movimiento
+   de cámara real. Pipeline completo probado end-to-end (guion + narración
+   ElevenLabs + 3 clips + combine): producto reconocible en las 3 escenas,
+   ~16s de comercial real. Nota honesta: una de las 3 escenas mostró un
+   tinte de iluminación más cálido/dorado del real — no una distorsión de
+   forma/marca, pero vale la pena afinar el prompt si se nota mucho.
+
+**Imágenes — prompt rediseñado (patrón Kontext, ya probado en este
+proyecto):** ya no se describe el producto en el prompt (la foto de
+referencia lo aporta) — solo se describe la escena/ambiente/iluminación,
+con la instrucción de preservar el producto al final, corta, sin competir
+con la descripción principal. De paso: `aspect_ratio` cambia de 1:1 a 3:4
+(vertical, el más cercano a fotografía lifestyle real — 4:5 no es un
+valor válido del enum real de Higgsfield, se confirmó al probarlo y
+corregirlo) y `resolution` se especifica explícito en 1080p (antes
+quedaba en el default 720p sin control del código). Verificado con
+generación real: imagen notablemente más nítida y mejor iluminada.
+
+Archivos: `app/services/replicate_client.py`, `app/services/higgsfield_client.py`,
+`app/api/lanzar.py` (`_run_video_pipeline`), `app/templates/partials/item_edit_modal.html`
+(etiqueta i2v/t2v/zoompan corregida — antes cualquier método que no fuera
+exactamente "t2v" se mostraba como "Slideshow", ocultando el nuevo método
+bueno).
+
+---
+
 ## 2026-08-15 — FIX+FEAT: video comercial real (no slideshow) + galería de imágenes IA ancladas a la foto real
 
 Jovan reportó (de nuevo, ya lo había mencionado antes) que el video generado
