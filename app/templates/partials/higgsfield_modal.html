@@ -96,6 +96,19 @@
                     </div>
                 </div>
 
+                {# Galeria de resultados -- FIX 2026-08-15: modo "image" ahora genera
+                   varias fotos ancladas a la foto real del producto (soul/reference),
+                   en vez de una sola foto solo-texto. Clic en cada una para agregarla
+                   (si la pagina que abrio el modal define window.hfOnImageSelected). #}
+                <div id="hf-gallery" class="hidden">
+                    <p class="text-xs font-semibold text-green-600 mb-2">✓ <span id="hf-gallery-count"></span> — clic para agregar cada foto que quieras usar</p>
+                    <div id="hf-gallery-grid" class="grid grid-cols-4 gap-2"></div>
+                    <button onclick="hfGenerateAgain()"
+                            class="w-full mt-3 py-2 text-sm font-semibold text-purple-600 border border-purple-200 hover:bg-purple-50 rounded-xl transition">
+                        Generar otro lote
+                    </button>
+                </div>
+
                 {# Error #}
                 <div id="hf-error" class="hidden bg-red-50 rounded-xl p-3">
                     <p class="text-sm font-semibold text-red-600">Error en la generación</p>
@@ -155,6 +168,7 @@ window.openHiggsfieldModal = function(title, thumbnailUrl, sku) {
     document.getElementById('hf-status').classList.add('hidden');
     document.getElementById('hf-loading').classList.add('hidden');
     document.getElementById('hf-result').classList.add('hidden');
+    document.getElementById('hf-gallery').classList.add('hidden');
     document.getElementById('hf-error').classList.add('hidden');
     document.getElementById('hf-mode-selector').classList.remove('hidden');
     document.getElementById('hf-footer').classList.remove('hidden');
@@ -180,12 +194,22 @@ window.hfSelectMode = function(mode) {
 window.hfStartGeneration = function() {
     if (!_hfState.mode) return;
 
+    // FIX 2026-08-15: modo "image" requiere la foto real del producto --
+    // sin ella no hay como anclar la generacion (Jovan: "no podemos poner
+    // algo que sea similar o parecido, podriamos tener muchos reclamos").
+    if (_hfState.mode === 'image' && !_hfState.thumbnail) {
+        hfShowError('Este producto no tiene foto — sube al menos una foto real antes de generar con IA.');
+        document.getElementById('hf-status').classList.remove('hidden');
+        return;
+    }
+
     // Ocultar modo selector, mostrar loading
     document.getElementById('hf-mode-selector').classList.add('hidden');
     document.getElementById('hf-footer').classList.add('hidden');
     document.getElementById('hf-status').classList.remove('hidden');
     document.getElementById('hf-loading').classList.remove('hidden');
     document.getElementById('hf-result').classList.add('hidden');
+    document.getElementById('hf-gallery').classList.add('hidden');
     document.getElementById('hf-error').classList.add('hidden');
 
     _hfState.startTs = Date.now();
@@ -196,6 +220,49 @@ window.hfStartGeneration = function() {
         var secs = Math.floor((Date.now() - _hfState.startTs) / 1000);
         document.getElementById('hf-elapsed').textContent = 'Procesando... ' + secs + 's';
     }, 1000);
+
+    if (_hfState.mode === 'image') {
+        // FIX 2026-08-15: galeria de varias fotos ancladas a la foto real
+        // (antes: 1 sola foto, generada solo de texto -- ver
+        // higgsfield_client.py generate_image()/build_image_prompt()).
+        fetch('/api/higgsfield/generate-images', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                title:         _hfState.title,
+                thumbnail_url: _hfState.thumbnail,
+                custom_prompt: document.getElementById('hf-custom-prompt').value,
+                sku:           _hfState.sku,
+                count:         8,
+            })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error || data.detail) { clearInterval(elapsedTimer); hfShowError(data.error || data.detail); return; }
+            var jobId = data.job_id;
+            _hfState.pollTimer = setInterval(function() {
+                fetch('/api/higgsfield/image-job/' + jobId)
+                    .then(function(r){ return r.json(); })
+                    .then(function(j) {
+                        if (j.status === 'done') {
+                            clearInterval(_hfState.pollTimer);
+                            clearInterval(elapsedTimer);
+                            hfShowGallery(j.images || []);
+                        } else if (j.status === 'error' || j.status === 'not_found') {
+                            clearInterval(_hfState.pollTimer);
+                            clearInterval(elapsedTimer);
+                            hfShowError(j.error || 'La generación falló');
+                        }
+                    })
+                    .catch(function(e) { /* ignorar errores de red en polling */ });
+            }, 3000);
+        })
+        .catch(function(e) {
+            clearInterval(elapsedTimer);
+            hfShowError('Error de conexión: ' + e.message);
+        });
+        return;
+    }
 
     fetch('/api/higgsfield/generate', {
         method: 'POST',
@@ -234,6 +301,47 @@ window.hfStartGeneration = function() {
         clearInterval(elapsedTimer);
         hfShowError('Error de conexión: ' + e.message);
     });
+};
+
+function hfShowGallery(urls) {
+    document.getElementById('hf-loading').classList.add('hidden');
+    document.getElementById('hf-footer').classList.remove('hidden');
+
+    if (!urls.length) {
+        hfShowError('No se generó ninguna imagen');
+        return;
+    }
+
+    document.getElementById('hf-gallery').classList.remove('hidden');
+    document.getElementById('hf-gallery-count').textContent = urls.length + ' foto' + (urls.length === 1 ? '' : 's') + ' generada' + (urls.length === 1 ? '' : 's');
+    var grid = document.getElementById('hf-gallery-grid');
+    grid.innerHTML = urls.map(function(url, idx) {
+        return '<div class="relative">' +
+            '<img src="' + url + '" data-img-url="' + url.replace(/"/g, '&quot;') + '" ' +
+            'onclick="hfPickGalleryImage(this)" loading="lazy" ' +
+            'class="w-full aspect-square rounded-lg object-cover border-2 border-fuchsia-200 cursor-pointer hover:border-fuchsia-500 transition" ' +
+            'title="Clic para agregar esta foto">' +
+        '</div>';
+    }).join('');
+
+    document.getElementById('hf-generate-btn').textContent = 'Otro lote ✨';
+    document.getElementById('hf-generate-btn').disabled = false;
+    document.getElementById('hf-generate-btn').onclick = hfGenerateAgain;
+}
+
+window.hfPickGalleryImage = function(imgEl) {
+    var url = imgEl.getAttribute('data-img-url');
+    if (!url) return;
+    if (typeof window.hfOnImageSelected === 'function') {
+        window.hfOnImageSelected(url);
+        imgEl.classList.add('opacity-30');
+        imgEl.onclick = null;
+        imgEl.title = 'Ya agregada';
+    } else {
+        // Contexto sin integracion directa (ej. wizard de nueva publicacion) --
+        // al menos abrir la imagen en una pestaña nueva para descargarla.
+        window.open(url, '_blank');
+    }
 };
 
 function hfShowResult(url) {

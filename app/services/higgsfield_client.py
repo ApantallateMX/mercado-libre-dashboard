@@ -65,16 +65,43 @@ async def _cancel(request_id: str) -> None:
             pass
 
 
-async def generate_image(prompt: str, aspect_ratio: str = "1:1") -> str:
+async def generate_image(
+    prompt: str,
+    image_reference_url: str = "",
+    batch_size: int = 1,
+    aspect_ratio: str = "1:1",
+) -> str:
     """
-    Texto → imagen con soul/standard.
+    Genera imagen(es) de producto.
+
+    FIX 2026-08-15 (pedido por Jovan: la foto generada podia verse
+    "parecida" pero no identica al producto real -- riesgo de reclamos si
+    el cliente recibe algo distinto a lo que ve en la foto): si se pasa
+    image_reference_url, usa soul/reference (foto real como referencia
+    OBLIGATORIA, hasta 4 imagenes por llamada via batch_size) en vez de
+    soul/standard (solo texto, sin ninguna garantia de que se parezca al
+    producto real). Sin referencia, cae al comportamiento anterior
+    (soul/standard, batch_size fijo en 1 -- ese modelo no soporta batch).
+
     Retorna request_id (generación asíncrona).
     """
+    if image_reference_url:
+        payload = {
+            "prompt": prompt,
+            "image_reference_url": image_reference_url,
+            "batch_size": min(max(batch_size, 1), 4),
+            "aspect_ratio": aspect_ratio,
+        }
+        endpoint = "soul/reference"
+    else:
+        payload = {"prompt": prompt}
+        endpoint = "soul/standard"
+
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         r = await client.post(
-            f"{_BASE}/higgsfield-ai/soul/standard",
+            f"{_BASE}/higgsfield-ai/{endpoint}",
             headers=_headers(),
-            json={"prompt": prompt},
+            json=payload,
         )
         r.raise_for_status()
         data = r.json()
@@ -104,7 +131,11 @@ async def generate_video(image_url: str, prompt: str) -> str:
 async def get_status(request_id: str) -> dict:
     """
     Consulta el estado de una generación.
-    Retorna dict con keys: status, result_url (None si aún no termina), error.
+    Retorna dict con keys: status, result_url (primera imagen/video, para
+    compatibilidad con el modo video de un solo resultado), result_urls
+    (TODAS las imagenes -- FIX 2026-08-15: antes se descartaban todas
+    menos la primera aunque batch_size pidiera varias, asi que aun
+    pidiendo 4 con soul/reference solo se veia 1 en el dashboard), error.
     """
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         r = await client.get(
@@ -116,21 +147,24 @@ async def get_status(request_id: str) -> dict:
 
     status = data.get("status", "unknown")
     result_url = None
+    result_urls = []
 
     if status == "completed":
-        # Imagen
+        # Imagen(es)
         images = data.get("images", [])
         if images:
-            result_url = images[0].get("url")
+            result_urls = [im.get("url") for im in images if im.get("url")]
+            result_url = result_urls[0] if result_urls else None
         # Video
         videos = data.get("videos", [])
         if videos:
             result_url = videos[0].get("url")
 
     return {
-        "status":     status,
-        "result_url": result_url,
-        "raw":        data,
+        "status":      status,
+        "result_url":  result_url,
+        "result_urls": result_urls,
+        "raw":         data,
     }
 
 
@@ -168,8 +202,21 @@ async def upload_from_url(image_url: str) -> str:
 
 
 def build_image_prompt(title: str, custom: str = "") -> str:
-    """Construye prompt optimizado para foto de producto a partir del título del listing."""
-    base = f"Professional studio product photo, white background, soft even lighting, {title}"
+    """Construye prompt para foto lifestyle de producto.
+
+    FIX 2026-08-15: se usa junto con image_reference_url (soul/reference,
+    ver generate_image) -- el prompt ahora exige explicitamente preservar
+    la apariencia REAL del producto de la foto de referencia (color,
+    forma, marca, proporciones) sin alterarla, para evitar que la IA
+    genere algo "parecido" pero distinto al producto real que se vende
+    (riesgo de reclamos si el cliente recibe algo distinto a la foto)."""
+    base = (
+        f"Professional lifestyle product photography of this exact {title}. "
+        f"Keep the product's real appearance, color, shape, proportions and "
+        f"branding completely unchanged and identical to the reference "
+        f"image -- do not alter, redesign, or reinterpret the product. "
+        f"Realistic setting, natural lighting, high detail, commercial quality"
+    )
     if custom:
         base += f", {custom}"
     return base

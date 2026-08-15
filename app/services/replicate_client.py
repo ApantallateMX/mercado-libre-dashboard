@@ -808,7 +808,14 @@ async def generate_video_minimax_live(image_url: str, prompt: str = "") -> str:
 
 # ─── Text → Video (sin imágenes — evita distorsiones) ─────────────────────────
 
-_LTX_URL     = "https://api.replicate.com/v1/models/lightricks/ltx-video/predictions"
+_LTX_URL     = "https://api.replicate.com/v1/predictions"
+# FIX 2026-08-15: lightricks/ltx-video NO es un modelo "oficial" en Replicate --
+# la ruta corta /v1/models/{owner}/{name}/predictions le devuelve 404 siempre
+# (confirmado en vivo). Para modelos no oficiales hay que usar /v1/predictions
+# con la version explicita. Version real obtenida via GET /v1/models/lightricks/
+# ltx-video (campo latest_version.id) el 2026-08-15 -- si Replicate publica una
+# version nueva, esta puede quedar desactualizada (revisar si vuelve a fallar).
+_LTX_VERSION = "8c47da666861d081eeb4d1261853087de23923a268a69b63febdf5dc1dee08e4"
 _WAN_T2V_URL = "https://api.replicate.com/v1/models/wavespeedai/wan-2.1-t2v-480p/predictions"
 
 
@@ -833,18 +840,30 @@ async def generate_video_t2v(prompt: str) -> str:
 
 
 async def _t2v_ltx(prompt: str) -> str:
-    """LTX-Video — alta calidad, genera video vertical 9:16 nativo."""
+    """LTX-Video — alta calidad, genera video vertical 9:16.
+
+    FIX 2026-08-15: el payload anterior (width/height/num_frames/frame_rate/
+    guidance_scale/num_inference_steps) no correspondia al schema real del
+    modelo -- por eso esta funcion SIEMPRE fallaba (404, ruta corta invalida
+    para un modelo no-oficial) y el pipeline completo caia siempre al
+    fallback de zoompan/slideshow (el "efecto collage" que Jovan reporto:
+    nunca se habia generado un video real por este camino). Confirmado en
+    vivo con una prediccion real completa (status succeeded, video de
+    salida real) usando este schema correcto: target_size/aspect_ratio/
+    length/cfg/steps -- no width/height/num_frames/guidance_scale/
+    num_inference_steps (esos campos no existen en este modelo).
+    """
     import asyncio
     payload = {
+        "version": _LTX_VERSION,
         "input": {
-            "prompt":               prompt,
-            "negative_prompt":      "blurry, low quality, distorted, watermark, text overlay, logo, amateur, shaky camera",
-            "width":                576,   # must be multiple of 32
-            "height":               1024,  # must be multiple of 32 — portrait for ML/Reels
-            "num_frames":           241,  # 241/24fps ≈ 10s por clip — 3 clips = ~30s de video real
-            "frame_rate":           24,
-            "guidance_scale":       3.5,
-            "num_inference_steps":  40,
+            "prompt":          prompt,
+            "negative_prompt": "blurry, low quality, distorted, watermark, text overlay, logo, amateur, shaky camera",
+            "target_size":     768,
+            "aspect_ratio":    "9:16",   # vertical para ML/Reels
+            "length":          257,     # ~10s por clip a la framerate nativa del modelo -- 3 clips = ~30s de video real
+            "cfg":             3.5,
+            "steps":           30,
         }
     }
     hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
@@ -881,14 +900,23 @@ async def _t2v_ltx(prompt: str) -> str:
 
 
 async def _t2v_wan(prompt: str) -> str:
-    """Wan 2.1 text-to-video fallback."""
+    """Wan 2.1 text-to-video -- ultimo fallback si LTX-Video falla.
+
+    FIX 2026-08-15: "num_frames"/"fps" no existen en el schema real de este
+    modelo (se mandaban pero Replicate los ignoraba en silencio, no
+    controlaban nada) -- corregido a los campos reales (aspect_ratio,
+    sample_steps). El modelo no expone control de duracion via input,
+    queda al default. NOTA: devolvio error interno E002 de Replicate en
+    pruebas del 2026-08-15 sin relacion aparente con los parametros --
+    revisar si persiste (podria ser un problema temporal del lado de
+    Replicate, no de este codigo)."""
     import asyncio
     payload = {
         "input": {
             "prompt":          prompt,
             "negative_prompt": "blurry, low quality, distorted, watermark, text overlay, amateur",
-            "num_frames":      161,  # 161/16fps ≈ 10s por clip — 3 clips = ~30s de video real
-            "fps":             16,
+            "aspect_ratio":    "9:16",
+            "sample_steps":    30,
         }
     }
     hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}

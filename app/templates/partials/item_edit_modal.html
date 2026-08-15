@@ -821,6 +821,16 @@ window.editModalOpenHiggsfield = function(sku) {
     var title = document.getElementById('edit-title').value;
     var photos = _editGetPhotoUrls();
     var thumb = photos.length ? photos[0] : '';
+    // FIX 2026-08-15: al elegir una foto de la galeria de Higgsfield, se
+    // agrega directo a las fotos pendientes del listing (mismo patron que
+    // addScrapedPhoto) -- antes no habia forma de "usar" el resultado sin
+    // descargarlo y volver a subirlo a mano.
+    window.hfOnImageSelected = function(url) {
+        _currentPhotos.push({source: url});
+        _photosModified = true;
+        refreshPhotosGrid();
+        updateChangeCounter();
+    };
     if (typeof openHiggsfieldModal === 'function') {
         openHiggsfieldModal(title, thumb, sku);
     }
