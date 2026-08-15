@@ -23,7 +23,11 @@ _MINIMAX_URL      = "https://api.replicate.com/v1/models/minimax/video-01/predic
 _MINIMAX_LIVE_URL = "https://api.replicate.com/v1/models/minimax/video-01-live/predictions"
 # Image-to-video models (ordered by preference)
 _WAN_I2V_URL      = "https://api.replicate.com/v1/models/wavespeedai/wan-2.1-i2v-480p/predictions"
-_SVD_XT_URL       = "https://api.replicate.com/v1/models/lucataco/stable-video-diffusion-img2vid-xt-1-1/predictions"
+# FIX 2026-08-15: lucataco/stable-video-diffusion-img2vid-xt-1-1 ya no existe
+# en Replicate (404 confirmado en vivo) -- se reemplaza como fallback por
+# lightricks/ltx-video en modo imagen-a-video (mismo modelo ya usado para
+# T2V en generate_video_t2v(), que SI soporta un campo "image" opcional como
+# primer frame -- confirmado con una generacion real completa).
 
 _HEADERS = {
     "Authorization": f"Bearer {_REPLICATE_KEY}",
@@ -624,40 +628,116 @@ async def generate_video(
 
 async def generate_video_img2vid(image_url: str, prompt: str = "") -> str:
     """
-    Convierte una imagen de producto en un video AI de 4-5s.
-    Pipeline: Wan2.1 (alta calidad) → SVD XT (fallback confiable).
+    Anima una foto REAL de producto con movimiento de camara (el producto en
+    el video es el de la foto, no uno imaginado por texto).
+
+    FIX 2026-08-15 (pedido por Jovan + diagnostico de ecommerce-creative-director):
+    el pipeline de video comercial usaba text-to-video puro, que no tiene
+    forma de anclarse a como se ve el producto real -- viola el principio de
+    Product Truth de ese agente. Esta funcion es el reemplazo correcto:
+    anima la foto real en vez de imaginar el producto desde cero.
+
+    Pipeline: LTX-Video en modo imagen-a-video (mismo modelo ya confirmado
+    confiable para T2V, soporta un frame inicial via "image") -> Wan2.1 i2v
+    como respaldo (parametros corregidos 2026-08-15, aunque devolvio error
+    interno E002 de Replicate en las pruebas de hoy -- se deja como
+    respaldo por si el problema del lado de Replicate se resuelve). El
+    fallback SVD XT anterior se elimino: el modelo
+    lucataco/stable-video-diffusion-img2vid-xt-1-1 ya no existe (404
+    confirmado en vivo).
+
     Retorna URL pública del video generado.
     """
-    import asyncio
-
-    # Intento 1: Wan2.1 image-to-video (alta calidad cinematica, ~60s)
     try:
-        logger.info(f"img2vid: intentando Wan2.1 para {image_url[:60]}...")
-        return await _img2vid_wan(image_url, prompt)
+        logger.info(f"img2vid: LTX-Video (imagen real) — {image_url[:60]}...")
+        return await _img2vid_ltx(image_url, prompt)
     except Exception as e:
-        logger.warning(f"Wan2.1 img2vid falló ({e.__class__.__name__}: {str(e)[:120]}), usando SVD...")
+        logger.warning(f"LTX-Video img2vid falló ({e.__class__.__name__}: {str(e)[:120]}), usando Wan2.1...")
 
-    # Intento 2: Stable Video Diffusion XT (fallback, ~45s)
-    logger.info(f"img2vid: usando SVD XT para {image_url[:60]}...")
-    return await _img2vid_svd(image_url)
+    logger.info(f"img2vid: Wan2.1 (imagen real) — {image_url[:60]}...")
+    return await _img2vid_wan(image_url, prompt)
 
 
-async def _img2vid_wan(image_url: str, prompt: str) -> str:
+async def _img2vid_ltx(image_url: str, prompt: str) -> str:
+    """LTX-Video en modo imagen-a-video -- misma version/endpoint que
+    _t2v_ltx (ver ese docstring), pero con el campo "image" como primer
+    frame para que el producto animado sea el real de la foto."""
     import asyncio
     vid_prompt = (
         prompt or
         "professional product commercial, smooth slow cinematic camera movement, "
-        "warm studio lighting, premium quality, 4K, no watermark"
+        "product stays centered and unchanged, warm studio lighting, premium quality"
+    )
+    payload = {
+        "version": _LTX_VERSION,
+        "input": {
+            "prompt":          vid_prompt,
+            "image":           image_url,
+            "negative_prompt": "blurry, low quality, distorted, watermark, text overlay, logo, amateur, shaky camera",
+            "target_size":     768,
+            "aspect_ratio":    "9:16",
+            "length":          97,   # ~4s a la framerate nativa del modelo (clips mas cortos para i2v, se combinan igual con xfade)
+            "cfg":             3.0,
+            "steps":           30,
+        }
+    }
+    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_LTX_URL, json=payload, headers=hdrs)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"LTX-Video img2vid submit {resp.status_code}: {resp.text[:200]}")
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"LTX-Video img2vid no pred_id: {data}")
+
+    logger.info(f"LTX-Video img2vid prediction {pred_id} — polling...")
+    poll_url  = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(60):   # max 60 × 5s = 300s
+            await asyncio.sleep(5)
+            pr = await client.get(poll_url, headers=poll_hdrs)
+            pd = pr.json()
+            status = pd.get("status")
+            if status == "succeeded":
+                out = pd.get("output")
+                if isinstance(out, str) and out.startswith("http"):
+                    return out
+                if isinstance(out, list) and out:
+                    first = out[0]
+                    return first if isinstance(first, str) else first.get("url", "")
+                raise RuntimeError(f"LTX-Video img2vid output inesperado: {out}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"LTX-Video img2vid falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("LTX-Video img2vid timeout — 300s sin resultado")
+
+
+async def _img2vid_wan(image_url: str, prompt: str) -> str:
+    """Wan2.1 image-to-video -- respaldo si LTX-Video falla.
+
+    FIX 2026-08-15: el payload anterior (num_frames/frames_per_second/
+    guide_scale) no correspondia al schema real de este modelo -- corregido
+    a sample_steps/sample_guide_scale/aspect_ratio (mismos campos reales que
+    _t2v_wan). NOTA: devolvio error interno E002 de Replicate en pruebas del
+    2026-08-15, igual que el modelo hermano wavespeedai/wan-2.1-t2v-480p --
+    parece un problema temporal del lado de Replicate con esta familia de
+    modelos, no de nuestros parametros (ya verificados correctos)."""
+    import asyncio
+    vid_prompt = (
+        prompt or
+        "professional product commercial, smooth slow cinematic camera movement, "
+        "product stays centered and unchanged, warm studio lighting, premium quality"
     )
     payload = {
         "input": {
-            "image":             image_url,
-            "prompt":            vid_prompt,
-            "negative_prompt":   "blurry, low quality, distorted, watermark, text overlay, logo",
-            "num_frames":        81,
-            "sample_steps":      25,
-            "frames_per_second": 16,
-            "guide_scale":       5.0,
+            "image":              image_url,
+            "prompt":             vid_prompt,
+            "negative_prompt":    "blurry, low quality, distorted, watermark, text overlay, logo",
+            "aspect_ratio":       "9:16",
+            "sample_steps":       30,
+            "sample_guide_scale": 5.0,
         }
     }
     hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
@@ -665,13 +745,13 @@ async def _img2vid_wan(image_url: str, prompt: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(_WAN_I2V_URL, json=payload, headers=hdrs)
         if resp.status_code not in (200, 201):
-            raise RuntimeError(f"Wan2.1 submit {resp.status_code}: {resp.text[:200]}")
+            raise RuntimeError(f"Wan2.1 img2vid submit {resp.status_code}: {resp.text[:200]}")
         data    = resp.json()
         pred_id = data.get("id")
         if not pred_id:
-            raise RuntimeError(f"Wan2.1 no pred_id: {data}")
+            raise RuntimeError(f"Wan2.1 img2vid no pred_id: {data}")
 
-    logger.info(f"Wan2.1 prediction {pred_id} — polling...")
+    logger.info(f"Wan2.1 img2vid prediction {pred_id} — polling...")
     poll_url = f"https://api.replicate.com/v1/predictions/{pred_id}"
     poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -687,56 +767,10 @@ async def _img2vid_wan(image_url: str, prompt: str) -> str:
                 if isinstance(out, list) and out:
                     first = out[0]
                     return first if isinstance(first, str) else first.get("url", "")
-                raise RuntimeError(f"Wan2.1 output inesperado: {out}")
+                raise RuntimeError(f"Wan2.1 img2vid output inesperado: {out}")
             if status in ("failed", "canceled"):
-                raise RuntimeError(f"Wan2.1 falló: {pd.get('error', 'unknown')}")
-    raise RuntimeError("Wan2.1 timeout — 400s sin resultado")
-
-
-async def _img2vid_svd(image_url: str) -> str:
-    """Stable Video Diffusion XT — fallback confiable."""
-    import asyncio
-    payload = {
-        "input": {
-            "input_image":       image_url,
-            "sizing_strategy":   "maintain_aspect_ratio",
-            "frames_per_second": 6,
-            "num_frames":        25,
-            "motion_bucket_id":  127,
-            "cond_aug":          0.02,
-        }
-    }
-    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(_SVD_XT_URL, json=payload, headers=hdrs)
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(f"SVD submit {resp.status_code}: {resp.text[:200]}")
-        data    = resp.json()
-        pred_id = data.get("id")
-        if not pred_id:
-            raise RuntimeError(f"SVD no pred_id: {data}")
-
-    logger.info(f"SVD XT prediction {pred_id} — polling...")
-    poll_url  = f"https://api.replicate.com/v1/predictions/{pred_id}"
-    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for _ in range(60):   # max 60 × 5s = 300s
-            await asyncio.sleep(5)
-            pr = await client.get(poll_url, headers=poll_hdrs)
-            pd = pr.json()
-            status = pd.get("status")
-            if status == "succeeded":
-                out = pd.get("output")
-                if isinstance(out, str) and out.startswith("http"):
-                    return out
-                if isinstance(out, list) and out:
-                    first = out[0]
-                    return first if isinstance(first, str) else ""
-                raise RuntimeError(f"SVD output inesperado: {out}")
-            if status in ("failed", "canceled"):
-                raise RuntimeError(f"SVD falló: {pd.get('error', 'unknown')}")
-    raise RuntimeError("SVD timeout — 300s sin resultado")
+                raise RuntimeError(f"Wan2.1 img2vid falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("Wan2.1 img2vid timeout — 400s sin resultado")
 
 
 # ─── Minimax video-01-live: imagen real → video (sin distorsión) ─────────────

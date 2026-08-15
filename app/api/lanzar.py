@@ -2414,16 +2414,41 @@ async def _run_video_pipeline(job_id: str, body: dict):
                 return vf.read()
     
         # ────────────────────────────────────────────────────────────────────────────
-        # PRIMARY: T2V con escenas específicas del producto (generadas por Claude Vision)
-        # Las imágenes se usan como REFERENCIA para Claude — no para animar
-        # → video real con movimiento, personas, lifestyle — NO foto estática animada
-        # FALLBACK: zoompan ffmpeg (solo si T2V falla y hay imágenes disponibles)
+        # FIX 2026-08-15 (pedido por Jovan + diagnostico de ecommerce-creative-director,
+        # con una segunda vuelta de verificacion real tras encontrar que el primer
+        # intento tambien fallaba): el T2V puro (texto -> video) NO tiene forma de
+        # anclarse a como se ve el producto real -- el modelo lo imagina desde cero,
+        # sin ninguna referencia visual. Viola el principio de Product Truth.
+        #
+        # Primer intento de arreglo (generate_video_img2vid, LTX-Video/Wan2.1):
+        # verificado en vivo que el producto empieza correcto pero se DISTORSIONA
+        # gravemente ya para el frame ~20 de 97 (inspeccion visual real, frame a
+        # frame) -- peor que T2V en algunos sentidos, porque ni siquiera se
+        # mantiene coherente todo el clip. Descartado.
+        #
+        # Solucion real: minimax/video-01 (replicate_client.generate_video(),
+        # YA usado correctamente en el endpoint mas simple /generate-video de
+        # este mismo archivo) -- verificado en vivo frame a frame (0, 40, 120 de
+        # ~150+) que el producto se mantiene 100% identico e intacto durante
+        # TODO el clip, con movimiento de camara real (zoom-in suave). Esta es
+        # la opcion que de verdad cumple Product Truth Y se ve como video real.
+        #
+        # Si hay fotos reales del producto (ai_image_urls), PRIMARY es
+        # minimax/video-01 con cada foto como first_frame_image. T2V puro queda
+        # como ultimo recurso solo cuando no hay ninguna foto disponible.
+        # FALLBACK adicional: zoompan ffmpeg (solo si el metodo primario falla).
         # ────────────────────────────────────────────────────────────────────────────
-        logger.info(f"=== T2V PRIMARY: {len(scenes)} escenas {'(Vision)' if ai_image_urls else '(text)'} ===")
+        _use_i2v = bool(ai_image_urls)
+        _method  = "i2v" if _use_i2v else "t2v"
+        logger.info(f"=== {_method.upper()} PRIMARY: {len(scenes)} escenas, {len(ai_image_urls)} fotos reales ===")
 
         _t2v_ok = False
 
         async def _gen_t2v_clip(idx: int):
+            if _use_i2v:
+                photo  = ai_image_urls[idx % len(ai_image_urls)]
+                motion = _motion_prompts[idx % len(_motion_prompts)]
+                return await replicate_client.generate_video(prompt=motion, first_frame_image=photo)
             _t2v_pool = scenes if scenes else _motion_prompts
             return await replicate_client.generate_video_t2v(_t2v_pool[idx % len(_t2v_pool)])
 
@@ -2439,10 +2464,10 @@ async def _run_video_pipeline(job_id: str, body: dict):
         # Log failures for debugging
         for _ci, _cr in enumerate(clip_url_results):
             if isinstance(_cr, Exception):
-                logger.error(f"T2V clip {_ci} falló: {type(_cr).__name__}: {str(_cr)[:300]}")
+                logger.error(f"{_method.upper()} clip {_ci} falló: {type(_cr).__name__}: {str(_cr)[:300]}")
 
         clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
-        logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
+        logger.info(f"{_method.upper()} clips OK: {len(clip_urls)}/{len(clip_url_results)}")
 
         # Reintentar secuencialmente hasta tener 3 clips — evita loops visibles en el video final
         _retry_idx = len(clip_url_results)
@@ -2514,13 +2539,13 @@ async def _run_video_pipeline(job_id: str, body: dict):
 
                 _persist_video(vid_id, _video_cache[vid_id])
                 out_mb = len(_video_cache[vid_id]) / 1_048_576
-                logger.info(f"T2V video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
-                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": "t2v"}
+                logger.info(f"{_method.upper()} video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
+                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": _method}
                 _t2v_ok = True
                 return
 
             except Exception as _t2v_err:
-                logger.error(f"T2V pipeline falló: {_t2v_err}", exc_info=True)
+                logger.error(f"{_method.upper()} pipeline falló: {_t2v_err}", exc_info=True)
 
         # ────────────────────────────────────────────────────────────────────────────
         # FALLBACK: zoompan ffmpeg (solo si hay imágenes del producto)

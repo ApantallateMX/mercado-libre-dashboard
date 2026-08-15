@@ -1139,9 +1139,18 @@ window.editModalGenVideo = async function(itemId) {
             if (pollData.status === 'done' && pollData.video_url) {
                 var vidId = pollData.video_url.split('/').pop();
                 // Show preview
+                // FIX 2026-08-15: "method" ahora puede ser i2v/t2v/zoompan (antes
+                // solo distinguia t2v vs "todo lo demas = Slideshow", asi que el
+                // nuevo metodo i2v (el correcto, ancla al producto real) se
+                // mostraba incorrectamente como "Slideshow".
+                var _methodLabels = {
+                    i2v: 'IA Imagen-a-Video (producto real)',
+                    t2v: 'IA Texto-a-Video',
+                    zoompan: 'Slideshow (fotos con zoom/pan)',
+                };
                 statusDiv.innerHTML =
                     '<video src="' + pollData.video_url + '" controls class="w-full rounded mt-1 max-h-48"></video>' +
-                    '<p class="mt-1 text-green-600 font-medium">✅ Video listo — ' + (pollData.method === 't2v' ? 'IA Text-to-Video' : 'Slideshow') + '</p>';
+                    '<p class="mt-1 text-green-600 font-medium">✅ Video listo — ' + (_methodLabels[pollData.method] || pollData.method) + '</p>';
                 // Auto-upload to ML
                 setTimeout(async function() {
                     try {

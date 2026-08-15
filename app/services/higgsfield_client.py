@@ -69,7 +69,8 @@ async def generate_image(
     prompt: str,
     image_reference_url: str = "",
     batch_size: int = 1,
-    aspect_ratio: str = "1:1",
+    aspect_ratio: str = "3:4",
+    resolution: str = "1080p",
 ) -> str:
     """
     Genera imagen(es) de producto.
@@ -83,6 +84,15 @@ async def generate_image(
     producto real). Sin referencia, cae al comportamiento anterior
     (soul/standard, batch_size fijo en 1 -- ese modelo no soporta batch).
 
+    FIX 2026-08-15 (segunda vuelta, diagnostico de ecommerce-creative-director
+    tras reporte de Jovan de que las fotos salieron "horribles"):
+    aspect_ratio por defecto cambia de 1:1 (formato "catalogo cuadrado") a
+    3:4 (vertical, el mas cercano a fotografia lifestyle real que soporta
+    soul/reference -- enum real confirmado: 9:16/16:9/4:3/3:4/1:1/2:3/3:2,
+    no incluye 4:5) y resolution se especifica explicito en 1080p (antes no
+    se mandaba, quedaba en el default 720p de Higgsfield sin que el codigo
+    lo controlara).
+
     Retorna request_id (generación asíncrona).
     """
     if image_reference_url:
@@ -91,6 +101,7 @@ async def generate_image(
             "image_reference_url": image_reference_url,
             "batch_size": min(max(batch_size, 1), 4),
             "aspect_ratio": aspect_ratio,
+            "resolution": resolution,
         }
         endpoint = "soul/reference"
     else:
@@ -202,24 +213,36 @@ async def upload_from_url(image_url: str) -> str:
 
 
 def build_image_prompt(title: str, custom: str = "") -> str:
-    """Construye prompt para foto lifestyle de producto.
+    """Construye prompt de ESCENA para soul/reference (foto real del
+    producto como referencia obligatoria).
 
-    FIX 2026-08-15: se usa junto con image_reference_url (soul/reference,
-    ver generate_image) -- el prompt ahora exige explicitamente preservar
-    la apariencia REAL del producto de la foto de referencia (color,
-    forma, marca, proporciones) sin alterarla, para evitar que la IA
-    genere algo "parecido" pero distinto al producto real que se vende
-    (riesgo de reclamos si el cliente recibe algo distinto a la foto)."""
-    base = (
-        f"Professional lifestyle product photography of this exact {title}. "
-        f"Keep the product's real appearance, color, shape, proportions and "
-        f"branding completely unchanged and identical to the reference "
-        f"image -- do not alter, redesign, or reinterpret the product. "
-        f"Realistic setting, natural lighting, high detail, commercial quality"
+    FIX 2026-08-15 (segunda vuelta -- Jovan reportó que las fotos salieron
+    "horribles", diagnóstico de ecommerce-creative-director): el prompt
+    anterior le pedía al modelo dos cosas que compiten entre sí en la misma
+    instrucción -- "mantén el producto exactamente igual" Y "ponlo en una
+    escena de vida real nueva" -- describiendo el producto de nuevo aunque
+    la imagen de referencia YA lo aporta. Un modelo de referencia-
+    condicionada resuelve mal esa tensión: o se queda pegado al fondo de
+    estudio de la referencia (visto en la primera prueba de hoy), o el
+    producto empieza a distorsionarse tratando de encajar en la escena.
+
+    Mismo patrón "Kontext" ya probado y funcionando en este proyecto (ver
+    `generate_product_prompts_endpoint` en `app/api/lanzar.py`, modo con
+    imagen de referencia para TVs): NO describir el producto en el prompt
+    -- solo la escena/ambiente/iluminación. La instrucción de preservar el
+    producto va al final, corta, sin competir con la descripción principal.
+    """
+    scene = custom or (
+        f"A realistic modern home setting where a {title} would naturally "
+        f"be used and displayed, warm natural window light, clean and "
+        f"inviting, editorial lifestyle photography, shallow depth of "
+        f"field, 8K, photorealistic"
     )
-    if custom:
-        base += f", {custom}"
-    return base
+    return (
+        f"{scene}. Keep the product exactly as shown in the reference "
+        f"image -- same color, shape, proportions, materials and branding, "
+        f"do not redesign or reinterpret it."
+    )
 
 
 def build_video_prompt(title: str, custom: str = "") -> str:
