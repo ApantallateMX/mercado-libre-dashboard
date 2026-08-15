@@ -1135,8 +1135,37 @@ class MeliClient:
         return await self.put(f"/items/{item_id}", json=updates)
 
     async def update_item_title(self, item_id: str, title: str) -> dict:
-        """Actualiza el titulo de un item."""
-        return await self.put(f"/items/{item_id}", json={"title": title})
+        """Actualiza el titulo de un item.
+
+        FIX 2026-08-14: para items con family_name (User Products -- hoy la
+        mayoria del catalogo activo por la migracion de ML), PUT /items/{id}
+        con "title" (o "family_name") SIEMPRE falla con 400 (cause 374,
+        "BODY_INVALID_FIELDS"), sin importar sold_quantity -- confirmado con
+        una prueba real autorizada por Jovan. El unico camino real por API
+        publica es el mismo que usa la consola de vendedores de ML
+        internamente: cambiar el family_name via el endpoint dedicado de
+        familia. El titulo visible final = family_name + atributos de
+        variacion que ML agrega despues (ej. color) -- eso ya no esta bajo
+        nuestro control exacto, es el mismo comportamiento que tiene la
+        consola real de ML.
+        """
+        item = await self.get_item(item_id)
+        family_name = item.get("family_name")
+        if not family_name:
+            return await self.put(f"/items/{item_id}", json={"title": title})
+
+        user_product_id = item.get("user_product_id")
+        if not user_product_id:
+            raise MeliApiError(400, f"/items/{item_id}", {
+                "error": "Item con family_name pero sin user_product_id -- no se puede editar el titulo por este camino."
+            })
+        user_product = await self.get(f"/user-products/{user_product_id}")
+        family_id = user_product.get("family_id")
+        if not family_id:
+            raise MeliApiError(400, f"/user-products/{user_product_id}", {
+                "error": "No se encontro family_id para este user_product -- no se puede editar el titulo."
+            })
+        return await self.put(f"/user-products-families/{family_id}", json={"family_name": title})
 
     async def update_item_description(self, item_id: str, plain_text: str) -> dict:
         """Actualiza la descripcion de un item (PUT /items/{id}/description)."""
