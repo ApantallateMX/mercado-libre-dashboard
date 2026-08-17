@@ -7,6 +7,63 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — BUG CRÍTICO: la sustitución "Aplicado en BM" NUNCA se aplicó de verdad (3 bugs encadenados, todos corregidos y verificados contra BM real)
+
+Jovan verificó a mano en el Fulfillment Dashboard de BM (Map de
+`SNTV007263`) que el sustituto `SNTV007447-GRB` — que la app mostraba en
+verde "✓ Aplicado en BM" tras el botón "Reintentar" de la entrada
+anterior — **no existía ahí**. Investigación con el nuevo endpoint
+`GET /api/diag/bm-alter-sku-groups` (solo lectura, temporal, admin-gated
+por `DIAG_TOKEN`) reveló que **ninguna sustitución hecha por esta feature
+se había aplicado realmente en BM desde que se construyó**, incluidas 2
+que Vanessa ya daba por buenas.
+
+**Bug 1 — ProductSKU sin condición:** `_inject_bm_alter_sku` mandaba el
+SKU BASE (`SNTV007263`) como `ProductSKU` a `AddAlterSKUMappingByWebSKU`,
+pero BM indexa el mapeo por el ProductSKU CON condición real
+(`SNTV007263-GRB` — confirmado el único producto registrado en ese
+WebSKU). BM respondía 200/"Success" sin crear nada real. Fix:
+`_resolve_bm_condition_sku()` resuelve el ProductSKU real vía
+`GetAlterSKUMappingByWebSKU` antes de crear/buscar — si hay 0 o más de 1
+producto (ambiguo), rechaza en vez de adivinar.
+
+**Bug 2 — anti-duplicado ciego al scope:** al corregir el bug 1, la
+sustitución de Vanessa (`SHHP000048`→`SHHP000060-NEW`, orden
+`2000017981754294`) seguía sin aplicarse: ya existía un mapeo MANUAL del
+mismo par de SKUs pero para OTRA orden (`2000017944072810`, creado por
+Vanessa el 15-ago). El chequeo "¿ya existe?" ignoraba a qué orden
+pertenecía el mapeo encontrado. Fix: `_bm_alter_sku_covers_order()` solo
+cuenta como "ya existe para esta orden" si `Scope=GLOBAL` o el
+`SiteOrderID` coincide exacto — cualquier otro caso debe crear su propia
+entrada.
+
+**Bug 3 — BM puede rechazar con HTTP 200:** al reintentar esa misma
+sustitución con el fix 2 aplicado, BM respondió 200 con
+`MessageReturn: "Insert Alternative SKU: SHHP000060-NEW exists for
+SHHP000048-NEW!"` — un RECHAZO real (BM solo permite UN mapeo por par
+ProductSKU+AlterSKU, sin importar el scope; el mapeo de Vanessa del 15-ago
+ya "tenía tomado" ese par). El código viejo marcaba éxito con cualquier
+200. Fix: `ok` ahora exige además `MessageReturn == "Success"` (el único
+texto visto en los 2 casos de éxito real confirmados hoy).
+
+**Resultado final, verificado contra BM real con el diag endpoint (no solo
+confiado en el mensaje de la API):**
+- Orden `2000017984576896` (`SNTV007263`→`SNTV007447-GRB`, hoy) — **RESUELTO
+  DE VERDAD**, confirmado con `SiteOrderID` correcto en el Map de BM.
+- Orden `2000017956308828` (`SNTV007446`→`SNTV004388`, Vanessa) — **RESUELTO
+  DE VERDAD** al reintentar, confirmado igual.
+- Orden `2000017981754294` (`SHHP000048`→`SHHP000060-NEW`, Vanessa) —
+  **NO SE PUDO auto-resolver** — BM no permite 2 mapeos para el mismo par
+  de SKUs. Queda marcado `bm_status=failed` con el mensaje real (antes
+  decía "Aplicado en BM" en falso). Pendiente de decisión de Jovan/Vanessa:
+  reasignar el mapeo existente del 15-ago a esta orden nueva (si esa orden
+  vieja ya se resolvió) o elegir un SKU sustituto distinto para esta orden.
+
+**Lección de esta sesión:** verificar contra el sistema real (no solo
+confiar en que la API devuelva 200 o un mensaje de texto) fue lo que
+destapó los 3 bugs — cada uno solo salió a la luz al probar el siguiente
+caso real, nunca se hubiera encontrado con solo revisar el código.
+
 ## 2026-08-17 — FEAT: botón "Reintentar" para sustituciones atoradas en BinManager (incidente real)
 
 Horas después del fix anterior (inyección async), Jovan reportó en vivo un
