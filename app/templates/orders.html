@@ -627,6 +627,12 @@ function loadAlertasHistory() {
                 if (h.bm_status === 'failed') {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700" title="' + (h.bm_message || '') + '">✗ Falló en BM</span>';
                 }
+                // FIX 2026-08-17: la inyección a BM ahora corre en background
+                // (ver resolve_stock_alert_substitution) -- este estado se ve
+                // brevemente mientras el background task todavía no termina.
+                if (h.bm_status === 'pending') {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700" title="Verificando con BinManager...">⏳ Verificando en BM</span>';
+                }
                 return '<span class="text-[10px] text-gray-400">—</span>';
             }
             // Solo tiene sentido borrar si de verdad se aplicó en BM y no se
@@ -742,16 +748,19 @@ window.submitSubstitution = function() {
     .then(function(d) {
         if (d.ok) {
             closeSubstitutionModal();
-            // FEATURE 2026-08-17: bm_result viene null cuando no aplica (ej.
-            // Amazon, sin feed en tiempo real todavia) -- distinguir ese caso
-            // de un fallo real de BM para no alarmar sin necesidad.
-            var bm = d.bm_result;
-            if (bm === null || bm === undefined) {
-                if (window.showToast) showToast('Sustitución registrada', 'success');
-            } else if (bm.ok) {
-                if (window.showToast) showToast('Sustitución registrada y aplicada en BinManager ✓', 'success');
+            // FIX 2026-08-17: la inyección a BM ya no bloquea este response
+            // (corre en background, ver resolve_stock_alert_substitution) --
+            // bm_pending indica si aplica (platform='ml' con cuenta), el
+            // resultado real se ve unos segundos después en el historial.
+            if (d.bm_pending) {
+                if (window.showToast) showToast('Sustitución registrada — verificando en BinManager...', 'success');
+                // Refresca el historial un par de veces para que el badge
+                // pase de "⏳ Verificando" a su estado final sin recargar a mano.
+                setTimeout(loadAlertasHistory, 6000);
+                setTimeout(loadAlertasHistory, 16000);
+                setTimeout(loadAlertasHistory, 30000);
             } else {
-                if (window.showToast) showToast('Registrada aquí, pero BinManager la rechazó — revisa manualmente', 'error');
+                if (window.showToast) showToast('Sustitución registrada', 'success');
             }
             alertasLoadData();
         } else {

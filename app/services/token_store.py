@@ -2327,6 +2327,39 @@ async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status: str, bm_message: str) -> None:
+    """Actualiza bm_status/bm_message de un registro ya guardado -- usado por
+    el background task de _inject_bm_alter_sku (FIX 2026-08-17: la inyección
+    a BM ya no bloquea el request original, ver resolve_stock_alert_substitution).
+
+    Reintentos: este write corre en background sin nadie esperándolo -- si
+    choca con "database is locked" (contención real observada en pruebas,
+    otros writers del proceso ya la sufren) y no se reintenta, el registro se
+    queda en bm_status='pending' PARA SIEMPRE sin ningún error visible, el
+    mismo tipo de silencio que este fix completo buscaba eliminar."""
+    # Verificado en pruebas locales: con ráfagas reales de contención (varios
+    # syncs completos de cuenta corriendo a la vez al arrancar) 4 intentos con
+    # timeout=15 no bastaron -- el write seguía chocando con "database is
+    # locked" más de 2 minutos después. Como nadie espera este resultado
+    # (corre en background), es preferible esperar más de la cuenta a
+    # rendirse rápido: timeout largo por intento + más intentos.
+    import asyncio as _asyncio
+    last_err: Exception | None = None
+    for attempt in range(6):
+        try:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=45) as db:
+                await db.execute(
+                    "UPDATE stock_alert_resolutions SET bm_status = ?, bm_message = ? WHERE id = ?",
+                    (bm_status, bm_message, resolution_id),
+                )
+                await db.commit()
+                return
+        except Exception as e:
+            last_err = e
+            await _asyncio.sleep(5 * (attempt + 1))
+    logger.error(f"[BM-ALTER-SKU] no se pudo actualizar bm_status de resolution_id={resolution_id} tras reintentos: {last_err}")
+
+
 async def mark_stock_alert_resolution_bm_deleted(resolution_id: int, deleted_by: str) -> None:
     """Marca una resolución como borrada de BinManager desde nuestro
     historial (ver /api/stock/alerts/resolutions/{id}/delete-from-bm)."""

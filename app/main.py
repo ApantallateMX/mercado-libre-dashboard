@@ -16458,10 +16458,22 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     from app.services.sku_utils import base_sku as _bm_base_sku
     from app.services.binmanager_client import bm_post as _bm_post_alter
 
+    web_sku = _bm_base_sku(product_sku)
+
+    # FIX 2026-08-17: antes de crear, verificar si el mapeo ya existe -- si un
+    # intento previo se quedó "en el aire" por timeout de Railway pero SÍ llegó
+    # a aplicarse en BM, evita crear un duplicado al reintentar.
+    existing_listing_id = await _find_bm_alter_sku_listing_id(
+        account_id=account_id, web_sku=web_sku, product_sku=product_sku,
+        substitute_sku=substitute_sku, order_id=order_id,
+    )
+    if existing_listing_id:
+        return {"ok": True, "already_existed": True, "response": {"MessageReturn": "El mapeo ya existía en BinManager"}}
+
     payload = {
         "ProfileID": account_id,
         "SiteAccountID": account_id,
-        "WebSKU": _bm_base_sku(product_sku),
+        "WebSKU": web_sku,
         "ProductSKU": product_sku,
         "AlterSKU": substitute_sku,
         "OrderScope": order_id,
@@ -16641,32 +16653,21 @@ async def resolve_stock_alert_substitution(request: Request):
     if not note:
         return JSONResponse({"detail": "La nota es obligatoria (respaldo de que el cliente aceptó el cambio)"}, status_code=400)
 
-    bm_result = None
-    if platform == "ml" and account_id:
-        try:
-            bm_result = await _inject_bm_alter_sku(
-                account_id=account_id, order_id=order_id, product_sku=sku,
-                substitute_sku=substitute_sku, qty=quantity,
-            )
-            if not bm_result["ok"]:
-                logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id}: {bm_result}")
-        except Exception as e:
-            logger.error(f"[BM-ALTER-SKU] excepción para orden {order_id}: {e}")
-            bm_result = {"ok": False, "error": str(e)}
-
-    _bm_status = ""
-    _bm_message = ""
-    if bm_result is not None:
-        _bm_status = "success" if bm_result.get("ok") else "failed"
-        _resp = bm_result.get("response") or {}
-        _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
-
+    # FIX 2026-08-17 (incidente orden 2000017956308828): antes, este endpoint
+    # esperaba la respuesta de BM ANTES de guardar el registro -- si el
+    # semáforo global de BM estaba ocupado (bulk sync u otro request en cola),
+    # el total podía superar el timeout del proxy de Railway (~100s) y la
+    # conexión se cortaba sin dejar NINGÚN registro (ni éxito ni error).
+    # Ahora se guarda primero (bm_status='pending' si aplica) y se responde de
+    # inmediato; la inyección real a BM corre en background y actualiza el
+    # registro cuando termine, sin bloquear al usuario.
+    apply_bm = platform == "ml" and bool(account_id)
     resolution_id = await token_store.record_stock_alert_resolution(
         order_id=order_id, platform=platform, account_id=account_id,
         original_sku=sku, resolution_type="substitution",
         substitute_sku=substitute_sku, note=note,
         username=du["username"], user_id=du.get("id"),
-        bm_status=_bm_status, bm_message=_bm_message,
+        bm_status="pending" if apply_bm else "", bm_message="",
     )
 
     try:
@@ -16674,13 +16675,34 @@ async def resolve_stock_alert_substitution(request: Request):
         await user_store.log_action(
             username=du["username"], user_id=du.get("id"),
             action="stock_order_substitution", item_id=sku,
-            detail={"order_id": order_id, "substitute_sku": substitute_sku, "note": note, "bm_result": bm_result},
+            detail={"order_id": order_id, "substitute_sku": substitute_sku, "note": note},
             ip=ip, ml_account=account_id, section="Ventas",
         )
     except Exception as e:
         logger.warning(f"log_action falló para stock_order_substitution (order={order_id}, sku={sku}) — {e}")
 
-    return JSONResponse({"ok": True, "id": resolution_id, "bm_result": bm_result})
+    if apply_bm:
+        async def _inject_bm_alter_sku_background():
+            try:
+                bm_result = await _inject_bm_alter_sku(
+                    account_id=account_id, order_id=order_id, product_sku=sku,
+                    substitute_sku=substitute_sku, qty=quantity,
+                )
+            except Exception as e:
+                logger.error(f"[BM-ALTER-SKU] excepción en background para orden {order_id}: {e}")
+                bm_result = {"ok": False, "error": str(e)}
+            _bm_status = "success" if bm_result.get("ok") else "failed"
+            _resp = bm_result.get("response") or {}
+            _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
+            if not bm_result.get("ok"):
+                logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id}: {bm_result}")
+            await token_store.update_stock_alert_resolution_bm_status(
+                resolution_id, bm_status=_bm_status, bm_message=_bm_message,
+            )
+
+        asyncio.create_task(_inject_bm_alter_sku_background())
+
+    return JSONResponse({"ok": True, "id": resolution_id, "bm_pending": apply_bm})
 
 
 @app.get("/api/stock/alerts/zero-stock-preview")
