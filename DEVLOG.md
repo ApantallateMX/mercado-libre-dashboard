@@ -7,6 +7,70 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-16 — FIX: video comercial de 15s a ~26-28s (guion ya no se corta) + FEAT: título real en preguntas de Amazon sin título
+
+Dos pedidos de Jovan el mismo día, investigados y resueltos por separado.
+
+### Video: duración real vs. requisitos oficiales de ML
+
+El video del fix anterior mejoró en calidad pero dura solo 15 segundos,
+y el guion narrado se cortaba antes de terminar ("no cuadra con el
+video"). Investigado con `ecommerce-creative-director` contra la
+documentación oficial de ML ("Working with Clips"): el Clip de una
+publicación acepta **10 a 61 segundos** (no 60 exacto), MP4/MOV/MPEG/AVI,
+máx 280MB, resolución mínima 360×640px vertical.
+
+- `_N_CLIPS` pasa de 3 a 5 → ~26-28s de video real, dentro del rango
+  oficial con margen.
+- El guion se recalibra de 100-120 palabras (pensado para un video de
+  30-40s que nunca se generaba) a 55-65 palabras exactas, calibrado a la
+  duración real del video de 5 clips.
+- **Causa raíz real del guion cortado** (independiente de la duración):
+  el cálculo de "cuánto dura el audio" en `_xfade_and_combine` usaba una
+  estimación por bytes/128kbps asumiendo mp3 de bitrate constante — pero
+  la cadena de fallback de TTS (ElevenLabs → edge-tts → gTTS → Google TTS
+  HTTP → Bark) puede devolver audio a bitrates muy distintos. Cuando el
+  fallback real no era ElevenLabs, la fórmula subestimaba la duración
+  real, y `-shortest` cortaba la narración a la fuerza. Reemplazado por
+  la duración REAL medida con ffprobe (mismo `_probe_dur` ya usado para
+  los clips de video) — nunca más una estimación para esto.
+
+**Nota sobre el error "UNAUTHORIZED" al subir clips a ML** (visto en la
+misma captura de Jovan): reproducido con un video 100% válido — es
+Mercado Libre rechazando la subida por su propio sistema de políticas
+(`PA_UNAUTHORIZED_RESULT_FROM_POLICIES`), no un bug de este código.
+Pendiente: revisar en el panel de vendedores si "Clips" está habilitado
+para la cuenta, o contactar soporte de ML con ese código exacto.
+
+### Amazon: título real en preguntas sin título
+
+Jovan reportó (con 2 capturas reales) que las preguntas de compradores
+en Amazon solo mostraban el ASIN, sin nombre del producto. Causa raíz:
+`product_title` se parsea del texto del correo de notificación de Amazon
+con una regex que espera el formato "N / Título | ... [ASIN: XXX]" —
+formato que solo aparece cuando la pregunta está ligada a una línea de
+orden. Preguntas de producto sueltas (como las de las capturas) solo
+traen "ASIN: XXX" sin esa línea, dejando el título vacío.
+
+En vez de parchar un parser de texto de un email que Amazon no
+documenta, se resuelve el título real vía Catalog Items API (SP-API) —
+mismo método (`get_catalog_item`) ya usado en `amazon_products.py`. Se
+persiste de una vez (`backfill_buyer_message_product_title`) para que la
+próxima carga de la bandeja no vuelva a pedirlo.
+
+**Bug de concurrencia encontrado al probar esto en vivo** (no
+hipotético): pedir varios ASIN en paralelo sobre el mismo cliente Amazon
+dispara una renovación de token por cada llamada simultánea cuando el
+token aún no está en caché — 5 llamadas concurrentes de prueba fallaron
+las 5 con `400 invalid_grant`. Cambiado a resolución secuencial.
+
+Verificado en producción con los ASIN exactos de las capturas de Jovan:
+`B0H12X52GB` → "LUBL Televisor Philips de 32 Pulgadas..." y
+`B0FDGZNLGG` → "Hisense Smart TV de 43 Pulgadas...". 22 de 22 hilos con
+ASIN de la cuenta VECKTOR ahora muestran título real.
+
+---
+
 ## 2026-08-15 (cont. 2) — FIX: video comercial usa minimax (producto real, sin distorsión) + prompt de imágenes no-competitivo
 
 Jovan reportó, justo después del fix anterior (cont. 1, mismo día): "que
