@@ -417,12 +417,13 @@
               <th class="px-3 py-3 text-left whitespace-nowrap">SKU original</th>
               <th class="px-3 py-3 text-left whitespace-nowrap">Tipo</th>
               <th class="px-3 py-3 text-left whitespace-nowrap">SKU sustituto</th>
+              <th class="px-3 py-3 text-left whitespace-nowrap">BinManager</th>
               <th class="px-3 py-3 text-left">Nota</th>
               <th class="px-3 py-3 text-left whitespace-nowrap">Usuario</th>
             </tr>
           </thead>
           <tbody id="alertas-history-tbody">
-            <tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+            <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -601,15 +602,32 @@ setInterval(loadRestockWatch, 60000);
 function loadAlertasHistory() {
     var tbody = document.getElementById('alertas-history-tbody');
     var cards = document.getElementById('alertas-history-cards');
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
     fetch('/api/stock/alerts/resolutions?limit=100')
         .then(function(r) { return r.json(); })
         .then(function(d) {
             var rows = d.rows || [];
             if (!rows.length) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
                 cards.innerHTML = '<p class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</p>';
                 return;
+            }
+            // FEATURE 2026-08-17: badge de estado real en BinManager -- antes
+            // el historial solo mostraba "se registró aquí", sin saber si de
+            // verdad se aplicó en BM. bm_deleted_at marca que ya se borró
+            // desde este mismo historial (ver deleteFromBM más abajo — aún
+            // pendiente confirmar el endpoint real de borrado con Jovan).
+            function _bmBadge(h) {
+                if (h.bm_deleted_at) {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500" title="' + (h.bm_deleted_by || '') + '">🗑 Borrado de BM</span>';
+                }
+                if (h.bm_status === 'success') {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700" title="' + (h.bm_message || '') + '">✓ Aplicado en BM</span>';
+                }
+                if (h.bm_status === 'failed') {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700" title="' + (h.bm_message || '') + '">✗ Falló en BM</span>';
+                }
+                return '<span class="text-[10px] text-gray-400">—</span>';
             }
             tbody.innerHTML = rows.map(function(h) {
                 var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
@@ -622,6 +640,7 @@ function loadAlertasHistory() {
                     '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + h.original_sku + '</td>' +
                     '<td class="px-3 py-2.5">' + tipoBadge + '</td>' +
                     '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + (h.substitute_sku || '—') + '</td>' +
+                    '<td class="px-3 py-2.5 whitespace-nowrap">' + _bmBadge(h) + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-600">' + (h.note || '—') + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + h.username + '</td>' +
                     '</tr>';
@@ -641,13 +660,13 @@ function loadAlertasHistory() {
                         '<span>Orden <span class="font-mono">' + h.order_id + '</span></span>' +
                         '<span>' + h.username + '</span>' +
                     '</div>' +
-                    (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span></div>' : '') +
+                    (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span> ' + _bmBadge(h) + '</div>' : '') +
                     (h.note ? '<p class="text-xs text-gray-500 mt-1">' + h.note + '</p>' : '') +
                 '</div>';
             }).join('');
         })
         .catch(function() {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
         });
 }
 

@@ -16531,11 +16531,19 @@ async def resolve_stock_alert_substitution(request: Request):
             logger.error(f"[BM-ALTER-SKU] excepción para orden {order_id}: {e}")
             bm_result = {"ok": False, "error": str(e)}
 
+    _bm_status = ""
+    _bm_message = ""
+    if bm_result is not None:
+        _bm_status = "success" if bm_result.get("ok") else "failed"
+        _resp = bm_result.get("response") or {}
+        _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
+
     resolution_id = await token_store.record_stock_alert_resolution(
         order_id=order_id, platform=platform, account_id=account_id,
         original_sku=sku, resolution_type="substitution",
         substitute_sku=substitute_sku, note=note,
         username=du["username"], user_id=du.get("id"),
+        bm_status=_bm_status, bm_message=_bm_message,
     )
 
     try:

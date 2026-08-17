@@ -1261,6 +1261,19 @@ async def init_db():
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sar_sku ON stock_alert_resolutions(original_sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sar_ts ON stock_alert_resolutions(ts)")
+        # FEATURE 2026-08-17 (pedido por Jovan): registrar si la sustitución
+        # SI se inyecto en BinManager (no solo la nota interna de siempre) y
+        # si despues se borro de BM desde nuestro historial.
+        for _col_sql in [
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_status TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_message TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_deleted_at REAL DEFAULT NULL",
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_deleted_by TEXT NOT NULL DEFAULT ''",
+        ]:
+            try:
+                await db.execute(_col_sql)
+            except Exception:
+                pass  # columna ya existe
         # ─────────────────────────────────────────────────────────────────
         # TABLA: amazon_buyer_messages — mensajes reales de compradores Amazon
         # (Buyer-Seller Messaging) capturados vía el buzón Gmail dedicado que
@@ -2274,19 +2287,25 @@ async def record_stock_alert_resolution(
     order_id: str, platform: str, account_id: str, original_sku: str,
     resolution_type: str, substitute_sku: str, note: str,
     username: str, user_id: int | None,
+    bm_status: str = "", bm_message: str = "",
 ) -> int:
     """Registra cómo se resolvió una orden sin stock — sustitución de
     producto o stock puesto en 0. resolution_type: 'substitution' |
-    'zeroed_stock'."""
+    'zeroed_stock'.
+
+    FEATURE 2026-08-17: bm_status ('success'/'failed'/'') y bm_message
+    (el MessageReturn crudo de BM) — para que el historial muestre si la
+    sustitución de verdad se aplicó en BinManager, no solo que se registró
+    aquí."""
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("""
             INSERT INTO stock_alert_resolutions
                 (order_id, platform, account_id, original_sku, resolution_type,
-                 substitute_sku, note, username, user_id, ts)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                 substitute_sku, note, username, user_id, ts, bm_status, bm_message)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (order_id, platform, account_id, original_sku, resolution_type,
-              substitute_sku, note, username, user_id, _t.time()))
+              substitute_sku, note, username, user_id, _t.time(), bm_status, bm_message))
         await db.commit()
         return cur.lastrowid
 
@@ -2299,12 +2318,25 @@ async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
         cur = await db.execute("""
             SELECT id, order_id, platform, account_id, original_sku,
                    resolution_type, substitute_sku, note, username, ts,
-                   reactivated_at, reactivated_by
+                   reactivated_at, reactivated_by, bm_status, bm_message,
+                   bm_deleted_at, bm_deleted_by
             FROM stock_alert_resolutions
             ORDER BY ts DESC
             LIMIT ?
         """, (limit,))
         return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_stock_alert_resolution_bm_deleted(resolution_id: int, deleted_by: str) -> None:
+    """Marca una resolución como borrada de BinManager desde nuestro
+    historial (ver /api/stock/alerts/resolutions/{id}/delete-from-bm)."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "UPDATE stock_alert_resolutions SET bm_deleted_at = ?, bm_deleted_by = ? WHERE id = ?",
+            (_t.time(), deleted_by, resolution_id),
+        )
+        await db.commit()
 
 
 async def get_pending_restock_watches() -> list[dict]:
