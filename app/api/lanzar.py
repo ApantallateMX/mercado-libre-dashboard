@@ -2177,11 +2177,23 @@ async def video_job_status(job_id: str):
 
 async def _run_video_pipeline(job_id: str, body: dict):
     """Pipeline completo de comercial en español (corre en background):
-    1. Claude genera guion en español de México (30-40 palabras)
-    2. ElevenLabs convierte guion a voz profesional en español
-    3. Si hay imágenes AI: slideshow con ffmpeg; si no: minimax/video-01
+    1. Claude genera guion en español de México (55-65 palabras, calibrado
+       a la duracion real del video generado, ver _N_CLIPS)
+    2. TTS (ElevenLabs u otro fallback) convierte guion a voz profesional
+    3. minimax/video-01 anima la foto real del producto (o T2V puro sin foto)
     4. ffmpeg combina audio + video en un solo MP4
     Actualiza _video_jobs[job_id] cuando termina.
+
+    FIX 2026-08-16: numero de clips (_N_CLIPS) y longitud del guion se
+    calibran juntos para que la narracion y el video terminen al mismo
+    tiempo -- antes el guion se generaba fijo a 100-120 palabras (~40-50s)
+    sin importar cuanto durara el video real (3 clips, ~16s), y el combine
+    final cortaba la narracion a la fuerza para que cupiera. Ver tambien
+    el fix del calculo de duracion real del audio en _xfade_and_combine.
+    Duracion objetivo calibrada contra el requisito oficial de ML para
+    Clips de publicacion (10-61s, ver doc "Working with Clips") -- 5 clips
+    de minimax (~5.6s c/u, sin control de duracion configurable en ese
+    modelo) dan ~26-28s, comodo dentro del rango y con margen real.
     """
     import json as _json
     import subprocess as _sp
@@ -2189,6 +2201,8 @@ async def _run_video_pipeline(job_id: str, body: dict):
     import uuid as _uuid
     import os as _os
     from app.services import replicate_client, elevenlabs_client
+
+    _N_CLIPS = 5  # ver docstring — calibrado junto con el conteo de palabras del guion
 
     try:
         brand          = body.get("brand", "")
@@ -2214,18 +2228,29 @@ async def _run_video_pipeline(job_id: str, body: dict):
         # (scenes are visual prompts — separate from the narration script)
         import json as _json_inner, re as _re
         product_desc = " ".join(filter(None, [brand, model])).strip() or title
+        # FIX 2026-08-16 (pedido por Jovan: "el guion se corta antes de
+        # terminar, no cuadra con el video, analiza bien"): el guion se
+        # generaba para 100-120 palabras (~40-50s narrados) pero el video
+        # real (antes 3 clips ~16s, ahora 5 clips ~26-28s, ver _N_CLIPS mas
+        # abajo) siempre fue mas corto -- la narracion terminaba cortada a
+        # la fuerza por el combine de audio/video (ver fix del calculo real
+        # de duracion de audio en _xfade_and_combine). El conteo de
+        # palabras del guion ahora se calibra al mismo target de duracion
+        # del video (26-28s), no a un numero arbitrario de "30 segundos".
         claude_system = (
-            "You are a world-class TV commercial director creating a premium 30-second ad for Mercado Libre México.\n"
+            "You are a world-class commercial director creating a short, premium "
+            "ad for Mercado Libre México, sized to EXACTLY match a ~26-28 second video.\n"
             "The product can be ANYTHING — adapt every scene specifically to THIS product and its actual use case.\n\n"
             "Respond ONLY with valid JSON (no markdown, no backticks, no extra text):\n"
-            '{"script": "...", "scenes": ["scene1", "scene2", "scene3"]}\n\n'
+            '{"script": "...", "scenes": ["scene1", "scene2", "scene3", "scene4", "scene5"]}\n\n'
             "SCRIPT rules (if empty, generate one):\n"
-            "- Mexican Spanish, MINIMUM 100 words, maximum 120 words (CRITICAL: under 100 words = video too short)\n"
+            "- Mexican Spanish, MINIMUM 55 words, MAXIMUM 65 words (CRITICAL: this must match a ~26-28s video EXACTLY — "
+            "too many words gets cut off mid-sentence when combined with the video, too few leaves dead air)\n"
             "- Exciting aspirational tone — describe benefits, lifestyle, emotions, use cases\n"
             "- Use varied sentence rhythm: short punchy lines mixed with longer flowing descriptions\n"
             "- Never mention model numbers, SKU codes, or technical specs directly\n"
             "- End with: Disponible ahora en Mercado Libre.\n\n"
-            "SCENES rules — 3 items, each max 55 words, in English:\n"
+            "SCENES rules — exactly 5 items, each max 40 words, in English:\n"
             "- Each scene is a TEXT PROMPT for an AI video model — describe ONLY what the camera sees\n"
             "- Show the product being USED in REAL LIFE by real people — NOT product photography\n"
             "- Be extremely specific to this product category and its use case\n"
@@ -2245,7 +2270,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
             f"Marca: {brand}\n"
             f"Categoria: {category}\n"
             f"Guion existente: {script or 'generar uno nuevo'}\n\n"
-            "Genera las 3 escenas cinematicas EN INGLES y el guion EN ESPANOL."
+            "Genera las 5 escenas cinematicas EN INGLES y el guion EN ESPANOL (55-65 palabras exactas)."
         )
         try:
             # Use Vision when product images are available — Claude SEES the product → specific scenes
@@ -2254,7 +2279,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
                     f"Producto: {title}\nMarca: {brand}\nCategoria: {category}\n"
                     f"Guion existente: {script or 'generar uno nuevo'}\n\n"
                     "Miras las imágenes reales del producto. "
-                    "Genera las 3 escenas cinematicas EN INGLES y el guion EN ESPANOL.\n"
+                    "Genera las 5 escenas cinematicas EN INGLES y el guion EN ESPANOL (55-65 palabras exactas).\n"
                     "Las escenas deben reflejar EXACTAMENTE este producto: su apariencia, color, tamaño y uso real."
                 )
                 logger.info(f"Claude Vision: analizando {len(ai_image_urls)} imágenes del producto...")
@@ -2282,7 +2307,9 @@ async def _run_video_pipeline(job_id: str, body: dict):
             scenes = []
     
         # Fallback scenes if Claude failed — generic but product-focused
-        if len(scenes) < 3:
+        # (5 escenas para que _N_CLIPS=5 tenga variedad real en vez de repetir
+        # las mismas 3 dos veces via modulo)
+        if len(scenes) < _N_CLIPS:
             prod = product_desc or title or "product"
             scenes = [
                 f"Professional lifestyle scene showing {prod} being used in a modern home, warm natural lighting, "
@@ -2291,6 +2318,10 @@ async def _run_video_pipeline(job_id: str, body: dict):
                 f"elegant hands interacting with it, macro photography style, aspirational",
                 f"Happy family or person enjoying the benefits of {prod}, cozy modern home setting, "
                 f"golden hour light through windows, slow pull-back wide shot, authentic and aspirational",
+                f"Slow orbit shot around {prod} on a clean surface, soft natural daylight, elegant and premium "
+                f"presentation, shallow depth of field, aspirational commercial look",
+                f"Person confidently using {prod} in a bright, organized living space, satisfied expression, "
+                f"gentle camera pan, warm afternoon light, authentic everyday moment",
             ]
         if not script:
             product_line = " ".join(filter(None, [brand, model, title])).strip()
@@ -2383,13 +2414,23 @@ async def _run_video_pipeline(job_id: str, body: dict):
             if has_audio and audio_bytes:
                 with open(aud_path, "wb") as af:
                     af.write(audio_bytes)
-                # Solo usar stream_loop si el video es más corto que el audio estimado
-                # (evita loops visibles cuando tenemos 3 clips ~30s ≥ audio ~28s)
+                # FIX 2026-08-16 (pedido por Jovan: "el guion se corta antes de
+                # terminar, no cuadra con el video"): la duracion del audio se
+                # estimaba con bytes/128kbps, asumiendo un mp3 128kbps constante --
+                # pero la cadena de fallback de TTS (elevenlabs_client.py) puede
+                # devolver gTTS/edge-tts/Bark con bitrates MUY distintos (voz mono
+                # de bajos kbps, o incluso WAV de Bark). Cuando el fallback real no
+                # era ElevenLabs, esa formula subestimaba la duracion real del
+                # audio -> use_loop salia False cuando en realidad SI hacia falta
+                # loop -> "-shortest" cortaba el audio (la narracion) a la mitad
+                # para que cupiera en el video sin loop. Se reemplaza por la
+                # duracion REAL medida con ffprobe (mismo _probe_dur ya usado para
+                # los clips de video), nunca una estimacion.
                 total_video_dur = sum(clip_durs) - FADE * max(0, len(norm_paths) - 1)
-                est_audio_dur = len(audio_bytes) / (128 * 1024 / 8)  # aprox a 128kbps
-                use_loop = total_video_dur < (est_audio_dur - 1.0)
+                real_audio_dur = _probe_dur(aud_path)
+                use_loop = total_video_dur < (real_audio_dur - 1.0)
                 loop_flag = ["-stream_loop", "-1"] if use_loop else []
-                logger.info(f"xfade+audio: video={total_video_dur:.1f}s audio≈{est_audio_dur:.1f}s loop={use_loop}")
+                logger.info(f"xfade+audio: video={total_video_dur:.1f}s audio={real_audio_dur:.1f}s (real) loop={use_loop}")
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
@@ -2438,9 +2479,18 @@ async def _run_video_pipeline(job_id: str, body: dict):
         # como ultimo recurso solo cuando no hay ninguna foto disponible.
         # FALLBACK adicional: zoompan ffmpeg (solo si el metodo primario falla).
         # ────────────────────────────────────────────────────────────────────────────
+        # FIX 2026-08-16 (pedido por Jovan: "el video dura 15 seg, hazlo mas
+        # largo, analiza los requerimientos reales de ML"): investigado con
+        # ecommerce-creative-director + doc oficial de ML ("Working with
+        # Clips") -- el clip de una publicacion acepta 10 a 61 segundos
+        # (no 60s exacto). 3 clips de minimax/video-01 (~5.6s cada uno, sin
+        # control de duracion configurable en ese modelo) daban solo ~16s,
+        # muy corto para el estandar real. _N_CLIPS=5 (definido al inicio
+        # de la funcion) da ~26-28s, comodo dentro del rango real y con
+        # margen para no rozar el maximo.
         _use_i2v = bool(ai_image_urls)
         _method  = "i2v" if _use_i2v else "t2v"
-        logger.info(f"=== {_method.upper()} PRIMARY: {len(scenes)} escenas, {len(ai_image_urls)} fotos reales ===")
+        logger.info(f"=== {_method.upper()} PRIMARY: {_N_CLIPS} clips objetivo, {len(scenes)} escenas, {len(ai_image_urls)} fotos reales ===")
 
         _t2v_ok = False
 
@@ -2454,7 +2504,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
 
         _all_t2v = await asyncio.gather(
             elevenlabs_client.generate_audio(script),
-            *[_gen_t2v_clip(i) for i in range(3)],   # 3 clips paralelos — menos carga en Replicate
+            *[_gen_t2v_clip(i) for i in range(_N_CLIPS)],
             return_exceptions=True,
         )
         audio_result     = _all_t2v[0]
@@ -2469,10 +2519,10 @@ async def _run_video_pipeline(job_id: str, body: dict):
         clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
         logger.info(f"{_method.upper()} clips OK: {len(clip_urls)}/{len(clip_url_results)}")
 
-        # Reintentar secuencialmente hasta tener 3 clips — evita loops visibles en el video final
+        # Reintentar secuencialmente hasta tener _N_CLIPS clips — evita loops visibles en el video final
         _retry_idx = len(clip_url_results)
         _retry_max = 3  # máximo 3 reintentos extra
-        while len(clip_urls) < 3 and _retry_max > 0:
+        while len(clip_urls) < _N_CLIPS and _retry_max > 0:
             _retry_max -= 1
             logger.info(f"Solo {len(clip_urls)} clips — reintentando clip extra secuencial (idx={_retry_idx})...")
             try:
