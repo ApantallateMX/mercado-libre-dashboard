@@ -17391,6 +17391,34 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
     return JSONResponse(out)
 
 
+@app.get("/api/diag/bm-alter-sku-groups")
+async def diag_bm_alter_sku_groups(web_sku: str = "", account_id: str = "", token: str = ""):
+    """DIAGNÓSTICO TEMPORAL 2026-08-17 — Jovan reportó que "Aplicado en BM"
+    no aparece realmente en el Fulfillment Dashboard. Devuelve los grupos
+    CRUDOS de GetAlterSKUMappingByWebSKU (ProductSKU exacto + su lista de
+    AlterSKUs) para confirmar bajo qué ProductSKU exacto vive el mapeo real
+    -- sospecha: _inject_bm_alter_sku manda ProductSKU=SKU BASE (sin
+    condición, ej. SNTV007263) pero BM lo indexa por el ProductSKU CON
+    condición (ej. SNTV007263-GRB), asi que el Add nunca aterriza donde
+    debería ni la búsqueda posterior lo encuentra."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not web_sku or not account_id:
+        return JSONResponse({"error": "web_sku y account_id requeridos"}, status_code=400)
+    from app.services.binmanager_client import bm_post as _bm_post_diag
+    resp = await _bm_post_diag(_BM_GET_ALTER_SKU_URL, {
+        "WebSKU": web_sku.strip().upper(), "ProfileID": account_id, "SiteAccountID": account_id,
+    }, timeout=20.0)
+    if resp is None:
+        return JSONResponse({"error": "sin respuesta de BM"}, status_code=502)
+    try:
+        outer = resp.json()
+        groups = json.loads(outer.get("JSONData") or "[]")
+    except Exception as e:
+        return JSONResponse({"error": f"no se pudo parsear: {e}", "raw_status": resp.status_code}, status_code=500)
+    return JSONResponse({"status_code": resp.status_code, "groups": groups})
+
+
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
     """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
