@@ -16438,11 +16438,62 @@ async def realtime_stock_alerts(request: Request, limit: int = 100):
 # ALERTAS DE STOCK — registro de resoluciones (sustitución / stock en 0)
 # ═══════════════════════════════════════════════════════════════════════════
 
+_BM_ALTER_SKU_URL = "https://binmanager.mitechnologiesinc.com/FullFillMent/FullFillMent/AddAlterSKUMappingByWebSKU"
+
+
+async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: str,
+                                substitute_sku: str, qty: int) -> dict:
+    """FEATURE 2026-08-17 (pedido por Jovan): antes, "Sustituir" en Alertas de
+    Stock solo guardaba una nota interna -- el usuario tenia que repetir el
+    trabajo a mano en BinManager (Fulfillment Dashboard -> Map -> +Alternative
+    -> escribir SKU -> marcar "Only Order" -> Save). Esta funcion llama al
+    mismo endpoint real que usa ese boton "Save", capturado en vivo por Jovan
+    via DevTools -> Network (no adivinado): POST
+    /FullFillMent/FullFillMent/AddAlterSKUMappingByWebSKU. OrderScope siempre
+    lleva el order_id real (equivalente a tener "Only Order" marcado) porque
+    este flujo SIEMPRE es para resolver una orden puntual, nunca un mapeo
+    general de SKU. Ver reference_bm_alter_sku_mapping (memoria del proyecto)
+    para el contrato completo verificado.
+    """
+    from app.services.sku_utils import base_sku as _bm_base_sku
+    from app.services.binmanager_client import bm_post as _bm_post_alter
+
+    payload = {
+        "ProfileID": account_id,
+        "SiteAccountID": account_id,
+        "WebSKU": _bm_base_sku(product_sku),
+        "ProductSKU": product_sku,
+        "AlterSKU": substitute_sku,
+        "OrderScope": order_id,
+        "FulfillmentType": "Merchant",
+        "Qty": qty,
+        "Actions": 1,
+        "ListingId": None,
+        "Priority": None,
+        "UserID": None,
+    }
+    resp = await _bm_post_alter(_BM_ALTER_SKU_URL, payload, timeout=20.0)
+    if resp is None:
+        return {"ok": False, "error": "Sin respuesta de BinManager (timeout o sesión no disponible)"}
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw_text": resp.text[:500]}
+    return {"ok": resp.status_code == 200, "status_code": resp.status_code, "response": data}
+
+
 @app.post("/api/stock/alerts/resolve-substitution")
 async def resolve_stock_alert_substitution(request: Request):
     """Registra que una orden sin stock se resolvió sustituyendo el producto
     original por otro — cualquier usuario logueado (mismo alcance que ver
-    las alertas). Body: {order_id, platform, account_id, sku, substitute_sku, note}."""
+    las alertas). Body: {order_id, platform, account_id, sku, substitute_sku,
+    note, quantity}.
+
+    FEATURE 2026-08-17: además de guardar el registro interno (como siempre),
+    ahora inyecta el SKU alternativo DIRECTO en BinManager (ver
+    _inject_bm_alter_sku) -- el usuario ya no tiene que entrar a BM a mano.
+    Solo aplica a platform='ml' (Amazon no tiene este feed de alertas en
+    tiempo real todavia, ver /api/stock/realtime-alerts)."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -16457,11 +16508,28 @@ async def resolve_stock_alert_substitution(request: Request):
     note = (body.get("note") or "").strip()
     platform = (body.get("platform") or "ml").strip()
     account_id = (body.get("account_id") or "").strip()
+    try:
+        quantity = int(body.get("quantity") or 1)
+    except (TypeError, ValueError):
+        quantity = 1
 
     if not order_id or not sku or not substitute_sku:
         return JSONResponse({"detail": "order_id, sku y substitute_sku son requeridos"}, status_code=400)
     if not note:
         return JSONResponse({"detail": "La nota es obligatoria (respaldo de que el cliente aceptó el cambio)"}, status_code=400)
+
+    bm_result = None
+    if platform == "ml" and account_id:
+        try:
+            bm_result = await _inject_bm_alter_sku(
+                account_id=account_id, order_id=order_id, product_sku=sku,
+                substitute_sku=substitute_sku, qty=quantity,
+            )
+            if not bm_result["ok"]:
+                logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id}: {bm_result}")
+        except Exception as e:
+            logger.error(f"[BM-ALTER-SKU] excepción para orden {order_id}: {e}")
+            bm_result = {"ok": False, "error": str(e)}
 
     resolution_id = await token_store.record_stock_alert_resolution(
         order_id=order_id, platform=platform, account_id=account_id,
@@ -16475,13 +16543,13 @@ async def resolve_stock_alert_substitution(request: Request):
         await user_store.log_action(
             username=du["username"], user_id=du.get("id"),
             action="stock_order_substitution", item_id=sku,
-            detail={"order_id": order_id, "substitute_sku": substitute_sku, "note": note},
+            detail={"order_id": order_id, "substitute_sku": substitute_sku, "note": note, "bm_result": bm_result},
             ip=ip, ml_account=account_id, section="Ventas",
         )
     except Exception as e:
         logger.warning(f"log_action falló para stock_order_substitution (order={order_id}, sku={sku}) — {e}")
 
-    return JSONResponse({"ok": True, "id": resolution_id})
+    return JSONResponse({"ok": True, "id": resolution_id, "bm_result": bm_result})
 
 
 @app.get("/api/stock/alerts/zero-stock-preview")

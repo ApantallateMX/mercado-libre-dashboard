@@ -654,8 +654,8 @@ function loadAlertasHistory() {
 // ─── Modal: registrar sustitución ──────────────────────────────────────────
 var _subModalCtx = null;
 
-window.openSubstitutionModal = function(orderId, sku, platform, accountId, suggestedSku) {
-    _subModalCtx = {orderId: orderId, sku: sku, platform: platform, accountId: accountId};
+window.openSubstitutionModal = function(orderId, sku, platform, accountId, suggestedSku, quantity) {
+    _subModalCtx = {orderId: orderId, sku: sku, platform: platform, accountId: accountId, quantity: quantity || 1};
     document.getElementById('sub-modal-order').textContent = orderId;
     document.getElementById('sub-modal-sku').textContent = sku;
     document.getElementById('sub-modal-substitute').value = suggestedSku || '';
@@ -686,14 +686,24 @@ window.submitSubstitution = function() {
         body: JSON.stringify({
             order_id: _subModalCtx.orderId, sku: _subModalCtx.sku,
             platform: _subModalCtx.platform, account_id: _subModalCtx.accountId,
-            substitute_sku: substituteSku, note: note,
+            substitute_sku: substituteSku, note: note, quantity: _subModalCtx.quantity,
         })
     })
     .then(function(r) { return r.json(); })
     .then(function(d) {
         if (d.ok) {
             closeSubstitutionModal();
-            if (window.showToast) showToast('Sustitución registrada', 'success');
+            // FEATURE 2026-08-17: bm_result viene null cuando no aplica (ej.
+            // Amazon, sin feed en tiempo real todavia) -- distinguir ese caso
+            // de un fallo real de BM para no alarmar sin necesidad.
+            var bm = d.bm_result;
+            if (bm === null || bm === undefined) {
+                if (window.showToast) showToast('Sustitución registrada', 'success');
+            } else if (bm.ok) {
+                if (window.showToast) showToast('Sustitución registrada y aplicada en BinManager ✓', 'success');
+            } else {
+                if (window.showToast) showToast('Registrada aquí, pero BinManager la rechazó — revisa manualmente', 'error');
+            }
             alertasLoadData();
         } else {
             errEl.textContent = d.detail || 'Error al registrar la sustitución.';
@@ -879,7 +889,7 @@ function alertasLoadData() {
                         '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
                 }
                 var suggestedSku = sugerencias.length ? sugerencias[0].sku : '';
-                var _subArgs = "'" + row.order_id + "','" + row.sku + "','" + (row.platform || 'ml') + "','" + (row.account_id || '') + "','" + suggestedSku + "'";
+                var _subArgs = "'" + row.order_id + "','" + row.sku + "','" + (row.platform || 'ml') + "','" + (row.account_id || '') + "','" + suggestedSku + "'," + (row.quantity || 1);
                 var actionsHtml = '<div class="flex flex-col gap-1">' +
                     '<button onclick="openSubstitutionModal(' + _subArgs + ')" class="text-xs bg-purple-50 border border-purple-200 text-purple-700 hover:bg-purple-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🔁 Sustituir</button>' +
                     (IS_ADMIN_ALERTAS ? '<button onclick="openZeroStockModal(\'' + row.sku + '\')" class="text-xs bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">⛔ Sin stock</button>' : '') +
