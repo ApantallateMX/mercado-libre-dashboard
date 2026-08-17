@@ -7,6 +7,65 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — FEAT: "Sustituir" en Alertas de Stock inyecta y borra directo en BinManager
+
+Jovan pidió: al dar clic en "Sustituir" en Alertas de Stock, que el SKU de
+reemplazo se mande directo a BinManager en vez de repetir el trabajo a mano
+(Fulfillment Dashboard → buscar orden → Map → +Alternative → escribir SKU
+→ marcar "Only Order" → Save). Después pidió también poder borrar ese
+mapeo desde nuestro propio historial si ya no hace falta.
+
+**Investigación (sin adivinar ningún endpoint):** intenté primero con
+`binmanager-specialist` — bloqueado por 3 vías distintas el mismo día
+(acceso HTTP directo bloqueado, navegador bloqueado por el clasificador de
+permisos, conector MCP de BinManager con token expirado). La vía que sí
+funcionó: Jovan capturó el tráfico real con DevTools → Network mientras
+hacía el flujo una vez a mano, dándonos el contrato exacto en vez de una
+hipótesis.
+
+**Contrato confirmado (mismo endpoint para las 3 operaciones, un campo
+`Actions` decide cuál):**
+```
+POST /FullFillMent/FullFillMent/AddAlterSKUMappingByWebSKU
+  Actions=1 → crear   (ListingId: null)
+  Actions=3 → borrar  (ListingId: <ID de esa alternativa específica>)
+
+POST /FullFillMent/FullFillMent/GetAlterSKUMappingByWebSKU
+  → devuelve, por cada AlterSKU, su propio ListingID interno (distinto
+    del ListingID del producto principal) — necesario antes de poder
+    borrar, porque crear no lo regresa en la respuesta.
+```
+`OrderScope` siempre lleva el `order_id` real (equivalente a "Only Order"
+marcado) porque este flujo siempre resuelve una orden puntual, nunca un
+mapeo general de SKU.
+
+**Crear (`app/main.py`):** `_inject_bm_alter_sku()` vía `bm_post()` (mismo
+semáforo global obligatorio para BM, sin cambios de arquitectura) +
+`sku_utils.base_sku()` (ya existía) para derivar `WebSKU`.
+`resolve_stock_alert_substitution` ahora llama a BM además de guardar el
+registro interno de siempre (solo `platform=ml` — Amazon no tiene este
+feed de alertas en tiempo real todavía).
+
+**Historial con estado real:** `token_store.py` — 4 columnas nuevas
+(`bm_status`, `bm_message`, `bm_deleted_at`, `bm_deleted_by`). La pestaña
+"Historial" de Alertas de Stock ahora muestra un badge por fila (✓
+Aplicado en BM / ✗ Falló en BM / 🗑 Borrado de BM) en vez de solo "se
+registró aquí".
+
+**Borrar:** `_find_bm_alter_sku_listing_id()` (decodifica `JSONData`, que
+viene como string con JSON adentro, dos veces) + `_delete_bm_alter_sku()`
+(`Actions=3`). Nuevo endpoint `POST /api/stock/alerts/resolutions/{id}/delete-from-bm`
++ botón "🗑 Borrar de BM" en el historial (solo visible para filas ya
+aplicadas y no borradas, con confirmación antes de ejecutar).
+
+Verificado con ciclo completo real, dos veces: una vez con las funciones
+sueltas, otra vez a través de los endpoints reales de la app (crear →
+"Aplicado en BM" → borrar con un clic → BM confirma → "Borrado de BM").
+Ya en uso real en producción (un registro con `bm_status=success` de un
+uso genuino, no de pruebas).
+
+---
+
 ## 2026-08-16 — FIX: video comercial de 15s a ~26-28s (guion ya no se corta) + FEAT: título real en preguntas de Amazon sin título
 
 Dos pedidos de Jovan el mismo día, investigados y resueltos por separado.
