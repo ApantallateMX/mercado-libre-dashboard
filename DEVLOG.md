@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — FEAT: botón "Reintentar" para sustituciones atoradas en BinManager (incidente real)
+
+Horas después del fix anterior (inyección async), Jovan reportó en vivo un
+caso real: la orden `2000017984576896` (sustituto `SNTV007447-GRB`,
+autorizado por Jovan) se quedó **15+ minutos** en "⏳ Verificando en BM".
+
+**Diagnóstico con logs reales de Railway (no supuesto):** en la ventana
+exacta de la sustitución, el servidor estaba procesando una ráfaga de
+~3,000 llamadas a `/messages/packs/...` en menos de 2 minutos — el
+diagnóstico `ml-messages-audit` corriendo contra BLOWTECHNOLOGIES (revisa
+TODAS las órdenes de la cuenta, no solo las últimas 50). En los 9+ minutos
+posteriores a crear la sustitución, **cero intentos reales de llamar a
+BinManager** aparecen en los logs — el background task (`create_task` del
+fix anterior) no falló, simplemente **nunca llegó a tener turno** en el
+event loop, saturado por esa ráfaga. Confirmado además en el propio panel
+de BM (Fulfillment Dashboard → Map de `SNTV007263`): el mapeo a
+`SNTV007447-GRB` nunca se había creado.
+
+**Fix:** nuevo endpoint `POST /api/stock/alerts/resolutions/{id}/retry-bm`
+que llama a BM de forma síncrona (aceptable aquí porque es un clic
+explícito del usuario, no el flujo automático que debe responder rápido)
+para resoluciones en `pending`/`failed`. Botón "🔁 Reintentar" en el
+historial de Alertas de Stock junto a "🗑 Borrar de BM".
+
+Verificado en producción de punta a punta contra el caso real: se disparó
+el reintento para la resolución atorada y quedó `bm_status: success` de
+inmediato — confirmado también que el mapeo ya aparece en el Map de BM.
+
+**Nota para más adelante (no resuelta hoy):** la causa raíz de fondo —que
+una tarea en background pueda quedarse sin turno indefinidamente cuando
+corre un diagnóstico pesado como `ml-messages-audit`— sigue viva. El botón
+de reintento es la mitigación inmediata; si este patrón se repite seguido,
+vale la pena revisar si `ml-messages-audit` necesita throttling propio
+(sleep entre lotes) para no acaparar el event loop.
+
 ## 2026-08-17 — FIX: inyección a BinManager ya no bloquea "Sustituir" (timeout de Railway)
 
 Jovan probó el flujo de sustitución en producción (orden `2000017956308828`,
