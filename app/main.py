@@ -16460,11 +16460,25 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
 
     web_sku = _bm_base_sku(product_sku)
 
-    # FIX 2026-08-17: antes de crear, verificar si el mapeo ya existe -- si un
-    # intento previo se quedó "en el aire" por timeout de Railway pero SÍ llegó
-    # a aplicarse en BM, evita crear un duplicado al reintentar.
+    # FIX 2026-08-17 (bug real encontrado: "Aplicado en BM" no aparecía en el
+    # Fulfillment Dashboard para NINGUNA sustitución hecha por esta feature,
+    # incluidas 2 previas de Vanessa que ya se daban por buenas): BM indexa el
+    # mapeo por el ProductSKU CON condición real (ej. SNTV007263-GRB), no por
+    # el WebSKU base (SNTV007263) que guardamos en la alerta. Mandar el SKU
+    # base como ProductSKU hacía que AddAlterSKUMappingByWebSKU respondiera
+    # 200/"Success" sin crear nada real -- confirmado con
+    # /api/diag/bm-alter-sku-groups contra BM en vivo. Se resuelve el
+    # ProductSKU real ANTES de todo -- si no se puede determinar sin
+    # ambigüedad, se rechaza en vez de adivinar.
+    real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku)
+    if not real_product_sku:
+        return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku} (0 o más de 1 producto encontrado) -- revisar manualmente en el Fulfillment Dashboard"}
+
+    # Antes de crear, verificar si el mapeo ya existe -- si un intento previo
+    # se quedó "en el aire" por timeout de Railway pero SÍ llegó a aplicarse
+    # en BM, evita crear un duplicado al reintentar.
     existing_listing_id = await _find_bm_alter_sku_listing_id(
-        account_id=account_id, web_sku=web_sku, product_sku=product_sku,
+        account_id=account_id, web_sku=web_sku, product_sku=real_product_sku,
         substitute_sku=substitute_sku, order_id=order_id,
     )
     if existing_listing_id:
@@ -16474,7 +16488,7 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
         "ProfileID": account_id,
         "SiteAccountID": account_id,
         "WebSKU": web_sku,
-        "ProductSKU": product_sku,
+        "ProductSKU": real_product_sku,
         "AlterSKU": substitute_sku,
         "OrderScope": order_id,
         "FulfillmentType": "Merchant",
@@ -16495,6 +16509,32 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
 
 
 _BM_GET_ALTER_SKU_URL = "https://binmanager.mitechnologiesinc.com/FullFillMent/FullFillMent/GetAlterSKUMappingByWebSKU"
+
+
+async def _resolve_bm_condition_sku(account_id: str, web_sku: str) -> str | None:
+    """FIX 2026-08-17: resuelve el ProductSKU real CON condición (ej.
+    SNTV007263-GRB) que BM usa para indexar el mapeo de AlterSKU -- BM
+    acepta el WebSKU base en GetAlterSKUMappingByWebSKU pero el/los grupos
+    que devuelve vienen bajo el ProductSKU exacto (con condición) del
+    listing real. Confirmado en vivo (3 SKUs distintos, mismo patrón):
+    siempre 1 solo grupo/condición por WebSKU en esta cuenta. Si aparecen 0
+    o más de 1 grupos, no hay forma segura de adivinar cuál es -- se
+    devuelve None y el caller debe rechazar en vez de arriesgar mandar la
+    condición equivocada."""
+    from app.services.binmanager_client import bm_post as _bm_post_resolve
+    resp = await _bm_post_resolve(_BM_GET_ALTER_SKU_URL, {
+        "WebSKU": web_sku, "ProfileID": account_id, "SiteAccountID": account_id,
+    }, timeout=20.0)
+    if resp is None or resp.status_code != 200:
+        return None
+    try:
+        outer = resp.json()
+        groups = json.loads(outer.get("JSONData") or "[]")
+    except Exception:
+        return None
+    if len(groups) == 1:
+        return groups[0].get("ProductSKU") or None
+    return None
 
 
 async def _find_bm_alter_sku_listing_id(*, account_id: str, web_sku: str, product_sku: str,
@@ -16547,8 +16587,13 @@ async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     from app.services.binmanager_client import bm_post as _bm_post_alter
 
     web_sku = _bm_base_sku(product_sku)
+    # FIX 2026-08-17: mismo bug que _inject_bm_alter_sku -- BM indexa por el
+    # ProductSKU con condición real, no por el WebSKU base.
+    real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku)
+    if not real_product_sku:
+        return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku}"}
     listing_id = await _find_bm_alter_sku_listing_id(
-        account_id=account_id, web_sku=web_sku, product_sku=product_sku,
+        account_id=account_id, web_sku=web_sku, product_sku=real_product_sku,
         substitute_sku=substitute_sku, order_id=order_id,
     )
     if not listing_id:
@@ -16558,7 +16603,7 @@ async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
         "ProfileID": account_id,
         "SiteAccountID": account_id,
         "WebSKU": web_sku,
-        "ProductSKU": product_sku,
+        "ProductSKU": real_product_sku,
         "AlterSKU": substitute_sku,
         "OrderScope": order_id,
         "FulfillmentType": "Merchant",
