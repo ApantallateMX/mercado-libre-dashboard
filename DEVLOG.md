@@ -7,6 +7,50 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — FIX: inyección a BinManager ya no bloquea "Sustituir" (timeout de Railway)
+
+Jovan probó el flujo de sustitución en producción (orden `2000017956308828`,
+sustituto `SNTV004388-GRB`) y el botón se quedó atorado ~2 min y terminó en
+error de conexión — **sin quedar nada guardado** en el historial (ni éxito
+ni error). Vanessa confirmó en BM que ese SKU alternativo nunca se llegó a
+crear, así que era seguro corregir sin riesgo de duplicado.
+
+**Causa raíz:** `resolve_stock_alert_substitution` esperaba la respuesta de
+BM (`_inject_bm_alter_sku`, síncrono) *antes* de guardar el registro. La
+llamada a BM comparte el semáforo global (`_BM_GLOBAL_SEM`, un solo request
+a la vez en todo el proceso) con TODO el demás tráfico a BM — si había algo
+más en cola, el total podía superar el timeout del proxy de Railway
+(~100s) y la conexión se cortaba sin dejar rastro.
+
+**Fix (`app/main.py`, `app/services/token_store.py`, `app/templates/orders.html`):**
+1. El registro se guarda PRIMERO (`bm_status='pending'` si aplica) y el
+   endpoint responde de inmediato — ya no espera a BM.
+2. La inyección real a BM corre como tarea en background
+   (`asyncio.create_task`) que actualiza el registro cuando termina
+   (`success`/`failed`), sin bloquear al usuario.
+3. `_inject_bm_alter_sku` ahora verifica primero si el mapeo ya existe
+   (`_find_bm_alter_sku_listing_id`) antes de crear uno — evita duplicados
+   si un intento previo sí llegó a aplicarse en BM pero la conexión se
+   cortó antes de confirmarlo.
+4. `orders.html`: nuevo badge "⏳ Verificando en BM" + refresco automático
+   del historial (6s/16s/30s) para que el badge final se vea sin recargar.
+
+**Bug encontrado durante la prueba (y corregido antes de dar el fix por
+bueno):** el primer intento de retry en `update_stock_alert_resolution_bm_status`
+(4 intentos, timeout=15s) no aguantó una ráfaga real de contención de
+SQLite local (varios syncs completos de cuenta corriendo a la vez al
+arrancar) — el registro se quedó pegado en `pending` para siempre, sin
+error visible, el mismo síntoma que este fix buscaba eliminar. Como este
+write corre en background sin que nadie lo espere, se subió a 6 intentos
+con timeout=45s cada uno — verificado que con eso sí resuelve
+correctamente incluso bajo esa contención extrema.
+
+Verificado en local con SKUs reales (`SNTV007414-GRB` → `SNTV007730-GRB`):
+respuesta del endpoint en 4-10s incluso con el servidor saturado (muy por
+debajo del límite de Railway), estado pasa de `pending` a `success`
+solo, y el chequeo anti-duplicado detectó correctamente un mapeo ya
+existente de una prueba anterior y no creó uno nuevo.
+
 ## 2026-08-17 — FEAT: "Sustituir" en Alertas de Stock inyecta y borra directo en BinManager
 
 Jovan pidió: al dar clic en "Sustituir" en Alertas de Stock, que el SKU de
