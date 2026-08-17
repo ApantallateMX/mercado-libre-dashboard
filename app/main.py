@@ -16578,6 +16578,45 @@ async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     return {"ok": resp.status_code == 200, "status_code": resp.status_code, "response": data}
 
 
+@app.post("/api/stock/alerts/resolutions/{resolution_id}/retry-bm")
+async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request):
+    """FIX 2026-08-17 (incidente real: orden 2000017984576896 se quedó en
+    'pending' 15+ min): el background task de _inject_bm_alter_sku puede
+    quedarse SIN TURNO del todo si el event loop está saturado (ej. un diag
+    pesado tipo ml-messages-audit corriendo al mismo tiempo) -- no es que
+    falle, simplemente nunca llega a ejecutarse. Este endpoint permite un
+    reintento MANUAL y SÍNCRONO (el usuario ve el resultado real al
+    instante, aceptable porque es una acción explícita de un clic, no el
+    flujo automático que debía responder rápido)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    rows = await token_store.get_stock_alert_resolutions(limit=500)
+    row = next((r for r in rows if r["id"] == resolution_id), None)
+    if not row:
+        return JSONResponse({"detail": "Resolución no encontrada"}, status_code=404)
+    if row.get("bm_deleted_at"):
+        return JSONResponse({"detail": "Ya se había borrado de BinManager — no tiene caso reintentar"}, status_code=400)
+    if row.get("bm_status") == "success":
+        return JSONResponse({"detail": "Ya está aplicado en BinManager — no hace falta reintentar"}, status_code=400)
+    if row.get("platform") != "ml" or not row.get("account_id"):
+        return JSONResponse({"detail": "Esta resolución no aplica a BinManager (no es ML o falta cuenta)"}, status_code=400)
+
+    try:
+        bm_result = await _inject_bm_alter_sku(
+            account_id=row["account_id"], order_id=row["order_id"], product_sku=row["original_sku"],
+            substitute_sku=row["substitute_sku"], qty=1,
+        )
+    except Exception as e:
+        bm_result = {"ok": False, "error": str(e)}
+    _bm_status = "success" if bm_result.get("ok") else "failed"
+    _resp = bm_result.get("response") or {}
+    _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
+    await token_store.update_stock_alert_resolution_bm_status(resolution_id, bm_status=_bm_status, bm_message=_bm_message)
+    return JSONResponse({"ok": bm_result.get("ok", False), "bm_status": _bm_status, "bm_message": _bm_message})
+
+
 @app.post("/api/stock/alerts/resolutions/{resolution_id}/delete-from-bm")
 async def delete_stock_alert_resolution_from_bm(resolution_id: int, request: Request):
     """Borra en BinManager el mapeo de SKU alternativo creado por una

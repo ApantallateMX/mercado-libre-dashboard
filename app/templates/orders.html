@@ -641,6 +641,15 @@ function loadAlertasHistory() {
                 if (h.bm_status !== 'success' || h.bm_deleted_at) return '';
                 return '<button onclick="deleteAlertResolutionFromBM(' + h.id + ', this)" class="text-[10px] bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🗑 Borrar de BM</button>';
             }
+            // FIX 2026-08-17 (incidente real: orden atorada 15+ min en
+            // "Verificando en BM" -- el background task perdió su turno por
+            // completo, no fallo, nunca llego a intentarlo): reintento
+            // manual y sincrono para pending/failed.
+            function _retryBtn(h) {
+                if (h.bm_deleted_at || h.bm_status === 'success') return '';
+                if (h.bm_status !== 'pending' && h.bm_status !== 'failed') return '';
+                return '<button onclick="retryAlertResolutionBM(' + h.id + ', this)" class="text-[10px] bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🔁 Reintentar</button>';
+            }
             tbody.innerHTML = rows.map(function(h) {
                 var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
                 var tipoBadge = h.resolution_type === 'substitution'
@@ -655,7 +664,7 @@ function loadAlertasHistory() {
                     '<td class="px-3 py-2.5 whitespace-nowrap">' + _bmBadge(h) + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-600">' + (h.note || '—') + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + h.username + '</td>' +
-                    '<td class="px-3 py-2.5 text-center whitespace-nowrap" id="alert-hist-action-' + h.id + '">' + _deleteBtn(h) + '</td>' +
+                    '<td class="px-3 py-2.5 text-center whitespace-nowrap" id="alert-hist-action-' + h.id + '">' + _deleteBtn(h) + _retryBtn(h) + '</td>' +
                     '</tr>';
             }).join('');
             cards.innerHTML = rows.map(function(h) {
@@ -675,7 +684,7 @@ function loadAlertasHistory() {
                     '</div>' +
                     (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span> ' + _bmBadge(h) + '</div>' : '') +
                     (h.note ? '<p class="text-xs text-gray-500 mt-1">' + h.note + '</p>' : '') +
-                    (_deleteBtn(h) ? '<div class="mt-2" id="alert-hist-action-card-' + h.id + '">' + _deleteBtn(h) + '</div>' : '') +
+                    ((_deleteBtn(h) || _retryBtn(h)) ? '<div class="mt-2 flex gap-1.5" id="alert-hist-action-card-' + h.id + '">' + _deleteBtn(h) + _retryBtn(h) + '</div>' : '') +
                 '</div>';
             }).join('');
         })
@@ -703,6 +712,30 @@ window.deleteAlertResolutionFromBM = function(id, btnEl) {
         .catch(function() {
             if (window.showToast) showToast('Error de conexión al borrar', 'error');
             btnEl.disabled = false; btnEl.textContent = '🗑 Borrar de BM';
+        });
+};
+
+// FIX 2026-08-17: reintento manual y sincrono -- el background task de la
+// inyeccion automatica puede quedarse sin turno del todo si el servidor
+// esta saturado (ej. un diagnostico pesado corriendo al mismo tiempo), no
+// solo fallar. Este boton llama a BM directo y espera el resultado real.
+window.retryAlertResolutionBM = function(id, btnEl) {
+    btnEl.disabled = true; btnEl.textContent = 'Reintentando...';
+    fetch('/api/stock/alerts/resolutions/' + id + '/retry-bm', { method: 'POST' })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+        .then(function(res) {
+            if (res.ok && res.d.ok) {
+                if (window.showToast) showToast('Aplicado en BinManager ✓', 'success');
+            } else if (res.ok) {
+                if (window.showToast) showToast('BinManager lo rechazó: ' + (res.d.bm_message || 'sin detalle'), 'error');
+            } else {
+                if (window.showToast) showToast(res.d.detail || 'No se pudo reintentar', 'error');
+            }
+            loadAlertasHistory();
+        })
+        .catch(function() {
+            if (window.showToast) showToast('Error de conexión al reintentar', 'error');
+            btnEl.disabled = false; btnEl.textContent = '🔁 Reintentar';
         });
 };
 
