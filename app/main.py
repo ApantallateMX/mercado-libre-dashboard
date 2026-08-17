@@ -16513,7 +16513,16 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
         data = resp.json()
     except Exception:
         data = {"raw_text": resp.text[:500]}
-    return {"ok": resp.status_code == 200, "status_code": resp.status_code, "response": data}
+    # FIX 2026-08-17 (bug real: BM rechazó SHHP000048-NEW→SHHP000060-NEW por
+    # ya existir para OTRA orden -- "Insert Alternative SKU: ... exists for
+    # ...!" -- con HTTP 200, y el código viejo lo daba por "Aplicado en BM"
+    # solo por el status code). BM responde 200 tanto en éxito real como en
+    # rechazo de negocio -- el resultado real está en MessageReturn. Todos
+    # los casos de éxito confirmados hasta hoy devuelven exactamente
+    # "Success"; cualquier otra cosa es un rechazo real, no un éxito.
+    _msg = str((data or {}).get("MessageReturn") or "").strip()
+    _ok = resp.status_code == 200 and _msg.lower() == "success"
+    return {"ok": _ok, "status_code": resp.status_code, "response": data}
 
 
 _BM_GET_ALTER_SKU_URL = "https://binmanager.mitechnologiesinc.com/FullFillMent/FullFillMent/GetAlterSKUMappingByWebSKU"
