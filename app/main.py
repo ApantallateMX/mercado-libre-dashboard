@@ -21994,6 +21994,53 @@ async def _fetch_amazon_threads_for_seller(sid: str, days: int, oid: str = "", n
         th["messages"].sort(key=lambda m: m["ts"] or 0)
         th["unread"] = sum(1 for m in th["messages"] if m["direction"] == "inbound" and not m.get("read_at"))
 
+    # FEATURE 2026-08-16 (pedido por Jovan: "solo mostramos el ASIN, quieren
+    # tambien el titulo del producto"): product_title viene vacio cuando el
+    # correo de notificacion de Amazon no trae la linea "N / Titulo | ... "
+    # que espera el parser (pasa en preguntas de producto sueltas, no ligadas
+    # a una orden -- ver buyer_messages_client.py _PRODUCT_LINE_RE, exactamente
+    # el caso real de las capturas de Jovan: "ASIN B0H12X52GB" sin titulo).
+    # En vez de arreglar el parser de un texto de email que Amazon no controla
+    # y puede seguir variando, se resuelve el titulo real via Catalog Items
+    # API (SP-API) -- mismo metodo (get_catalog_item) y mismo campo
+    # (summaries[0].itemName) ya usados en todo amazon_products.py. Se
+    # persiste de una vez (backfill_buyer_message_product_title) para no
+    # volver a pedirlo la proxima carga de la bandeja.
+    _missing_asin_threads = [t for t in threads if t["asin"] and not t["product_title"]]
+    if _missing_asin_threads:
+        try:
+            from app.services.amazon_client import get_amazon_client as _get_amz_for_titles
+            _amz_client_titles = await _get_amz_for_titles(sid)
+            if _amz_client_titles:
+                _distinct_asins = list({t["asin"] for t in _missing_asin_threads})
+                # FIX 2026-08-16 (encontrado al probar esto en vivo, no algo
+                # hipotetico): pedir varios ASIN en paralelo con
+                # asyncio.gather sobre el MISMO cliente dispara una renovacion
+                # de access token LWA por cada llamada simultanea cuando el
+                # token de instancia aun no esta cacheado (todas ven
+                # "expirado" a la vez) -- confirmado con una prueba real
+                # (5 llamadas concurrentes, las 5 fallaron 400 invalid_grant/
+                # saturacion). Secuencial evita esto: la primera llamada
+                # cachea el access token en la instancia del cliente, las
+                # siguientes lo reusan sin volver a pedirlo a Amazon.
+                _title_by_asin = {}
+                for _asin in _distinct_asins:
+                    try:
+                        _cat = await _amz_client_titles.get_catalog_item(_asin)
+                        _summaries = _cat.get("summaries") or []
+                        _title = (_summaries[0].get("itemName") if _summaries else "") or ""
+                        if _title:
+                            _title_by_asin[_asin] = _title
+                    except Exception:
+                        pass
+                for th in _missing_asin_threads:
+                    _found = _title_by_asin.get(th["asin"])
+                    if _found:
+                        th["product_title"] = _found
+                        asyncio.create_task(token_store.backfill_buyer_message_product_title(sid, th["asin"], _found))
+        except Exception as _e:
+            logger.warning(f"[AMZ-BUYER-MSG] No se pudo resolver titulo por ASIN: {_e}")
+
     # view_info ANTES de filtrar — "pendiente" depende tanto de si el
     # último mensaje es del comprador COMO de si alguien ya lo marcó
     # resuelto a mano (ej. "Marcar todo como atendido" para limpiar

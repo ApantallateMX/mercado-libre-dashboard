@@ -2418,6 +2418,25 @@ async def insert_buyer_message(msg: dict) -> int | None:
         return cur.lastrowid if cur.rowcount else None
 
 
+async def backfill_buyer_message_product_title(seller_id: str, asin: str, product_title: str) -> None:
+    """FEATURE 2026-08-16 (pedido por Jovan: preguntas de Amazon solo mostraban
+    el ASIN, sin titulo del producto, cuando el correo de Amazon no traia esa
+    linea en el formato exacto que espera el parser — ver
+    buyer_messages_client.py _PRODUCT_LINE_RE). Cuando se resuelve el titulo
+    real via Catalog Items API (SP-API), se guarda aqui de una vez para TODAS
+    las filas de ese asin+seller que quedaron con product_title vacio — asi
+    la proxima carga de la bandeja ya no necesita volver a consultar Amazon
+    para el mismo ASIN."""
+    if not asin or not product_title:
+        return
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute("""
+            UPDATE amazon_buyer_messages SET product_title = ?
+            WHERE seller_id = ? AND asin = ? AND (product_title IS NULL OR product_title = '')
+        """, (product_title, seller_id, asin))
+        await db.commit()
+
+
 async def get_buyer_messages(seller_id: str, days: int = 30, limit: int = 50) -> list[dict]:
     """Mensajes (in+outbound) de una cuenta, más reciente primero, para la
     sección 'Mensajes de Compradores' de Salud y Retornos Amazon. limit
