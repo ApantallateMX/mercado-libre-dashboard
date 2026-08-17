@@ -16624,7 +16624,7 @@ async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
 
 
 @app.post("/api/stock/alerts/resolutions/{resolution_id}/retry-bm")
-async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request):
+async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request, force: bool = False):
     """FIX 2026-08-17 (incidente real: orden 2000017984576896 se quedó en
     'pending' 15+ min): el background task de _inject_bm_alter_sku puede
     quedarse SIN TURNO del todo si el event loop está saturado (ej. un diag
@@ -16643,7 +16643,7 @@ async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request):
         return JSONResponse({"detail": "Resolución no encontrada"}, status_code=404)
     if row.get("bm_deleted_at"):
         return JSONResponse({"detail": "Ya se había borrado de BinManager — no tiene caso reintentar"}, status_code=400)
-    if row.get("bm_status") == "success":
+    if row.get("bm_status") == "success" and not force:
         return JSONResponse({"detail": "Ya está aplicado en BinManager — no hace falta reintentar"}, status_code=400)
     if row.get("platform") != "ml" or not row.get("account_id"):
         return JSONResponse({"detail": "Esta resolución no aplica a BinManager (no es ML o falta cuenta)"}, status_code=400)
