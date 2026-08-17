@@ -16474,15 +16474,23 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     if not real_product_sku:
         return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku} (0 o más de 1 producto encontrado) -- revisar manualmente en el Fulfillment Dashboard"}
 
-    # Antes de crear, verificar si el mapeo ya existe -- si un intento previo
-    # se quedó "en el aire" por timeout de Railway pero SÍ llegó a aplicarse
-    # en BM, evita crear un duplicado al reintentar.
-    existing_listing_id = await _find_bm_alter_sku_listing_id(
+    # Antes de crear, verificar si el mapeo YA cubre ESTA orden -- si un
+    # intento previo se quedó "en el aire" por timeout de Railway pero SÍ
+    # llegó a aplicarse en BM, evita crear un duplicado al reintentar.
+    #
+    # FIX 2026-08-17 (bug real encontrado al corregir el de arriba): un
+    # AlterSKU con Scope="UNICA" solo cubre SU SiteOrderID -- un mapeo viejo
+    # creado a mano por otro empleado para OTRA orden (mismo par de SKUs,
+    # coincidencia real observada: SHHP000048→SHHP000060-NEW ya existía para
+    # la orden 2000017944072810 de Vanessa) NO cubre la orden actual. Solo
+    # Scope="GLOBAL" (aplica a cualquier orden) o SiteOrderID== esta orden
+    # cuentan como "ya existe" -- cualquier otra cosa debe crear su propia
+    # entrada UNICA para esta orden.
+    if await _bm_alter_sku_covers_order(
         account_id=account_id, web_sku=web_sku, product_sku=real_product_sku,
         substitute_sku=substitute_sku, order_id=order_id,
-    )
-    if existing_listing_id:
-        return {"ok": True, "already_existed": True, "response": {"MessageReturn": "El mapeo ya existía en BinManager"}}
+    ):
+        return {"ok": True, "already_existed": True, "response": {"MessageReturn": "El mapeo ya existía en BinManager para esta orden"}}
 
     payload = {
         "ProfileID": account_id,
@@ -16535,6 +16543,39 @@ async def _resolve_bm_condition_sku(account_id: str, web_sku: str) -> str | None
     if len(groups) == 1:
         return groups[0].get("ProductSKU") or None
     return None
+
+
+async def _bm_alter_sku_covers_order(*, account_id: str, web_sku: str, product_sku: str,
+                                      substitute_sku: str, order_id: str) -> bool:
+    """FIX 2026-08-17: chequeo anti-duplicado CORRECTO (scope-aware) antes de
+    crear un AlterSKU -- un mapeo con Scope='UNICA' solo aplica a SU
+    SiteOrderID exacto, uno con Scope='GLOBAL' aplica a cualquier orden.
+    Un match por nombre de SKU nada más (ignorando el scope/orden, como
+    hacía la versión vieja reusando _find_bm_alter_sku_listing_id) daba
+    falsos "ya existe" cuando el mismo par de SKUs ya tenía un mapeo manual
+    de OTRA orden -- bug real encontrado (SHHP000048→SHHP000060-NEW: existía
+    para la orden 2000017944072810 de Vanessa, pero NO para la orden nueva
+    que se intentaba resolver)."""
+    from app.services.binmanager_client import bm_post as _bm_post_cover
+    resp = await _bm_post_cover(_BM_GET_ALTER_SKU_URL, {
+        "WebSKU": web_sku, "ProfileID": account_id, "SiteAccountID": account_id,
+    }, timeout=20.0)
+    if resp is None or resp.status_code != 200:
+        return False
+    try:
+        outer = resp.json()
+        groups = json.loads(outer.get("JSONData") or "[]")
+    except Exception:
+        return False
+    for group in groups:
+        if group.get("ProductSKU") != product_sku:
+            continue
+        for alt in (group.get("AlterSKUs") or []):
+            if alt.get("AlterSKU") != substitute_sku:
+                continue
+            if alt.get("Scope") == "GLOBAL" or str(alt.get("SiteOrderID") or "") == order_id:
+                return True
+    return False
 
 
 async def _find_bm_alter_sku_listing_id(*, account_id: str, web_sku: str, product_sku: str,
