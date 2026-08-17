@@ -1695,3 +1695,15 @@ Códigos usados en `WorkPlanInspection_ByClassification` y detalles de inspecci�
 
 **Nota importante:** `GetOrderShipped` retorna array directo (no JSON anidado). `GetReportTRG`, `GetReportTRG_Detail`, `GetUnifiedOrderReport`, `GetInspectionsRecycle`, `GetBinMovementsByWorkCenter` retornan JSON **doblemente anidado** en un campo string que hay que parsear dos veces.
 
+---
+
+### AddAlterSKUMappingByWebSKU / GetAlterSKUMappingByWebSKU — gotchas reales (2026-08-17)
+
+Usado por la feature "Sustituir SKU" del dashboard (`app/main.py`). 3 bugs reales encontrados en producción el mismo día que se construyó, cada uno solo verificable contra BM real (no adivinable leyendo código) — detalle completo en memoria de proyecto `project_bm_alter_sku_mapping.md`:
+
+1. **`ProductSKU` debe llevar la CONDICIÓN real** (ej. `SNTV007263-GRB`), nunca el WebSKU/SKU base. `GetAlterSKUMappingByWebSKU` acepta el base para buscar, pero cada grupo que devuelve viene indexado por el ProductSKU exacto con condición (el listing real del canal). Mandar el SKU base como `ProductSKU` en el Add hace que BM responda 200/"Success" **sin crear nada**.
+2. **Un mismo par (ProductSKU, AlterSKU) solo puede tener 1 mapeo activo a la vez**, sin importar el `Scope` (`GLOBAL` = cualquier orden, `UNICA` = solo esa `SiteOrderID`). Un mapeo manual ya existente para otra orden bloquea crear uno nuevo para una orden distinta — no es un bug, es el modelo de datos de BM.
+3. **BM responde HTTP 200 tanto en éxito real como en rechazo de negocio.** El resultado real está en `MessageReturn` del body — solo el texto exacto `"Success"` es éxito confirmado; cualquier otro texto (ej. `"Insert Alternative SKU: X exists for Y!"`) es un rechazo real que hay que tratar como falla.
+
+Si algún consumidor futuro (dashboard u otro) reporta "dice aplicado pero no aparece en el Fulfillment Dashboard", verificar primero contra BM real (endpoint de diag `/api/diag/bm-alter-sku-groups?web_sku=X&account_id=Y&token=DIAG_TOKEN` en el repo del dashboard) antes de asumir que es un bug nuevo.
+
