@@ -16482,6 +16482,129 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     return {"ok": resp.status_code == 200, "status_code": resp.status_code, "response": data}
 
 
+_BM_GET_ALTER_SKU_URL = "https://binmanager.mitechnologiesinc.com/FullFillMent/FullFillMent/GetAlterSKUMappingByWebSKU"
+
+
+async def _find_bm_alter_sku_listing_id(*, account_id: str, web_sku: str, product_sku: str,
+                                         substitute_sku: str, order_id: str) -> str | None:
+    """Busca el ListingID interno (por AlterSKU) que BM necesita para poder
+    borrar un mapeo -- NO es el mismo ListingID del producto principal, cada
+    alternativa dentro de "AlterSKUs" tiene el suyo propio. Contrato
+    verificado en vivo por Jovan via DevTools -> Network (GET real, no
+    adivinado): JSONData viene como STRING con JSON adentro, hay que
+    decodificarlo dos veces."""
+    from app.services.binmanager_client import bm_post as _bm_post_get
+
+    resp = await _bm_post_get(_BM_GET_ALTER_SKU_URL, {
+        "WebSKU": web_sku, "ProfileID": account_id, "SiteAccountID": account_id,
+    }, timeout=20.0)
+    if resp is None or resp.status_code != 200:
+        return None
+    try:
+        outer = resp.json()
+        groups = json.loads(outer.get("JSONData") or "[]")
+    except Exception as e:
+        logger.warning(f"[BM-ALTER-SKU] no se pudo parsear GetAlterSKUMappingByWebSKU: {e}")
+        return None
+
+    for group in groups:
+        if group.get("ProductSKU") != product_sku:
+            continue
+        for alt in (group.get("AlterSKUs") or []):
+            if alt.get("AlterSKU") == substitute_sku and str(alt.get("SiteOrderID") or "") == order_id:
+                return alt.get("ListingID")
+    # Fallback: mismo AlterSKU sin exigir match exacto de orden (por si BM
+    # normalizó el SiteOrderID de forma distinta) -- mejor encontrar algo
+    # razonable que no encontrar nada.
+    for group in groups:
+        if group.get("ProductSKU") != product_sku:
+            continue
+        for alt in (group.get("AlterSKUs") or []):
+            if alt.get("AlterSKU") == substitute_sku:
+                return alt.get("ListingID")
+    return None
+
+
+async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: str,
+                                substitute_sku: str, qty: int) -> dict:
+    """Borra el mapeo de SKU alternativo en BinManager -- mismo endpoint que
+    crearlo, pero Actions=3 y ListingId apuntando a la fila especifica.
+    Contrato verificado en vivo por Jovan via DevTools -> Network (capturo
+    el POST real al borrar la fila de prueba desde el panel de BM)."""
+    from app.services.sku_utils import base_sku as _bm_base_sku
+    from app.services.binmanager_client import bm_post as _bm_post_alter
+
+    web_sku = _bm_base_sku(product_sku)
+    listing_id = await _find_bm_alter_sku_listing_id(
+        account_id=account_id, web_sku=web_sku, product_sku=product_sku,
+        substitute_sku=substitute_sku, order_id=order_id,
+    )
+    if not listing_id:
+        return {"ok": False, "error": "No se encontró el mapeo en BinManager (¿ya se borró antes, o el SKU no coincide?)"}
+
+    payload = {
+        "ProfileID": account_id,
+        "SiteAccountID": account_id,
+        "WebSKU": web_sku,
+        "ProductSKU": product_sku,
+        "AlterSKU": substitute_sku,
+        "OrderScope": order_id,
+        "FulfillmentType": "Merchant",
+        "Qty": qty,
+        "Actions": 3,
+        "ListingId": listing_id,
+        "Priority": None,
+        "UserID": None,
+    }
+    resp = await _bm_post_alter(_BM_ALTER_SKU_URL, payload, timeout=20.0)
+    if resp is None:
+        return {"ok": False, "error": "Sin respuesta de BinManager (timeout o sesión no disponible)"}
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw_text": resp.text[:500]}
+    return {"ok": resp.status_code == 200, "status_code": resp.status_code, "response": data}
+
+
+@app.post("/api/stock/alerts/resolutions/{resolution_id}/delete-from-bm")
+async def delete_stock_alert_resolution_from_bm(resolution_id: int, request: Request):
+    """Borra en BinManager el mapeo de SKU alternativo creado por una
+    sustitución previa (ver _delete_bm_alter_sku) -- botón "🗑 Borrar de BM"
+    del historial de Alertas de Stock. Solo tiene sentido para resoluciones
+    que sí se aplicaron en BM (bm_status='success') y que no se hayan
+    borrado ya."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    rows = await token_store.get_stock_alert_resolutions(limit=500)
+    row = next((r for r in rows if r["id"] == resolution_id), None)
+    if not row:
+        return JSONResponse({"detail": "Resolución no encontrada"}, status_code=404)
+    if row.get("bm_deleted_at"):
+        return JSONResponse({"detail": "Ya se había borrado de BinManager antes"}, status_code=400)
+    if row.get("bm_status") != "success":
+        return JSONResponse({"detail": "Esta sustitución nunca se aplicó en BinManager — nada que borrar"}, status_code=400)
+
+    result = await _delete_bm_alter_sku(
+        account_id=row["account_id"], order_id=row["order_id"],
+        product_sku=row["original_sku"], substitute_sku=row["substitute_sku"],
+        qty=1,
+    )
+    if result.get("ok"):
+        await token_store.mark_stock_alert_resolution_bm_deleted(resolution_id, deleted_by=du["username"])
+        try:
+            await user_store.log_action(
+                username=du["username"], user_id=du.get("id"),
+                action="stock_alert_bm_delete", item_id=row["original_sku"],
+                detail={"order_id": row["order_id"], "substitute_sku": row["substitute_sku"]},
+                ml_account=row["account_id"], section="Ventas",
+            )
+        except Exception:
+            pass
+    return JSONResponse({"ok": result.get("ok", False), "detail": result.get("error") or (result.get("response") or {}).get("MessageReturn")})
+
+
 @app.post("/api/stock/alerts/resolve-substitution")
 async def resolve_stock_alert_substitution(request: Request):
     """Registra que una orden sin stock se resolvió sustituyendo el producto

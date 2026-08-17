@@ -420,10 +420,11 @@
               <th class="px-3 py-3 text-left whitespace-nowrap">BinManager</th>
               <th class="px-3 py-3 text-left">Nota</th>
               <th class="px-3 py-3 text-left whitespace-nowrap">Usuario</th>
+              <th class="px-3 py-3 text-center whitespace-nowrap">Acción</th>
             </tr>
           </thead>
           <tbody id="alertas-history-tbody">
-            <tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+            <tr><td colspan="9" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -602,21 +603,20 @@ setInterval(loadRestockWatch, 60000);
 function loadAlertasHistory() {
     var tbody = document.getElementById('alertas-history-tbody');
     var cards = document.getElementById('alertas-history-cards');
-    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
     fetch('/api/stock/alerts/resolutions?limit=100')
         .then(function(r) { return r.json(); })
         .then(function(d) {
             var rows = d.rows || [];
             if (!rows.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
                 cards.innerHTML = '<p class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</p>';
                 return;
             }
             // FEATURE 2026-08-17: badge de estado real en BinManager -- antes
             // el historial solo mostraba "se registró aquí", sin saber si de
             // verdad se aplicó en BM. bm_deleted_at marca que ya se borró
-            // desde este mismo historial (ver deleteFromBM más abajo — aún
-            // pendiente confirmar el endpoint real de borrado con Jovan).
+            // desde este mismo historial (ver deleteFromBM más abajo).
             function _bmBadge(h) {
                 if (h.bm_deleted_at) {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500" title="' + (h.bm_deleted_by || '') + '">🗑 Borrado de BM</span>';
@@ -628,6 +628,12 @@ function loadAlertasHistory() {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700" title="' + (h.bm_message || '') + '">✗ Falló en BM</span>';
                 }
                 return '<span class="text-[10px] text-gray-400">—</span>';
+            }
+            // Solo tiene sentido borrar si de verdad se aplicó en BM y no se
+            // ha borrado ya.
+            function _deleteBtn(h) {
+                if (h.bm_status !== 'success' || h.bm_deleted_at) return '';
+                return '<button onclick="deleteAlertResolutionFromBM(' + h.id + ', this)" class="text-[10px] bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🗑 Borrar de BM</button>';
             }
             tbody.innerHTML = rows.map(function(h) {
                 var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
@@ -643,6 +649,7 @@ function loadAlertasHistory() {
                     '<td class="px-3 py-2.5 whitespace-nowrap">' + _bmBadge(h) + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-600">' + (h.note || '—') + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + h.username + '</td>' +
+                    '<td class="px-3 py-2.5 text-center whitespace-nowrap" id="alert-hist-action-' + h.id + '">' + _deleteBtn(h) + '</td>' +
                     '</tr>';
             }).join('');
             cards.innerHTML = rows.map(function(h) {
@@ -662,13 +669,36 @@ function loadAlertasHistory() {
                     '</div>' +
                     (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span> ' + _bmBadge(h) + '</div>' : '') +
                     (h.note ? '<p class="text-xs text-gray-500 mt-1">' + h.note + '</p>' : '') +
+                    (_deleteBtn(h) ? '<div class="mt-2" id="alert-hist-action-card-' + h.id + '">' + _deleteBtn(h) + '</div>' : '') +
                 '</div>';
             }).join('');
         })
         .catch(function() {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
         });
 }
+
+// FEATURE 2026-08-17: borra en BinManager el mapeo de SKU alternativo que se
+// creo al hacer "Sustituir" -- botón "🗑 Borrar de BM" del historial.
+window.deleteAlertResolutionFromBM = function(id, btnEl) {
+    if (!confirm('¿Borrar este mapeo de SKU alternativo en BinManager? Esta acción no se puede deshacer.')) return;
+    btnEl.disabled = true; btnEl.textContent = 'Borrando...';
+    fetch('/api/stock/alerts/resolutions/' + id + '/delete-from-bm', { method: 'POST' })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+        .then(function(res) {
+            if (res.ok && res.d.ok) {
+                if (window.showToast) showToast('Mapeo borrado de BinManager', 'success');
+                loadAlertasHistory();
+            } else {
+                if (window.showToast) showToast(res.d.detail || 'No se pudo borrar de BinManager', 'error');
+                btnEl.disabled = false; btnEl.textContent = '🗑 Borrar de BM';
+            }
+        })
+        .catch(function() {
+            if (window.showToast) showToast('Error de conexión al borrar', 'error');
+            btnEl.disabled = false; btnEl.textContent = '🗑 Borrar de BM';
+        });
+};
 
 // ─── Modal: registrar sustitución ──────────────────────────────────────────
 var _subModalCtx = null;
