@@ -17772,7 +17772,7 @@ async def diag_bm_alter_sku_create_exact(
     if not all([account_id, order_id, product_sku_exact, substitute_sku]):
         return JSONResponse({"error": "account_id, order_id, product_sku_exact, substitute_sku requeridos"}, status_code=400)
 
-    web_sku = _bm_base_sku(product_sku_exact)
+    web_sku = normalize_to_bm_sku(product_sku_exact)
     if await _bm_alter_sku_covers_order(
         account_id=account_id, web_sku=web_sku, product_sku=product_sku_exact,
         substitute_sku=substitute_sku, order_id=order_id,
@@ -17811,7 +17811,7 @@ async def diag_bm_alter_sku_delete_exact(
     if not all([account_id, order_id, product_sku_exact, substitute_sku]):
         return JSONResponse({"error": "account_id, order_id, product_sku_exact, substitute_sku requeridos"}, status_code=400)
 
-    web_sku = _bm_base_sku(product_sku_exact)
+    web_sku = normalize_to_bm_sku(product_sku_exact)
     listing_id = await _find_bm_alter_sku_listing_id(
         account_id=account_id, web_sku=web_sku, product_sku=product_sku_exact,
         substitute_sku=substitute_sku, order_id=order_id,
