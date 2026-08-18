@@ -2484,6 +2484,12 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
                     for it in items if (it.get("SellerSKU") or "").strip()
                 }
                 known_skus = await token_store.get_bm_master_rows_for_skus(list(skus_this_order))
+                # Limpieza dirigida: si algún SKU de esta orden se alertó
+                # ANTES de este fix sin ser catálogo BM, se corrige aquí
+                # mismo sin esperar a que la orden se envíe/cancele.
+                await token_store.delete_realtime_stock_alerts_for_order_except_skus(
+                    order_id, "amazon", list(known_skus.keys()),
+                )
                 for item in items:
                     sku_raw = (item.get("SellerSKU") or "").strip()
                     if not sku_raw:

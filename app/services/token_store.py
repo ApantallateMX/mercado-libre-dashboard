@@ -2213,6 +2213,30 @@ async def delete_realtime_stock_alerts_for_order(order_id: str, platform: str = 
         return cur.rowcount
 
 
+async def delete_realtime_stock_alerts_for_order_except_skus(
+    order_id: str, platform: str, valid_skus: list[str],
+) -> int:
+    """Limpieza dirigida (2026-08-18, Amazon): borra SOLO las filas de esta
+    orden cuyo SKU YA NO debería alertar (ej. resultó no ser catálogo BM)
+    -- a diferencia de delete_realtime_stock_alerts_for_order() (borra
+    TODAS), esto preserva detected_at de las filas que SÍ siguen siendo
+    válidas en vez de re-insertarlas con timestamp nuevo cada ciclo."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        if valid_skus:
+            placeholders = ",".join("?" * len(valid_skus))
+            cur = await db.execute(
+                f"DELETE FROM realtime_stock_alerts WHERE order_id = ? AND platform = ? AND sku NOT IN ({placeholders})",
+                (order_id, platform, *valid_skus),
+            )
+        else:
+            cur = await db.execute(
+                "DELETE FROM realtime_stock_alerts WHERE order_id = ? AND platform = ?",
+                (order_id, platform),
+            )
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_all_realtime_alerts_for_reconcile() -> list[dict]:
     """Todas las alertas activas — para el loop periódico que revisa el
     estado REAL de cada envío (no depende de que llegue una notificación
