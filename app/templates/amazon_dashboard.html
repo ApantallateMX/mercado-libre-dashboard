@@ -256,6 +256,10 @@
     <button id="amz-ventas-view-finanzas" onclick="window.setAmzVentasView('finanzas')"
             class="px-3 py-1.5 {% if _amz_ventas_default == 'finanzas' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">💰 Finanzas</button>
     {% endif %}
+    {% if 'alertas_stock' in _amz_ventas_subtabs %}
+    <button id="amz-ventas-view-alertas_stock" onclick="window.setAmzVentasView('alertas_stock')"
+            class="px-3 py-1.5 {% if _amz_ventas_default == 'alertas_stock' %}bg-orange-500 text-white{% else %}text-gray-600 hover:bg-orange-50{% endif %} border-l border-gray-200 first:border-l-0">⚠️ Alertas de Stock</button>
+    {% endif %}
 </div>
 
 <div id="amz-ventas-resumen" {% if _amz_ventas_default != 'resumen' %}class="hidden"{% endif %}>
@@ -396,7 +400,111 @@
 </div>
 <!-- /amz-ventas-finanzas -->
 
+<!-- ─── Alertas de Stock (2026-08-18, portado de ML) ───────────────────────
+     Fase 1 (detección, ver _amazon_stock_reconcile_loop en main.py) YA
+     activa para VECKTOR+AUTOBOT. Fase 2 (sustitución con inyección real a
+     BinManager) está BLOQUEADA: ProfileID/SiteAccountID de BM son bigint,
+     no aceptan el Seller ID alfanumérico de Amazon (confirmado con error
+     SQL real contra BM en vivo) -- "Registrar" guarda la nota igual que
+     hacía ML antes de tener BM conectado, pero no inyecta nada hasta que
+     BinManager/MI2 resuelva ese bloqueo de su lado. -->
+<div id="amz-ventas-alertas_stock" {% if _amz_ventas_default != 'alertas_stock' %}class="hidden"{% endif %}>
+  <div class="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
+    ⚠️ La sustitución automática con BinManager para Amazon está pendiente de una configuración
+    del lado de BinManager (el Seller ID de Amazon no es compatible con su esquema actual). Por
+    ahora, "Registrar" solo guarda la nota — informa al almacén manualmente sobre el sustituto.
+  </div>
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+    <div>
+      <h2 class="text-base font-bold text-gray-800">Órdenes sin stock — en el momento</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Detección cada 5 min vía polling (Amazon no tiene webhook) · cuentas: VECKTOR + AUTOBOT</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+        <button id="amz-alertas-sub-live" onclick="window.setAmzAlertasSubView('live')"
+                class="px-3 py-2 bg-orange-500 text-white">En vivo</button>
+        <button id="amz-alertas-sub-pending" onclick="window.setAmzAlertasSubView('pending')"
+                class="px-3 py-2 bg-white text-gray-500 hover:bg-orange-50 border-l border-gray-200">🚚 Pendientes de Envío</button>
+        <button id="amz-alertas-sub-history" onclick="window.setAmzAlertasSubView('history')"
+                class="px-3 py-2 bg-white text-gray-500 hover:bg-orange-50 border-l border-gray-200">📋 Historial</button>
+      </div>
+      <button onclick="window.loadAmzAlertasCurrentSubView()" class="text-xs bg-orange-500 text-white px-3 py-2 rounded-lg font-medium hover:bg-orange-600 transition">↻ Actualizar</button>
+    </div>
+  </div>
+
+  <!-- En vivo -->
+  <div id="amz-alertas-view-live">
+    <div id="amz-alertas-live-empty" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200 py-16 flex flex-col items-center justify-center gap-2">
+      <span class="text-3xl">✅</span>
+      <p class="text-sm text-gray-500">Sin órdenes Amazon sin stock en este momento</p>
+    </div>
+    <div id="amz-alertas-live-cards" class="space-y-2"></div>
+  </div>
+
+  <!-- Pendientes de Envío -->
+  <div id="amz-alertas-view-pending" class="hidden">
+    <p class="text-xs text-gray-400 mb-3">Sustituciones ya registradas cuya orden todavía no se ha enviado.</p>
+    <div id="amz-alertas-pending-empty" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200 py-16 flex flex-col items-center justify-center gap-2">
+      <span class="text-3xl">🚚</span>
+      <p class="text-sm text-gray-500">Sin sustituciones pendientes de envío</p>
+    </div>
+    <div id="amz-alertas-pending-cards" class="space-y-2"></div>
+  </div>
+
+  <!-- Historial -->
+  <div id="amz-alertas-view-history" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-gray-500 text-xs uppercase">
+        <tr>
+          <th class="px-3 py-3 text-left whitespace-nowrap">Fecha</th>
+          <th class="px-3 py-3 text-left whitespace-nowrap">Orden</th>
+          <th class="px-3 py-3 text-left whitespace-nowrap">SKU original</th>
+          <th class="px-3 py-3 text-left whitespace-nowrap">SKU sustituto</th>
+          <th class="px-3 py-3 text-left whitespace-nowrap">BinManager</th>
+          <th class="px-3 py-3 text-left">Nota</th>
+          <th class="px-3 py-3 text-left whitespace-nowrap">Usuario</th>
+        </tr>
+      </thead>
+      <tbody id="amz-alertas-history-tbody">
+        <tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<!-- /amz-ventas-alertas_stock -->
+
 </div><!-- /amz-tab-ventas -->
+
+<!-- ═══ Modal: registrar sustitución (Amazon) ═══ -->
+<div id="amz-substitution-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-end md:items-center justify-center p-0 md:p-4">
+  <div class="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl max-h-[90vh] overflow-y-auto">
+    <div class="p-5 border-b border-gray-100">
+      <h3 class="text-sm font-bold text-gray-800">🔁 Registrar sustitución</h3>
+      <p class="text-xs text-gray-400 mt-0.5">Orden <span id="amz-sub-modal-order" class="font-mono"></span> · SKU original <span id="amz-sub-modal-sku" class="font-mono"></span></p>
+    </div>
+    <div class="p-5 space-y-3">
+      <p class="text-xs bg-amber-50 border border-amber-200 rounded-lg p-2 text-amber-800">
+        No se inyecta a BinManager todavía (pendiente de su lado) — avisa al almacén manualmente.
+      </p>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">SKU del producto que se mandó en su lugar</label>
+        <input type="text" id="amz-sub-modal-substitute" placeholder="ej: SNTV004254"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-orange-400 transition">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Nota — respaldo de que el cliente aceptó el cambio <span class="text-red-400">*</span></label>
+        <textarea id="amz-sub-modal-note" rows="3" placeholder="ej: cliente aceptó el cambio por email"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-400 transition"></textarea>
+      </div>
+      <p id="amz-sub-modal-error" class="hidden text-xs text-red-500"></p>
+    </div>
+    <div class="p-5 border-t border-gray-100 flex flex-col sm:flex-row gap-2 sm:justify-end">
+      <button onclick="closeAmzSubstitutionModal()" class="w-full sm:w-auto px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
+      <button onclick="submitAmzSubstitution()" id="amz-sub-modal-confirm-btn"
+              class="w-full sm:w-auto px-4 py-2 text-sm bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-semibold transition">Registrar</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════
      TAB: SALUD

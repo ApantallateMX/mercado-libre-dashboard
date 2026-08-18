@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FEAT: "Alertas de Stock" para Amazon — Fase 3 (pestaña UI)
+
+Cierra el porteo a Amazon (ver entrada de Fase 0/1 más abajo). Nueva
+sub-pestaña "⚠️ Alertas de Stock" dentro de Ventas → Amazon (junto a
+Resumen/Por SKU/Finanzas), mismo patrón visual que ML: sub-vistas En vivo
+/ Pendientes de Envío / Historial + modal "Sustituir".
+
+- `user_store.py`: agregado `alertas_stock` a `PERMISSION_TREE["amz"]["ventas"]["subtabs"]`.
+- `amazon_dashboard.html`: markup de la sub-vista + modal `#amz-substitution-modal`
+  (IDs con prefijo `amz-` para no chocar con el modal de ML, que vive en
+  otro template).
+- `amazon_dashboard.js`: `setAmzAlertasSubView`, `loadAmzAlertasLive/Pending/History`,
+  `openAmzSubstitutionModal`/`submitAmzSubstitution`. Reusa los mismos
+  endpoints de ML (ya platform-agnostic) con `&platform=amazon` nuevo en
+  los 3 (`/api/stock/realtime-alerts`, `/pending-shipment`, `/resolutions`)
+  — la vista de ML sigue sin filtrar (default `platform=""` = todas, sin
+  cambiar su comportamiento actual).
+- **Mejora pedida por Jovan**: "En vivo" agrupa por orden en vez de repetir
+  la tarjeta completa por cada SKU (una orden Amazon con 5 productos sin
+  stock mostraba 5 tarjetas idénticas salvo el SKU) — ahora 1 tarjeta con
+  la orden arriba y la lista de SKUs debajo, cada uno con su botón
+  "Sustituir" independiente. El modelo de datos no cambió (sigue 1 fila
+  por order_id+sku, igual que ML) — es solo agrupación visual.
+- El aviso "Fase 2 bloqueada" queda visible arriba de la pestaña y dentro
+  del modal — "Registrar" guarda la nota pero no inyecta a BM hasta que
+  BinManager/MI2 resuelva el problema de esquema (`ProfileID`/`SiteAccountID`
+  bigint, ver entrada anterior).
+
+Probado localmente: página `/amazon?tab=ventas` renderiza sin errores de
+Jinja, los 3 endpoints con `&platform=amazon` responden 200, JS validado
+con `node --check`.
+
+---
+
 ## 2026-08-18 — FEAT: "Alertas de Stock" portado a Amazon — Fase 1 (detección) en producción, Fase 2 (sustitución BM) BLOQUEADA por BinManager
 
 Jovan pidió portar a Amazon la misma operación completa de "sin stock"

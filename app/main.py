@@ -16705,33 +16705,41 @@ async def orders_without_stock(request: Request, days: int = 14):
 
 
 @app.get("/api/stock/realtime-alerts")
-async def realtime_stock_alerts(request: Request, limit: int = 100):
-    """Feed cronológico (más reciente primero) de órdenes ML individuales
-    detectadas sin stock al momento, vía webhook — reemplaza el reporte
-    agregado por SKU. Amazon pendiente (Fase 2, requiere infra AWS).
-    Vive en Ventas (no admin_only) — cualquier usuario con sesión puede
-    verlo, movido de Sync Stock porque no todos tenían acceso ahí."""
+async def realtime_stock_alerts(request: Request, limit: int = 100, platform: str = ""):
+    """Feed cronológico (más reciente primero) de órdenes individuales
+    detectadas sin stock al momento — reemplaza el reporte agregado por
+    SKU. ML vía webhook; Amazon vía polling (ver _amazon_stock_reconcile_loop,
+    2026-08-18). `platform`: "" = todas (uso histórico de la vista ML,
+    sin cambiar su comportamiento default), "ml"/"amazon" = acota (usado
+    por la pestaña Alertas de Stock de Amazon -- regla del proyecto de
+    nunca mezclar cuentas/plataformas en una vista). Vive en Ventas (no
+    admin_only) — cualquier usuario con sesión puede verlo."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     limit = max(1, min(limit, 500))
     rows = await token_store.get_realtime_stock_alerts(limit=limit)
+    if platform:
+        rows = [r for r in rows if r.get("platform") == platform]
     for row in rows:
         row["account_name"] = _account_display_name(row.get("platform", "ml"), row.get("account_id", ""))
     return JSONResponse({"rows": rows})
 
 
 @app.get("/api/stock/alerts/pending-shipment")
-async def stock_alerts_pending_shipment(request: Request):
+async def stock_alerts_pending_shipment(request: Request, platform: str = ""):
     """FEATURE 2026-08-17 (pedido por Jovan): sustituciones ya aplicadas en
     BM cuya orden todavía no se ha enviado -- paso intermedio entre
     "Sustituir" y que quede como completada en el Historial. Ver
     _substitution_fulfillment_loop (revisa cada 10 min si la orden ya
-    avanzó y si el sustituto sigue teniendo stock)."""
+    avanzó y si el sustituto sigue teniendo stock). `platform` acota igual
+    que en /api/stock/realtime-alerts (2026-08-18, pestaña Amazon)."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     rows = await token_store.get_pending_shipment_resolutions()
+    if platform:
+        rows = [r for r in rows if r.get("platform") == platform]
     for row in rows:
         row["account_name"] = _account_display_name(row.get("platform", "ml"), row.get("account_id", ""))
     return JSONResponse({"rows": rows})
@@ -17282,8 +17290,12 @@ async def resolve_stock_alert_substitution(request: Request):
     FEATURE 2026-08-17: además de guardar el registro interno (como siempre),
     ahora inyecta el SKU alternativo DIRECTO en BinManager (ver
     _inject_bm_alter_sku) -- el usuario ya no tiene que entrar a BM a mano.
-    Solo aplica a platform='ml' (Amazon no tiene este feed de alertas en
-    tiempo real todavia, ver /api/stock/realtime-alerts)."""
+    FIX 2026-08-18: solo aplica (apply_bm) a platform='ml' -- Amazon SÍ
+    tiene el feed de alertas en tiempo real desde hoy (polling, ver
+    _amazon_stock_reconcile_loop), pero la inyección a BM sigue bloqueada
+    del lado de BinManager (ProfileID/SiteAccountID son bigint, no aceptan
+    el Seller ID de Amazon) -- para platform='amazon' esto guarda solo la
+    nota interna, igual que hacía ML antes de tener BM conectado."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -17452,14 +17464,19 @@ async def zero_stock_execute(request: Request):
 
 
 @app.get("/api/stock/alerts/resolutions")
-async def stock_alert_resolutions_history(request: Request, limit: int = 50):
+async def stock_alert_resolutions_history(request: Request, limit: int = 50, platform: str = ""):
     """Historial de resoluciones (sustituciones + stock en 0) — pestaña
-    'Historial' de Alertas de Stock."""
+    'Historial' de Alertas de Stock. `platform` acota igual que en
+    /api/stock/realtime-alerts (2026-08-18, pestaña Amazon)."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     limit = max(1, min(limit, 200))
     rows = await token_store.get_stock_alert_resolutions(limit=limit)
+    if platform:
+        rows = [r for r in rows if r.get("platform") == platform]
+    for row in rows:
+        row["account_name"] = _account_display_name(row.get("platform", "ml"), row.get("account_id", ""))
     return JSONResponse({"rows": rows})
 
 

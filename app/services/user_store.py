@@ -120,6 +120,7 @@ PERMISSION_TREE = {
         "dashboard":    {"label": "Dashboard",    "subtabs": None},
         "ventas":       {"label": "Ventas",       "subtabs": {
             "resumen": "Resumen", "sku": "Por SKU", "finanzas": "Finanzas",
+            "alertas_stock": "Alertas de Stock",
         }},
         "productos":    {"label": "Productos",    "subtabs": {
             "listings": "Listings", "deals": "Deals",

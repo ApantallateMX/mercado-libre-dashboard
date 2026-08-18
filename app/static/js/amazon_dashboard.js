@@ -1319,7 +1319,7 @@ async function loadTopProducts() {
 var _amzSkuDays = 30;
 
 window.setAmzVentasView = function(view) {
-    ['resumen', 'sku', 'finanzas'].forEach(function(v) {
+    ['resumen', 'sku', 'finanzas', 'alertas_stock'].forEach(function(v) {
         var el = document.getElementById('amz-ventas-' + v);
         if (el) el.classList.toggle('hidden', v !== view);
         var btn = document.getElementById('amz-ventas-view-' + v);
@@ -1338,6 +1338,224 @@ window.setAmzVentasView = function(view) {
         _amzVentasFinanzasLoaded = true;
         loadAmzFinanzasTab();
     }
+    if (view === 'alertas_stock' && !_amzVentasAlertasLoaded) {
+        _amzVentasAlertasLoaded = true;
+        window.loadAmzAlertasCurrentSubView();
+    }
+};
+var _amzVentasAlertasLoaded = false;
+
+// ─── Alertas de Stock (Amazon) — En vivo / Pendientes de Envío / Historial ──
+// FEATURE 2026-08-18: portado de ML (orders.html) -- mismos endpoints
+// backend (ya platform-agnostic), acotados con &platform=amazon. Fase 2
+// (inyección real a BinManager) bloqueada del lado de BM -- "Registrar"
+// solo guarda la nota, ver aviso en el HTML.
+var _amzAlertasSubView = 'live';
+
+window.setAmzAlertasSubView = function(v) {
+    _amzAlertasSubView = v;
+    ['live', 'pending', 'history'].forEach(function(k) {
+        var el = document.getElementById('amz-alertas-view-' + k);
+        if (el) el.classList.toggle('hidden', k !== v);
+        var btn = document.getElementById('amz-alertas-sub-' + k);
+        if (btn) {
+            btn.classList.toggle('bg-orange-500', k === v);
+            btn.classList.toggle('text-white', k === v);
+            btn.classList.toggle('bg-white', k !== v);
+            btn.classList.toggle('text-gray-500', k !== v);
+        }
+    });
+    window.loadAmzAlertasCurrentSubView();
+};
+
+window.loadAmzAlertasCurrentSubView = function() {
+    if (_amzAlertasSubView === 'live') loadAmzAlertasLive();
+    else if (_amzAlertasSubView === 'pending') loadAmzAlertasPending();
+    else loadAmzAlertasHistory();
+};
+
+function loadAmzAlertasLive() {
+    var container = document.getElementById('amz-alertas-live-cards');
+    var emptyEl = document.getElementById('amz-alertas-live-empty');
+    container.innerHTML = '<p class="text-center py-6 text-gray-400 text-sm">Cargando...</p>';
+    fetch('/api/stock/realtime-alerts?limit=200&platform=amazon')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            if (!rows.length) {
+                container.innerHTML = '';
+                emptyEl.classList.remove('hidden');
+                return;
+            }
+            emptyEl.classList.add('hidden');
+            // FEATURE 2026-08-18 (pedido por Jovan): agrupar por orden -- una
+            // orden Amazon puede traer varios SKUs sin stock; mostrarla 1 sola
+            // vez con la lista de SKUs debajo, en vez de repetir la tarjeta
+            // completa por cada SKU (como hace hoy la vista de ML).
+            var byOrder = {};
+            var orderSeq = [];
+            rows.forEach(function(r) {
+                if (!byOrder[r.order_id]) { byOrder[r.order_id] = []; orderSeq.push(r.order_id); }
+                byOrder[r.order_id].push(r);
+            });
+            container.innerHTML = orderSeq.map(function(orderId) {
+                var items = byOrder[orderId];
+                var first = items[0];
+                var detectedAgo = Math.round((Date.now() / 1000 - first.detected_at) / 60);
+                var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
+                var itemsHtml = items.map(function(r) {
+                    var sugerencias = r.sugerencias || [];
+                    var suggestedSku = sugerencias.length ? sugerencias[0].sku : '';
+                    var availLabel = (r.available_qty_at_check === null || r.available_qty_at_check === undefined)
+                        ? '<span class="text-gray-400">sin dato</span>'
+                        : '<span class="' + (r.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + r.available_qty_at_check + '</span>';
+                    return '<div class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-gray-50">' +
+                        '<div class="text-xs">' +
+                            '<span class="font-mono text-gray-700">' + r.sku + '</span>' +
+                            (r.titulo ? '<span class="text-gray-400"> — ' + r.titulo + '</span>' : '') +
+                            '<div class="text-gray-400 mt-0.5">Cant. ' + r.quantity + ' · Disp. BM ' + availLabel + '</div>' +
+                        '</div>' +
+                        '<button onclick="openAmzSubstitutionModal(\'' + r.order_id + '\',\'' + r.sku + '\',\'' + (r.account_id || '') + '\',\'' + suggestedSku + '\',' + (r.quantity || 1) + ')" ' +
+                                'class="text-xs bg-orange-50 border border-orange-200 text-orange-700 hover:bg-orange-100 rounded-lg px-2 py-1.5 font-medium transition whitespace-nowrap">🔁 Sustituir</button>' +
+                    '</div>';
+                }).join('');
+                return '<div class="bg-white rounded-xl border border-gray-200 p-4">' +
+                    '<div class="flex items-center justify-between gap-2 flex-wrap">' +
+                        '<span class="text-xs text-gray-400">' + detectedLabel + ' · ' + (first.account_name || first.account_id) + '</span>' +
+                        '<span class="text-xs font-mono text-gray-600">Orden ' + orderId + '</span>' +
+                    '</div>' +
+                    itemsHtml +
+                '</div>';
+            }).join('');
+        })
+        .catch(function() {
+            container.innerHTML = '<p class="text-center py-6 text-red-500 text-sm">Error cargando alertas.</p>';
+        });
+}
+
+function loadAmzAlertasPending() {
+    var container = document.getElementById('amz-alertas-pending-cards');
+    var emptyEl = document.getElementById('amz-alertas-pending-empty');
+    container.innerHTML = '<p class="text-center py-6 text-gray-400 text-sm">Cargando...</p>';
+    fetch('/api/stock/alerts/pending-shipment?platform=amazon')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            if (!rows.length) {
+                container.innerHTML = '';
+                emptyEl.classList.remove('hidden');
+                return;
+            }
+            emptyEl.classList.add('hidden');
+            container.innerHTML = rows.map(function(r) {
+                var fecha = new Date(r.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                return '<div class="bg-white rounded-xl border border-gray-200 p-4">' +
+                    '<div class="flex items-center justify-between gap-2 flex-wrap">' +
+                        '<span class="text-xs text-gray-400">' + fecha + ' · ' + (r.account_name || r.account_id) + '</span>' +
+                    '</div>' +
+                    (r.titulo ? '<p class="text-sm text-gray-700 font-medium mt-1">' + r.titulo + '</p>' : '') +
+                    '<div class="text-xs text-gray-500 mt-1">Orden <span class="font-mono">' + r.order_id + '</span></div>' +
+                    '<div class="text-xs text-gray-600 mt-2">' +
+                        '<span class="font-mono">' + r.original_sku + '</span> → sustituto <span class="font-mono">' + r.substitute_sku + '</span>' +
+                    '</div>' +
+                '</div>';
+            }).join('');
+        })
+        .catch(function() {
+            container.innerHTML = '<p class="text-center py-6 text-red-500 text-sm">Error cargando pendientes de envío.</p>';
+        });
+}
+
+function loadAmzAlertasHistory() {
+    var tbody = document.getElementById('amz-alertas-history-tbody');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400 text-sm">Cargando...</td></tr>';
+    fetch('/api/stock/alerts/resolutions?limit=100&platform=amazon')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
+                return;
+            }
+            function _bmBadge(h) {
+                if (h.bm_status === 'success') return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">✓ Aplicado en BM</span>';
+                if (h.bm_status === 'failed') return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">✗ Falló en BM</span>';
+                return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500" title="Fase 2 (BM) pendiente para Amazon">— solo nota</span>';
+            }
+            tbody.innerHTML = rows.map(function(h) {
+                var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                return '<tr class="border-t border-gray-100">' +
+                    '<td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">' + fecha + '</td>' +
+                    '<td class="px-3 py-2 font-mono text-xs whitespace-nowrap">' + h.order_id + '</td>' +
+                    '<td class="px-3 py-2 font-mono text-xs whitespace-nowrap">' + h.original_sku + '</td>' +
+                    '<td class="px-3 py-2 font-mono text-xs whitespace-nowrap">' + h.substitute_sku + '</td>' +
+                    '<td class="px-3 py-2">' + _bmBadge(h) + '</td>' +
+                    '<td class="px-3 py-2 text-xs text-gray-600">' + (h.note || '') + '</td>' +
+                    '<td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">' + (h.username || '') + '</td>' +
+                '</tr>';
+            }).join('');
+        })
+        .catch(function() {
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
+        });
+}
+
+// ─── Modal: registrar sustitución (Amazon) ─────────────────────────────────
+var _amzSubModalCtx = null;
+
+window.openAmzSubstitutionModal = function(orderId, sku, accountId, suggestedSku, quantity) {
+    _amzSubModalCtx = {orderId: orderId, sku: sku, accountId: accountId, quantity: quantity || 1};
+    document.getElementById('amz-sub-modal-order').textContent = orderId;
+    document.getElementById('amz-sub-modal-sku').textContent = sku;
+    document.getElementById('amz-sub-modal-substitute').value = suggestedSku || '';
+    document.getElementById('amz-sub-modal-note').value = '';
+    document.getElementById('amz-sub-modal-error').classList.add('hidden');
+    document.getElementById('amz-substitution-modal').classList.remove('hidden');
+};
+
+window.closeAmzSubstitutionModal = function() {
+    document.getElementById('amz-substitution-modal').classList.add('hidden');
+    _amzSubModalCtx = null;
+};
+
+window.submitAmzSubstitution = function() {
+    if (!_amzSubModalCtx) return;
+    var substituteSku = document.getElementById('amz-sub-modal-substitute').value.trim();
+    var note = document.getElementById('amz-sub-modal-note').value.trim();
+    var errEl = document.getElementById('amz-sub-modal-error');
+    if (!substituteSku || !note) {
+        errEl.textContent = 'El SKU sustituto y la nota son obligatorios.';
+        errEl.classList.remove('hidden');
+        return;
+    }
+    var btn = document.getElementById('amz-sub-modal-confirm-btn');
+    btn.disabled = true; btn.textContent = 'Guardando...';
+    fetch('/api/stock/alerts/resolve-substitution', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            order_id: _amzSubModalCtx.orderId, sku: _amzSubModalCtx.sku,
+            platform: 'amazon', account_id: _amzSubModalCtx.accountId,
+            substitute_sku: substituteSku, note: note, quantity: _amzSubModalCtx.quantity,
+        })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (d.ok) {
+            closeAmzSubstitutionModal();
+            if (typeof showToast === 'function') showToast('Nota registrada — avisa al almacén manualmente.', false);
+            window.loadAmzAlertasCurrentSubView();
+        } else {
+            errEl.textContent = d.detail || 'No se pudo registrar.';
+            errEl.classList.remove('hidden');
+        }
+    })
+    .catch(function() {
+        errEl.textContent = 'Error de conexión.';
+        errEl.classList.remove('hidden');
+    })
+    .finally(function() {
+        btn.disabled = false; btn.textContent = 'Registrar';
+    });
 };
 
 // ─── FBA & Stock — sub-vista Reabastecimiento / Catálogo (antes "Operaciones") ──
