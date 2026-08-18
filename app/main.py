@@ -18585,6 +18585,41 @@ async def diag_order_lookup(order_id: str = "", token: str = ""):
     }
 
 
+@app.get("/api/diag/ml-order-raw-sku")
+async def diag_ml_order_raw_sku(order_id: str = "", account_id: str = "", token: str = ""):
+    """DIAGNÓSTICO PUNTUAL 2026-08-18 -- confirmar si el seller_sku CRUDO de
+    una orden real de ML ya trae la condición (ej. "SNTV006485-ICB") antes
+    de que normalize_to_bm_sku() se la quite. Bug real encontrado: BM puede
+    tener MÁS DE UN Product registrado bajo el mismo WebSKU (ej. -ICB y
+    -GRB para SNTV006485), y GetAlterSKUMappingByWebSKU solo devuelve UNO
+    sin garantía de ser el correcto para la orden -- si el seller_sku crudo
+    ya trae la condición real, usar ESE valor directo (sin resolver nada)
+    es la fuente confiable, evita adivinar."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not order_id or not account_id:
+        return JSONResponse({"error": "order_id y account_id requeridos"}, status_code=400)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        order = await client.resolve_order(order_id)
+        items = []
+        for oi in order.get("order_items", []):
+            item_info = oi.get("item", {})
+            items.append({
+                "item_id": item_info.get("id", ""),
+                "seller_sku_raw": item_info.get("seller_sku", ""),
+                "seller_custom_field_raw": item_info.get("seller_custom_field", ""),
+                "normalized_to_bm_sku": normalize_to_bm_sku(item_info.get("seller_sku") or item_info.get("seller_custom_field") or ""),
+            })
+        return {"order_id": order_id, "items": items}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 @app.get("/api/diag/ml-webhook-activity")
 async def diag_ml_webhook_activity(token: str = "", minutes: int = 60):
     """Diagnóstico: actividad reciente de order_history por cuenta ML — para
