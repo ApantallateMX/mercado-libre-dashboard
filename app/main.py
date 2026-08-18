@@ -17024,18 +17024,21 @@ async def stock_live_check(request: Request, sku: str = Query(...), account_id: 
     archivo"): la versión original hacía 2 llamadas EN VIVO secuenciales a
     BM (resolver condición + consultar stock), cada una con su propio
     reintento y timeout de hasta 20s -- en la práctica se podía ir a 60-90s+
-    si BM estaba lento o el semáforo global (_BM_GLOBAL_SEM, 1 sola
-    petición a la vez para TODA la app) estaba ocupado por otro ciclo
-    (prewarm, fulfillment loop, etc.), dejando el modal atorado en
-    "Verificando...". Se cambia a leer el bulk que YA está en memoria
-    (_bm_bulk_gr_cache/_bm_bulk_all_cache, el mismo que usa
-    _bm_bulk_available_qty()) -- responde en milisegundos, mismo principio
-    ya aplicado a bm_sku_master (ver feedback_preferir_solucion_simple_del_bulk
-    en memoria: "ausencia en bulk = 0, sin excepciones"). Se pierde la
-    garantía de "reflejado hace 1 segundo" (el bulk se refresca ~cada 15 min
-    vía prewarm) a cambio de nunca más colgarse -- la verificación que sí
-    tiene que ser en vivo de verdad (justo antes de escribir en BM) sigue
-    siéndolo, ver _inject_bm_alter_sku/_resolve_bm_condition_sku."""
+    (confirmado en producción: 300s reales, Railway devolvió 502) si BM
+    estaba lento o el semáforo global (_BM_GLOBAL_SEM, 1 sola petición a la
+    vez para TODA la app) estaba ocupado por otro ciclo. El NÚMERO de stock
+    ahora sale del bulk que YA está en memoria (responde en milisegundos,
+    mismo principio que _bm_bulk_available_qty()/feedback_preferir_solucion_simple_del_bulk).
+
+    FIX 2026-08-18 #2 (bug real confirmado por Jovan, reportado el mismo
+    día): el bulk NO es confiable para la CONDICIÓN -- a veces guarda el
+    SKU base sin sufijo como su propia fila con stock, y usarlo como
+    "resuelto" dejaba el campo del modal sin la condición real. La
+    condición SÍ vuelve a resolverse en vivo (_resolve_bm_condition_sku,
+    GetAlterSKUMappingByWebSKU) pero con un techo duro de 10s -- es una
+    consulta puntual por SKU (rápida), no el reporte bulk completo que
+    causó el colgado original -- así el campo del modal siempre termina
+    con el mismo SKU completo que se va a mandar a BM al confirmar."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -17046,9 +17049,37 @@ async def stock_live_check(request: Request, sku: str = Query(...), account_id: 
     result = _bm_bulk_stock_lookup(base)
     if result is None:
         return JSONResponse({"sku": sku, "resolved_sku": "", "available_qty": None, "error": "Todavía no hay caché de BM (esperando al primer prewarm)."})
+
+    # FIX 2026-08-18 (bug real confirmado por Jovan): BM a veces guarda el
+    # SKU BASE sin sufijo de condición como su propia fila en el bulk (con
+    # stock real) -- el bulk_lookup de arriba lo toma como "match exacto" y
+    # devuelve el mismo SKU que ya escribió el usuario, sin ninguna condición
+    # -- exactamente el caso que _resolve_bm_condition_sku existe para
+    # resolver bien. Un resolved_sku sin sufijo no aporta nada nuevo, se
+    # descarta.
+    resolved_sku = result["resolved_sku"]
+    if resolved_sku and _split_bm_sku_condition(resolved_sku)[1] == "":
+        resolved_sku = ""
+
+    # La condición real solo la garantiza GetAlterSKUMappingByWebSKU (el
+    # mismo mecanismo que usa la inyección real a BM, ver
+    # _resolve_bm_condition_sku) -- se intenta en vivo con un techo bajo de
+    # 10s (consulta puntual por SKU, no el reporte bulk completo que causó
+    # el colgado de 300s/502 del incidente anterior) para que lo que se ve
+    # en el modal sea lo mismo que se va a mandar a BM al confirmar. Si no
+    # responde a tiempo, se sigue con lo que ya haya salido del bulk (o
+    # nada) -- nunca bloquea la respuesta más de 10s.
+    if account_id:
+        try:
+            _live_resolved = await asyncio.wait_for(_resolve_bm_condition_sku(account_id, base), timeout=10.0)
+            if _live_resolved:
+                resolved_sku = _live_resolved
+        except Exception:
+            pass
+
     return JSONResponse({
         "sku": sku,
-        "resolved_sku": result["resolved_sku"],
+        "resolved_sku": resolved_sku,
         "available_qty": result["available_qty"],
         "reserve": result["reserve"],
         "age_minutes": round(result["age_seconds"] / 60),
