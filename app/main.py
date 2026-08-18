@@ -18802,6 +18802,23 @@ async def diag_oversell_correction_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/amazon-order-status")
+async def diag_amazon_order_status(token: str = "", seller_id: str = "", order_id: str = ""):
+    """Consulta el estado REAL y actual (getOrder puntual, no getOrders) de
+    una orden Amazon -- para depurar por qué una orden dejó de aparecer en
+    el reconcile (2026-08-18, caso VECKTOR 702-3480491-5024235)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not order_id:
+        return JSONResponse({"error": "seller_id y order_id son requeridos"}, status_code=400)
+    from app.services.amazon_client import get_amazon_client
+    client = await get_amazon_client(seller_id)
+    if not client:
+        return JSONResponse({"error": "no se pudo obtener cliente Amazon para esa cuenta"}, status_code=400)
+    result = await client._request("GET", f"/orders/v0/orders/{order_id}")
+    return JSONResponse(result.get("payload", {}))
+
+
 @app.get("/api/diag/amazon-stock-reconcile")
 async def diag_amazon_stock_reconcile(token: str = "", days: int = 3):
     """Dispara YA una pasada de _run_amazon_stock_reconcile_pass (normalmente
