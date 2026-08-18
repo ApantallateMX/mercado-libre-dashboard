@@ -1241,6 +1241,19 @@ async def init_db():
             await db.execute("ALTER TABLE realtime_stock_alerts ADD COLUMN shipping_id TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # FIX 2026-08-18 (bug real confirmado por Jovan con evidencia): `sku`
+        # ya viene normalizado (normalize_to_bm_sku le quita bundles/condición,
+        # ej. "SNTV006485 / SNWM000001" -> "SNTV006485") -- necesario para
+        # comparar contra bm_sku_master, PERO BM indexa su propio WebSKU con
+        # el string CRUDO tal cual lo manda ML. Usar el normalizado para
+        # resolver el ProductSKU real en BM llevaba a un producto DISTINTO Y
+        # EQUIVOCADO cuando el SKU real tenía bundle/condición. sku_raw
+        # preserva el valor original para ese caso -- sin él, no hay forma de
+        # recuperarlo después.
+        try:
+            await db.execute("ALTER TABLE realtime_stock_alerts ADD COLUMN sku_raw TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: stock_alert_resolutions — registro de qué se hizo con cada
         # orden sin stock (Alertas de Stock): se sustituyó por otro SKU, o
@@ -1289,6 +1302,12 @@ async def init_db():
             "ALTER TABLE stock_alert_resolutions ADD COLUMN last_stock_check_at REAL DEFAULT NULL",
             "ALTER TABLE stock_alert_resolutions ADD COLUMN last_stock_check_qty INTEGER DEFAULT NULL",
             "ALTER TABLE stock_alert_resolutions ADD COLUMN shipment_resolved_at REAL DEFAULT NULL",
+            # FIX 2026-08-18 (bug real confirmado por Jovan): original_sku ya
+            # viene normalizado -- original_sku_raw preserva el seller_sku
+            # CRUDO de ML (con bundle/condición si los tiene) para poder
+            # resolver el ProductSKU real en BM con el WebSKU correcto, no uno
+            # normalizado que puede apuntar a un producto distinto.
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN original_sku_raw TEXT NOT NULL DEFAULT ''",
         ]:
             try:
                 await db.execute(_col_sql)
@@ -2138,22 +2157,25 @@ async def get_recent_paid_ml_orders(hours: int = 24) -> list[dict]:
 async def record_realtime_stock_alert(
     order_id: str, item_id: str, platform: str, account_id: str,
     sku: str, quantity: int, available_qty: int | None, order_date: str,
-    shipping_id: str = "",
+    shipping_id: str = "", sku_raw: str = "",
 ) -> None:
     """Registra una orden individual detectada sin stock al momento (vía
     webhook). Idempotente — UNIQUE(order_id, sku, platform) absorbe reenvíos
     duplicados de la notificación sin generar 2 alertas. shipping_id se
     guarda para que el loop de reconciliación pueda revisar el estado real
-    del envío sin tener que re-resolver la orden completa."""
+    del envío sin tener que re-resolver la orden completa. sku_raw: el
+    seller_sku/seller_custom_field CRUDO de ML (antes de normalize_to_bm_sku)
+    -- necesario para resolver el ProductSKU real en BM cuando hay bundle o
+    condición en el SKU real (ver FIX 2026-08-18, bug confirmado por Jovan)."""
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("""
             INSERT OR IGNORE INTO realtime_stock_alerts
                 (order_id, item_id, platform, account_id, sku, quantity,
-                 available_qty_at_check, order_date, detected_at, shipping_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+                 available_qty_at_check, order_date, detected_at, shipping_id, sku_raw)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (order_id, item_id, platform, account_id, sku, quantity,
-              available_qty, order_date, _t.time(), shipping_id))
+              available_qty, order_date, _t.time(), shipping_id, sku_raw))
         await db.commit()
 
 
@@ -2246,6 +2268,21 @@ async def get_replacement_sku_suggestions(
     return rows
 
 
+async def get_realtime_stock_alert_raw_sku(order_id: str, platform: str, sku: str) -> str:
+    """Devuelve el sku_raw (crudo, tal como lo manda ML) guardado para esta
+    alerta -- usado al registrar una sustitución para inyectar en BM con el
+    WebSKU real en vez del normalizado (ver FIX 2026-08-18). '' si no se
+    encuentra (alertas viejas de antes de este fix, o platform sin este
+    feed) -- el caller debe usar el sku normalizado como fallback."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "SELECT sku_raw FROM realtime_stock_alerts WHERE order_id = ? AND platform = ? AND sku = ?",
+            (order_id, platform, sku),
+        )
+        row = await cur.fetchone()
+        return (row[0] if row else "") or ""
+
+
 async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
     """Feed cronológico (más reciente primero) de órdenes individuales
     detectadas sin stock al momento — reemplaza la vista agregada por SKU.
@@ -2302,7 +2339,7 @@ async def record_stock_alert_resolution(
     order_id: str, platform: str, account_id: str, original_sku: str,
     resolution_type: str, substitute_sku: str, note: str,
     username: str, user_id: int | None,
-    bm_status: str = "", bm_message: str = "",
+    bm_status: str = "", bm_message: str = "", original_sku_raw: str = "",
 ) -> int:
     """Registra cómo se resolvió una orden sin stock — sustitución de
     producto o stock puesto en 0. resolution_type: 'substitution' |
@@ -2311,16 +2348,17 @@ async def record_stock_alert_resolution(
     FEATURE 2026-08-17: bm_status ('success'/'failed'/'') y bm_message
     (el MessageReturn crudo de BM) — para que el historial muestre si la
     sustitución de verdad se aplicó en BinManager, no solo que se registró
-    aquí."""
+    aquí. original_sku_raw (FIX 2026-08-18): el seller_sku CRUDO de ML,
+    necesario para resolver el ProductSKU real en BM con el WebSKU correcto."""
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         cur = await db.execute("""
             INSERT INTO stock_alert_resolutions
                 (order_id, platform, account_id, original_sku, resolution_type,
-                 substitute_sku, note, username, user_id, ts, bm_status, bm_message)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 substitute_sku, note, username, user_id, ts, bm_status, bm_message, original_sku_raw)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (order_id, platform, account_id, original_sku, resolution_type,
-              substitute_sku, note, username, user_id, _t.time(), bm_status, bm_message))
+              substitute_sku, note, username, user_id, _t.time(), bm_status, bm_message, original_sku_raw))
         await db.commit()
         return cur.lastrowid
 
@@ -2335,7 +2373,8 @@ async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
                    resolution_type, substitute_sku, note, username, ts,
                    reactivated_at, reactivated_by, bm_status, bm_message,
                    bm_deleted_at, bm_deleted_by, fulfillment_status,
-                   last_stock_check_at, last_stock_check_qty, shipment_resolved_at
+                   last_stock_check_at, last_stock_check_qty, shipment_resolved_at,
+                   original_sku_raw
             FROM stock_alert_resolutions
             ORDER BY ts DESC
             LIMIT ?
@@ -2396,7 +2435,8 @@ async def get_pending_shipment_resolutions() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
             SELECT id, order_id, platform, account_id, original_sku, substitute_sku,
-                   username, ts, fulfillment_status, last_stock_check_at, last_stock_check_qty
+                   username, ts, fulfillment_status, last_stock_check_at, last_stock_check_qty,
+                   original_sku_raw
             FROM stock_alert_resolutions
             WHERE resolution_type = 'substitution'
               AND bm_status = 'success'

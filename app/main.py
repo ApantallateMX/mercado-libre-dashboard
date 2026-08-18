@@ -2257,7 +2257,7 @@ async def _evaluate_order_stock_alert(order_id: str, user_id: str, client) -> No
                     item_id=str(item_info.get("id", "")),
                     platform="ml", account_id=user_id, sku=sku,
                     quantity=quantity, available_qty=(avail or 0), order_date=order_date,
-                    shipping_id=str(shipping_id),
+                    shipping_id=str(shipping_id), sku_raw=sku_raw,
                 )
     else:
         # ML reenvía la notificación en cada cambio de estado de la misma
@@ -2389,7 +2389,7 @@ async def _check_one_substitution_fulfillment(row: dict) -> None:
             # Ya autorizado por Jovan: si la orden se cancela, el mapeo de
             # SKU alternativo en BM ya no tiene caso -- se borra solo.
             del_result = await _delete_bm_alter_sku(
-                account_id=account_id, order_id=order_id, product_sku=row["original_sku"],
+                account_id=account_id, order_id=order_id, product_sku=(row.get("original_sku_raw") or row["original_sku"]),
                 substitute_sku=row["substitute_sku"], qty=1,
             )
             await token_store.mark_resolution_fulfillment(row["id"], "cancelada")
@@ -16536,7 +16536,7 @@ async def reopen_stock_alert_resolution(resolution_id: int, request: Request):
     async def _cleanup_old_bm_mapping():
         try:
             del_result = await _delete_bm_alter_sku(
-                account_id=row["account_id"], order_id=row["order_id"], product_sku=row["original_sku"],
+                account_id=row["account_id"], order_id=row["order_id"], product_sku=(row.get("original_sku_raw") or row["original_sku"]),
                 substitute_sku=row["substitute_sku"], qty=1,
             )
             if del_result.get("ok"):
@@ -16590,7 +16590,18 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     from app.services.sku_utils import base_sku as _bm_base_sku
     from app.services.binmanager_client import bm_post as _bm_post_alter
 
-    web_sku = _bm_base_sku(product_sku)
+    # FIX 2026-08-18 (bug real confirmado por Jovan con evidencia): BM guarda
+    # su WebSKU tal cual el seller_sku CRUDO de ML, incluyendo bundles (ej.
+    # "SNTV006485 / SNWM000001") -- normalizar ANTES de preguntarle a BM
+    # (quitar el bundle/condición) hacía que la búsqueda cayera en un
+    # Product DISTINTO Y EQUIVOCADO (WebSKU normalizado = "SNTV006485"
+    # coincidía con OTRO listing sin relación con esta orden). Se intenta
+    # primero con el SKU crudo (tal cual lo manda el caller); solo si eso
+    # falla se cae al normalizado (compatibilidad con resoluciones viejas
+    # que no tienen el SKU crudo guardado).
+    web_sku_raw = (product_sku or "").strip()
+    web_sku_norm = _bm_base_sku(product_sku)
+    web_sku = web_sku_raw
 
     # FIX 2026-08-17 (bug real encontrado: "Aplicado en BM" no aparecía en el
     # Fulfillment Dashboard para NINGUNA sustitución hecha por esta feature,
@@ -16602,9 +16613,13 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     # /api/diag/bm-alter-sku-groups contra BM en vivo. Se resuelve el
     # ProductSKU real ANTES de todo -- si no se puede determinar sin
     # ambigüedad, se rechaza en vez de adivinar.
-    real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku)
+    real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku_raw)
+    if not real_product_sku and web_sku_norm != web_sku_raw:
+        real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku_norm)
+        if real_product_sku:
+            web_sku = web_sku_norm
     if not real_product_sku:
-        return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku} (0 o más de 1 producto encontrado) -- revisar manualmente en el Fulfillment Dashboard"}
+        return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku_raw} (0 o más de 1 producto encontrado) -- revisar manualmente en el Fulfillment Dashboard"}
 
     # Antes de crear, verificar si el mapeo YA cubre ESTA orden -- si un
     # intento previo se quedó "en el aire" por timeout de Railway pero SÍ
@@ -16768,12 +16783,21 @@ async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     from app.services.sku_utils import base_sku as _bm_base_sku
     from app.services.binmanager_client import bm_post as _bm_post_alter
 
-    web_sku = _bm_base_sku(product_sku)
+    # FIX 2026-08-18: mismo criterio que _inject_bm_alter_sku -- probar
+    # primero con el SKU crudo (como lo guarda BM de verdad), caer al
+    # normalizado solo si eso falla.
+    web_sku_raw = (product_sku or "").strip()
+    web_sku_norm = _bm_base_sku(product_sku)
+    web_sku = web_sku_raw
     # FIX 2026-08-17: mismo bug que _inject_bm_alter_sku -- BM indexa por el
     # ProductSKU con condición real, no por el WebSKU base.
-    real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku)
+    real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku_raw)
+    if not real_product_sku and web_sku_norm != web_sku_raw:
+        real_product_sku = await _resolve_bm_condition_sku(account_id, web_sku_norm)
+        if real_product_sku:
+            web_sku = web_sku_norm
     if not real_product_sku:
-        return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku}"}
+        return {"ok": False, "error": f"No se pudo determinar el ProductSKU con condición real en BM para {web_sku_raw}"}
     listing_id = await _find_bm_alter_sku_listing_id(
         account_id=account_id, web_sku=web_sku, product_sku=real_product_sku,
         substitute_sku=substitute_sku, order_id=order_id,
@@ -16832,7 +16856,7 @@ async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request, 
 
     try:
         bm_result = await _inject_bm_alter_sku(
-            account_id=row["account_id"], order_id=row["order_id"], product_sku=row["original_sku"],
+            account_id=row["account_id"], order_id=row["order_id"], product_sku=(row.get("original_sku_raw") or row["original_sku"]),
             substitute_sku=row["substitute_sku"], qty=1,
         )
     except Exception as e:
@@ -16866,7 +16890,7 @@ async def delete_stock_alert_resolution_from_bm(resolution_id: int, request: Req
 
     result = await _delete_bm_alter_sku(
         account_id=row["account_id"], order_id=row["order_id"],
-        product_sku=row["original_sku"], substitute_sku=row["substitute_sku"],
+        product_sku=(row.get("original_sku_raw") or row["original_sku"]), substitute_sku=row["substitute_sku"],
         qty=1,
     )
     if result.get("ok"):
@@ -16983,12 +17007,20 @@ async def resolve_stock_alert_substitution(request: Request):
     # inmediato; la inyección real a BM corre en background y actualiza el
     # registro cuando termine, sin bloquear al usuario.
     apply_bm = platform == "ml" and bool(account_id)
+    # FIX 2026-08-18 (bug real confirmado por Jovan): original_sku ya viene
+    # normalizado (sin bundle/condición) -- sku_raw preserva el seller_sku
+    # CRUDO de ML, necesario para que _inject_bm_alter_sku resuelva el
+    # ProductSKU real en BM con el WebSKU correcto (mandar el normalizado
+    # llevaba a un producto DISTINTO Y EQUIVOCADO cuando el SKU real tenía
+    # bundle/condición).
+    sku_raw = await token_store.get_realtime_stock_alert_raw_sku(order_id, platform, sku) if platform == "ml" else ""
     resolution_id = await token_store.record_stock_alert_resolution(
         order_id=order_id, platform=platform, account_id=account_id,
         original_sku=sku, resolution_type="substitution",
         substitute_sku=substitute_sku, note=note,
         username=du["username"], user_id=du.get("id"),
         bm_status="pending" if apply_bm else "", bm_message="",
+        original_sku_raw=sku_raw,
     )
 
     try:
@@ -17017,7 +17049,7 @@ async def resolve_stock_alert_substitution(request: Request):
             for _attempt in range(4):
                 try:
                     bm_result = await _inject_bm_alter_sku(
-                        account_id=account_id, order_id=order_id, product_sku=sku,
+                        account_id=account_id, order_id=order_id, product_sku=(sku_raw or sku),
                         substitute_sku=substitute_sku, qty=quantity,
                     )
                 except Exception as e:
