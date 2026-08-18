@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX DE RAÍZ: usar el seller_sku CRUDO de ML para resolver el ProductSKU real en BM (cierra el bug de la entrada anterior)
+
+Cierra de raíz el bug de la entrada anterior (2 Products distintos bajo
+el mismo WebSKU). Jovan preguntó por qué no usábamos directo el SKU
+"completo" de la orden en vez de tratar de adivinarlo — se probó la
+hipótesis directo contra BM (no se asumió) y resultó ser la solución
+correcta: **BM guarda su WebSKU tal cual el seller_sku CRUDO que manda
+ML, incluyendo el bundle** (ej. `"SNTV006485 / SNWM000001"`, TV + soporte
+de pared). El código normalizaba ese SKU (quitaba el bundle) ANTES de
+preguntarle a BM cuál era el producto — eso lo mandaba a un Product
+DISTINTO sin relación con la orden real.
+
+Confirmado en vivo con `/api/diag/bm-alter-sku-groups`:
+- `WebSKU="SNTV006485"` (normalizado) → resuelve a `SNTV006485-GRB`
+  (un listing sin relación, `ListingID 29791`) — el bug.
+- `WebSKU="SNTV006485 / SNWM000001"` (crudo, sin tocar) → resuelve a
+  `SNTV006485-ICB`, el correcto — confirmado idéntico a la captura real
+  de BM (mismas alternativas ICC/GRC/GRA/GRB).
+
+**Fix:** se preserva el seller_sku crudo desde que se detecta la alerta
+(`realtime_stock_alerts.sku_raw`) hasta que se registra la sustitución
+(`stock_alert_resolutions.original_sku_raw`) — `_inject_bm_alter_sku`/
+`_delete_bm_alter_sku` intentan PRIMERO con el crudo, y solo caen al
+normalizado si eso falla (compatibilidad con resoluciones viejas que no
+tienen el dato). Las sustituciones nuevas de aquí en adelante deberían
+resolver el producto correcto automáticamente, sin necesitar que Jovan
+mande captura de BM cada vez.
+
+**Pendiente de confirmar con un caso real nuevo** (no se pudo probar
+todavía un caso 100% end-to-end con un SKU con bundle real después del
+deploy — el próximo caso similar que aparezca en "Alertas de Stock"
+confirma si quedó resuelto de verdad).
+
 ## 2026-08-18 — FIX CRÍTICO: BM puede tener 2 Products distintos bajo el mismo WebSKU + orden duplicada en En vivo/Pendientes
 
 Jovan reportó (con captura real de BM) que una sustitución aplicada
