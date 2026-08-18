@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX: sustitución fallaba SIEMPRE con "'str' object has no attribute 'get'" (orden real 2000017985070200, reportado por Jovan)
+
+Jovan preguntó por qué una sustitución seguía cayendo directo a
+"Historial" con "✗ Falló en BM" en cada reintento, sin nunca llegar a
+"Pendientes de Envío". No era un problema de orden de flujo — el
+`bm_message` guardado decía literalmente `'str' object has no attribute
+'get'`, un error real de código que hacía fallar la inyección SIEMPRE
+para ese SKU, sin importar cuántas veces se reintentara.
+
+**Causa:** `GetAlterSKUMappingByWebSKU` (BM) a veces devuelve `JSONData`
+como una lista con entradas que NO son objetos (strings u otros
+valores), en vez de los grupos `{ProductSKU, AlterSKUs}` esperados —
+también el endpoint de creación (`AddAlterSKUMappingByWebSKU`) a veces
+responde con un string JSON plano en vez de `{MessageReturn: ...}`.
+Cuatro funciones (`_resolve_bm_condition_sku`, `_bm_alter_sku_covers_order`,
+`_find_bm_alter_sku_listing_id`, `_inject_bm_alter_sku`) asumían sin
+verificar que cada entrada/respuesta siempre era un dict y llamaban
+`.get()` directo — con una entrada no-dict, eso revienta con
+`AttributeError` y NUNCA llega a "success" ni a "Pendientes de Envío".
+
+**Fix:** las 4 funciones ahora filtran/verifican `isinstance(..., dict)`
+antes de llamar `.get()` (descartan entradas raras en vez de asumir que
+siempre vienen bien formadas), y `_inject_bm_alter_sku` maneja el caso de
+`data` siendo un string plano. No cambia ninguna regla de negocio — es
+manejo defensivo de una variabilidad real de formato de BM, no una
+suposición nueva sobre su comportamiento.
+
+Archivo: `app/main.py`. Pendiente: Jovan reintentará esta orden después
+del deploy para confirmar que ahora sí completa.
+
+---
+
 ## 2026-08-18 — El bulk GR seguía sin refrescar tras subir el timeout: el cuello de botella real estaba 1 nivel más abajo (60s por página, no el wrapper de 150s)
 
 Después del fix "timeout GR 90s→150s" (2 entradas más abajo), el navbar

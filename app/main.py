@@ -16734,7 +16734,10 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     # rechazo de negocio -- el resultado real está en MessageReturn. Todos
     # los casos de éxito confirmados hasta hoy devuelven exactamente
     # "Success"; cualquier otra cosa es un rechazo real, no un éxito.
-    _msg = str((data or {}).get("MessageReturn") or "").strip()
+    # FIX 2026-08-18 (bug real: "'str' object has no attribute 'get'" en
+    # TODOS los reintentos de la orden 2000017985070200) -- BM a veces
+    # responde con un string JSON plano en vez de un objeto {MessageReturn:...}.
+    _msg = str(data).strip() if isinstance(data, str) else str((data or {}).get("MessageReturn") or "").strip()
     _ok = resp.status_code == 200 and _msg.lower() == "success"
     return {"ok": _ok, "status_code": resp.status_code, "response": data}
 
@@ -16763,6 +16766,14 @@ async def _resolve_bm_condition_sku(account_id: str, web_sku: str) -> str | None
         groups = json.loads(outer.get("JSONData") or "[]")
     except Exception:
         return None
+    # FIX 2026-08-18 (bug real: orden 2000017985070200 fallaba con
+    # "'str' object has no attribute 'get'" en TODOS los reintentos) -- BM
+    # a veces devuelve JSONData como lista de strings/valores no-dict en vez
+    # de los grupos {ProductSKU, AlterSKUs} esperados. Se descartan las
+    # entradas que no son dict en vez de asumir que siempre lo son -- si con
+    # esto queda 1 solo grupo real, se resuelve igual; si no, se rechaza
+    # como cualquier otro caso ambiguo (no se adivina).
+    groups = [g for g in groups if isinstance(g, dict)]
     if len(groups) == 1:
         return groups[0].get("ProductSKU") or None
     return None
@@ -16790,11 +16801,13 @@ async def _bm_alter_sku_covers_order(*, account_id: str, web_sku: str, product_s
         groups = json.loads(outer.get("JSONData") or "[]")
     except Exception:
         return False
+    # FIX 2026-08-18: mismo caso que _resolve_bm_condition_sku -- BM puede
+    # devolver entradas no-dict en JSONData.
     for group in groups:
-        if group.get("ProductSKU") != product_sku:
+        if not isinstance(group, dict) or group.get("ProductSKU") != product_sku:
             continue
         for alt in (group.get("AlterSKUs") or []):
-            if alt.get("AlterSKU") != substitute_sku:
+            if not isinstance(alt, dict) or alt.get("AlterSKU") != substitute_sku:
                 continue
             if alt.get("Scope") == "GLOBAL" or str(alt.get("SiteOrderID") or "") == order_id:
                 return True
@@ -16823,20 +16836,22 @@ async def _find_bm_alter_sku_listing_id(*, account_id: str, web_sku: str, produc
         logger.warning(f"[BM-ALTER-SKU] no se pudo parsear GetAlterSKUMappingByWebSKU: {e}")
         return None
 
+    # FIX 2026-08-18: mismo caso que _resolve_bm_condition_sku -- BM puede
+    # devolver entradas no-dict en JSONData.
     for group in groups:
-        if group.get("ProductSKU") != product_sku:
+        if not isinstance(group, dict) or group.get("ProductSKU") != product_sku:
             continue
         for alt in (group.get("AlterSKUs") or []):
-            if alt.get("AlterSKU") == substitute_sku and str(alt.get("SiteOrderID") or "") == order_id:
+            if isinstance(alt, dict) and alt.get("AlterSKU") == substitute_sku and str(alt.get("SiteOrderID") or "") == order_id:
                 return alt.get("ListingID")
     # Fallback: mismo AlterSKU sin exigir match exacto de orden (por si BM
     # normalizó el SiteOrderID de forma distinta) -- mejor encontrar algo
     # razonable que no encontrar nada.
     for group in groups:
-        if group.get("ProductSKU") != product_sku:
+        if not isinstance(group, dict) or group.get("ProductSKU") != product_sku:
             continue
         for alt in (group.get("AlterSKUs") or []):
-            if alt.get("AlterSKU") == substitute_sku:
+            if isinstance(alt, dict) and alt.get("AlterSKU") == substitute_sku:
                 return alt.get("ListingID")
     return None
 
