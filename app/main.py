@@ -17798,6 +17798,45 @@ async def diag_bm_alter_sku_create_exact(
     return JSONResponse({"ok": _ok, "status_code": resp.status_code, "response": data})
 
 
+@app.post("/api/diag/bm-alter-sku-delete-exact")
+async def diag_bm_alter_sku_delete_exact(
+    account_id: str = "", order_id: str = "", product_sku_exact: str = "",
+    substitute_sku: str = "", token: str = "",
+):
+    """Complemento de bm-alter-sku-create-exact -- borra un AlterSKU dado su
+    ProductSKU EXACTO (sin resolución), buscando su ListingID por
+    AlterSKU+SiteOrderID dentro de ESE ProductSKU puntual."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not all([account_id, order_id, product_sku_exact, substitute_sku]):
+        return JSONResponse({"error": "account_id, order_id, product_sku_exact, substitute_sku requeridos"}, status_code=400)
+
+    web_sku = _bm_base_sku(product_sku_exact)
+    listing_id = await _find_bm_alter_sku_listing_id(
+        account_id=account_id, web_sku=web_sku, product_sku=product_sku_exact,
+        substitute_sku=substitute_sku, order_id=order_id,
+    )
+    if not listing_id:
+        return JSONResponse({"ok": False, "error": "No encontrado"}, status_code=404)
+    payload = {
+        "ProfileID": account_id, "SiteAccountID": account_id, "WebSKU": web_sku,
+        "ProductSKU": product_sku_exact, "AlterSKU": substitute_sku, "OrderScope": order_id,
+        "FulfillmentType": "Merchant", "Qty": 1, "Actions": 3,
+        "ListingId": listing_id, "Priority": None, "UserID": None,
+    }
+    from app.services.binmanager_client import bm_post as _bm_post_del_exact
+    resp = await _bm_post_del_exact(_BM_ALTER_SKU_URL, payload, timeout=20.0)
+    if resp is None:
+        return JSONResponse({"ok": False, "error": "Sin respuesta de BinManager"}, status_code=502)
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw_text": resp.text[:500]}
+    _msg = str((data or {}).get("MessageReturn") or "").strip()
+    _ok = resp.status_code == 200 and _msg.lower() == "success"
+    return JSONResponse({"ok": _ok, "status_code": resp.status_code, "response": data})
+
+
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
     """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
