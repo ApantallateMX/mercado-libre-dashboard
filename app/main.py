@@ -2413,7 +2413,7 @@ async def _realtime_stock_reconcile_wide_loop():
 _AMAZON_STOCK_ALERT_ENABLED_SELLERS = {"A20NFIUQNEYZ1E", "A252KSQ687FNRO"}
 
 
-async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
+async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tuple[int, list]:
     """Una pasada de reconciliación Amazon: por cada cuenta, trae órdenes
     dentro de la ventana (Unshipped/PartiallyShipped/Shipped/Canceled en una
     sola llamada -- SP-API permite mezclar estos 4, solo Pending debe ir
@@ -2425,6 +2425,7 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
     created_after = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     n = 0
     errors: list = []
+    trace: list = []  # solo se llena si debug=True (2026-08-18, depuración caso VECKTOR)
 
     for acc in accounts:
         seller_id = acc.get("seller_id", "")
@@ -2451,6 +2452,8 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
                 # filtra por ORDEN, no por cuenta completa -- una cuenta
                 # mayormente FBA puede tener alguna orden Merchant suelta.
                 if order.get("FulfillmentChannel") == "AFN":
+                    if debug:
+                        trace.append({"order_id": order_id, "step": "skip_afn"})
                     continue
                 status = order.get("OrderStatus", "")
                 should_alert = status in ("Unshipped", "PartiallyShipped")
@@ -2459,11 +2462,15 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
                     # Ya se envió/canceló -- ya no es accionable, igual que
                     # _evaluate_order_stock_alert cuando should_alert=False.
                     await token_store.delete_realtime_stock_alerts_for_order(order_id, platform="amazon")
+                    if debug:
+                        trace.append({"order_id": order_id, "step": "not_alertable", "status": status})
                     continue
                 try:
                     items = await client.get_order_items(order_id)
                 except Exception as e:
                     errors.append({"order_id": order_id, "error": str(e)[:200]})
+                    if debug:
+                        trace.append({"order_id": order_id, "step": "get_order_items_failed", "error": str(e)[:200]})
                     continue
                 order_date = (order.get("PurchaseDate") or "")[:10]
                 # FIX 2026-08-18 (bug real encontrado probando contra las 3
@@ -2487,9 +2494,16 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
                 # Limpieza dirigida: si algún SKU de esta orden se alertó
                 # ANTES de este fix sin ser catálogo BM, se corrige aquí
                 # mismo sin esperar a que la orden se envíe/cancele.
-                await token_store.delete_realtime_stock_alerts_for_order_except_skus(
+                deleted = await token_store.delete_realtime_stock_alerts_for_order_except_skus(
                     order_id, "amazon", list(known_skus.keys()),
                 )
+                if debug:
+                    trace.append({
+                        "order_id": order_id, "step": "processed",
+                        "skus_this_order": list(skus_this_order),
+                        "known_skus": list(known_skus.keys()),
+                        "deleted_rows": deleted,
+                    })
                 for item in items:
                     sku_raw = (item.get("SellerSKU") or "").strip()
                     if not sku_raw:
@@ -2512,6 +2526,10 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
             # su propio httpx.AsyncClient con "async with") -- a diferencia de
             # MeliClient, no existe ni hace falta un client.close() aquí.
             errors.append({"order_id": f"cuenta {seller_id}", "error": str(e)[:200]})
+            if debug:
+                trace.append({"order_id": f"cuenta {seller_id}", "step": "account_exception", "error": str(e)[:200]})
+    if debug:
+        return n, errors, trace
     return n, errors
 
 
@@ -18846,13 +18864,17 @@ async def diag_amazon_orders_list(token: str = "", seller_id: str = "", days: in
 
 
 @app.get("/api/diag/amazon-stock-reconcile")
-async def diag_amazon_stock_reconcile(token: str = "", days: int = 3):
+async def diag_amazon_stock_reconcile(token: str = "", days: int = 3, debug: bool = False):
     """Dispara YA una pasada de _run_amazon_stock_reconcile_pass (normalmente
     corre sola cada 5 min/2h) -- para depurar en vivo por qué una orden
     puntual no se limpia (2026-08-18, caso real: 5 filas de VECKTOR sin
-    autolimpiar). Devuelve {n, errors} tal cual, sin resumir."""
+    autolimpiar). Devuelve {n, errors} tal cual, sin resumir. debug=true
+    agrega "trace" con el paso a paso de cada orden."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    if debug:
+        n, errors, trace = await _run_amazon_stock_reconcile_pass(days=days, debug=True)
+        return JSONResponse({"n": n, "errors": errors, "trace": trace})
     n, errors = await _run_amazon_stock_reconcile_pass(days=days)
     return JSONResponse({"n": n, "errors": errors})
 
