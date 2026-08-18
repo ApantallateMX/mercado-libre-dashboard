@@ -2413,7 +2413,13 @@ async def _check_one_substitution_fulfillment(row: dict) -> None:
         conditions_param = cond if cond else _bm_conditions_for_sku(base)
         from app.services.binmanager_client import get_shared_bm as _gsbm_fulfillment
         bm_cli = await _gsbm_fulfillment()
-        result = await bm_cli.get_stock_with_reserve(base, conditions=conditions_param)
+        # FIX 2026-08-17 (2): el timeout default de 7s (pensado para ciclos
+        # que revisan muchos SKUs seguidos) resultó insuficiente en vivo --
+        # BM tardó más de 14s (7+7 de los 2 intentos internos) en varias
+        # pruebas reales del mismo día para estos SKUs puntuales. Este loop
+        # revisa 1-5 filas cada 10 min, hay margen de sobra para esperar más
+        # en vez de rendirse y dejar "sin verificar" para siempre.
+        result = await bm_cli.get_stock_with_reserve(base, conditions=conditions_param, timeout=20.0)
         # FIX 2026-08-17 (bug real reportado por Jovan): si BM no responde
         # (timeout, ya visto antes con otro SKU) NO hay que pisar el último
         # dato REAL conocido (ej. "0 disponibles") con "sin verificar" --
@@ -16964,7 +16970,11 @@ async def stock_live_check(request: Request, sku: str = Query(...), account_id: 
 
     from app.services.binmanager_client import get_shared_bm as _gsbm_live
     bm_cli = await _gsbm_live()
-    result = await bm_cli.get_stock_with_reserve(check_base, conditions=conditions_param)
+    # FIX 2026-08-17: timeout de 15s (default de la función es 7s, pensado
+    # para ciclos que revisan muchos SKUs seguidos) -- este es un chequeo
+    # de un solo SKU con un usuario esperando en el modal, vale más esperar
+    # un poco más que rendirse rápido y decir "no se pudo verificar".
+    result = await bm_cli.get_stock_with_reserve(check_base, conditions=conditions_param, timeout=15.0)
     if result is None:
         return JSONResponse({"sku": sku, "resolved_sku": resolved_sku, "available_qty": None, "error": "No se pudo verificar en vivo (BM sin respuesta)"})
     avail, reserve = result

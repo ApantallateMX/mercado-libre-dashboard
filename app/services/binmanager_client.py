@@ -389,7 +389,7 @@ class BinManagerClient:
         logger.info(f"[BM] get_bulk_stock: {len(all_rows)} SKUs en {_BM_MAX_PAGES} páginas (límite)")
         return all_rows
 
-    async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68") -> tuple[int, int] | None:
+    async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68", timeout: float = 7.0) -> tuple[int, int] | None:
         """Retorna (AvailableQTY, Reserve) para un SKU.
         location_id: "47,62,68" (MTY+CDMX+Cuautitlán, único vendible online, default),
         "47" (solo Autobot CDMX), "68" (solo MTY MAXX). Tijuana (45,69,43,42) EXCLUIDA
@@ -400,8 +400,14 @@ class BinManagerClient:
           - None         = fallo de sesión/red — dato desconocido (NO confundir con 0 genuino)
         conditions: GRA,GRB,GRC,NEW por default. Pasar GRA,GRB,GRC,ICB,ICC,NEW para SKUs IC.
         Verificado: SNTV001764 → AvailableQTY=213, Reserve=2 (TotalQty=215)
+        timeout: 7s por default (igual que siempre) -- subirlo (ej. 20-25s)
+        para chequeos puntuales de un solo SKU donde vale más esperar una
+        respuesta real que rendirse rápido (ej. live-check del modal
+        "Sustituir", _substitution_fulfillment_loop) -- NO subir el default
+        global, rompería el ritmo de los ciclos que revisan muchos SKUs
+        seguidos (ej. reconciliación de bm_sku_master, 150 por ciclo).
         """
-        return await self._query_bm_stock(sku, conditions=conditions, location_id=location_id)
+        return await self._query_bm_stock(sku, conditions=conditions, location_id=location_id, timeout=timeout)
 
     async def get_available_qty(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> int:
         """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
@@ -496,7 +502,7 @@ class BinManagerClient:
             "total_qty": total, "by_condition": by_condition, "locations": locations,
         }
 
-    async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68") -> tuple[int, int] | None:
+    async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68", timeout: float = 7.0) -> tuple[int, int] | None:
         """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1.
         location_id: default "47,62,68" (MTY+CDMX+Cuautitlán, único vendible online).
         Pasar "47" o "68" para desglose por almacén individual, o "45,69,43,42" para Tijuana
@@ -560,7 +566,7 @@ class BinManagerClient:
         _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         for attempt in range(2):
             try:
-                r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=7)
+                r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=timeout)
                 if self._session_expired(r):
                     self._logged_in = False
                     if attempt == 0:
