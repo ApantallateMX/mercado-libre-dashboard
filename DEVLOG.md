@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX (2x): reintento automático en "Sustituir" + Productos ya no llama BM en vivo
+
+Continuación directa del fix crítico de `bm_sku_master` (entrada de abajo).
+Jovan pidió analizar dónde más aplicar el mismo criterio ("preferir el
+archivo completo sobre llamadas puntuales"). Encontré dos sitios reales:
+
+**1. Reintento automático en la inyección de BM ("Sustituir"):** una
+orden nueva (`2000017991930258`) volvió a quedarse en "Verificando en
+BM" — investigar mostró que `_inject_bm_alter_sku_background` intentaba
+UNA sola vez; si BM estaba lento en ese momento puntual (confirmado real
+y frecuente ese mismo día), se quedaba pegado hasta un clic manual en
+"Reintentar". Se agregó reintento automático (hasta 4 intentos, espera
+creciente) ANTES de rendirse — seguro porque `_inject_bm_alter_sku` ya
+valida anti-duplicado en cada intento. (La orden reportada en el momento
+ya se había resuelto sola para cuando se revisó — confirma que la mayoría
+de estos fallos son transitorios, no permanentes.)
+
+**2. Página de Productos sin llamadas a BM:** análisis de dónde más se
+hacían consultas puntuales a BM reveló que `/partials/items-grid` hacía
+**2 llamadas EN VIVO a BM por cada producto visible** (hasta 100 por
+carga de página), sin revisar ningún caché — mismo riesgo que el
+incidente de `bm_sku_master`. Se reemplazó por una sola consulta a
+`bm_sku_master` (ya con MTY/CDMX/TJ/avail/reserve, refrescado cada ~2 min
+desde el fix anterior) — cero llamadas a BM en esta vista. Verificado en
+producción: carga de página en <1s.
+
+**Nota del análisis:** se investigó también el prewarm principal por
+cuenta (sospecha inicial de "600 llamadas individuales por ciclo") — al
+rastrear el código completo (no solo la función aislada) se confirmó que
+ese mismo problema ya se había corregido ahí en 2026-08-11 con el mismo
+criterio — no era un riesgo activo, corrección de mi análisis inicial.
+
 ## 2026-08-18 — FIX CRÍTICO: reconciliación de bm_sku_master atorada 4.5+ horas (0/150 en 6 ciclos consecutivos) — solución de Jovan
 
 Jovan siguió preguntando por qué la sugerencia de sustituto mostraba
