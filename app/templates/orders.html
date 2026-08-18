@@ -346,6 +346,8 @@
           <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs">
             <button id="alertas-tab-live" onclick="setAlertasSubView('live')"
                     class="px-3 py-2 bg-indigo-600 text-white font-semibold transition">En vivo</button>
+            <button id="alertas-tab-pending" onclick="setAlertasSubView('pending')"
+                    class="px-3 py-2 bg-white text-gray-500 hover:bg-gray-50 transition">🚚 Pendientes de Envío</button>
             <button id="alertas-tab-history" onclick="setAlertasSubView('history')"
                     class="px-3 py-2 bg-white text-gray-500 hover:bg-gray-50 transition">📋 Historial</button>
           </div>
@@ -404,6 +406,16 @@
     </div>
 
     </div><!-- /alertas-view-live -->
+
+    <!-- ═══ Pendientes de Envío (sustituciones ya aplicadas en BM, esperando que la orden se envíe) ═══ -->
+    <div id="alertas-view-pending" class="hidden space-y-3">
+      <p class="text-xs text-gray-400 px-1">Sustituciones ya aplicadas en BinManager cuya orden todavía no se ha impreso/enviado — se revisa cada 10 min si el sustituto sigue teniendo stock y si la orden ya avanzó.</p>
+      <div id="pending-shipment-empty" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200 py-16 flex flex-col items-center justify-center gap-2">
+        <div class="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center text-green-600 text-2xl">✓</div>
+        <p class="text-sm font-semibold text-gray-700">Sin sustituciones pendientes de envío</p>
+      </div>
+      <div id="pending-shipment-cards" class="space-y-2"></div>
+    </div>
 
     <!-- ═══ Historial de resoluciones ═══ -->
     <div id="alertas-view-history" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200">
@@ -544,24 +556,72 @@ var _alertasRowsHtml = [];
 var _ALERTAS_PAGE_SIZE = 10;
 var _alertasLastLoadTs = 0;
 
-// ─── Sub-vistas: En vivo / Historial ───────────────────────────────────────
+// ─── Sub-vistas: En vivo / Pendientes de Envío / Historial ─────────────────
 window.setAlertasSubView = function(v) {
     document.getElementById('alertas-view-live').classList.toggle('hidden', v !== 'live');
+    document.getElementById('alertas-view-pending').classList.toggle('hidden', v !== 'pending');
     document.getElementById('alertas-view-history').classList.toggle('hidden', v !== 'history');
-    var liveBtn = document.getElementById('alertas-tab-live');
-    var histBtn = document.getElementById('alertas-tab-history');
-    liveBtn.classList.toggle('bg-indigo-600', v === 'live');
-    liveBtn.classList.toggle('text-white', v === 'live');
-    liveBtn.classList.toggle('font-semibold', v === 'live');
-    liveBtn.classList.toggle('bg-white', v !== 'live');
-    liveBtn.classList.toggle('text-gray-500', v !== 'live');
-    histBtn.classList.toggle('bg-indigo-600', v === 'history');
-    histBtn.classList.toggle('text-white', v === 'history');
-    histBtn.classList.toggle('font-semibold', v === 'history');
-    histBtn.classList.toggle('bg-white', v !== 'history');
-    histBtn.classList.toggle('text-gray-500', v !== 'history');
+    ['live', 'pending', 'history'].forEach(function(name) {
+        var btn = document.getElementById('alertas-tab-' + name);
+        var active = v === name;
+        btn.classList.toggle('bg-indigo-600', active);
+        btn.classList.toggle('text-white', active);
+        btn.classList.toggle('font-semibold', active);
+        btn.classList.toggle('bg-white', !active);
+        btn.classList.toggle('text-gray-500', !active);
+    });
+    if (v === 'pending') loadPendingShipment();
     if (v === 'history') loadAlertasHistory();
 };
+
+// ─── Pendientes de Envío ────────────────────────────────────────────────────
+function loadPendingShipment() {
+    var container = document.getElementById('pending-shipment-cards');
+    var emptyEl = document.getElementById('pending-shipment-empty');
+    container.innerHTML = '<p class="text-center py-6 text-gray-400 text-sm">Cargando...</p>';
+    fetch('/api/stock/alerts/pending-shipment')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var rows = d.rows || [];
+            if (!rows.length) {
+                container.innerHTML = '';
+                emptyEl.classList.remove('hidden');
+                return;
+            }
+            emptyEl.classList.add('hidden');
+            container.innerHTML = rows.map(function(r) {
+                var fecha = new Date(r.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                var checked = r.last_stock_check_at
+                    ? new Date(r.last_stock_check_at * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})
+                    : 'aún no verificado';
+                var qty = r.last_stock_check_qty;
+                var stockBadge;
+                if (qty === null || qty === undefined) {
+                    stockBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">sin verificar todavía</span>';
+                } else if (qty <= 0) {
+                    stockBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">⚠ 0 disponibles — el sustituto ya se agotó</span>';
+                } else {
+                    stockBadge = '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">✓ ' + qty + ' disponibles</span>';
+                }
+                return '<div class="bg-white rounded-xl border ' + (qty !== null && qty !== undefined && qty <= 0 ? 'border-red-200' : 'border-gray-200') + ' p-4">' +
+                    '<div class="flex items-center justify-between gap-2 flex-wrap">' +
+                        '<div>' +
+                            '<span class="text-xs text-gray-400">' + fecha + ' · ' + (r.account_name || r.account_id) + '</span>' +
+                            '<div class="font-mono text-sm mt-0.5"><a href="/orders?order_id=' + r.order_id + '" target="_blank" class="text-indigo-600 hover:underline">' + r.order_id + '</a></div>' +
+                        '</div>' +
+                        stockBadge +
+                    '</div>' +
+                    '<div class="text-xs text-gray-600 mt-2">' +
+                        '<span class="font-mono">' + r.original_sku + '</span> → sustituto <span class="font-mono">' + r.substitute_sku + '</span>' +
+                    '</div>' +
+                    '<div class="text-xs text-gray-400 mt-1">Último chequeo de stock: ' + checked + ' · registrado por ' + r.username + '</div>' +
+                '</div>';
+            }).join('');
+        })
+        .catch(function() {
+            container.innerHTML = '<p class="text-center py-6 text-red-500 text-sm">Error cargando pendientes de envío.</p>';
+        });
+}
 
 // ─── Aviso de reactivación (SKUs puestos en 0 que ya tienen stock BM) ──────
 function loadRestockWatch() {
@@ -637,6 +697,21 @@ function loadAlertasHistory() {
                 }
                 return '<span class="text-[10px] text-gray-400">—</span>';
             }
+            // FEATURE 2026-08-17: seguimiento de envío real -- una sustitución
+            // "Aplicada en BM" puede seguir esperando a que el almacén de
+            // verdad envíe la orden (ver /api/stock/alerts/pending-shipment).
+            function _fulfillmentBadge(h) {
+                if (h.bm_status !== 'success' || h.bm_deleted_at) return '';
+                if (h.fulfillment_status === 'completado') {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 text-blue-700 block mt-1">📦 Enviada</span>';
+                }
+                if (h.fulfillment_status === 'cancelada') {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500 block mt-1">Orden cancelada</span>';
+                }
+                var stockNote = (h.last_stock_check_qty !== null && h.last_stock_check_qty !== undefined && h.last_stock_check_qty <= 0)
+                    ? ' — sustituto sin stock' : '';
+                return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 block mt-1">🚚 Pendiente de envío' + stockNote + '</span>';
+            }
             // Solo tiene sentido borrar si de verdad se aplicó en BM y no se
             // ha borrado ya.
             function _deleteBtn(h) {
@@ -663,7 +738,7 @@ function loadAlertasHistory() {
                     '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + h.original_sku + '</td>' +
                     '<td class="px-3 py-2.5">' + tipoBadge + '</td>' +
                     '<td class="px-3 py-2.5 font-mono text-xs whitespace-nowrap">' + (h.substitute_sku || '—') + '</td>' +
-                    '<td class="px-3 py-2.5 whitespace-nowrap">' + _bmBadge(h) + '</td>' +
+                    '<td class="px-3 py-2.5 whitespace-nowrap">' + _bmBadge(h) + _fulfillmentBadge(h) + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-600">' + (h.note || '—') + '</td>' +
                     '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + h.username + '</td>' +
                     '<td class="px-3 py-2.5 text-center whitespace-nowrap" id="alert-hist-action-' + h.id + '">' + _deleteBtn(h) + _retryBtn(h) + '</td>' +
@@ -684,7 +759,7 @@ function loadAlertasHistory() {
                         '<span>Orden <span class="font-mono">' + h.order_id + '</span></span>' +
                         '<span>' + h.username + '</span>' +
                     '</div>' +
-                    (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span> ' + _bmBadge(h) + '</div>' : '') +
+                    (h.substitute_sku ? '<div class="text-xs text-gray-600 mt-1">Sustituto: <span class="font-mono">' + h.substitute_sku + '</span> ' + _bmBadge(h) + _fulfillmentBadge(h) + '</div>' : '') +
                     (h.note ? '<p class="text-xs text-gray-500 mt-1">' + h.note + '</p>' : '') +
                     ((_deleteBtn(h) || _retryBtn(h)) ? '<div class="mt-2 flex gap-1.5" id="alert-hist-action-card-' + h.id + '">' + _deleteBtn(h) + _retryBtn(h) + '</div>' : '') +
                 '</div>';

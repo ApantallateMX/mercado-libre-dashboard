@@ -1277,6 +1277,18 @@ async def init_db():
             "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_message TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_deleted_at REAL DEFAULT NULL",
             "ALTER TABLE stock_alert_resolutions ADD COLUMN bm_deleted_by TEXT NOT NULL DEFAULT ''",
+            # FEATURE 2026-08-17 (pedido por Jovan): antes, en cuanto se
+            # aplicaba en BM la sustitución quedaba "cerrada" en el
+            # historial sin confirmar que el almacén de verdad la envió --
+            # si el stock del sustituto se agotaba entre la promesa y el
+            # envío real, nadie se enteraba. fulfillment_status: ''/'pendiente_envio'
+            # (recién aplicada, esperando que la orden avance) ->
+            # 'completado' (la orden ya se imprimió/envió) o 'cancelada'
+            # (la orden se canceló -- el mapeo de BM se borra automático).
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN fulfillment_status TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN last_stock_check_at REAL DEFAULT NULL",
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN last_stock_check_qty INTEGER DEFAULT NULL",
+            "ALTER TABLE stock_alert_resolutions ADD COLUMN shipment_resolved_at REAL DEFAULT NULL",
         ]:
             try:
                 await db.execute(_col_sql)
@@ -2346,7 +2358,8 @@ async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
             SELECT id, order_id, platform, account_id, original_sku,
                    resolution_type, substitute_sku, note, username, ts,
                    reactivated_at, reactivated_by, bm_status, bm_message,
-                   bm_deleted_at, bm_deleted_by
+                   bm_deleted_at, bm_deleted_by, fulfillment_status,
+                   last_stock_check_at, last_stock_check_qty, shipment_resolved_at
             FROM stock_alert_resolutions
             ORDER BY ts DESC
             LIMIT ?
@@ -2370,14 +2383,24 @@ async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status:
     # locked" más de 2 minutos después. Como nadie espera este resultado
     # (corre en background), es preferible esperar más de la cuenta a
     # rendirse rápido: timeout largo por intento + más intentos.
+    # FEATURE 2026-08-17: en cuanto bm_status pasa a 'success', arranca el
+    # seguimiento de "¿de verdad se envió?" (fulfillment_status) -- ver
+    # _substitution_fulfillment_loop. Guard con fulfillment_status='' para
+    # no pisar un estado terminal (completado/cancelada) si esto se
+    # re-dispara después por alguna razón.
     import asyncio as _asyncio
     last_err: Exception | None = None
     for attempt in range(6):
         try:
             async with aiosqlite.connect(DATABASE_PATH, timeout=45) as db:
                 await db.execute(
-                    "UPDATE stock_alert_resolutions SET bm_status = ?, bm_message = ? WHERE id = ?",
-                    (bm_status, bm_message, resolution_id),
+                    """UPDATE stock_alert_resolutions SET bm_status = ?, bm_message = ?,
+                           fulfillment_status = CASE
+                               WHEN ? = 'success' AND fulfillment_status = '' THEN 'pendiente_envio'
+                               ELSE fulfillment_status
+                           END
+                       WHERE id = ?""",
+                    (bm_status, bm_message, bm_status, resolution_id),
                 )
                 await db.commit()
                 return
@@ -2385,6 +2408,54 @@ async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status:
             last_err = e
             await _asyncio.sleep(5 * (attempt + 1))
     logger.error(f"[BM-ALTER-SKU] no se pudo actualizar bm_status de resolution_id={resolution_id} tras reintentos: {last_err}")
+
+
+async def get_pending_shipment_resolutions() -> list[dict]:
+    """Sustituciones ya aplicadas en BM pero cuya orden todavía no se ha
+    enviado -- ver _substitution_fulfillment_loop (main.py). fulfillment_status
+    vacío cuenta como 'pendiente_envio' (filas viejas de antes de esta
+    feature, o la primera vez que bm_status pasó a success sin haber
+    corrido aún el loop)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT id, order_id, platform, account_id, original_sku, substitute_sku,
+                   username, ts, fulfillment_status, last_stock_check_at, last_stock_check_qty
+            FROM stock_alert_resolutions
+            WHERE resolution_type = 'substitution'
+              AND bm_status = 'success'
+              AND fulfillment_status IN ('', 'pendiente_envio')
+              AND bm_deleted_at IS NULL
+            ORDER BY ts ASC
+        """)
+        return [dict(r) for r in await cur.fetchall()]
+
+
+async def mark_resolution_fulfillment(
+    resolution_id: int, status: str, stock_qty: int | None = None, checked_at: float | None = None,
+) -> None:
+    """Actualiza el seguimiento de envío de una sustitución. status:
+    'pendiente_envio' (sigue esperando, guarda el último chequeo de stock)
+    | 'completado' (la orden ya se imprimió/envió) | 'cancelada' (la orden
+    se canceló -- el caller ya debe haber borrado el mapeo de BM)."""
+    import time as _t
+    now = checked_at if checked_at is not None else _t.time()
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        if status == "pendiente_envio":
+            await db.execute(
+                """UPDATE stock_alert_resolutions
+                   SET fulfillment_status = 'pendiente_envio', last_stock_check_at = ?, last_stock_check_qty = ?
+                   WHERE id = ?""",
+                (now, stock_qty, resolution_id),
+            )
+        else:
+            await db.execute(
+                """UPDATE stock_alert_resolutions
+                   SET fulfillment_status = ?, last_stock_check_at = ?, last_stock_check_qty = ?, shipment_resolved_at = ?
+                   WHERE id = ?""",
+                (status, now, stock_qty, now, resolution_id),
+            )
+        await db.commit()
 
 
 async def mark_stock_alert_resolution_bm_deleted(resolution_id: int, deleted_by: str) -> None:

@@ -860,6 +860,9 @@ async def lifespan(app: FastAPI):
     # pagadas recientes que el webhook ya no vuelve a tocar por su cuenta.
     asyncio.create_task(_realtime_stock_reconcile_loop())
     asyncio.create_task(_realtime_stock_reconcile_wide_loop())
+    # "Pendientes de Envío" (2026-08-17) -- sigue las sustituciones ya
+    # aplicadas en BM hasta que la orden real se imprime/envía o se cancela.
+    asyncio.create_task(_substitution_fulfillment_loop())
 
     # ── Sync diario de catálogo BM (3am Monterrey CDT = 09:00 UTC) ──
     # Descarga retail_ph, brand, model, title para todos los SKUs del bulk cache.
@@ -2365,6 +2368,79 @@ async def _realtime_stock_reconcile_wide_loop():
         except Exception as e:
             logger.warning(f"[STOCK-RECONCILE] Error en ciclo amplio: {e}")
         await asyncio.sleep(2 * 3600)  # cada 2h
+
+
+async def _check_one_substitution_fulfillment(row: dict) -> None:
+    """FEATURE 2026-08-17 (pedido por Jovan): una sustitución "Aplicada en
+    BM" no significa que el almacén ya la envió -- si el stock del
+    sustituto se agota ANTES de que la orden se imprima/envíe, nadie se
+    entera hasta que sea tarde. Revisa el estado real de envío (misma
+    lógica de _shipment_should_alert que ya usa el feed de alertas en
+    vivo) y, mientras siga pendiente, el stock actual del sustituto."""
+    order_id = row["order_id"]
+    account_id = row["account_id"]
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return
+    try:
+        order = await client.resolve_order(order_id)
+        order_status = order.get("status", "")
+        if order_status == "cancelled":
+            # Ya autorizado por Jovan: si la orden se cancela, el mapeo de
+            # SKU alternativo en BM ya no tiene caso -- se borra solo.
+            del_result = await _delete_bm_alter_sku(
+                account_id=account_id, order_id=order_id, product_sku=row["original_sku"],
+                substitute_sku=row["substitute_sku"], qty=1,
+            )
+            await token_store.mark_resolution_fulfillment(row["id"], "cancelada")
+            if del_result.get("ok"):
+                await token_store.mark_stock_alert_resolution_bm_deleted(row["id"], deleted_by="sistema (orden cancelada)")
+            else:
+                logger.warning(f"[SUB-FULFILLMENT] orden {order_id} cancelada pero no se pudo borrar el mapeo de BM: {del_result}")
+            return
+
+        shipping_id = (order.get("shipping") or {}).get("id")
+        if not shipping_id:
+            return  # sin dato todavía, se reintenta el siguiente ciclo
+        shipment = await client.get_shipment(str(shipping_id))
+        if not _shipment_should_alert(shipment):
+            await token_store.mark_resolution_fulfillment(row["id"], "completado")
+            return
+
+        # Sigue pendiente de envío -- verificar si el sustituto TODAVÍA
+        # tiene stock (mismo mecanismo del live-check del modal "Sustituir").
+        base, cond = _split_bm_sku_condition(row["substitute_sku"])
+        conditions_param = cond if cond else _bm_conditions_for_sku(base)
+        from app.services.binmanager_client import get_shared_bm as _gsbm_fulfillment
+        bm_cli = await _gsbm_fulfillment()
+        result = await bm_cli.get_stock_with_reserve(base, conditions=conditions_param)
+        qty = result[0] if result is not None else None
+        await token_store.mark_resolution_fulfillment(row["id"], "pendiente_envio", stock_qty=qty)
+    except Exception as e:
+        logger.warning(f"[SUB-FULFILLMENT] error revisando resolution_id={row['id']} orden={order_id}: {e}")
+    finally:
+        await client.close()
+
+
+async def _substitution_fulfillment_loop():
+    """Corre cada 10 min -- volumen bajo (normalmente unas pocas
+    sustituciones pendientes de envío a la vez), no necesita más
+    frecuencia que eso: el estado de envío de una orden no cambia en
+    segundos."""
+    await asyncio.sleep(240)
+    while True:
+        try:
+            rows = await token_store.get_pending_shipment_resolutions()
+            if rows:
+                sem = asyncio.Semaphore(3)
+                async def _check(r):
+                    async with sem:
+                        await _check_one_substitution_fulfillment(r)
+                await asyncio.gather(*[_check(r) for r in rows], return_exceptions=True)
+                logger.info(f"[SUB-FULFILLMENT] {len(rows)} sustituciones pendientes de envío revisadas")
+        except Exception as e:
+            logger.error(f"[SUB-FULFILLMENT] Error inesperado: {e}")
+        await asyncio.sleep(600)
 
 
 @app.post("/webhooks/ml/orders")
@@ -16452,6 +16528,22 @@ async def realtime_stock_alerts(request: Request, limit: int = 100):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     limit = max(1, min(limit, 500))
     rows = await token_store.get_realtime_stock_alerts(limit=limit)
+    for row in rows:
+        row["account_name"] = _KNOWN_ML_NICKNAMES.get(str(row.get("account_id", "")), str(row.get("account_id", "")))
+    return JSONResponse({"rows": rows})
+
+
+@app.get("/api/stock/alerts/pending-shipment")
+async def stock_alerts_pending_shipment(request: Request):
+    """FEATURE 2026-08-17 (pedido por Jovan): sustituciones ya aplicadas en
+    BM cuya orden todavía no se ha enviado -- paso intermedio entre
+    "Sustituir" y que quede como completada en el Historial. Ver
+    _substitution_fulfillment_loop (revisa cada 10 min si la orden ya
+    avanzó y si el sustituto sigue teniendo stock)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    rows = await token_store.get_pending_shipment_resolutions()
     for row in rows:
         row["account_name"] = _KNOWN_ML_NICKNAMES.get(str(row.get("account_id", "")), str(row.get("account_id", "")))
     return JSONResponse({"rows": rows})
