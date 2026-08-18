@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — FEAT: "Pendientes de Envío" — sustituciones ya no quedan cerradas hasta que la orden se envía
+
+Jovan planteó el hueco real detrás de todo el incidente del día: hasta
+ahora, en cuanto una sustitución quedaba "Aplicada en BM" pasaba
+directamente al Historial como si estuviera resuelta — pero eso solo
+confirma que BM SABE del sustituto, no que el almacén ya lo empacó y
+envió. Si el stock del sustituto se agota entre la promesa y el envío
+real (como pasó hoy mismo con `SNTV007447-GRB`: 1 unidad al sustituir,
+0 unas horas después), nadie se entera hasta que es tarde.
+
+**Nuevo paso intermedio:** `fulfillment_status` en `stock_alert_resolutions`
+(`''`/`pendiente_envio` → `completado` o `cancelada`). Loop en background
+cada 10 min (`_substitution_fulfillment_loop`) revisa cada sustitución
+aplicada en BM que siga pendiente:
+- Si la orden ML ya avanzó (se imprimió/envió — misma lógica de
+  `_shipment_should_alert` que ya usa el feed de alertas en vivo, sin
+  reinventar el criterio) → `completado`.
+- Si la orden se canceló → borra el mapeo de BM automáticamente
+  (autorizado por Jovan explícitamente) y marca `cancelada`.
+- Si sigue pendiente → verifica el stock del sustituto EN VIVO (mismo
+  mecanismo del live-check del modal) y lo deja marcado — bandera roja
+  si ya es 0, visible en la nueva vista y en el Historial.
+
+**Nueva vista "🚚 Pendientes de Envío"** en Alertas de Stock (junto a "En
+vivo" y "Historial") — solo muestra sustituciones en este estado
+intermedio, con el último stock verificado. El Historial también gana un
+badge de estado de envío para que quede el registro completo de todo
+(pedido explícito de Jovan: "llevando un historial de todo").
+
+Decisiones tomadas vía AskUserQuestion: bandera visual solamente (sin
+notificación activa nueva) y borrado automático del mapeo de BM cuando
+una orden se cancela.
+
+Verificado en producción real (`/api/diag/trigger-substitution-fulfillment`,
+sin esperar el ciclo de 10 min) contra las 3 sustituciones reales del
+día: una ya se había enviado y pasó a `completado` sola; la de hoy quedó
+correctamente marcada `pendiente_envio` con stock real `0` (el caso
+exacto que motivó el pedido); la tercera sigue pendiente de verificar
+(timeout real de BM para ese SKU puntual, manejado con gracia).
+
 ## 2026-08-17 — OPERACIÓN: cierre del incidente de sustitución BM — auditoría completa + reasignación autorizada
 
 Continuación directa de la entrada de abajo. Audité el historial completo
