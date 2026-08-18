@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX: modal "Sustituir" ya no perdía la condición real del SKU (bug real, reportado por Jovan tras el fix del colgado)
+
+El fix del colgado de 300s/502 (entrada de abajo) cambió `/api/stock/live-check`
+a leer solo el bulk en memoria — pero esto rompió la resolución de
+condición: Jovan probó con `SNTV003147` y el campo se quedaba tal cual
+(sin `-GRB`) en vez de completarse solo como antes.
+
+**Causa:** BM a veces guarda el SKU BASE, sin ningún sufijo de condición,
+como su propia fila en el bulk (con stock real) — el lookup lo tomaba
+como "coincidencia exacta" y devolvía el mismo SKU que el usuario ya
+había escrito, sin aportar la condición real.
+
+**Fix:** se descarta ese "match exacto sin condición" (no aporta nada) y
+se vuelve a resolver la condición EN VIVO vía `_resolve_bm_condition_sku`
+(`GetAlterSKUMappingByWebSKU`) — pero con techo duro de 10s
+(`asyncio.wait_for`), y es una consulta puntual por SKU (ligera), no el
+reporte bulk completo (pesado) que causó el colgado original. La
+cantidad disponible se queda saliendo del bulk (instantánea). Si la
+resolución en vivo no responde en 10s, no bloquea — se sigue con lo que
+ya haya salido del bulk.
+
+---
+
 ## 2026-08-18 — FEAT: histórico de fallos del bulk BM + navbar deja de mentir frescura + timeout GR subido a 150s
 
 Cierra el pendiente real de las 2 entradas anteriores: Jovan pidió "llevar
