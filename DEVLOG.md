@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FEAT/FIX UI: título de producto en "Pendientes de Envío" + modal "Sustituir" autocompleta el SKU con condición real
+
+Dos pedidos de Jovan sobre la UI de Alertas de Stock:
+
+1. **"Pendientes de Envío" no se veía bien** — la tarjeta solo mostraba el
+   número de orden a secas (sin decir qué producto es), a diferencia de
+   "En vivo" que ya muestra el título. Se agregó el mismo JOIN con
+   `bm_sku_master` (por `original_sku` y por `substitute_sku`) en
+   `get_pending_shipment_resolutions()` (`token_store.py`) y se
+   reordenó la tarjeta en `orders.html` para mostrar el título en grande
+   arriba y la orden como link secundario debajo (mismo patrón visual
+   que "En vivo"), más el título del sustituto junto al SKU.
+
+2. **Modal "Sustituir" solo avisaba la condición real en un texto aparte
+   (ej. "(condición real: SNTV003147-GRB)"), tapado visualmente por el
+   siguiente campo** — Jovan pidió que el campo mismo quede con el SKU
+   completo. `_subModalLiveCheck()` ahora, en cuanto `GetAlterSKUMappingByWebSKU`
+   resuelve una condición distinta a lo escrito, actualiza el VALOR del
+   input a ese SKU completo (base+condición) — lo que se ve en la
+   pantalla es exactamente lo que se va a registrar y mandar a BM, sin
+   nota aparte que se pueda no ver.
+
+Verificado localmente (`/api/stock/alerts/pending-shipment` responde 200
+JSON válido con el JOIN nuevo; `py_compile` limpio).
+
+---
+
 ## 2026-08-18 — FIX DE RAÍZ: usar el seller_sku CRUDO de ML para resolver el ProductSKU real en BM (cierra el bug de la entrada anterior)
 
 Cierra de raíz el bug de la entrada anterior (2 Products distintos bajo

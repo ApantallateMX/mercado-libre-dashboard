@@ -2433,16 +2433,27 @@ async def get_pending_shipment_resolutions() -> list[dict]:
     corrido aún el loop)."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
+        # FEATURE 2026-08-18 (pedido por Jovan): la tarjeta solo mostraba
+        # el número de orden a secas, sin decir QUÉ producto es -- se le
+        # agrega el título real (mismo JOIN que usa "En vivo", ver
+        # get_realtime_stock_alerts) tanto del SKU original como del
+        # sustituto para poder identificar la orden de un vistazo.
         cur = await db.execute("""
-            SELECT id, order_id, platform, account_id, original_sku, substitute_sku,
-                   username, ts, fulfillment_status, last_stock_check_at, last_stock_check_qty,
-                   original_sku_raw
-            FROM stock_alert_resolutions
-            WHERE resolution_type = 'substitution'
-              AND bm_status = 'success'
-              AND fulfillment_status IN ('', 'pendiente_envio')
-              AND bm_deleted_at IS NULL
-            ORDER BY ts ASC
+            SELECT sar.id, sar.order_id, sar.platform, sar.account_id,
+                   sar.original_sku, sar.substitute_sku,
+                   sar.username, sar.ts, sar.fulfillment_status,
+                   sar.last_stock_check_at, sar.last_stock_check_qty,
+                   sar.original_sku_raw,
+                   COALESCE(bsm_o.title, '') AS titulo,
+                   COALESCE(bsm_s.title, '') AS substitute_titulo
+            FROM stock_alert_resolutions sar
+            LEFT JOIN bm_sku_master bsm_o ON bsm_o.sku = sar.original_sku
+            LEFT JOIN bm_sku_master bsm_s ON bsm_s.sku = sar.substitute_sku
+            WHERE sar.resolution_type = 'substitution'
+              AND sar.bm_status = 'success'
+              AND sar.fulfillment_status IN ('', 'pendiente_envio')
+              AND sar.bm_deleted_at IS NULL
+            ORDER BY sar.ts ASC
         """)
         return [dict(r) for r in await cur.fetchall()]
 
