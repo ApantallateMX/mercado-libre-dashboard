@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — OPERACIÓN: cierre del incidente de sustitución BM — auditoría completa + reasignación autorizada
+
+Continuación directa de la entrada de abajo. Audité el historial completo
+de `stock_alert_resolutions` (7 filas totales) — la feature de inyección a
+BM solo se había usado 3 veces desde que se construyó (todas hoy mismo),
+las demás filas son de antes de que existiera esta feature (nunca
+intentaron aplicar nada en BM). Sin más falsos positivos escondidos.
+
+**Caso pendiente resuelto** (`SHHP000048-NEW`→`SHHP000060-NEW`, orden de
+Vanessa `2000017981754294`): BM no permite "actualizar" el scope de un
+mapeo existente — confirmado que la única forma es borrar (Actions=3) +
+crear (Actions=1). Antes de tocar nada se verificó que la orden vieja que
+tenía el mapeo (`2000017944072810`, 14-ago) ya no aparece en el feed de
+alertas activas (señal de que ya se resolvió) — Jovan autorizó
+explícitamente la reasignación. Nuevo endpoint puntual
+`POST /api/diag/bm-alter-sku-reassign` (no automatizado a propósito,
+requiere los 5 parámetros a mano) ejecutó el borrado+creación. Verificado
+contra BM real: `SiteOrderID` ahora es la orden nueva.
+
+**Dato nuevo para `project_bm_alter_sku_mapping.md`:** la respuesta de BM
+trae también un campo booleano `WasSuccess` (además de `MessageReturn`) —
+en los éxitos reales confirmados hoy siempre `WasSuccess: true` +
+`MessageReturn: "Success"` juntos. Podría ser una verificación aún más
+robusta que solo el texto de `MessageReturn` — evaluar en el futuro si se
+repiten casos ambiguos.
+
+Las 3 sustituciones reales de hoy quedan confirmadas y aplicadas en BM:
+`2000017984576896`, `2000017956308828`, `2000017981754294`.
+
 ## 2026-08-17 — BUG CRÍTICO: la sustitución "Aplicado en BM" NUNCA se aplicó de verdad (3 bugs encadenados, todos corregidos y verificados contra BM real)
 
 Jovan verificó a mano en el Fulfillment Dashboard de BM (Map de
