@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX CRÍTICO: reconciliación de bm_sku_master atorada 4.5+ horas (0/150 en 6 ciclos consecutivos) — solución de Jovan
+
+Jovan siguió preguntando por qué la sugerencia de sustituto mostraba
+"SNTV007447 — disp. 1" cuando BM mostraba 0 en varios almacenes. Investigar
+a fondo (en vez de repetir el número sin verificar, error que cometí antes
+en esta misma conversación) reveló un incidente real de horas, confirmado
+con logs de Railway:
+
+**Causa raíz:** `_bm_master_sync_once_inner` (main.py) reconciliaba los
+SKUs "ausentes del bulk" (no encontrados en el fetch masivo) con hasta 150
+llamadas INDIVIDUALES a BM por ciclo. Bajo la carga real del día, el
+endpoint puntual de BM (`Get_GlobalStock_InventoryBySKU` para un solo SKU)
+falló **0/150 en 6 ciclos consecutivos** (~38 minutos cada uno, cada uno
+de los 150 intentos agotando su timeout) — de 01:54 a 06:21. Con ~28,000
+SKUs "ausentes del bulk" en el universo total y avance real de CERO, SKUs
+como `SNTV007447` quedaron con un valor de **hace 6 días** sin que nada lo
+corrigiera ni avisara que estaba desactualizado.
+
+**Solución (propuesta por Jovan, no por mí):** "si no aparece en el bulk,
+es 0 — bájalo completo y consulta sobre ese archivo, sin verificar uno por
+uno." Es exactamente la misma regla ya usada y verificada para las alertas
+en tiempo real (`_bm_bulk_available_qty`, DEVLOG 2026-08-14: "BM omite del
+bulk cualquier SKU con stock=0 — por diseño"). Se eliminó por completo el
+paso de reconciliación individual — los "misses" se escriben directo con
+`available_qty=0, verified=True`, puro trabajo en memoria sin ninguna
+llamada nueva a BM. Se eliminó `get_reconciliation_priority_skus()` (ya
+sin uso).
+
+**Resultado verificado en producción:** el ciclo completo pasó de ~38 min
+(150/29998 SKUs, con 0% de éxito real) a **0.5 segundos cubriendo el 100%
+del universo (29998/29998)**. `SNTV007447` corregido a `available_qty=0`
+de inmediato; la sugerencia falsa para la orden `2000017984576896`
+desapareció (`sugerencias: []`, ya no ofrece un SKU sin stock real).
+
+**Lección de esta sesión:** cuando Jovan preguntó "por qué no piensas más
+lógicamente", tenía razón — la solución correcta ya existía en el propio
+código (el mismo criterio de `_bm_bulk_available_qty`) y era más simple
+que el mecanismo de reconciliación individual que se había construido
+antes. La complejidad (llamadas puntuales con reintentos y rotación de
+prioridad) fue la causa del problema, no la solución.
+
 ## 2026-08-17 — FIX (2x): "Pendientes de Envío" no actualizaba stock + botón "Buscar otro sustituto" se quedaba atorado
 
 Dos bugs reales encontrados por Jovan usando la feature recién lanzada
