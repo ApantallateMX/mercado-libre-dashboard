@@ -6433,6 +6433,26 @@ async def _bm_master_sync_once_inner():
             sum(int(r.get("NoVendibleQty") or 0) for r in rows_to_sum),
         )
 
+    def _lookup_rows(exact, by_base, base):
+        row = exact.get(base)
+        return [row] if row is not None else by_base.get(base, [])
+
+    # FEATURE 2026-08-17 (pedido por Jovan): available_qty es la SUMA de
+    # todas las condiciones (GRA+GRB+GRC+NEW) -- no dice en CUÁL condición
+    # específica hay stock real, lo que hacía que las sugerencias de
+    # reemplazo mostraran un SKU sin sufijo que nadie podía usar
+    # directamente en el almacén. Se calcula la condición con más stock a
+    # partir de las mismas filas EXACTAS del bulk que ya se leen aquí (sin
+    # llamadas nuevas a BM).
+    def _best_condition_row(rows_to_sum):
+        if not rows_to_sum:
+            return "", 0
+        best = max(rows_to_sum, key=lambda r: int(r.get("AvailableQTY") or 0))
+        best_qty = int(best.get("AvailableQTY") or 0)
+        if best_qty <= 0:
+            return "", 0
+        return (best.get("SKU") or "").upper().strip(), best_qty
+
     misses: list[str] = []
     to_write: list[dict] = []
     for base in skus:
@@ -6440,11 +6460,13 @@ async def _bm_master_sync_once_inner():
         if not base_u:
             continue
         use_all = _bm_conditions_for_sku(base_u) == "GRA,GRB,GRC,ICB,ICC,NEW"
-        result = _lookup(exact_all, base_all, base_u) if use_all else _lookup(exact_gr, base_gr, base_u)
+        exact_primary, base_primary = (exact_all, base_all) if use_all else (exact_gr, base_gr)
+        result = _lookup(exact_primary, base_primary, base_u)
         if result is None:
             misses.append(base_u)
             continue
         avail, reserve, total, no_vendible = result
+        best_condition_sku, best_condition_qty = _best_condition_row(_lookup_rows(exact_primary, base_primary, base_u))
         mty_r  = _lookup(exact_68, base_68, base_u)
         cdmx_r = _lookup(exact_47, base_47, base_u)
         tj_r   = _lookup(exact_tj, base_tj, base_u)
@@ -6454,6 +6476,7 @@ async def _bm_master_sync_once_inner():
             "mty_qty":  mty_r[0]  if mty_r  else 0,
             "cdmx_qty": cdmx_r[0] if cdmx_r else 0,
             "tj_qty":   tj_r[0]   if tj_r   else 0,
+            "best_condition_sku": best_condition_sku, "best_condition_qty": best_condition_qty,
             "verified": True,
         })
 
@@ -16749,6 +16772,57 @@ async def delete_stock_alert_resolution_from_bm(resolution_id: int, request: Req
         except Exception:
             pass
     return JSONResponse({"ok": result.get("ok", False), "detail": result.get("error") or (result.get("response") or {}).get("MessageReturn")})
+
+
+def _split_bm_sku_condition(sku: str) -> tuple[str, str]:
+    """Separa un SKU de BM en (base, condición) -- ej. "SNTV007447-GRB" ->
+    ("SNTV007447", "GRB"). Sin sufijo reconocido, condición vacía."""
+    upper = (sku or "").upper().strip()
+    for sfx in ("ICB", "ICC", "NEW", "GRA", "GRB", "GRC"):
+        if upper.endswith("-" + sfx):
+            return upper[: -(len(sfx) + 1)], sfx
+    return upper, ""
+
+
+@app.get("/api/stock/live-check")
+async def stock_live_check(request: Request, sku: str = Query(...), account_id: str = Query("")):
+    """FEATURE 2026-08-17 (pedido por Jovan): antes de sustituir, verificar
+    en VIVO (no el snapshot de bm_sku_master, refrescado cada ~2 min) si el
+    SKU sustituto sigue teniendo stock -- "a lo mejor ya lo tomaron para
+    otra cosa" entre que se sugirió y que se confirma la sustitución.
+
+    También resuelve el SKU con su condición REAL (ej. SNTV007447-GRB) --
+    probado en el incidente del mismo día que el bulk de stock (usado antes
+    aquí) NO expone la condición de forma confiable (a veces trae el SKU
+    base sin sufijo aunque sí exista una condición real), mientras que
+    GetAlterSKUMappingByWebSKU (mismo mecanismo ya verificado hoy para las
+    sustituciones reales) sí la reporta de forma exacta. Requiere
+    account_id para esa resolución -- sin él, solo hace el chequeo de
+    stock con el sufijo que ya traiga el SKU (o el agregado si no trae)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+
+    base, cond = _split_bm_sku_condition(sku)
+    resolved_sku = ""
+    if account_id:
+        try:
+            resolved_sku = await _resolve_bm_condition_sku(account_id, base) or ""
+        except Exception:
+            resolved_sku = ""
+    check_sku = resolved_sku or sku
+    check_base, check_cond = _split_bm_sku_condition(check_sku)
+    conditions_param = check_cond if check_cond else _bm_conditions_for_sku(check_base)
+
+    from app.services.binmanager_client import get_shared_bm as _gsbm_live
+    bm_cli = await _gsbm_live()
+    result = await bm_cli.get_stock_with_reserve(check_base, conditions=conditions_param)
+    if result is None:
+        return JSONResponse({"sku": sku, "resolved_sku": resolved_sku, "available_qty": None, "error": "No se pudo verificar en vivo (BM sin respuesta)"})
+    avail, reserve = result
+    return JSONResponse({"sku": sku, "resolved_sku": resolved_sku, "available_qty": avail, "reserve": reserve})
 
 
 @app.post("/api/stock/alerts/resolve-substitution")

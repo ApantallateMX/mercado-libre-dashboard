@@ -444,7 +444,9 @@
       <div>
         <label class="block text-xs font-medium text-gray-600 mb-1">SKU del producto que se mandó en su lugar</label>
         <input type="text" id="sub-modal-substitute" placeholder="ej: SNTV004254"
+               oninput="_subModalLiveCheck()"
                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-400 transition">
+        <p id="sub-modal-live-stock" class="text-xs text-gray-400 mt-1"></p>
       </div>
       <div>
         <label class="block text-xs font-medium text-gray-600 mb-1">Nota — respaldo de que el cliente aceptó el cambio <span class="text-red-400">*</span></label>
@@ -749,13 +751,59 @@ window.openSubstitutionModal = function(orderId, sku, platform, accountId, sugge
     document.getElementById('sub-modal-substitute').value = suggestedSku || '';
     document.getElementById('sub-modal-note').value = '';
     document.getElementById('sub-modal-error').classList.add('hidden');
+    document.getElementById('sub-modal-live-stock').textContent = '';
     document.getElementById('substitution-modal').classList.remove('hidden');
+    _subModalLiveCheck();
 };
 
 window.closeSubstitutionModal = function() {
     document.getElementById('substitution-modal').classList.add('hidden');
     _subModalCtx = null;
+    _subModalLiveStock = null;
 };
+
+// FEATURE 2026-08-17 (pedido por Jovan): la disponibilidad mostrada en la
+// sugerencia es un snapshot de ~2 min (bm_sku_master) -- "a lo mejor ya lo
+// tomaron para otra cosa" entre que se sugiere y que se confirma. Verifica
+// en VIVO contra BM cada vez que cambia el SKU sustituto (debounce 500ms)
+// y guarda el último resultado conocido para el chequeo final al confirmar.
+var _subModalLiveStock = null;
+var _subModalLiveCheckTimer = null;
+function _subModalLiveCheck() {
+    var sku = document.getElementById('sub-modal-substitute').value.trim();
+    var el = document.getElementById('sub-modal-live-stock');
+    clearTimeout(_subModalLiveCheckTimer);
+    if (!sku) { el.textContent = ''; _subModalLiveStock = null; return; }
+    el.textContent = 'Verificando disponibilidad en vivo...';
+    el.className = 'text-xs text-gray-400 mt-1';
+    var accountId = (_subModalCtx && _subModalCtx.accountId) || '';
+    _subModalLiveCheckTimer = setTimeout(function() {
+        fetch('/api/stock/live-check?sku=' + encodeURIComponent(sku) + '&account_id=' + encodeURIComponent(accountId))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (document.getElementById('sub-modal-substitute').value.trim() !== sku) return; // el usuario ya cambió el SKU
+                _subModalLiveStock = d;
+                // FEATURE 2026-08-17: el SKU con la condición REAL (ej.
+                // -GRB/-GRC/-GRA/-NEW) resuelto contra BM -- si difiere de lo
+                // que el usuario escribió/vio sugerido, mostrarlo explícito.
+                var condNote = (d.resolved_sku && d.resolved_sku !== sku) ? (' (condición real: ' + d.resolved_sku + ')') : '';
+                if (d.available_qty === null || d.available_qty === undefined) {
+                    el.textContent = '⚠ No se pudo verificar en vivo — se registrará sin confirmar stock real.';
+                    el.className = 'text-xs text-amber-600 mt-1';
+                } else if (d.available_qty <= 0) {
+                    el.textContent = '⚠ BinManager dice 0 disponibles AHORA MISMO para ' + sku + condNote + ' — puede que ya se haya usado.';
+                    el.className = 'text-xs text-red-600 mt-1 font-medium';
+                } else {
+                    el.textContent = '✓ ' + d.available_qty + ' disponibles ahora mismo en BinManager' + condNote + '.';
+                    el.className = 'text-xs text-green-600 mt-1';
+                }
+            })
+            .catch(function() {
+                _subModalLiveStock = null;
+                el.textContent = '';
+            });
+    }, 500);
+}
 
 window.submitSubstitution = function() {
     if (!_subModalCtx) return;
@@ -766,6 +814,17 @@ window.submitSubstitution = function() {
         errEl.textContent = 'El SKU sustituto y la nota son obligatorios.';
         errEl.classList.remove('hidden');
         return;
+    }
+    // FEATURE 2026-08-17: última verificación antes de confirmar -- si el
+    // chequeo en vivo más reciente (mismo SKU que se está por registrar)
+    // dice 0 disponibles, advertir antes de seguir en vez de confiar en la
+    // sugerencia ya vieja. No bloquea duro -- Jovan/Vanessa pueden saber
+    // algo que el snapshot no sabe (unidad física ya apartada, etc.).
+    if (_subModalLiveStock && _subModalLiveStock.sku === substituteSku &&
+        typeof _subModalLiveStock.available_qty === 'number' && _subModalLiveStock.available_qty <= 0) {
+        if (!confirm('BinManager dice 0 disponibles AHORA MISMO para ' + substituteSku + ' — puede que ya se haya usado para otra orden. ¿Continuar de todas formas?')) {
+            return;
+        }
     }
     var btn = document.getElementById('sub-modal-confirm-btn');
     btn.disabled = true; btn.textContent = 'Guardando...';

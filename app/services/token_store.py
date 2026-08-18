@@ -1176,6 +1176,14 @@ async def init_db():
             ("tj_qty", "INTEGER NOT NULL DEFAULT 0"),
             ("no_vendible_qty", "INTEGER NOT NULL DEFAULT 0"),
             ("verified", "INTEGER NOT NULL DEFAULT 0"),
+            # FEATURE 2026-08-17 (pedido por Jovan): available_qty es la SUMA
+            # de todas las condiciones (GRA+GRB+GRC+NEW) -- nunca dice en CUÁL
+            # condición específica hay stock real. best_condition_sku/qty
+            # guardan el SKU exacto con sufijo (ej. SNTV007447-GRB) de la
+            # condición con más stock, calculado en _bm_master_sync_once_inner
+            # (ya tiene acceso a las filas exactas por condición del bulk).
+            ("best_condition_sku", "TEXT NOT NULL DEFAULT ''"),
+            ("best_condition_qty", "INTEGER NOT NULL DEFAULT 0"),
         ):
             try:
                 await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
@@ -1929,9 +1937,11 @@ async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
         await db.executemany(
             """INSERT INTO bm_sku_master
                    (sku, available_qty, reserve_qty, total_qty,
-                    mty_qty, cdmx_qty, tj_qty, no_vendible_qty, verified, stock_updated_at)
+                    mty_qty, cdmx_qty, tj_qty, no_vendible_qty, verified,
+                    best_condition_sku, best_condition_qty, stock_updated_at)
                VALUES (:sku, :available_qty, :reserve_qty, :total_qty,
-                       :mty_qty, :cdmx_qty, :tj_qty, :no_vendible_qty, :verified, :updated_at)
+                       :mty_qty, :cdmx_qty, :tj_qty, :no_vendible_qty, :verified,
+                       :best_condition_sku, :best_condition_qty, :updated_at)
                ON CONFLICT(sku) DO UPDATE SET
                    available_qty   = excluded.available_qty,
                    reserve_qty     = excluded.reserve_qty,
@@ -1941,6 +1951,8 @@ async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
                    tj_qty          = excluded.tj_qty,
                    no_vendible_qty = excluded.no_vendible_qty,
                    verified        = excluded.verified,
+                   best_condition_sku = excluded.best_condition_sku,
+                   best_condition_qty = excluded.best_condition_qty,
                    stock_updated_at = excluded.stock_updated_at""",
             [{
                 "sku": r["sku"],
@@ -1952,6 +1964,8 @@ async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
                 "tj_qty": r.get("tj_qty", 0) or 0,
                 "no_vendible_qty": r.get("no_vendible_qty", 0) or 0,
                 "verified": 1 if r.get("verified") else 0,
+                "best_condition_sku": r.get("best_condition_sku", "") or "",
+                "best_condition_qty": r.get("best_condition_qty", 0) or 0,
                 "updated_at": now,
             } for r in rows],
         )
@@ -2238,6 +2252,7 @@ async def get_replacement_sku_suggestions(
         params = [retail_ph, brand, sku] + ([size] if size and size > 0 else []) + [limit]
         cur = await db.execute(f"""
             SELECT sku, title, model, retail_ph, available_qty, size,
+                   best_condition_sku, best_condition_qty,
                    ABS(retail_ph - ?) AS price_diff
             FROM bm_sku_master
             WHERE brand = ? AND sku != ? AND available_qty > 0 AND retail_ph > 0 {size_clause}
@@ -2245,6 +2260,18 @@ async def get_replacement_sku_suggestions(
             LIMIT ?
         """, params)
         rows = [dict(r) for r in await cur.fetchall()]
+    # FEATURE 2026-08-17 (pedido por Jovan): available_qty es la suma de
+    # TODAS las condiciones -- no dice en cuál hay stock real. Si se pudo
+    # resolver la condición ganadora (ver _bm_master_sync_once_inner), se
+    # usa ESE sku (con sufijo -GRB/-GRC/-GRA/-NEW) y SU cantidad específica
+    # en vez del agregado -- para no sugerir "disp. 3" cuando en realidad
+    # son 3 condiciones distintas con 1 unidad cada una.
+    for row in rows:
+        best_sku = row.pop("best_condition_sku", "") or ""
+        best_qty = row.pop("best_condition_qty", 0) or 0
+        if best_sku:
+            row["sku"] = best_sku
+            row["available_qty"] = best_qty
     return rows
 
 
