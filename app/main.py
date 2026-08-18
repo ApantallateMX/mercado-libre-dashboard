@@ -18802,6 +18802,18 @@ async def diag_oversell_correction_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/amazon-stock-reconcile")
+async def diag_amazon_stock_reconcile(token: str = "", days: int = 3):
+    """Dispara YA una pasada de _run_amazon_stock_reconcile_pass (normalmente
+    corre sola cada 5 min/2h) -- para depurar en vivo por qué una orden
+    puntual no se limpia (2026-08-18, caso real: 5 filas de VECKTOR sin
+    autolimpiar). Devuelve {n, errors} tal cual, sin resumir."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    n, errors = await _run_amazon_stock_reconcile_pass(days=days)
+    return JSONResponse({"n": n, "errors": errors})
+
+
 @app.get("/api/diag/reconcile-realtime-alerts")
 async def diag_reconcile_realtime_alerts(token: str = ""):
     """Dispara YA el chequeo de reconciliación (normalmente corre solo cada
