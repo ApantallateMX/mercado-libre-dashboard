@@ -2466,11 +2466,31 @@ async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
                     errors.append({"order_id": order_id, "error": str(e)[:200]})
                     continue
                 order_date = (order.get("PurchaseDate") or "")[:10]
+                # FIX 2026-08-18 (bug real encontrado probando contra las 3
+                # cuentas reales antes de desplegar): "SKU no encontrado en
+                # el bulk" NO siempre significa "sin stock" -- también puede
+                # significar "este SKU no es catálogo de BM en absoluto".
+                # Confirmado con datos reales: VECKTOR tiene solo ~48% de su
+                # catálogo Amazon en convención SN/SH (el resto, códigos de
+                # fabricante/dropship sin relación con BM); AUTOBOT ~94%.
+                # Sin este filtro, CADA item no-BM de una orden generaba una
+                # falsa alerta "sin stock". Se exige que el SKU exista en
+                # bm_sku_master (el catálogo maestro persistido, no solo el
+                # bulk en memoria) antes de evaluar/alertar -- mismo criterio
+                # que ya se usó para excluir ExclusiveBulbs, aplicado a nivel
+                # SKU en vez de a nivel cuenta completa.
+                skus_this_order = {
+                    normalize_to_bm_sku((it.get("SellerSKU") or "").strip())
+                    for it in items if (it.get("SellerSKU") or "").strip()
+                }
+                known_skus = await token_store.get_bm_master_rows_for_skus(list(skus_this_order))
                 for item in items:
                     sku_raw = (item.get("SellerSKU") or "").strip()
                     if not sku_raw:
                         continue
                     sku = normalize_to_bm_sku(sku_raw)
+                    if sku not in known_skus:
+                        continue  # no es catálogo BM -- no nos corresponde alertar
                     quantity = int(item.get("QuantityOrdered") or 1)
                     avail = _bm_bulk_available_qty(sku)
                     if avail is None or avail <= 0:

@@ -57,10 +57,24 @@ antes de desplegar (no se guessed, se corrió el loop de verdad):**
    explícita) para no generar falsas alertas "sin stock" en esa cuenta
    hasta aclarar cómo se gestiona su inventario.
 
-**Hallazgo aparte (no bloquea, pero limita hoy):** la cuenta VECKTOR
-IMPORTS tiene el refresh token OAuth inválido/expirado (HTTP 400 al
-refrescar) — no relacionado con este feature, pendiente que Jovan
-reautorice la cuenta desde el dashboard.
+**3er bug real, encontrado en producción justo después del primer
+deploy:** la primera corrida SÍ detectó una orden real de VECKTOR, pero
+**los 5 SKUs de esa orden (ej. "8512899") no existen en absoluto en
+`bm_sku_master`** — no eran "sin stock", eran de un catálogo que no es
+de BM. Se verificó con datos reales: VECKTOR solo tiene ~48% de su
+catálogo Amazon en convención SN/SH (el resto son códigos de fabricante/
+dropship), AUTOBOT ~94%. "SKU no encontrado en el bulk" puede significar
+2 cosas distintas y el código solo distinguía una. Fix: antes de evaluar
+stock, se exige que el SKU exista en `bm_sku_master` (catálogo maestro
+persistido) — mismo criterio de "no es catálogo BM" ya usado para excluir
+ExclusiveBulbs, aplicado ahora a nivel SKU dentro de cualquier cuenta, no
+solo a nivel cuenta completa. Con este fix, la orden falsa de VECKTOR se
+habría saltado por completo (verificado).
+
+**Nota de corrección:** el "hallazgo" original de que VECKTOR tenía el
+refresh token OAuth roto era un falso positivo del entorno LOCAL de
+prueba (credenciales locales desactualizadas) — en producción el token
+de VECKTOR funciona bien, confirmado con la detección real de arriba.
 
 También: `_account_display_name(platform, account_id)` nuevo — antes
 `/api/stock/realtime-alerts` y `/api/stock/alerts/pending-shipment`
