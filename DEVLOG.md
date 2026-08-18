@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX CRÍTICO: BM puede tener 2 Products distintos bajo el mismo WebSKU + orden duplicada en En vivo/Pendientes
+
+Jovan reportó (con captura real de BM) que una sustitución aplicada
+("Aplicado en BM") no aparecía en el Mapping real de la orden en BM.
+Investigación con evidencia real (no supuestos) reveló un caso NUEVO,
+distinto a los bugs de ayer: **BM puede tener DOS "Product" registrados
+por separado bajo el mismo WebSKU** (`SNTV006485-ICB`, el real para esta
+orden según su Channel/Listing, Y `SNTV006485-GRB`, un producto distinto
+con su propio Listing) — `GetAlterSKUMappingByWebSKU` (usado por
+`_resolve_bm_condition_sku`) solo devuelve UNO de los dos, sin garantía
+de ser el correcto para una orden puntual. El sistema adivinó el
+equivocado.
+
+**Investigado y descartado con datos reales:** se revisó si el
+`seller_sku` crudo de la orden en ML ya trae la condición real — NO, es
+solo el bundle (`"SNTV006485 / SNWM000001"`), la condición (ICB/GRB/etc.)
+es un dato 100% interno de BM que ML nunca conoce. No hay atajo posible
+desde el lado de ML.
+
+**Solución aplicada para el caso puntual:** nuevos endpoints
+`bm-alter-sku-create-exact`/`delete-exact` (crean/borran un mapeo con el
+ProductSKU EXACTO que el usuario ya confirmó visualmente en BM, sin
+ninguna resolución automática) — se limpió el mapeo mal ubicado y se creó
+el correcto bajo `SNTV006485-ICB`, confirmado por Jovan directamente en
+BM. **Pendiente real, no resuelto todavía**: la resolución automática
+general (para sustituciones futuras vía "Sustituir") sigue usando el
+mecanismo ambiguo — se necesita capturar con DevTools el endpoint real
+que usa "Status Orders" de BM al buscar por orden, para resolver el
+Product correcto de forma determinista sin depender de que Jovan mande
+captura cada vez.
+
+**Bug relacionado, también real, encontrado al revisar la captura:** una
+orden ya sustituida (viviendo en "Pendientes de Envío") seguía
+apareciendo en "En vivo" pidiendo "Sustituir" otra vez — confuso, parecía
+que no se había hecho nada. `get_realtime_stock_alerts` ahora excluye
+cualquier orden con sustitución activa (aplicándose o ya aplicada,
+pendiente/completada) — vuelve a aparecer solo si se reabre
+explícitamente o si la inyección a BM falló de verdad. Verificado en
+producción: la orden ya no aparece en "En vivo", sigue correcta en
+"Pendientes de Envío".
+
 ## 2026-08-18 — FIX (2x): reintento automático en "Sustituir" + Productos ya no llama BM en vivo
 
 Continuación directa del fix crítico de `bm_sku_master` (entrada de abajo).
