@@ -2250,7 +2250,15 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
     """Feed cronológico (más reciente primero) de órdenes individuales
     detectadas sin stock al momento — reemplaza la vista agregada por SKU.
     Cada fila incluye sugerencias de reemplazo (misma marca, precio parecido,
-    con stock)."""
+    con stock).
+
+    FIX 2026-08-18 (reportado por Jovan): una orden ya sustituida (viviendo
+    en "Pendientes de Envío") seguía apareciendo aquí pidiendo "Sustituir"
+    otra vez -- confuso, parecía que no se había hecho nada. Se excluye
+    cualquier orden con una sustitución activa (aplicándose o ya aplicada
+    y pendiente de envío/completada) -- vuelve a aparecer aquí solo si se
+    "reabre" explícitamente (sustituto sin stock) o si la inyección a BM
+    falló de verdad (necesita una decisión nueva)."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
@@ -2263,6 +2271,15 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
                 rsa.quantity, rsa.available_qty_at_check, rsa.order_date, rsa.detected_at
             FROM realtime_stock_alerts rsa
             LEFT JOIN bm_sku_master bsm ON bsm.sku = rsa.sku
+            WHERE NOT EXISTS (
+                SELECT 1 FROM stock_alert_resolutions sar
+                WHERE sar.order_id = rsa.order_id
+                  AND sar.resolution_type = 'substitution'
+                  AND (
+                      sar.fulfillment_status IN ('pendiente_envio', 'completado')
+                      OR (sar.fulfillment_status = '' AND sar.bm_status IN ('pending', 'success'))
+                  )
+            )
             ORDER BY rsa.detected_at DESC
             LIMIT ?
         """, (limit,))
