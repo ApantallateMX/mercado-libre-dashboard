@@ -7884,11 +7884,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             _bulk_gr_rows = _bm_bulk_gr_cache[1]
             logger.info("[BM-CACHE] GR bulk fallo hace <3min -- usando stale sin reintentar")
         elif _bulk_gr_rows is None:
+            _gr_t0 = _time.time()
             try:
+                # FIX 2026-08-18 (incidente real: GR timing out a 90s de forma
+                # silenciosa por 25h seguidas, cascadeando el skip de LOC47/68/
+                # TJ/ALL cada ciclo) -- subido a 150s, igual que ALL/LOC-TJ (que
+                # ya se subieron por el mismo motivo el 2026-08-10: la cola del
+                # semáforo global se acumula en cada fetch sucesivo).
                 _fresh_gr = await asyncio.wait_for(
                     bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
-                    timeout=90.0,
+                    timeout=150.0,
                 )
+                _gr_elapsed = _time.time() - _gr_t0
                 if _fresh_gr:
                     global _bm_bulk_raw_sample
                     if _fresh_gr and _bm_bulk_raw_sample is None:
@@ -7900,7 +7907,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bulk_gr_rows = _fresh_gr
                     _bm_bulk_mark_ok("gr")
                     asyncio.create_task(token_store.save_bm_bulk_cache("gr", _bm_bulk_gr_cache[0], _bm_bulk_gr_cache[1]))
-                    logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas")
+                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("gr", "success", rows_count=len(_fresh_gr), elapsed_s=_gr_elapsed))
+                    logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas ({round(_gr_elapsed)}s)")
                 else:
                     # Fix B1: BM respondió sin excepción pero devolvió vacío/None — tratar como fallo.
                     # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
@@ -7908,14 +7916,21 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bulk_returned_empty = True  # señal para evitar retries individuales
                     _gr_fresh_attempt_failed = True
                     _bm_bulk_mark_failed("gr")
+                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("gr", "empty", elapsed_s=_gr_elapsed))
                     if _bm_bulk_gr_cache:
                         _bulk_gr_rows = _bm_bulk_gr_cache[1]
                         logger.warning(f"[BM-CACHE] GR usando stale ({len(_bulk_gr_rows)} rows) tras bulk vacío")
                     _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
             except Exception as _bulk_err:
-                logger.warning(f"[BM-CACHE] GR bulk fetch error: {_bulk_err} — usando stale")
+                _gr_elapsed = _time.time() - _gr_t0
+                # FIX 2026-08-18: str(asyncio.TimeoutError()) es '' -- el log
+                # quedaba mudo ("GR bulk fetch error:  — usando stale") sin
+                # decir qué pasó de verdad. Se agrega el tipo de excepción.
+                _gr_err_label = f"{type(_bulk_err).__name__}: {_bulk_err}" if str(_bulk_err) else type(_bulk_err).__name__
+                logger.warning(f"[BM-CACHE] GR bulk fetch error ({round(_gr_elapsed)}s): {_gr_err_label} — usando stale")
                 _gr_fresh_attempt_failed = True
                 _bm_bulk_mark_failed("gr")
+                asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("gr", "error", elapsed_s=_gr_elapsed, error_message=_gr_err_label))
                 # Si falla el fetch, intentar usar cache aunque sea antiguo
                 if _bm_bulk_gr_cache:
                     _bulk_gr_rows = _bm_bulk_gr_cache[1]
@@ -7939,24 +7954,31 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
                 logger.info("[BM-CACHE] LOC47 fallo hace <3min -- usando stale sin reintentar")
             else:
+                _l47_t0 = _time.time()
                 try:
                     _fresh_l47 = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="47"),
                         timeout=90.0,
                     )
+                    _l47_elapsed = _time.time() - _l47_t0
                     if _fresh_l47:
                         _bm_bulk_loc47_cache = (_time.time(), _slim_bulk_rows(_fresh_l47))
                         _bulk_loc47_rows = _fresh_l47
                         _bm_bulk_mark_ok("loc47")
                         asyncio.create_task(token_store.save_bm_bulk_cache("loc47", _bm_bulk_loc47_cache[0], _bm_bulk_loc47_cache[1]))
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc47", "success", rows_count=len(_fresh_l47), elapsed_s=_l47_elapsed))
                         logger.info(f"[BM-CACHE] LOC47 (CDMX) bulk OK: {len(_fresh_l47)} filas")
                     else:
                         _bm_bulk_mark_failed("loc47")
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc47", "empty", elapsed_s=_l47_elapsed))
                         if _bm_bulk_loc47_cache:
                             _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
                 except Exception as _le47:
-                    logger.warning(f"[BM-CACHE] LOC47 bulk error: {_le47}")
+                    _l47_elapsed = _time.time() - _l47_t0
+                    _l47_err_label = f"{type(_le47).__name__}: {_le47}" if str(_le47) else type(_le47).__name__
+                    logger.warning(f"[BM-CACHE] LOC47 bulk error: {_l47_err_label}")
                     _bm_bulk_mark_failed("loc47")
+                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc47", "error", elapsed_s=_l47_elapsed, error_message=_l47_err_label))
                     if _bm_bulk_loc47_cache:
                         _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
             if _bm_bulk_loc68_cache and (_time.time() - _bm_bulk_loc68_cache[0]) < _loc_ttl:
@@ -7966,24 +7988,31 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
                 logger.info("[BM-CACHE] LOC68 fallo hace <3min -- usando stale sin reintentar")
             else:
+                _l68_t0 = _time.time()
                 try:
                     _fresh_l68 = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="68"),
                         timeout=90.0,
                     )
+                    _l68_elapsed = _time.time() - _l68_t0
                     if _fresh_l68:
                         _bm_bulk_loc68_cache = (_time.time(), _slim_bulk_rows(_fresh_l68))
                         _bulk_loc68_rows = _fresh_l68
                         _bm_bulk_mark_ok("loc68")
                         asyncio.create_task(token_store.save_bm_bulk_cache("loc68", _bm_bulk_loc68_cache[0], _bm_bulk_loc68_cache[1]))
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc68", "success", rows_count=len(_fresh_l68), elapsed_s=_l68_elapsed))
                         logger.info(f"[BM-CACHE] LOC68 (MTY) bulk OK: {len(_fresh_l68)} filas")
                     else:
                         _bm_bulk_mark_failed("loc68")
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc68", "empty", elapsed_s=_l68_elapsed))
                         if _bm_bulk_loc68_cache:
                             _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
                 except Exception as _le68:
-                    logger.warning(f"[BM-CACHE] LOC68 bulk error: {_le68}")
+                    _l68_elapsed = _time.time() - _l68_t0
+                    _l68_err_label = f"{type(_le68).__name__}: {_le68}" if str(_le68) else type(_le68).__name__
+                    logger.warning(f"[BM-CACHE] LOC68 bulk error: {_l68_err_label}")
                     _bm_bulk_mark_failed("loc68")
+                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc68", "error", elapsed_s=_l68_elapsed, error_message=_l68_err_label))
                     if _bm_bulk_loc68_cache:
                         _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
             if _bm_bulk_loctj_cache and (_time.time() - _bm_bulk_loctj_cache[0]) < _loc_ttl:
@@ -7993,6 +8022,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
                 logger.info("[BM-CACHE] LOC-TJ fallo hace <3min -- usando stale sin reintentar")
             else:
+                _ltj_t0 = _time.time()
                 try:
                     # timeout=150s (no 90s como GR/LOC47/LOC68): FIX 2026-08-10 —
                     # LOC-TJ se pide DESPUÉS de GR+LOC47+LOC68 en la misma cadena
@@ -8006,19 +8036,25 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="45,69,43,42"),
                         timeout=150.0,
                     )
+                    _ltj_elapsed = _time.time() - _ltj_t0
                     if _fresh_ltj:
                         _bm_bulk_loctj_cache = (_time.time(), _slim_bulk_rows(_fresh_ltj))
                         _bulk_loctj_rows = _fresh_ltj
                         _bm_bulk_mark_ok("loctj")
                         asyncio.create_task(token_store.save_bm_bulk_cache("loctj", _bm_bulk_loctj_cache[0], _bm_bulk_loctj_cache[1]))
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loctj", "success", rows_count=len(_fresh_ltj), elapsed_s=_ltj_elapsed))
                         logger.info(f"[BM-CACHE] LOC-TJ bulk OK: {len(_fresh_ltj)} filas")
                     else:
                         _bm_bulk_mark_failed("loctj")
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loctj", "empty", elapsed_s=_ltj_elapsed))
                         if _bm_bulk_loctj_cache:
                             _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
                 except Exception as _letj:
-                    logger.warning(f"[BM-CACHE] LOC-TJ bulk error: {_letj}")
+                    _ltj_elapsed = _time.time() - _ltj_t0
+                    _ltj_err_label = f"{type(_letj).__name__}: {_letj}" if str(_letj) else type(_letj).__name__
+                    logger.warning(f"[BM-CACHE] LOC-TJ bulk error: {_ltj_err_label}")
                     _bm_bulk_mark_failed("loctj")
+                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loctj", "error", elapsed_s=_ltj_elapsed, error_message=_ltj_err_label))
                     if _bm_bulk_loctj_cache:
                         _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
 
@@ -8045,6 +8081,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bulk_all_rows = _bm_bulk_all_cache[1]
                     logger.info("[BM-CACHE] ALL bulk saltado (GR ya falló este ciclo) -- usando stale")
             elif _bulk_all_rows is None:
+                _all_t0 = _time.time()
                 try:
                     # timeout=150s: FIX 2026-08-10 — mismo motivo que LOC-TJ arriba,
                     # ALL se pide al final de la cadena secuencial (después de GR,
@@ -8054,22 +8091,28 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
                         timeout=150.0,
                     )
+                    _all_elapsed = _time.time() - _all_t0
                     if _fresh_all:
                         _slimmed_all = _slim_bulk_rows(_fresh_all)
                         _bm_bulk_all_cache = (_time.time(), _slimmed_all)
                         _bulk_all_rows = _slimmed_all
                         _bm_bulk_mark_ok("all")
                         asyncio.create_task(token_store.save_bm_bulk_cache("all", _bm_bulk_all_cache[0], _bm_bulk_all_cache[1]))
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("all", "success", rows_count=len(_fresh_all), elapsed_s=_all_elapsed))
                         logger.info(f"[BM-CACHE] ALL bulk fetch OK: {len(_fresh_all)} filas")
                     else:
                         # Fix B2: mismo caso que GR — bulk vacío sin excepción → stale fallback
                         logger.warning("[BM-CACHE] ALL bulk fetch devolvió vacío — fallback a stale cache")
                         _bm_bulk_mark_failed("all")
+                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("all", "empty", elapsed_s=_all_elapsed))
                         if _bm_bulk_all_cache:
                             _bulk_all_rows = _bm_bulk_all_cache[1]
                 except Exception as _bulk_err:
-                    logger.warning(f"[BM-CACHE] ALL bulk fetch error: {_bulk_err} — usando stale")
+                    _all_elapsed = _time.time() - _all_t0
+                    _all_err_label = f"{type(_bulk_err).__name__}: {_bulk_err}" if str(_bulk_err) else type(_bulk_err).__name__
+                    logger.warning(f"[BM-CACHE] ALL bulk fetch error: {_all_err_label} — usando stale")
                     _bm_bulk_mark_failed("all")
+                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("all", "error", elapsed_s=_all_elapsed, error_message=_all_err_label))
                     if _bm_bulk_all_cache:
                         _bulk_all_rows = _bm_bulk_all_cache[1]
 
@@ -16448,11 +16491,26 @@ async def prewarm_status():
     except Exception:
         pass
 
+    # FIX 2026-08-18 (incidente real: GR bulk fetch fallando por timeout 25h
+    # seguidas SIN que "last_updated_s" (stock_issues_cache, derivado) lo
+    # reflejara -- ese caché se sigue "actualizando" cada ciclo aunque por
+    # debajo use bulk viejo, así que el badge del navbar se veía verde
+    # mintiendo frescura). bulk_age_s es la edad REAL del bulk que BM
+    # devolvió la última vez que SÍ respondió -- la señal que de verdad
+    # importa para saber si hay que confiar en los datos de stock.
+    _bulk_ages = []
+    if _bm_bulk_gr_cache:
+        _bulk_ages.append(_time.time() - _bm_bulk_gr_cache[0])
+    if _bm_bulk_all_cache:
+        _bulk_ages.append(_time.time() - _bm_bulk_all_cache[0])
+    bulk_age_s = round(max(_bulk_ages)) if _bulk_ages else None
+
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
         "error": _prewarm_error[:300] if _prewarm_error else "",
         "last_updated_s": last_updated,
+        "bulk_age_s": bulk_age_s,
         "progress": progress,
         "bm_down": bm_down,
         "bm_down_min": bm_down_min,

@@ -264,8 +264,15 @@ window._setSysAlert = function(key, item) {
 
     function _checkCacheAge() {
         fetch('/api/stock/prewarm-status').then(function(r){ return r.json(); }).then(function(d){
-            _updateBmDot(d.last_updated_s);
-            _updateCacheAge(d.last_updated_s, d.running);
+            // FIX 2026-08-18 (incidente real: el bulk BM real llevaba 25h
+            // fallando por timeout y este indicador seguía en verde) --
+            // bulk_age_s es la edad REAL del último bulk que BM sí devolvió;
+            // last_updated_s es un caché derivado que puede "refrescarse"
+            // aunque el bulk de abajo esté viejo. Usar bulk_age_s cuando
+            // exista (siempre que ya hubo al menos un fetch en este proceso).
+            var age = (typeof d.bulk_age_s === 'number') ? d.bulk_age_s : d.last_updated_s;
+            _updateBmDot(age);
+            _updateCacheAge(age, d.running);
         }).catch(function(){});
     }
     _checkCacheAge();

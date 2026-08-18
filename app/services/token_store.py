@@ -702,6 +702,26 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_bulk_fetch_log — histórico de CADA intento real de bajar
+        # el bulk de BM (éxito, vacío o error), no solo los éxitos como
+        # bm_sync_log. FEATURE 2026-08-18 (pedido por Jovan tras el
+        # incidente de 25h de bulk sin refrescar por timeouts silenciosos
+        # de GR): sin esto, una racha de fallos no deja ningún rastro
+        # consultable -- bm_sync_log solo se escribe cuando SÍ hubo éxito.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_bulk_fetch_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts            REAL    NOT NULL,
+                bulk_name     TEXT    NOT NULL,
+                status        TEXT    NOT NULL,
+                rows_count    INTEGER NOT NULL DEFAULT 0,
+                elapsed_s     REAL    NOT NULL DEFAULT 0,
+                error_message TEXT    NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bm_bulk_fetch_log_ts ON bm_bulk_fetch_log(ts)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: stock_issues_cache — persiste alertas/stock pre-computados
         # Sobrevive deploys de Railway: el Stock tab muestra datos inmediatos
         # en lugar de "Calculando..." mientras corre el prewarm en background.
@@ -4342,6 +4362,46 @@ async def get_bm_sync_log(limit: int = 10) -> list[dict]:
         rows = await (await db.execute(
             "SELECT id, synced_at, sku_count, elapsed_s, source "
             "FROM bm_sync_log ORDER BY id DESC LIMIT ?",
+            [limit],
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ─── bm_bulk_fetch_log helpers ──────────────────────────────────────────────
+# FEATURE 2026-08-18 (pedido por Jovan): a diferencia de bm_sync_log (solo
+# éxitos), esto registra CADA intento real de fetch al bulk de BM -- para
+# que una racha de timeouts silenciosos (como el incidente real: GR bulk
+# fallando por 25h sin que nada quedara registrado) deje rastro consultable
+# en vez de perderse en logs efímeros de Railway.
+
+async def log_bm_bulk_fetch_attempt(
+    bulk_name: str, status: str, rows_count: int = 0, elapsed_s: float = 0.0, error_message: str = "",
+) -> None:
+    """status: 'success' | 'empty' | 'error'. Solo se llama para intentos
+    FRESCOS reales (no para cache-hit ni para el skip de <3min sin reintentar
+    -- esos no son intentos, serían ruido). Conserva los últimos 300."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "INSERT INTO bm_bulk_fetch_log (ts, bulk_name, status, rows_count, elapsed_s, error_message) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (_t.time(), bulk_name, status, rows_count, round(elapsed_s, 1), (error_message or "")[:300]),
+        )
+        await db.execute(
+            "DELETE FROM bm_bulk_fetch_log WHERE id NOT IN "
+            "(SELECT id FROM bm_bulk_fetch_log ORDER BY id DESC LIMIT 300)"
+        )
+        await db.commit()
+
+
+async def get_bm_bulk_fetch_log(limit: int = 30, only_failures: bool = False) -> list[dict]:
+    """Últimos `limit` intentos de fetch bulk, más reciente primero."""
+    where = "WHERE status != 'success'" if only_failures else ""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"SELECT ts, bulk_name, status, rows_count, elapsed_s, error_message "
+            f"FROM bm_bulk_fetch_log {where} ORDER BY id DESC LIMIT ?",
             [limit],
         )).fetchall()
     return [dict(r) for r in rows]

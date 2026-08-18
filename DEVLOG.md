@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FEAT: histórico de fallos del bulk BM + navbar deja de mentir frescura + timeout GR subido a 150s
+
+Cierra el pendiente real de las 2 entradas anteriores: Jovan pidió "llevar
+un control e histórico para que no pase eso". Se investigó con evidencia
+real de los logs de Railway (no supuesta) por qué el bulk llevaba 25h sin
+refrescar pese a que el loop de 10 min SÍ estaba corriendo:
+
+**Causa raíz encontrada:** el fetch GR (`bm_cli.get_bulk_stock`) lleva
+fallando por **timeout de 90s de forma silenciosa y repetida** (log real:
+`[BM-CACHE] GR bulk fetch error:  — usando stale`, mensaje vacío = firma
+de `asyncio.TimeoutError`, cuyo `str()` es ''). Cuando GR falla fresco, el
+circuit breaker existente (`_gr_fresh_attempt_failed`) salta LOC47/LOC68/
+LOC-TJ/ALL ese mismo ciclo — así que UN solo endpoint lento tumba los 5
+fetches, ciclo tras ciclo, indefinidamente. Y nadie lo veía porque el
+badge verde de "Inventario actualizado" en el navbar mide la edad de
+`stock_issues_cache` (un caché derivado que se puede "completar" un ciclo
+usando bulk viejo) — no la edad real del bulk.
+
+**3 cambios (todos aprobados por Jovan, "adelante con todos"):**
+
+1. **Tabla nueva `bm_bulk_fetch_log`** (`token_store.py`) — registra CADA
+   intento fresco real (éxito/vacío/error) de los 5 fetches (gr/all/loc47/
+   loc68/loctj), con duración y mensaje de error real (se agregó
+   `type(e).__name__` porque `TimeoutError` sin eso se veía vacío en el
+   log). A diferencia de `bm_sync_log` (solo éxitos), esto deja rastro de
+   una racha de fallos como la de hoy.
+2. **Navbar ya no usa el proxy que mentía frescura** — `/api/stock/prewarm-status`
+   ahora expone `bulk_age_s` (edad real de `_bm_bulk_gr_cache`/`_bm_bulk_all_cache`,
+   el máximo de los dos) y `base.html` (`_checkCacheAge`) lo usa en vez de
+   `last_updated_s` para el punto verde/amarillo/rojo y la alerta global.
+3. **Timeout de GR subido de 90s a 150s** (igual que ALL/LOC-TJ, que ya se
+   subieron el 2026-08-10 por el mismo motivo: la cola del semáforo global
+   se acumula fetch tras fetch). No garantiza resolver la causa si BM está
+   lento de verdad de su lado, pero le da más margen real.
+
+Archivos: `app/services/token_store.py` (tabla + helpers), `app/main.py`
+(instrumentación de los 5 bloques de fetch, timeout GR, campo `bulk_age_s`),
+`app/templates/base.html` (`_checkCacheAge`). Probado localmente: tabla e
+inserts funcionan, endpoint devuelve `bulk_age_s` correctamente.
+
+---
+
 ## 2026-08-18 — Corrección propia: SÍ existía un loop de refresco fijo del bulk BM (ya a 10 min, no "ninguno") — bajado a 5 min
 
 Después del fix de `/api/stock/live-check` (ver entrada siguiente), se
