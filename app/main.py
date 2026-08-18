@@ -17749,6 +17749,55 @@ async def diag_bm_alter_sku_reassign(
     return JSONResponse({"step": "create", "delete_result": delete_result, "create_result": create_result})
 
 
+@app.post("/api/diag/bm-alter-sku-create-exact")
+async def diag_bm_alter_sku_create_exact(
+    account_id: str = "", order_id: str = "", product_sku_exact: str = "",
+    substitute_sku: str = "", token: str = "",
+):
+    """UTILIDAD PUNTUAL 2026-08-18 -- bug real encontrado: un mismo WebSKU
+    puede tener MÁS DE UN "Product" registrado en BM (ej. SNTV006485-ICB
+    Y SNTV006485-GRB, cada uno con su propio Channel/Listing) --
+    GetAlterSKUMappingByWebSKU (usado por _resolve_bm_condition_sku) solo
+    devuelve UNO de ellos, sin garantía de que sea el correcto para una
+    orden puntual. El Product real de una orden se ve buscándola en
+    "Status Orders" dentro de BM y abriendo su Mapping -- ahí está el
+    ProductSKU verdadero (ej. SNTV006485-ICB para la orden
+    2000017991930258, confirmado por Jovan visualmente en BM).
+
+    Este endpoint crea el mapeo con el ProductSKU EXACTO que el caller ya
+    confirmó (sin ninguna resolución/adivinanza) -- usar solo cuando ya se
+    verificó en BM cuál es el Product correcto para la orden."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not all([account_id, order_id, product_sku_exact, substitute_sku]):
+        return JSONResponse({"error": "account_id, order_id, product_sku_exact, substitute_sku requeridos"}, status_code=400)
+
+    web_sku = _bm_base_sku(product_sku_exact)
+    if await _bm_alter_sku_covers_order(
+        account_id=account_id, web_sku=web_sku, product_sku=product_sku_exact,
+        substitute_sku=substitute_sku, order_id=order_id,
+    ):
+        return JSONResponse({"ok": True, "already_existed": True})
+
+    payload = {
+        "ProfileID": account_id, "SiteAccountID": account_id, "WebSKU": web_sku,
+        "ProductSKU": product_sku_exact, "AlterSKU": substitute_sku, "OrderScope": order_id,
+        "FulfillmentType": "Merchant", "Qty": 1, "Actions": 1,
+        "ListingId": None, "Priority": None, "UserID": None,
+    }
+    from app.services.binmanager_client import bm_post as _bm_post_exact
+    resp = await _bm_post_exact(_BM_ALTER_SKU_URL, payload, timeout=20.0)
+    if resp is None:
+        return JSONResponse({"ok": False, "error": "Sin respuesta de BinManager"}, status_code=502)
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"raw_text": resp.text[:500]}
+    _msg = str((data or {}).get("MessageReturn") or "").strip()
+    _ok = resp.status_code == 200 and _msg.lower() == "success"
+    return JSONResponse({"ok": _ok, "status_code": resp.status_code, "response": data})
+
+
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
     """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
