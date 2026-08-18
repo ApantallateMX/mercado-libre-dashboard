@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-17 — FIX (2x): "Pendientes de Envío" no actualizaba stock + botón "Buscar otro sustituto" se quedaba atorado
+
+Dos bugs reales encontrados por Jovan usando la feature recién lanzada
+(entrada de abajo), mismo día:
+
+**1. Las tarjetas seguían en "sin verificar todavía" sin actualizar
+nunca.** Causa real: `get_stock_with_reserve()` usaba timeout=7s fijo
+(pensado para ciclos que revisan 150 SKUs seguidos, ej. `bm_sku_master`),
+insuficiente para estos 2 SKUs puntuales bajo la carga real de pruebas
+del día (confirmado en logs: timeout de 7s×2 intentos repetido varias
+veces). Fix: `get_stock_with_reserve()`/`_query_bm_stock()` ganan
+parámetro `timeout` (default 7s sin cambio para los ciclos existentes);
+el live-check del modal y `_substitution_fulfillment_loop` — ambos
+consultan 1-5 SKUs nada más — ahora esperan 15-20s antes de rendirse.
+Verificado en producción: `SHHP000048`→`SHHP000060-NEW` resultó tener
+**115 disponibles** reales (no 0 como parecía); `SNTV007263`→
+`SNTV007447-GRB` confirmó **0 real**.
+
+**2. El botón "🔄 Buscar otro sustituto" se quedaba en "Reabriendo..."
+para siempre.** Mismo patrón exacto del incidente de "Sustituir" de la
+sesión anterior: el endpoint esperaba 2-3 llamadas SEGUIDAS a BM (buscar
++ borrar el mapeo viejo) antes de responder — podía tardar tanto que se
+cortaba por el timeout del proxy de Railway, dejando el botón atorado sin
+error y sin haber hecho nada (confirmado: la fila seguía intacta en DB).
+Fix: se marca "reabierta" de inmediato (responde en <1s) y el borrado del
+mapeo viejo en BM corre en background — es solo limpieza, el sustituto ya
+está en 0, no hay urgencia real de esperarlo.
+
+Verificado en producción de punta a punta: reopen respondió en 0.25s,
+trajo sugerencias frescas, y el borrado en background confirmó
+`bm_deleted_at` set correctamente segundos después.
+
 ## 2026-08-17 — FEAT: "Pendientes de Envío" — sustituciones ya no quedan cerradas hasta que la orden se envía
 
 Jovan planteó el hueco real detrás de todo el incidente del día: hasta
