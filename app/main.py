@@ -19366,6 +19366,21 @@ async def diag_trigger_bm_master_sync(token: str = ""):
     return JSONResponse({"ok": True, "message": "bm_master_sync disparado en background"})
 
 
+@app.get("/api/diag/trigger-substitution-fulfillment")
+async def diag_trigger_substitution_fulfillment(token: str = ""):
+    """Dispara la revisión de "Pendientes de Envío" manualmente, sin esperar
+    al ciclo de 10 min (_substitution_fulfillment_loop)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    rows = await token_store.get_pending_shipment_resolutions()
+    sem = asyncio.Semaphore(3)
+    async def _check(r):
+        async with sem:
+            await _check_one_substitution_fulfillment(r)
+    await asyncio.gather(*[_check(r) for r in rows], return_exceptions=True)
+    return JSONResponse({"ok": True, "checked": len(rows)})
+
+
 @app.get("/api/diag/trigger-stock-reconcile")
 async def diag_trigger_stock_reconcile(token: str = "", hours: int = 24):
     """Dispara UNA pasada del barrido de _realtime_stock_reconcile_loop()
