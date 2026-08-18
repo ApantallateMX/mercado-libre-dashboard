@@ -6575,75 +6575,36 @@ async def _bm_master_sync_once_inner():
     # estuvieran listas — sin señal de progreso real para verificar Fase C.
     if to_write:
         await token_store.upsert_bm_stock_full_batch(to_write)
-        logger.info(f"[BM-MASTER-SYNC] {len(to_write)} SKUs de bulk escritos (fase rápida) — reconciliando {len(misses)} misses ahora")
+        logger.info(f"[BM-MASTER-SYNC] {len(to_write)} SKUs de bulk escritos (fase rápida) — {len(misses)} ausentes del bulk, se escriben en 0 sin llamadas nuevas a BM")
 
-    # Reconciliación de misses — UNA sola vez para TODO el universo (no 4x).
-    # BM omite del bulk los SKUs con 0 stock — "no está en el bulk" no es
-    # igual a "no existe". Cap de seguridad por ciclo: si hay muchos misses
-    # (bulk recién reseteado tras un restart), se completan gradualmente en
-    # ciclos siguientes en vez de bloquear todo el ciclo actual.
+    # FIX 2026-08-18 (pedido por Jovan, tras un incidente real de 4.5+
+    # horas): antes, los "misses" (SKU no encontrado en el bulk) se
+    # reconciliaban con hasta 150 llamadas INDIVIDUALES a BM por ciclo,
+    # cada una con su propio timeout -- cuando el endpoint puntual de BM
+    # se degrada bajo carga real (confirmado en logs: 0/150 exitosas en
+    # 6 ciclos consecutivos, ~38 min por ciclo, cada uno de los 150
+    # agotando su timeout), este mecanismo se queda COMPLETAMENTE
+    # estancado -- ninguno de los ~28,000 misses del catálogo se
+    # actualiza nunca, y SKUs como SNTV007447 quedan con un valor de
+    # hace DÍAS sin que nada avise que está viejo.
     #
-    # FIX 2026-08-10 (pedido por Jovan: "todos los SKUs deben ser prioridad,
-    # que no se quede nada sin bajar"): el orden de un set() de Python es
-    # estable dentro del mismo proceso corriendo — sin priorizar, misses[:150]
-    # devolvía SIEMPRE el mismo primer lote cada ciclo mientras el proceso no
-    # se reiniciara, sin avanzar nunca hacia el resto. get_reconciliation_
-    # priority_skus() prioriza primero los nunca vistos, luego los mas
-    # antiguos — garantiza cobertura completa del universo con el tiempo,
-    # MISMO volumen de llamadas a BM por ciclo (no aumenta la carga).
-    # REVERTIDO 2026-08-11: se probo 500 (pedido por Jovan, "calalo") pero
-    # ~10 min despues _stock_issues_cache aparecio vacio para las 4 cuentas
-    # y bm_health.latency_ms subio a 15.4s -- misma firma del incidente de
-    # ese mismo dia. Revertido a 150 (valor ya probado sin ese problema) por
-    # seguridad -- el intervalo de ciclo mas corto (120s, ver _bm_master_
-    # sync_loop) se queda igual, esa parte no mostro riesgo.
-    _MAX_MISS_PER_CYCLE = 150
-    _reconciled_rows: list[dict] = []
+    # Jovan propuso la solución correcta y más simple: el bulk YA es la
+    # fuente completa -- "si no aparece en el bulk, es 0" es la MISMA
+    # regla ya usada y verificada para las alertas en tiempo real
+    # (_bm_bulk_available_qty, ver DEVLOG 2026-08-14: "BM omite del bulk
+    # cualquier SKU con stock=0 -- por diseño"). No hace falta ninguna
+    # llamada individual a BM para confirmarlo -- se escribe 0
+    # directamente, verified=True (el bulk YA lo confirmó por omisión).
+    # Cero riesgo de que este paso se atore: es solo lectura de memoria.
     if misses:
-        priority_misses = await token_store.get_reconciliation_priority_skus(misses, _MAX_MISS_PER_CYCLE)
-        from app.services.binmanager_client import get_shared_bm as _gsbm_master
-        bm_cli = await _gsbm_master()
-        # FIX 2026-08-11 (Jovan: "llevamos mas de 1 dia y no puedas terminar"):
-        # un SKU que BM nunca reconoce (descontinuado, mal capturado, etc.)
-        # jamas entraba a bm_sku_master -- get_reconciliation_priority_skus lo
-        # trataba como "nunca visto" (prioridad maxima) CADA ciclo, para
-        # siempre, bloqueando el avance hacia el resto del universo. Mismo
-        # patron de bug que el fix anterior de misses[:150] estable, pero para
-        # fallos permanentes en vez de exito. Ahora se registra el intento
-        # fallido con verified=False -- cae a la cola de "no verificado, mas
-        # antiguo primero" y rota de forma justa con los demas.
-        _still_missing_rows: list[dict] = []
-        for base_u in priority_misses:
-            try:
-                stock = await asyncio.wait_for(
-                    bm_cli.get_stock_with_reserve(base_u, conditions=_bm_conditions_for_sku(base_u)),
-                    timeout=15.0,
-                )
-            except Exception:
-                stock = None
-            if stock is not None:
-                _reconciled_rows.append({
-                    "sku": base_u, "available_qty": stock[0], "reserve_qty": stock[1],
-                    "total_qty": 0, "no_vendible_qty": 0, "mty_qty": 0, "cdmx_qty": 0, "tj_qty": 0,
-                    "verified": True,
-                })
-            else:
-                _still_missing_rows.append({
-                    "sku": base_u, "available_qty": 0, "reserve_qty": 0,
-                    "total_qty": 0, "no_vendible_qty": 0, "mty_qty": 0, "cdmx_qty": 0, "tj_qty": 0,
-                    "verified": False,
-                })
-            await asyncio.sleep(0.3)
-        if _reconciled_rows:
-            await token_store.upsert_bm_stock_full_batch(_reconciled_rows)
-        if _still_missing_rows:
-            await token_store.upsert_bm_stock_full_batch(_still_missing_rows)
-        logger.info(
-            f"[BM-MASTER-SYNC] {len(_reconciled_rows)}/{min(len(misses), _MAX_MISS_PER_CYCLE)} misses reconciliados "
-            f"({len(_still_missing_rows)} siguen sin encontrarse en BM, marcados para rotar) de {len(misses)} totales"
-        )
+        miss_rows = [{
+            "sku": base_u, "available_qty": 0, "reserve_qty": 0, "total_qty": 0,
+            "no_vendible_qty": 0, "mty_qty": 0, "cdmx_qty": 0, "tj_qty": 0,
+            "best_condition_sku": "", "best_condition_qty": 0, "verified": True,
+        } for base_u in misses]
+        await token_store.upsert_bm_stock_full_batch(miss_rows)
 
-    logger.info(f"[BM-MASTER-SYNC] Ciclo completo: {len(to_write) + len(_reconciled_rows)}/{len(skus)} SKUs escritos a bm_sku_master")
+    logger.info(f"[BM-MASTER-SYNC] Ciclo completo: {len(to_write)} en bulk + {len(misses)} en 0 (ausentes del bulk) = {len(to_write) + len(misses)}/{len(skus)} SKUs escritos a bm_sku_master")
 
 
 async def _bm_master_sync_loop():

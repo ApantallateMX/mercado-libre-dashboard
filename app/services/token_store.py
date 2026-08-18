@@ -2026,47 +2026,6 @@ async def get_bm_master_sync_meta() -> dict:
     }
 
 
-async def get_reconciliation_priority_skus(candidate_skus: list[str], limit: int) -> list[str]:
-    """FIX 2026-08-10 -- de una lista de SKUs candidatos a reconciliar (misses
-    del bulk en _bm_master_sync_once), devuelve los `limit` con MAYOR
-    prioridad: primero los que nunca han estado en bm_sku_master, luego los
-    con verified=0, luego los con stock_updated_at mas antiguo.
-
-    Bug real que esto arregla: el orden de iteracion de un set() de Python
-    es estable dentro del mismo proceso en ejecucion (aunque varia entre
-    reinicios) -- sin esta priorizacion, `misses[:150]` devolvia SIEMPRE el
-    mismo primer lote en cada ciclo de 10 min mientras el proceso seguia
-    corriendo, sin avanzar nunca hacia el resto de la lista. Con esto, en
-    cuanto un lote queda reconciliado (verified=1, stock_updated_at fresco),
-    automaticamente cae al final de la prioridad y el siguiente ciclo
-    avanza al proximo lote pendiente -- garantiza cobertura completa del
-    universo con el tiempo, sin aumentar la carga por ciclo hacia BM."""
-    if not candidate_skus:
-        return []
-    known = {}
-    uniq = list(set(candidate_skus))
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        db.row_factory = aiosqlite.Row
-        for i in range(0, len(uniq), 500):
-            chunk = uniq[i:i + 500]
-            placeholders = ",".join("?" * len(chunk))
-            cur = await db.execute(
-                f"SELECT sku, verified, stock_updated_at FROM bm_sku_master WHERE sku IN ({placeholders})",
-                chunk,
-            )
-            for r in await cur.fetchall():
-                known[r["sku"]] = (r["verified"] or 0, r["stock_updated_at"] or 0)
-
-    def _priority(sku):
-        if sku not in known:
-            return (-1, 0.0)  # nunca visto en bm_sku_master = maxima prioridad
-        verified, ts = known[sku]
-        return (verified, ts)
-
-    ordered = sorted(uniq, key=_priority)
-    return ordered[:limit]
-
-
 async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
     """Lee bm_sku_master para un set de SKUs normalizados -- SELECT puro, sin
     llamadas a BM. Usado por el nuevo camino de alertas (Fase C) para hacer
