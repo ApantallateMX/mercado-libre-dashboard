@@ -7,6 +7,73 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FEAT: "Alertas de Stock" portado a Amazon — Fase 1 (detección) en producción, Fase 2 (sustitución BM) BLOQUEADA por BinManager
+
+Jovan pidió portar a Amazon la misma operación completa de "sin stock"
+que ya existe en ML. Se investigó ANTES de escribir código (con los
+especialistas, no manualmente — pedido explícito de Jovan): primero
+`marketplace-strategist` leyó documentación real de Amazon SP-API
+(Notifications API/SNS, ciclo de vida de `OrderStatus`, rate limits),
+después `binmanager-specialist` verificó contra BM en vivo si las cuentas
+Amazon ya tenían un ProfileID/SiteAccountID configurado.
+
+**Fase 0 (verificación BM) — bloqueo real, no de código.** `ProfileID`/
+`SiteAccountID` en BM son columnas SQL `bigint` — el Seller ID
+alfanumérico de Amazon (ej. `A20NFIUQNEYZ1E`) rompe el cast con un error
+SQL real (`Error converting data type nvarchar to bigint`), no un simple
+"no encontrado" (se comprobó la diferencia con un ID numérico inventado,
+que sí da "Not Found" limpio). **La Fase 2 (sustitución real + inyección
+a BM) queda bloqueada hasta que BinManager/MI2 defina cómo identificar
+una cuenta Amazon en ese esquema** — no es algo resoluble con más código
+de este lado.
+
+**Fase 1 (detección, SÍ implementada) — polling, no webhook.** Amazon no
+tiene Notifications API/SNS conectado (confirmado con documentación
+real: existe `ORDER_CHANGE` vía SQS, pero requiere infra AWS nueva).
+Recomendación del especialista con números reales: polling cada 5 min
+alcanza de sobra (rate limit real 0.0167 req/s sostenido = 1 cada 60s;
+necesitamos 1 cada 300s, con margen de 5x, y cada cuenta tiene su propio
+balde por usar su propia app SP-API). Nuevas funciones en `main.py`:
+`_run_amazon_stock_reconcile_pass` (compartida por `_amazon_stock_reconcile_loop`
+cada 5 min/3 días y `_amazon_stock_reconcile_wide_loop` cada 2h/30 días) —
+mismo patrón que el reconcile de ML, reusa `_bm_bulk_available_qty` (cero
+llamadas nuevas a BM) y las tablas ya platform-agnostic
+(`realtime_stock_alerts`/`stock_alert_resolutions`).
+
+**2 bugs reales encontrados probando contra las 3 cuentas Amazon reales
+antes de desplegar (no se guessed, se corrió el loop de verdad):**
+1. `AmazonClient` no tiene `.close()` (a diferencia de `MeliClient`) —
+   cada request abre su propio `httpx.AsyncClient` con context manager,
+   no hay conexión persistente que cerrar. Se quitó la llamada que
+   tronaba en el `finally`.
+2. **ExclusiveBulbs (A22XNR713HGDVG) excluida del alcance por ahora** —
+   confirmado por Jovan que opera "más por FBA que Merchant"; se agregó
+   el filtro `FulfillmentChannel == "AFN"` (equivalente exacto al
+   `logistic_type=fulfillment` que ML ya excluye) para toda cuenta, PERO
+   la única orden Merchant real de esa cuenta detectada en la prueba
+   (`SellerSKU` con convención `ARBVYNL...`) tampoco tiene match en BM —
+   catálogo aparentemente no gestionado ahí. Se agregó
+   `_AMAZON_STOCK_ALERT_ENABLED_SELLERS = {VECKTOR, AUTOBOT}` (allowlist
+   explícita) para no generar falsas alertas "sin stock" en esa cuenta
+   hasta aclarar cómo se gestiona su inventario.
+
+**Hallazgo aparte (no bloquea, pero limita hoy):** la cuenta VECKTOR
+IMPORTS tiene el refresh token OAuth inválido/expirado (HTTP 400 al
+refrescar) — no relacionado con este feature, pendiente que Jovan
+reautorice la cuenta desde el dashboard.
+
+También: `_account_display_name(platform, account_id)` nuevo — antes
+`/api/stock/realtime-alerts` y `/api/stock/alerts/pending-shipment`
+resolvían nombre de cuenta SOLO contra el diccionario de nicknames de ML,
+mostrando el seller_id crudo para cualquier fila Amazon.
+
+Pendiente (Fase 3, no bloqueada): pestaña "Alertas de Stock" en
+`amazon_orders.html` — hoy los datos ya se generan pero no hay UI para
+verlos del lado Amazon (sí aparecen en "En vivo" de la vista de ML,
+mezclados con las alertas ML, gracias a que la tabla es platform-agnostic).
+
+---
+
 ## 2026-08-18 — FIX: sustitución fallaba SIEMPRE con "'str' object has no attribute 'get'" (orden real 2000017985070200, reportado por Jovan)
 
 Jovan preguntó por qué una sustitución seguía cayendo directo a

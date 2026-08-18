@@ -454,6 +454,18 @@ def _apply_bundle_margin_override(products: list, bundles: dict):
 _KNOWN_ML_NICKNAMES: dict = token_store.KNOWN_ML_NICKNAMES
 
 
+def _account_display_name(platform: str, account_id: str) -> str:
+    """Nombre amigable de cuenta para las vistas de Alertas de Stock (En
+    vivo/Pendientes/Historial), que mezclan ML y Amazon en la misma tabla
+    -- FEATURE 2026-08-18 (portar Alertas de Stock a Amazon): usar SOLO
+    _KNOWN_ML_NICKNAMES para todas las plataformas mostraba el seller_id
+    crudo de Amazon (ej. "A20NFIUQNEYZ1E") en vez de "VECKTOR IMPORTS"."""
+    account_id = str(account_id or "")
+    if platform == "amazon":
+        return token_store.KNOWN_AMAZON_NICKNAMES.get(account_id, account_id)
+    return _KNOWN_ML_NICKNAMES.get(account_id, account_id)
+
+
 async def _seed_one(user_id: str, refresh_token: str, label: str, nickname_hint: str = ""):
     """Intenta recuperar tokens para una cuenta via refresh_token.
     También obtiene el nickname desde la API de MeLi para mostrarlo en el dropdown.
@@ -865,6 +877,10 @@ async def lifespan(app: FastAPI):
     # pagadas recientes que el webhook ya no vuelve a tocar por su cuenta.
     asyncio.create_task(_realtime_stock_reconcile_loop())
     asyncio.create_task(_realtime_stock_reconcile_wide_loop())
+    # Alertas de Stock — Amazon (2026-08-18) -- sin webhook, esto ES la
+    # detección (no un respaldo como en ML).
+    asyncio.create_task(_amazon_stock_reconcile_loop())
+    asyncio.create_task(_amazon_stock_reconcile_wide_loop())
     # "Pendientes de Envío" (2026-08-17) -- sigue las sustituciones ya
     # aplicadas en BM hasta que la orden real se imprime/envía o se cancela.
     asyncio.create_task(_substitution_fulfillment_loop())
@@ -2373,6 +2389,131 @@ async def _realtime_stock_reconcile_wide_loop():
         except Exception as e:
             logger.warning(f"[STOCK-RECONCILE] Error en ciclo amplio: {e}")
         await asyncio.sleep(2 * 3600)  # cada 2h
+
+
+# ── Alertas de Stock — Amazon (FEATURE 2026-08-18, pedido por Jovan: "la misma
+# operación completa de no-stock para Amazon") ──────────────────────────────
+# Amazon NO tiene webhook/Notifications API conectado (confirmado por
+# marketplace-strategist contra documentación real de Amazon) -- a diferencia
+# de ML, aquí no hay evento que nos avise cuando entra una orden. La detección
+# es 100% por polling periódico de getOrders. Verificado que el rate limit
+# real (0.0167 req/s sostenido, ver orders-api-rate-limits) sobra por mucho
+# para 1 request cada 5 min por cuenta -- y cada cuenta tiene su propio balde
+# porque usa su propia app SP-API (VECKTOR/AUTOBOT/ExclusiveBulbs), no compiten
+# entre sí. El punto "accionable" real es OrderStatus=Unshipped (equivalente a
+# "ready_to_print" de ML) -- Pending ni siquiera trae precio/impuestos
+# confiables todavía según la doc oficial de Amazon.
+# FIX 2026-08-18 (confirmado por Jovan): ExclusiveBulbs (A22XNR713HGDVG) opera
+# "más por FBA que Merchant" y su única orden Merchant real probada no tiene
+# match en BM (SKU "ARBVYNL", convención distinta a SNxx/SHxx) -- catálogo
+# aparentemente NO gestionado en BM. Se arranca esta feature SOLO con las 2
+# cuentas confirmadas con catálogo real en BM (VECKTOR/AUTOBOT) para no
+# generar falsas alertas "sin stock" en pedidos que sí tienen -- agregar
+# ExclusiveBulbs aquí cuando se aclare cómo (o si) se gestiona su inventario.
+_AMAZON_STOCK_ALERT_ENABLED_SELLERS = {"A20NFIUQNEYZ1E", "A252KSQ687FNRO"}
+
+
+async def _run_amazon_stock_reconcile_pass(days: int) -> tuple[int, list]:
+    """Una pasada de reconciliación Amazon: por cada cuenta, trae órdenes
+    dentro de la ventana (Unshipped/PartiallyShipped/Shipped/Canceled en una
+    sola llamada -- SP-API permite mezclar estos 4, solo Pending debe ir
+    separado) y evalúa/limpia alertas igual que _evaluate_order_stock_alert
+    del lado ML. Compartida por el loop rápido (3d) y el amplio (30d)."""
+    from app.services.sku_utils import normalize_to_bm_sku
+
+    accounts = await token_store.get_all_amazon_accounts()
+    created_after = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    n = 0
+    errors: list = []
+
+    for acc in accounts:
+        seller_id = acc.get("seller_id", "")
+        if not seller_id or seller_id not in _AMAZON_STOCK_ALERT_ENABLED_SELLERS:
+            continue
+        try:
+            from app.services.amazon_client import get_amazon_client
+            client = await get_amazon_client(seller_id)
+            if not client:
+                continue
+            orders = await client.get_orders(
+                created_after,
+                order_statuses=["Unshipped", "PartiallyShipped", "Shipped", "Canceled"],
+            )
+            for order in orders:
+                order_id = order.get("AmazonOrderId", "")
+                if not order_id:
+                    continue
+                # FIX 2026-08-18 (confirmado por Jovan: ExclusiveBulbs opera
+                # "más por FBA que Merchant") -- FBA (FulfillmentChannel=AFN)
+                # lo surte Amazon desde SU propio almacén, no depende de
+                # nuestro stock BM -- mismo motivo por el que ML excluye
+                # logistic_type="fulfillment" (FULL) de esta alerta. Se
+                # filtra por ORDEN, no por cuenta completa -- una cuenta
+                # mayormente FBA puede tener alguna orden Merchant suelta.
+                if order.get("FulfillmentChannel") == "AFN":
+                    continue
+                status = order.get("OrderStatus", "")
+                should_alert = status in ("Unshipped", "PartiallyShipped")
+                n += 1
+                if not should_alert:
+                    # Ya se envió/canceló -- ya no es accionable, igual que
+                    # _evaluate_order_stock_alert cuando should_alert=False.
+                    await token_store.delete_realtime_stock_alerts_for_order(order_id, platform="amazon")
+                    continue
+                try:
+                    items = await client.get_order_items(order_id)
+                except Exception as e:
+                    errors.append({"order_id": order_id, "error": str(e)[:200]})
+                    continue
+                order_date = (order.get("PurchaseDate") or "")[:10]
+                for item in items:
+                    sku_raw = (item.get("SellerSKU") or "").strip()
+                    if not sku_raw:
+                        continue
+                    sku = normalize_to_bm_sku(sku_raw)
+                    quantity = int(item.get("QuantityOrdered") or 1)
+                    avail = _bm_bulk_available_qty(sku)
+                    if avail is None or avail <= 0:
+                        await token_store.record_realtime_stock_alert(
+                            order_id=order_id, item_id=str(item.get("OrderItemId", "")),
+                            platform="amazon", account_id=seller_id, sku=sku,
+                            quantity=quantity, available_qty=(avail or 0), order_date=order_date,
+                            shipping_id="", sku_raw=sku_raw,
+                        )
+                await asyncio.sleep(0.3)  # espaciar getOrderItems entre órdenes (rate limit propio)
+        except Exception as e:
+            # AmazonClient no mantiene conexión persistente (cada _request abre
+            # su propio httpx.AsyncClient con "async with") -- a diferencia de
+            # MeliClient, no existe ni hace falta un client.close() aquí.
+            errors.append({"order_id": f"cuenta {seller_id}", "error": str(e)[:200]})
+    return n, errors
+
+
+async def _amazon_stock_reconcile_loop():
+    """Equivalente Amazon de _realtime_stock_reconcile_loop -- ventana
+    corta (3 días) cada 5 min. Sin webhook, esta ES la detección (no un
+    respaldo como en ML)."""
+    await asyncio.sleep(240)
+    while True:
+        try:
+            n, errors = await _run_amazon_stock_reconcile_pass(days=3)
+            logger.info(f"[STOCK-RECONCILE-AMZ] Ciclo rápido: {n} órdenes evaluadas ({len(errors)} errores)")
+        except Exception as e:
+            logger.warning(f"[STOCK-RECONCILE-AMZ] Error en ciclo rápido: {e}")
+        await asyncio.sleep(300)
+
+
+async def _amazon_stock_reconcile_wide_loop():
+    """Ventana amplia (30 días) cada 2h -- red de seguridad para una orden
+    Unshipped que envejece más allá de los 3 días del loop rápido."""
+    await asyncio.sleep(900)
+    while True:
+        try:
+            n, errors = await _run_amazon_stock_reconcile_pass(days=30)
+            logger.info(f"[STOCK-RECONCILE-AMZ] Ciclo amplio (30d): {n} órdenes evaluadas ({len(errors)} errores)")
+        except Exception as e:
+            logger.warning(f"[STOCK-RECONCILE-AMZ] Error en ciclo amplio: {e}")
+        await asyncio.sleep(2 * 3600)
 
 
 async def _check_one_substitution_fulfillment(row: dict) -> None:
@@ -16550,7 +16691,7 @@ async def realtime_stock_alerts(request: Request, limit: int = 100):
     limit = max(1, min(limit, 500))
     rows = await token_store.get_realtime_stock_alerts(limit=limit)
     for row in rows:
-        row["account_name"] = _KNOWN_ML_NICKNAMES.get(str(row.get("account_id", "")), str(row.get("account_id", "")))
+        row["account_name"] = _account_display_name(row.get("platform", "ml"), row.get("account_id", ""))
     return JSONResponse({"rows": rows})
 
 
@@ -16566,7 +16707,7 @@ async def stock_alerts_pending_shipment(request: Request):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     rows = await token_store.get_pending_shipment_resolutions()
     for row in rows:
-        row["account_name"] = _KNOWN_ML_NICKNAMES.get(str(row.get("account_id", "")), str(row.get("account_id", "")))
+        row["account_name"] = _account_display_name(row.get("platform", "ml"), row.get("account_id", ""))
     return JSONResponse({"rows": rows})
 
 
