@@ -16581,15 +16581,29 @@ async def reopen_stock_alert_resolution(resolution_id: int, request: Request):
     if row.get("fulfillment_status") not in ("", "pendiente_envio"):
         return JSONResponse({"detail": "Esta resolución ya no está pendiente de envío"}, status_code=400)
 
-    del_result = await _delete_bm_alter_sku(
-        account_id=row["account_id"], order_id=row["order_id"], product_sku=row["original_sku"],
-        substitute_sku=row["substitute_sku"], qty=1,
-    )
+    # FIX 2026-08-17 (mismo patrón del incidente de "Sustituir" de esta
+    # misma sesión): borrar el mapeo viejo son 2-3 llamadas SEGUIDAS a BM
+    # (buscar + borrar) -- esperar eso bloqueado podía tardar tanto que el
+    # botón se quedaba "Reabriendo..." para siempre o se cortaba por el
+    # timeout del proxy de Railway. El borrado es solo limpieza (el
+    # sustituto ya está en 0, no hay urgencia real) -- se marca reabierta
+    # YA y el borrado corre en background.
     await token_store.mark_resolution_fulfillment(resolution_id, "reabierta")
-    if del_result.get("ok"):
-        await token_store.mark_stock_alert_resolution_bm_deleted(resolution_id, deleted_by=f"{du['username']} (reabierta -- sin stock)")
-    else:
-        logger.warning(f"[SUB-FULFILLMENT] reopen resolution_id={resolution_id}: no se pudo borrar el mapeo viejo de BM: {del_result}")
+
+    async def _cleanup_old_bm_mapping():
+        try:
+            del_result = await _delete_bm_alter_sku(
+                account_id=row["account_id"], order_id=row["order_id"], product_sku=row["original_sku"],
+                substitute_sku=row["substitute_sku"], qty=1,
+            )
+            if del_result.get("ok"):
+                await token_store.mark_stock_alert_resolution_bm_deleted(resolution_id, deleted_by=f"{du['username']} (reabierta -- sin stock)")
+            else:
+                logger.warning(f"[SUB-FULFILLMENT] reopen resolution_id={resolution_id}: no se pudo borrar el mapeo viejo de BM: {del_result}")
+        except Exception as e:
+            logger.warning(f"[SUB-FULFILLMENT] reopen resolution_id={resolution_id}: excepción borrando mapeo viejo: {e}")
+
+    asyncio.create_task(_cleanup_old_bm_mapping())
 
     import aiosqlite as _aio_reopen
     async with _aio_reopen.connect(DATABASE_PATH) as _db:
