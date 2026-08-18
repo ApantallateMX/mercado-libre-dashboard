@@ -360,7 +360,13 @@ class BinManagerClient:
             fetched = False
             for attempt in range(2):
                 try:
-                    r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=60)
+                    # FIX 2026-08-18 (incidente real, evidencia en logs de
+                    # producción): 60s no bastó -- página 1 falló por timeout
+                    # (mensaje vacío = asyncio.TimeoutError, ver except abajo)
+                    # con BM sano en el ping liviano. Subido a 100s -- el
+                    # wrapper externo en main.py (150s) sigue siendo el techo
+                    # total para las 2 páginas/reintentos.
+                    r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=100)
                     if self._session_expired(r):
                         self._logged_in = False
                         if attempt == 0:
@@ -397,7 +403,8 @@ class BinManagerClient:
                         )
                         return all_rows  # error HTTP — devolver lo acumulado
                 except Exception as e:
-                    logger.error(f"BinManager get_bulk_stock pág {page} error: {e}")
+                    _err_label = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                    logger.error(f"BinManager get_bulk_stock pág {page} error: {_err_label}")
                     if attempt == 0:
                         continue
                     return all_rows

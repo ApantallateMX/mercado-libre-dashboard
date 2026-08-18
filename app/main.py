@@ -7886,14 +7886,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         elif _bulk_gr_rows is None:
             _gr_t0 = _time.time()
             try:
-                # FIX 2026-08-18 (incidente real: GR timing out a 90s de forma
-                # silenciosa por 25h seguidas, cascadeando el skip de LOC47/68/
-                # TJ/ALL cada ciclo) -- subido a 150s, igual que ALL/LOC-TJ (que
-                # ya se subieron por el mismo motivo el 2026-08-10: la cola del
-                # semáforo global se acumula en cada fetch sucesivo).
+                # FIX 2026-08-18 (incidente real: GR timing out de forma
+                # silenciosa por 25h+ seguidas, cascadeando el skip de LOC47/
+                # 68/TJ/ALL cada ciclo). Primero se subió este wrapper externo
+                # 90s->150s, pero el log real mostró que el timeout de verdad
+                # está DENTRO de get_bulk_stock() -- 60s por página, sin
+                # relación con este wrapper -- y BM está tardando >60s en
+                # responder la página 1 sola. Se subió ese interno a 100s
+                # (binmanager_client.py); este externo sube a 250s para que
+                # alcance 2 intentos de 100s + margen para más páginas.
                 _fresh_gr = await asyncio.wait_for(
                     bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
-                    timeout=150.0,
+                    timeout=250.0,
                 )
                 _gr_elapsed = _time.time() - _gr_t0
                 if _fresh_gr:

@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — El bulk GR seguía sin refrescar tras subir el timeout: el cuello de botella real estaba 1 nivel más abajo (60s por página, no el wrapper de 150s)
+
+Después del fix "timeout GR 90s→150s" (2 entradas más abajo), el navbar
+seguía en rojo (`bulk_gr_age_s` sin bajar). Se monitoreó producción en
+vivo tras el deploy y apareció evidencia nueva y distinta:
+
+- Primero: `[BM-CACHE] GR bulk fetch devolvió vacío` (HTTP 200 sin filas)
+  — se agregó log de la respuesta cruda (`get_bulk_stock`,
+  `binmanager_client.py`) para el próximo caso, sin adivinar la causa.
+- Con el deploy de ese log, apareció el dato real: `BinManager
+  get_bulk_stock pág 1 error:` (mensaje vacío = `asyncio.TimeoutError`) —
+  el timeout que de verdad importa es un **60s hardcodeado POR PÁGINA
+  dentro de `get_bulk_stock()`**, completamente independiente del wrapper
+  externo de 150s que se había subido antes (ese wrapper solo pone un
+  techo al total de páginas/reintentos, no cambia el timeout individual).
+
+**Fix:** timeout interno por página subido de 60s a 100s
+(`binmanager_client.py`), wrapper externo subido de 150s a 250s para que
+alcancen 2 intentos de 100s + margen (`main.py`). También se corrigió el
+log de esa excepción para mostrar `type(e).__name__` (antes se veía
+"error: " vacío, mismo problema que ya se había corregido en main.py).
+
+**Nota honesta:** BM tardando >60s en responder la página 1 de un reporte
+de inventario, con el ping liviano de salud reportando "sano", apunta a
+que el endpoint específico (`Get_GlobalStock_InventoryBySKU`) está lento
+del lado de BM ahora mismo — subir el timeout le da más margen pero no
+arregla una lentitud real de su servidor. Si esto persiste después de
+este fix, vale la pena reportarlo al equipo de BinManager/MI2 en vez de
+seguir subiendo timeouts a ciegas.
+
+---
+
 ## 2026-08-18 — FIX: modal "Sustituir" ya no perdía la condición real del SKU (bug real, reportado por Jovan tras el fix del colgado)
 
 El fix del colgado de 300s/502 (entrada de abajo) cambió `/api/stock/live-check`
