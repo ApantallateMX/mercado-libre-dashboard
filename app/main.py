@@ -16930,9 +16930,12 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     # FIX 2026-08-18 (bug real: "'str' object has no attribute 'get'" en
     # TODOS los reintentos de la orden 2000017985070200) -- BM a veces
     # responde con un string JSON plano en vez de un objeto {MessageReturn:...}.
-    _msg = str(data).strip() if isinstance(data, str) else str((data or {}).get("MessageReturn") or "").strip()
+    # Centralizado en _safe_bm_message() -- ver su docstring para el motivo
+    # (3 callers reimplementaban esto mismo por su cuenta y volvieron a
+    # reventar con el mismo AttributeError en un 4to lugar no cubierto).
+    _msg = _safe_bm_message(data)
     _ok = resp.status_code == 200 and _msg.lower() == "success"
-    return {"ok": _ok, "status_code": resp.status_code, "response": data}
+    return {"ok": _ok, "status_code": resp.status_code, "response": data, "message": _msg}
 
 
 _BM_GET_ALTER_SKU_URL = "https://binmanager.mitechnologiesinc.com/FullFillMent/FullFillMent/GetAlterSKUMappingByWebSKU"
@@ -17049,6 +17052,24 @@ async def _find_bm_alter_sku_listing_id(*, account_id: str, web_sku: str, produc
     return None
 
 
+def _safe_bm_message(response_data, fallback: str = "") -> str:
+    """Extrae el mensaje real de una respuesta de BM sin asumir que siempre
+    es un dict -- FIX 2026-08-18 (bug real, 3 sitios distintos reventaron
+    con 'str' object has no attribute 'get' porque cada uno reimplementaba
+    esta misma extracción por su cuenta: retry_stock_alert_resolution_bm,
+    delete_stock_alert_resolution_from_bm, e _inject_bm_alter_sku_background
+    -- el de background es el más grave, corre en CADA sustitución y al
+    reventar silenciosamente dejaba la resolución en 'pending' para
+    siempre). Centralizado aquí UNA sola vez -- _inject_bm_alter_sku y
+    _delete_bm_alter_sku ya calculan esto internamente y lo devuelven en
+    "message"; los callers deben leer eso, no volver a parsear "response"."""
+    if isinstance(response_data, str):
+        return response_data.strip() or fallback
+    if isinstance(response_data, dict):
+        return str(response_data.get("MessageReturn") or "").strip() or fallback
+    return fallback
+
+
 async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: str,
                                 substitute_sku: str, qty: int) -> dict:
     """Borra el mapeo de SKU alternativo en BinManager -- mismo endpoint que
@@ -17101,7 +17122,8 @@ async def _delete_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
         data = resp.json()
     except Exception:
         data = {"raw_text": resp.text[:500]}
-    return {"ok": resp.status_code == 200, "status_code": resp.status_code, "response": data}
+    _ok = resp.status_code == 200
+    return {"ok": _ok, "status_code": resp.status_code, "response": data, "message": _safe_bm_message(data)}
 
 
 @app.post("/api/stock/alerts/resolutions/{resolution_id}/retry-bm")
@@ -17137,8 +17159,11 @@ async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request, 
     except Exception as e:
         bm_result = {"ok": False, "error": str(e)}
     _bm_status = "success" if bm_result.get("ok") else "failed"
-    _resp = bm_result.get("response") or {}
-    _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
+    # FIX 2026-08-18: usar el "message" ya calculado por _inject_bm_alter_sku
+    # (seguro ante response=string) en vez de re-parsear "response" aquí --
+    # este mismo re-parseo reventó con AttributeError el mismo día (orden
+    # 2000018003864808), ver _safe_bm_message().
+    _bm_message = bm_result.get("message") or bm_result.get("error") or ""
     await token_store.update_stock_alert_resolution_bm_status(resolution_id, bm_status=_bm_status, bm_message=_bm_message)
     return JSONResponse({"ok": bm_result.get("ok", False), "bm_status": _bm_status, "bm_message": _bm_message})
 
@@ -17179,7 +17204,9 @@ async def delete_stock_alert_resolution_from_bm(resolution_id: int, request: Req
             )
         except Exception:
             pass
-    return JSONResponse({"ok": result.get("ok", False), "detail": result.get("error") or (result.get("response") or {}).get("MessageReturn")})
+    # FIX 2026-08-18: usar "message" ya calculado por _delete_bm_alter_sku
+    # en vez de re-parsear "response" -- ver _safe_bm_message().
+    return JSONResponse({"ok": result.get("ok", False), "detail": result.get("error") or result.get("message")})
 
 
 def _split_bm_sku_condition(sku: str) -> tuple[str, str]:
@@ -17385,24 +17412,43 @@ async def resolve_stock_alert_substitution(request: Request):
             # creciente ANTES de rendirse y pedir intervencion manual -- la
             # gran mayoria de fallos de BM observados hoy fueron transitorios
             # (BM tarda, no que el SKU/orden sea invalido).
-            bm_result = {"ok": False, "error": "sin intentos"}
-            for _attempt in range(4):
-                try:
-                    bm_result = await _inject_bm_alter_sku(
-                        account_id=account_id, order_id=order_id, product_sku=(sku_raw or sku),
-                        substitute_sku=substitute_sku, qty=quantity,
-                    )
-                except Exception as e:
-                    logger.error(f"[BM-ALTER-SKU] excepción en background para orden {order_id} (intento {_attempt + 1}): {e}")
-                    bm_result = {"ok": False, "error": str(e)}
-                if bm_result.get("ok"):
-                    break
-                logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id} (intento {_attempt + 1}/4): {bm_result}")
-                if _attempt < 3:
-                    await asyncio.sleep(15 * (_attempt + 1))
-            _bm_status = "success" if bm_result.get("ok") else "failed"
-            _resp = bm_result.get("response") or {}
-            _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
+            #
+            # FIX 2026-08-18 #2 (más grave, encontrado el mismo día en la
+            # orden 2000018003864808 -- pedido explícito de Jovan de no solo
+            # parchar sino dejar una solución final): este bloque entero corre
+            # dentro de un asyncio.create_task() sin nadie afuera que atrape
+            # una excepción -- CUALQUIER error inesperado aquí (no solo el
+            # 'str' sin .get() ya corregido con _safe_bm_message) deja la
+            # resolución en bm_status='pending' PARA SIEMPRE, sin aviso, sin
+            # botón de error, nada -- indistinguible de "sigue en cola". Se
+            # envuelve TODO el cuerpo en try/except: pase lo que pase, el
+            # registro SIEMPRE termina en 'success' o 'failed' (nunca
+            # pending-zombie), y el error real queda en bm_message para
+            # poder diagnosticarlo sin repetir esta arqueología de logs.
+            try:
+                bm_result = {"ok": False, "error": "sin intentos"}
+                for _attempt in range(4):
+                    try:
+                        bm_result = await _inject_bm_alter_sku(
+                            account_id=account_id, order_id=order_id, product_sku=(sku_raw or sku),
+                            substitute_sku=substitute_sku, qty=quantity,
+                        )
+                    except Exception as e:
+                        logger.error(f"[BM-ALTER-SKU] excepción en background para orden {order_id} (intento {_attempt + 1}): {e}")
+                        bm_result = {"ok": False, "error": str(e)}
+                    if bm_result.get("ok"):
+                        break
+                    logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id} (intento {_attempt + 1}/4): {bm_result}")
+                    if _attempt < 3:
+                        await asyncio.sleep(15 * (_attempt + 1))
+                _bm_status = "success" if bm_result.get("ok") else "failed"
+                # Usar "message" ya calculado (seguro ante response=string)
+                # por _inject_bm_alter_sku -- ver _safe_bm_message().
+                _bm_message = bm_result.get("message") or bm_result.get("error") or ""
+            except Exception as e:
+                logger.error(f"[BM-ALTER-SKU] error inesperado en background (orden {order_id}), resolución {resolution_id} marcada 'failed' en vez de quedar 'pending' para siempre: {e}")
+                _bm_status = "failed"
+                _bm_message = f"Error interno inesperado: {e}"[:300]
             await token_store.update_stock_alert_resolution_bm_status(
                 resolution_id, bm_status=_bm_status, bm_message=_bm_message,
             )

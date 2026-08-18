@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX DE RAÍZ: mismo bug "'str' object has no attribute 'get'" en 3 lugares (no solo el ya corregido) — orden real 2000018003864808 se quedaba "pending" para siempre
+
+Jovan reportó una orden nueva (`2000018003864808`) atorada en "Verificando en BM" y pidió explícitamente NO parchar una cosa a la vez sino encontrar la solución final, adaptando lo nuevo a lo ya resuelto. Tenía razón: el fix de hoy más temprano (`'str' object has no attribute 'get'`, commit `d3848d3`) solo cubrió el sitio donde apareció esa vez — pero el mismo patrón (cada caller re-parseando `response` a mano, asumiendo que siempre es un dict) estaba duplicado en otros 3 lugares, y uno de ellos es el más usado de todos.
+
+**Encontrados con evidencia real** (traceback completo de Railway, no supuesto):
+1. `retry_stock_alert_resolution_bm` (botón "Reintentar" manual) — línea ~17163.
+2. `delete_stock_alert_resolution_from_bm` (botón "🗑 Borrar de BM") — línea ~17204.
+3. **`_inject_bm_alter_sku_background`** (el reintento automático que corre en CADA "Sustituir", vía `asyncio.create_task`) — el más grave: al no tener ningún try/except envolvente en ese tramo, la excepción se perdía en silencio dentro del task y la resolución se quedaba en `bm_status='pending'` **para siempre**, sin ningún error visible — exactamente el síntoma reportado.
+
+**Solución final (no un 4to parche puntual):**
+- Nueva función `_safe_bm_message(response_data, fallback="")` — UN solo lugar que sabe extraer el mensaje de BM sin asumir que `response` es dict.
+- `_inject_bm_alter_sku` y `_delete_bm_alter_sku` ahora devuelven `"message"` ya calculado con esa función — los 3 callers se simplificaron a leer `bm_result.get("message")` en vez de reimplementar el parseo cada uno por su cuenta.
+- `_inject_bm_alter_sku_background` además se envolvió COMPLETO en try/except: cualquier error futuro (no solo este) ahora termina en `bm_status='failed'` con el error real en `bm_message`, nunca más en `'pending'` zombie sin explicación.
+
+Verificado que ML sigue sano de este lado antes y después del fix (cuenta ML es numérica, nunca dispara el bug; 3 sustituciones reales recientes con `bm_status=success` confirmado contra producción).
+
+---
+
 ## 2026-08-18 — FEAT: "Alertas de Stock" para Amazon — Fase 3 (pestaña UI)
 
 Cierra el porteo a Amazon (ver entrada de Fase 0/1 más abajo). Nueva
