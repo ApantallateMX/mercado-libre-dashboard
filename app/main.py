@@ -786,7 +786,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_ml_messages_unread_poll_loop())
     asyncio.create_task(token_store.feedback_sync_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
-    # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
+    # Loop periódico: refresca cada 5 min (bajado de 10 min 2026-08-18) para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
     async def _startup_prewarm():
         await asyncio.sleep(90)  # ml_listing_sync necesita ~60s para full sync inicial
@@ -840,11 +840,16 @@ async def lifespan(app: FastAPI):
                 _cleanup_memory_caches()
             except Exception:
                 pass
-            # Retry rápido en fallo (2 min); ciclo normal 10 min (bajado de 15 min
-            # 2026-08-14 -- pedido explícito de Jovan para refrescar más seguido
-            # el archivo bulk que ahora alimenta directo la alerta de "Sin Stock"
-            # del webhook, ver _bm_bulk_available_qty())
-            _sleep = 120 if _auto_fail_streak > 0 else 600
+            # Retry rápido en fallo (2 min); ciclo normal 5 min (bajado de 10 min
+            # 2026-08-18 -- pedido explícito de Jovan tras encontrar el bulk con
+            # ~25h de antigüedad en producción: el intervalo YA era de 10 min,
+            # pero cada redeploy reinicia este loop desde cero (90s + 1 ciclo
+            # completo) -- en una sesión con varios deploys seguidos, el ciclo
+            # nunca llegaba a terminar antes del siguiente restart. Bajarlo no
+            # arregla ese reinicio (inevitable en cada deploy), pero acorta la
+            # ventana de "sin refrescar" el resto del tiempo. Alimenta directo
+            # _bm_bulk_available_qty() y /api/stock/live-check.
+            _sleep = 120 if _auto_fail_streak > 0 else 300
             await asyncio.sleep(_sleep)
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())

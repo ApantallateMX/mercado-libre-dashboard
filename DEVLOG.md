@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — Corrección propia: SÍ existía un loop de refresco fijo del bulk BM (ya a 10 min, no "ninguno") — bajado a 5 min
+
+Después del fix de `/api/stock/live-check` (ver entrada siguiente), se
+diagnosticó por qué el bulk (`_bm_bulk_gr_cache`) tenía ~25h de
+antigüedad en producción pese a BM estar sano. Le dije a Jovan que "no
+existe ningún proceso con temporizador fijo" — **esto era INCORRECTO**:
+`_startup_prewarm()` (arranca en el startup del proceso, `if not
+_BM_DISABLED`) YA corría cada 10 min (bajado de 15 min el 2026-08-14).
+Confirmado que `DISABLE_BM_MONITOR=false` en Railway (el loop sí corre).
+
+La causa real de los 25h: el diagnóstico se corrió ~1 minuto después de
+un redeploy — cada redeploy reinicia el proceso, y este loop tarda 90s +
+1 ciclo completo (multi-cuenta, puede tardar varios minutos) antes de su
+primer refresh; en una sesión con varios deploys seguidos (como la de
+hoy) el ciclo nunca llega a completar antes del siguiente restart, así
+que sigue sirviendo el snapshot persistido en DB de la última vez que un
+ciclo completo SÍ terminó (posiblemente un día antes). Bajar el
+intervalo no elimina ese reinicio por deploy (inevitable), pero acorta la
+ventana de "sin refrescar" el resto del tiempo entre deploys.
+
+Jovan pidió bajarlo a "10 o 5 minutos" — se eligió **5 min** (bajado de
+10). Cambio de una sola línea en `_startup_prewarm()` (`app/main.py`,
+`_sleep = 120 if _auto_fail_streak > 0 else 300`).
+
+---
+
 ## 2026-08-18 — FIX CRÍTICO: modal "Sustituir" se colgaba hasta 5 min (502 de Railway) — /api/stock/live-check ya no llama a BM en vivo
 
 Jovan reportó que "Verificando disponibilidad en vivo..." se quedaba
