@@ -890,7 +890,7 @@ function _subModalLiveCheck() {
     var el = document.getElementById('sub-modal-live-stock');
     clearTimeout(_subModalLiveCheckTimer);
     if (!sku) { el.textContent = ''; _subModalLiveStock = null; return; }
-    el.textContent = 'Verificando disponibilidad en vivo...';
+    el.textContent = 'Verificando disponibilidad...';
     el.className = 'text-xs text-gray-400 mt-1';
     var accountId = (_subModalCtx && _subModalCtx.accountId) || '';
     _subModalLiveCheckTimer = setTimeout(function() {
@@ -910,14 +910,22 @@ function _subModalLiveCheck() {
                     sku = d.resolved_sku;
                 }
                 _subModalLiveStock = d;
+                // FIX 2026-08-18 (pedido por Jovan): esto ya no es una llamada en
+                // vivo a BM (se colgaba 60-90s+ cuando BM andaba lento) -- lee el
+                // mismo caché bulk que ya usamos para todo lo demás en Alertas de
+                // Stock, refrescado por el prewarm cada ~15 min. Se muestra la
+                // antigüedad para que quede claro que no es al segundo.
+                var edadTxt = (typeof d.age_minutes === 'number')
+                    ? (d.age_minutes < 1 ? ' (caché de hace unos segundos)' : ' (caché de hace ' + d.age_minutes + ' min)')
+                    : '';
                 if (d.available_qty === null || d.available_qty === undefined) {
-                    el.textContent = '⚠ No se pudo verificar en vivo — se registrará sin confirmar stock real.';
+                    el.textContent = '⚠ ' + (d.error || 'No se pudo verificar') + ' — se registrará sin confirmar stock real.';
                     el.className = 'text-xs text-amber-600 mt-1';
                 } else if (d.available_qty <= 0) {
-                    el.textContent = '⚠ BinManager dice 0 disponibles AHORA MISMO para ' + sku + ' — puede que ya se haya usado.';
+                    el.textContent = '⚠ BinManager dice 0 disponibles para ' + sku + edadTxt + ' — puede que ya se haya usado.';
                     el.className = 'text-xs text-red-600 mt-1 font-medium';
                 } else {
-                    el.textContent = '✓ ' + d.available_qty + ' disponibles ahora mismo en BinManager.';
+                    el.textContent = '✓ ' + d.available_qty + ' disponibles en BinManager' + edadTxt + '.';
                     el.className = 'text-xs text-green-600 mt-1';
                 }
             })
@@ -945,7 +953,7 @@ window.submitSubstitution = function() {
     // algo que el snapshot no sabe (unidad física ya apartada, etc.).
     if (_subModalLiveStock && _subModalLiveStock.sku === substituteSku &&
         typeof _subModalLiveStock.available_qty === 'number' && _subModalLiveStock.available_qty <= 0) {
-        if (!confirm('BinManager dice 0 disponibles AHORA MISMO para ' + substituteSku + ' — puede que ya se haya usado para otra orden. ¿Continuar de todas formas?')) {
+        if (!confirm('BinManager dice 0 disponibles para ' + substituteSku + ' (según el caché) — puede que ya se haya usado para otra orden. ¿Continuar de todas formas?')) {
             return;
         }
     }

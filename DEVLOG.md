@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX CRÍTICO: modal "Sustituir" se colgaba hasta 5 min (502 de Railway) — /api/stock/live-check ya no llama a BM en vivo
+
+Jovan reportó que "Verificando disponibilidad en vivo..." se quedaba
+pegado en el modal. Se probó directo contra producción (no se asumió):
+la llamada real tardó **300s exactos y Railway devolvió 502 "upstream
+error"** — colgada de verdad, no solo lenta.
+
+**Causa:** el endpoint hacía 2 llamadas EN VIVO secuenciales a BM
+(`_resolve_bm_condition_sku` + `get_stock_with_reserve`), cada una con su
+propio reintento (2 intentos) y timeout de hasta 20s, TODAS pasando por
+`_BM_GLOBAL_SEM` (semáforo de 1 sola petición BM a la vez para TODA la
+app) — si BM andaba lento o cualquier otro ciclo (prewarm, fulfillment
+loop) tenía el semáforo ocupado, el peor caso se iba a 60-90s+ solo para
+esta llamada, encolado detrás de lo que sea que ya estuviera esperando.
+
+**Fix — mismo principio de [[feedback_preferir_solucion_simple_del_bulk]]
+("ausencia en bulk = 0, sin excepciones") aplicado aquí:** se reemplazó
+por `_bm_bulk_stock_lookup()`, que lee `_bm_bulk_gr_cache`/`_bm_bulk_all_cache`
+(el mismo bulk ya en memoria, refrescado ~cada 15 min por el prewarm) —
+cero llamadas a BM, responde en milisegundos (probado: 0.34s local vs
+300s+/502 antes). Se pierde la garantía de "reflejado hace 1 segundo" a
+cambio de nunca más colgarse; el frontend ahora muestra la antigüedad del
+dato ("caché de hace X min") en vez de decir "en vivo"/"ahora mismo". La
+verificación que sí necesita ser 100% en vivo (justo antes de escribir en
+BM, dentro de `_inject_bm_alter_sku`) no se tocó — sigue siendo real.
+
+Archivos: `app/main.py` (`_bm_bulk_stock_lookup`, `stock_live_check`),
+`app/templates/orders.html` (`_subModalLiveCheck`, `submitSubstitution`).
+
+---
+
 ## 2026-08-18 — FEAT/FIX UI: título de producto en "Pendientes de Envío" + modal "Sustituir" autocompleta el SKU con condición real
 
 Dos pedidos de Jovan sobre la UI de Alertas de Stock:

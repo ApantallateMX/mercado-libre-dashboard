@@ -16917,49 +16917,79 @@ def _split_bm_sku_condition(sku: str) -> tuple[str, str]:
     return upper, ""
 
 
+def _bm_bulk_stock_lookup(sku: str) -> dict | None:
+    """Igual que _bm_bulk_available_qty() pero también devuelve Reserve, el
+    SKU exacto con condición (cuando hay un solo match, igual que
+    _resolve_bm_condition_sku pero sin llamar a BM) y la edad del bulk.
+    None si el bulk todavía no se cargó ni una vez (cold start)."""
+    cache = _bm_bulk_all_cache if _bm_conditions_for_sku(sku) == "GRA,GRB,GRC,ICB,ICC,NEW" else _bm_bulk_gr_cache
+    if not cache:
+        return None
+    ts, rows = cache
+    rows = rows or []
+    sku_u = sku.upper()
+    age_seconds = _time.time() - ts
+    exact = next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku_u), None)
+    if exact is not None:
+        return {
+            "available_qty": int(exact.get("AvailableQTY") or 0),
+            "reserve": int(exact.get("Reserve") or 0),
+            "resolved_sku": exact.get("SKU") or "",
+            "age_seconds": age_seconds,
+        }
+    base_matches = [r for r in rows if _extract_base_sku((r.get("SKU") or "").upper().strip()) == sku_u]
+    if not base_matches:
+        return {"available_qty": 0, "reserve": 0, "resolved_sku": "", "age_seconds": age_seconds}
+    return {
+        "available_qty": sum(int(r.get("AvailableQTY") or 0) for r in base_matches),
+        "reserve": sum(int(r.get("Reserve") or 0) for r in base_matches),
+        # Si hay más de 1 variante de condición con stock no hay forma segura de
+        # decir cuál es "la" real (mismo límite que _resolve_bm_condition_sku) --
+        # se deja vacío en vez de adivinar.
+        "resolved_sku": base_matches[0].get("SKU") or "" if len(base_matches) == 1 else "",
+        "age_seconds": age_seconds,
+    }
+
+
 @app.get("/api/stock/live-check")
 async def stock_live_check(request: Request, sku: str = Query(...), account_id: str = Query("")):
     """FEATURE 2026-08-17 (pedido por Jovan): antes de sustituir, verificar
-    en VIVO (no el snapshot de bm_sku_master, refrescado cada ~2 min) si el
-    SKU sustituto sigue teniendo stock -- "a lo mejor ya lo tomaron para
-    otra cosa" entre que se sugirió y que se confirma la sustitución.
+    si el SKU sustituto sigue teniendo stock -- "a lo mejor ya lo tomaron
+    para otra cosa" entre que se sugirió y que se confirma la sustitución.
 
-    También resuelve el SKU con su condición REAL (ej. SNTV007447-GRB) --
-    probado en el incidente del mismo día que el bulk de stock (usado antes
-    aquí) NO expone la condición de forma confiable (a veces trae el SKU
-    base sin sufijo aunque sí exista una condición real), mientras que
-    GetAlterSKUMappingByWebSKU (mismo mecanismo ya verificado hoy para las
-    sustituciones reales) sí la reporta de forma exacta. Requiere
-    account_id para esa resolución -- sin él, solo hace el chequeo de
-    stock con el sufijo que ya traiga el SKU (o el agregado si no trae)."""
+    FIX 2026-08-18 (pedido por Jovan -- "por qué tarda si ya tenemos el
+    archivo"): la versión original hacía 2 llamadas EN VIVO secuenciales a
+    BM (resolver condición + consultar stock), cada una con su propio
+    reintento y timeout de hasta 20s -- en la práctica se podía ir a 60-90s+
+    si BM estaba lento o el semáforo global (_BM_GLOBAL_SEM, 1 sola
+    petición a la vez para TODA la app) estaba ocupado por otro ciclo
+    (prewarm, fulfillment loop, etc.), dejando el modal atorado en
+    "Verificando...". Se cambia a leer el bulk que YA está en memoria
+    (_bm_bulk_gr_cache/_bm_bulk_all_cache, el mismo que usa
+    _bm_bulk_available_qty()) -- responde en milisegundos, mismo principio
+    ya aplicado a bm_sku_master (ver feedback_preferir_solucion_simple_del_bulk
+    en memoria: "ausencia en bulk = 0, sin excepciones"). Se pierde la
+    garantía de "reflejado hace 1 segundo" (el bulk se refresca ~cada 15 min
+    vía prewarm) a cambio de nunca más colgarse -- la verificación que sí
+    tiene que ser en vivo de verdad (justo antes de escribir en BM) sigue
+    siéndolo, ver _inject_bm_alter_sku/_resolve_bm_condition_sku."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     if not sku:
         return JSONResponse({"error": "sku requerido"}, status_code=400)
 
-    base, cond = _split_bm_sku_condition(sku)
-    resolved_sku = ""
-    if account_id:
-        try:
-            resolved_sku = await _resolve_bm_condition_sku(account_id, base) or ""
-        except Exception:
-            resolved_sku = ""
-    check_sku = resolved_sku or sku
-    check_base, check_cond = _split_bm_sku_condition(check_sku)
-    conditions_param = check_cond if check_cond else _bm_conditions_for_sku(check_base)
-
-    from app.services.binmanager_client import get_shared_bm as _gsbm_live
-    bm_cli = await _gsbm_live()
-    # FIX 2026-08-17: timeout de 15s (default de la función es 7s, pensado
-    # para ciclos que revisan muchos SKUs seguidos) -- este es un chequeo
-    # de un solo SKU con un usuario esperando en el modal, vale más esperar
-    # un poco más que rendirse rápido y decir "no se pudo verificar".
-    result = await bm_cli.get_stock_with_reserve(check_base, conditions=conditions_param, timeout=15.0)
+    base, _cond = _split_bm_sku_condition(sku)
+    result = _bm_bulk_stock_lookup(base)
     if result is None:
-        return JSONResponse({"sku": sku, "resolved_sku": resolved_sku, "available_qty": None, "error": "No se pudo verificar en vivo (BM sin respuesta)"})
-    avail, reserve = result
-    return JSONResponse({"sku": sku, "resolved_sku": resolved_sku, "available_qty": avail, "reserve": reserve})
+        return JSONResponse({"sku": sku, "resolved_sku": "", "available_qty": None, "error": "Todavía no hay caché de BM (esperando al primer prewarm)."})
+    return JSONResponse({
+        "sku": sku,
+        "resolved_sku": result["resolved_sku"],
+        "available_qty": result["available_qty"],
+        "reserve": result["reserve"],
+        "age_minutes": round(result["age_seconds"] / 60),
+    })
 
 
 @app.post("/api/stock/alerts/resolve-substitution")
