@@ -5386,9 +5386,15 @@ async def items_grid_partial(
                 bodies_for_sp.append(body)
         await _enrich_with_sale_prices(client, bodies_for_sp, id_key="id", price_key="price")
 
-        # Consultar inventario BinManager para cada item (Warehouse + Reserve → disponible real)
-        BM_WH_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-        BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        # FIX 2026-08-18 (pedido por Jovan, mismo criterio del incidente de
+        # bm_sku_master ese día): antes esta vista hacía 2 llamadas EN VIVO a
+        # BM por cada producto visible (hasta 50 × 2 = 100 llamadas por
+        # carga de página) sin revisar ningún caché primero -- vulnerable al
+        # mismo tipo de degradación de BM bajo carga que atoró la
+        # reconciliación de bm_sku_master. bm_sku_master YA tiene el
+        # desglose MTY/CDMX/TJ + avail/reserve (refrescado cada ~2 min,
+        # ciclo completo en <1s desde el fix de ese día) -- una sola
+        # consulta a la BD basta, cero llamadas a BM en esta vista.
         inventory_map = {}  # item_id -> {MTY, CDMX, TJ, total, avail}
         sku_to_items = {}   # base -> {sku, item_ids}
         for it in items:
@@ -5401,42 +5407,18 @@ async def items_grid_partial(
                 sku_to_items[base]["item_ids"].append(item_id)
 
         if sku_to_items:
-            from app.services.binmanager_client import get_shared_bm as _get_bm_cli, bm_post as _bm_post_inv
-            async def _fetch_inv(base_sku: str, full_sku: str):
-                try:
-                    bm_cli = await _get_bm_cli()
-                    r_wh = await _bm_post_inv(BM_WH_URL, {
-                        "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
-                        "LocationID": "47,62,68,45,69,43,42", "BINID": None,
-                        "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
-                    }, timeout=15.0)
-                    _stock = await bm_cli.get_stock_with_reserve(base_sku)
-                    avail_qty, reserve_qty = _stock if isinstance(_stock, tuple) else (0, 0)
-                    mty = cdmx = tj = 0
-                    if r_wh and r_wh.status_code == 200:
-                        for row in (r_wh.json() or []):
-                            qty = row.get("QtyTotal", 0) or 0
-                            wname = (row.get("WarehouseName") or "").lower()
-                            if "monterrey" in wname or "maxx" in wname:
-                                mty += qty
-                            elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-                                cdmx += qty
-                            else:
-                                tj += qty
-                    warehouse_total = mty + cdmx
-                    return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail_qty, "reserved": reserve_qty}
-                except Exception:
-                    pass
-                return base_sku, None
-
-            tasks = [_fetch_inv(base, sku_to_items[base]["sku"]) for base in sku_to_items.keys()]
-            for coro in asyncio.as_completed(tasks):
-                queried_base, inv = await coro
-                if inv:
-                    for b, info in sku_to_items.items():
-                        if b.upper() == queried_base.upper():
-                            for iid in info["item_ids"]:
-                                inventory_map[iid] = inv
+            _bm_rows = await token_store.get_bm_master_rows_for_skus(list(sku_to_items.keys()))
+            for queried_base, _row in _bm_rows.items():
+                inv = {
+                    "MTY": _row.get("mty_qty") or 0, "CDMX": _row.get("cdmx_qty") or 0,
+                    "TJ": _row.get("tj_qty") or 0,
+                    "total": (_row.get("mty_qty") or 0) + (_row.get("cdmx_qty") or 0),
+                    "avail": _row.get("available_qty") or 0, "reserved": _row.get("reserve_qty") or 0,
+                }
+                for b, info in sku_to_items.items():
+                    if b.upper() == queried_base.upper():
+                        for iid in info["item_ids"]:
+                            inventory_map[iid] = inv
 
         # Construir metadata por item (brand, model, variaciones)
         item_meta = {}
@@ -17022,19 +17004,33 @@ async def resolve_stock_alert_substitution(request: Request):
 
     if apply_bm:
         async def _inject_bm_alter_sku_background():
-            try:
-                bm_result = await _inject_bm_alter_sku(
-                    account_id=account_id, order_id=order_id, product_sku=sku,
-                    substitute_sku=substitute_sku, qty=quantity,
-                )
-            except Exception as e:
-                logger.error(f"[BM-ALTER-SKU] excepción en background para orden {order_id}: {e}")
-                bm_result = {"ok": False, "error": str(e)}
+            # FIX 2026-08-18 (pedido por Jovan, "esta fallando mucho, arreglalo
+            # de raiz, no me digas que reintente"): antes esto intentaba UNA
+            # sola vez -- si BM estaba lento/degradado ese momento puntual
+            # (confirmado real y frecuente el mismo dia), se quedaba en
+            # bm_status='pending' hasta que alguien le diera clic manual a
+            # "Reintentar". Ahora reintenta solo hasta 4 veces con espera
+            # creciente ANTES de rendirse y pedir intervencion manual -- la
+            # gran mayoria de fallos de BM observados hoy fueron transitorios
+            # (BM tarda, no que el SKU/orden sea invalido).
+            bm_result = {"ok": False, "error": "sin intentos"}
+            for _attempt in range(4):
+                try:
+                    bm_result = await _inject_bm_alter_sku(
+                        account_id=account_id, order_id=order_id, product_sku=sku,
+                        substitute_sku=substitute_sku, qty=quantity,
+                    )
+                except Exception as e:
+                    logger.error(f"[BM-ALTER-SKU] excepción en background para orden {order_id} (intento {_attempt + 1}): {e}")
+                    bm_result = {"ok": False, "error": str(e)}
+                if bm_result.get("ok"):
+                    break
+                logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id} (intento {_attempt + 1}/4): {bm_result}")
+                if _attempt < 3:
+                    await asyncio.sleep(15 * (_attempt + 1))
             _bm_status = "success" if bm_result.get("ok") else "failed"
             _resp = bm_result.get("response") or {}
             _bm_message = _resp.get("MessageReturn") or bm_result.get("error") or ""
-            if not bm_result.get("ok"):
-                logger.warning(f"[BM-ALTER-SKU] falló para orden {order_id}: {bm_result}")
             await token_store.update_stock_alert_resolution_bm_status(
                 resolution_id, bm_status=_bm_status, bm_message=_bm_message,
             )
