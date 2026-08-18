@@ -366,10 +366,23 @@ class BinManagerClient:
                         if attempt == 0:
                             await self.login()
                             continue
+                        logger.warning(f"[BM] get_bulk_stock pág {page}: sesión expiró y el re-login no bastó -- devolviendo {len(all_rows)} filas acumuladas")
                         return all_rows  # devolver lo que tenemos
                     if r.status_code == 200:
                         data = r.json()
                         page_rows = data if isinstance(data, list) else []
+                        # DIAG 2026-08-18 (incidente real: GR bulk devolviendo
+                        # vacío por horas sin ninguna evidencia de POR QUÉ --
+                        # HTTP 200 no es lo mismo que "de verdad no hay datos".
+                        # Loguea la respuesta cruda (truncada) SOLO cuando la
+                        # página 1 sale vacía/inesperada, para no inflar logs
+                        # en el camino feliz (miles de filas normales).
+                        if page == 1 and not page_rows:
+                            logger.warning(
+                                f"[BM] get_bulk_stock pág 1 vacía/inesperada -- "
+                                f"tipo={type(data).__name__} status={r.status_code} "
+                                f"body[:300]={r.text[:300]!r}"
+                            )
                         all_rows.extend(page_rows)
                         fetched = True
                         if len(page_rows) < _BM_PAGE_SIZE:
@@ -378,6 +391,10 @@ class BinManagerClient:
                             return all_rows
                         break  # página completa, continuar con la siguiente
                     else:
+                        logger.warning(
+                            f"[BM] get_bulk_stock pág {page} HTTP no-200 -- "
+                            f"status={r.status_code} body[:300]={r.text[:300]!r}"
+                        )
                         return all_rows  # error HTTP — devolver lo acumulado
                 except Exception as e:
                     logger.error(f"BinManager get_bulk_stock pág {page} error: {e}")
