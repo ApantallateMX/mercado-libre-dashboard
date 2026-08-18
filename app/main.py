@@ -2414,8 +2414,13 @@ async def _check_one_substitution_fulfillment(row: dict) -> None:
         from app.services.binmanager_client import get_shared_bm as _gsbm_fulfillment
         bm_cli = await _gsbm_fulfillment()
         result = await bm_cli.get_stock_with_reserve(base, conditions=conditions_param)
-        qty = result[0] if result is not None else None
-        await token_store.mark_resolution_fulfillment(row["id"], "pendiente_envio", stock_qty=qty)
+        # FIX 2026-08-17 (bug real reportado por Jovan): si BM no responde
+        # (timeout, ya visto antes con otro SKU) NO hay que pisar el último
+        # dato REAL conocido (ej. "0 disponibles") con "sin verificar" --
+        # eso borraba información real por un fallo transitorio. Solo se
+        # actualiza cuando de verdad se obtuvo una lectura nueva.
+        if result is not None:
+            await token_store.mark_resolution_fulfillment(row["id"], "pendiente_envio", stock_qty=result[0])
     except Exception as e:
         logger.warning(f"[SUB-FULFILLMENT] error revisando resolution_id={row['id']} orden={order_id}: {e}")
     finally:
@@ -16547,6 +16552,55 @@ async def stock_alerts_pending_shipment(request: Request):
     for row in rows:
         row["account_name"] = _KNOWN_ML_NICKNAMES.get(str(row.get("account_id", "")), str(row.get("account_id", "")))
     return JSONResponse({"rows": rows})
+
+
+@app.post("/api/stock/alerts/resolutions/{resolution_id}/reopen")
+async def reopen_stock_alert_resolution(resolution_id: int, request: Request):
+    """FEATURE 2026-08-17 (pedido por Jovan): cuando el sustituto de una
+    sustitución "pendiente de envío" se confirma en 0, este botón ("🔄
+    Buscar otro sustituto") borra el mapeo viejo (ya inútil, sin stock --
+    dejarlo confundiría al almacén) y saca la resolución de "Pendientes de
+    Envío" (fulfillment_status='reabierta'). La orden sigue viva en el
+    feed "En vivo" (nunca se quita de ahí) -- este endpoint solo devuelve
+    sugerencias frescas para que el frontend abra el modal de "Sustituir"
+    directo, sin que el usuario tenga que ir a buscarla por su cuenta."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    rows = await token_store.get_stock_alert_resolutions(limit=500)
+    row = next((r for r in rows if r["id"] == resolution_id), None)
+    if not row:
+        return JSONResponse({"detail": "Resolución no encontrada"}, status_code=404)
+    if row.get("fulfillment_status") not in ("", "pendiente_envio"):
+        return JSONResponse({"detail": "Esta resolución ya no está pendiente de envío"}, status_code=400)
+
+    del_result = await _delete_bm_alter_sku(
+        account_id=row["account_id"], order_id=row["order_id"], product_sku=row["original_sku"],
+        substitute_sku=row["substitute_sku"], qty=1,
+    )
+    await token_store.mark_resolution_fulfillment(resolution_id, "reabierta")
+    if del_result.get("ok"):
+        await token_store.mark_stock_alert_resolution_bm_deleted(resolution_id, deleted_by=f"{du['username']} (reabierta -- sin stock)")
+    else:
+        logger.warning(f"[SUB-FULFILLMENT] reopen resolution_id={resolution_id}: no se pudo borrar el mapeo viejo de BM: {del_result}")
+
+    import aiosqlite as _aio_reopen
+    async with _aio_reopen.connect(DATABASE_PATH) as _db:
+        _db.row_factory = _aio_reopen.Row
+        _cur = await _db.execute(
+            "SELECT brand, retail_ph, size FROM bm_sku_master WHERE sku = ?", (row["original_sku"],),
+        )
+        _bm_row = await _cur.fetchone()
+    sugerencias = []
+    if _bm_row:
+        sugerencias = await token_store.get_replacement_sku_suggestions(
+            row["original_sku"], _bm_row["brand"], _bm_row["retail_ph"], _bm_row["size"], limit=3,
+        )
+    return JSONResponse({
+        "ok": True, "order_id": row["order_id"], "sku": row["original_sku"],
+        "platform": row["platform"], "account_id": row["account_id"], "sugerencias": sugerencias,
+    })
 
 
 # ═══════════════════════════════════════════════════════════════════════════

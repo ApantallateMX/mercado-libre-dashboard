@@ -614,7 +614,12 @@ function loadPendingShipment() {
                     '<div class="text-xs text-gray-600 mt-2">' +
                         '<span class="font-mono">' + r.original_sku + '</span> → sustituto <span class="font-mono">' + r.substitute_sku + '</span>' +
                     '</div>' +
-                    '<div class="text-xs text-gray-400 mt-1">Último chequeo de stock: ' + checked + ' · registrado por ' + r.username + '</div>' +
+                    '<div class="flex items-center justify-between gap-2 mt-1">' +
+                        '<span class="text-xs text-gray-400">Último chequeo de stock: ' + checked + ' · registrado por ' + r.username + '</span>' +
+                        (qty !== null && qty !== undefined && qty <= 0
+                            ? '<button onclick="reopenPendingResolution(' + r.id + ', this)" class="text-[10px] bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🔄 Buscar otro sustituto</button>'
+                            : '') +
+                    '</div>' +
                 '</div>';
             }).join('');
         })
@@ -622,6 +627,33 @@ function loadPendingShipment() {
             container.innerHTML = '<p class="text-center py-6 text-red-500 text-sm">Error cargando pendientes de envío.</p>';
         });
 }
+
+// FEATURE 2026-08-17 (pedido por Jovan): cuando el sustituto ya confirmado
+// en 0 sigue sin enviarse, borra el mapeo viejo de BM (ya inútil) y abre
+// el modal de "Sustituir" con sugerencias frescas para esa misma orden --
+// la orden nunca sale del feed "En vivo", esto es solo un atajo directo.
+window.reopenPendingResolution = function(id, btnEl) {
+    if (!confirm('Esto borra de BinManager el mapeo del sustituto anterior (ya sin stock) y te deja elegir uno nuevo. ¿Continuar?')) return;
+    btnEl.disabled = true; btnEl.textContent = 'Reabriendo...';
+    fetch('/api/stock/alerts/resolutions/' + id + '/reopen', { method: 'POST' })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+        .then(function(res) {
+            if (res.ok && res.d.ok) {
+                loadPendingShipment();
+                var d = res.d;
+                var sugerencias = d.sugerencias || [];
+                var suggestedSku = sugerencias.length ? sugerencias[0].sku : '';
+                openSubstitutionModal(d.order_id, d.sku, d.platform, d.account_id, suggestedSku, 1);
+            } else {
+                if (window.showToast) showToast(res.d.detail || 'No se pudo reabrir', 'error');
+                btnEl.disabled = false; btnEl.textContent = '🔄 Buscar otro sustituto';
+            }
+        })
+        .catch(function() {
+            if (window.showToast) showToast('Error de conexión al reabrir', 'error');
+            btnEl.disabled = false; btnEl.textContent = '🔄 Buscar otro sustituto';
+        });
+};
 
 // ─── Aviso de reactivación (SKUs puestos en 0 que ya tienen stock BM) ──────
 function loadRestockWatch() {
@@ -701,6 +733,13 @@ function loadAlertasHistory() {
             // "Aplicada en BM" puede seguir esperando a que el almacén de
             // verdad envíe la orden (ver /api/stock/alerts/pending-shipment).
             function _fulfillmentBadge(h) {
+                // FEATURE 2026-08-17: "reabierta" se ve aunque bm_deleted_at
+                // esté seteado (el borrado fue automático al reabrir, no un
+                // borrado manual normal) -- por eso se revisa ANTES del guard
+                // general de abajo.
+                if (h.fulfillment_status === 'reabierta') {
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 block mt-1">🔄 Reabierta — se buscó otro sustituto</span>';
+                }
                 if (h.bm_status !== 'success' || h.bm_deleted_at) return '';
                 if (h.fulfillment_status === 'completado') {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 text-blue-700 block mt-1">📦 Enviada</span>';
