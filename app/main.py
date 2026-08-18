@@ -17514,6 +17514,40 @@ async def diag_bm_alter_sku_groups(web_sku: str = "", account_id: str = "", toke
     return JSONResponse({"status_code": resp.status_code, "groups": groups})
 
 
+@app.post("/api/diag/bm-alter-sku-reassign")
+async def diag_bm_alter_sku_reassign(
+    account_id: str = "", old_order_id: str = "", new_order_id: str = "",
+    product_sku: str = "", substitute_sku: str = "", token: str = "",
+):
+    """UTILIDAD PUNTUAL 2026-08-17: BM solo permite 1 mapeo activo por par
+    (ProductSKU, AlterSKU) sin importar el scope -- cuando un mapeo UNICA de
+    una orden vieja ya resuelta bloquea crear el mismo par para una orden
+    nueva, no hay forma de "actualizar" el scope directamente (el endpoint
+    de BM no lo soporta) -- hay que borrar el viejo (Actions=3) y crear el
+    nuevo (Actions=1). Caso real: SHHP000048-NEW->SHHP000060-NEW, orden
+    vieja 2000017944072810 (Vanessa, 14-ago, ya resuelta) bloqueaba la
+    orden nueva 2000017981754294 (Vanessa, autorizado explícitamente por
+    Jovan reasignar). Requiere confirmar con evidencia que la orden vieja
+    ya no está activa antes de usar -- no automatizado a propósito."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not all([account_id, old_order_id, new_order_id, product_sku, substitute_sku]):
+        return JSONResponse({"error": "account_id, old_order_id, new_order_id, product_sku, substitute_sku requeridos"}, status_code=400)
+
+    delete_result = await _delete_bm_alter_sku(
+        account_id=account_id, order_id=old_order_id, product_sku=product_sku,
+        substitute_sku=substitute_sku, qty=1,
+    )
+    if not delete_result.get("ok"):
+        return JSONResponse({"step": "delete", "ok": False, "detail": delete_result}, status_code=500)
+
+    create_result = await _inject_bm_alter_sku(
+        account_id=account_id, order_id=new_order_id, product_sku=product_sku,
+        substitute_sku=substitute_sku, qty=1,
+    )
+    return JSONResponse({"step": "create", "delete_result": delete_result, "create_result": create_result})
+
+
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
     """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
