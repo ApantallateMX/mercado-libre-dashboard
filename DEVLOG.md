@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FEAT: "No Lanzados" de Amazon igualado al desglose por categoría que ya tenía ML
+
+Continuación de la exploración de `ConfColumns_Conditions_Excel`
+(entrada anterior del mismo día). Jovan preguntó cómo decidir en qué
+categorías vale la pena invertir esfuerzo, señalando que basarse solo en
+ventas actuales es sesgado (una categoría puede no vender simplemente
+porque nunca se lanzó bien, no porque no haya demanda) — pidió mejor
+mirar "stock real pero sin publicar" por categoría.
+
+**Hallazgo: esa feature ya existía, solo para ML.** El gap scan de ML
+(`_run_gap_scan`, cada ~3h, `app/api/lanzar.py`) ya usa
+`ConfColumns_Conditions_Excel` con un payload simple (sin `CATEGORYID`)
+que sí trae las ~120 categorías completas de BM en una sola llamada
+(la prueba anterior había fallado por un payload propio con demasiados
+campos, no por una limitación real del endpoint). `GET /api/lanzar/filters`
+ya devuelve categoría+conteo+stock total, usado en la página "No
+Lanzados" (`/bm/unlaunched`) con un dropdown "Categoría (N)".
+
+**Lo que faltaba: Amazon no tenía el mismo desglose.** `amz_sku_gaps` ya
+guardaba `category` por SKU (el scan de Amazon también la captura), pero
+`GET /products/sin-lanzar` (`app/api/amazon_products.py`) solo exponía
+una lista plana de nombres, sin conteo ni stock. Igualado con la misma
+regla de ML: `GROUP BY category` con `COUNT(*)` y `SUM(avail_qty)`,
+ordenado por conteo descendente. También se agregó un badge de
+categoría por fila en la tabla (`app/templates/partials/amazon_sin_lanzar.html`),
+igual al que ya tenía ML.
+
+Verificado contra producción (solo lectura de `amz_sku_gaps`, cero
+llamadas a BM/Amazon en vivo): 585 SKUs sin publicar, con categorías
+reales como "Televisions" (131, 181 uds), "Personal Protective
+Equipment" (111, 10,573 uds), "Kits Parts TVs" (87, 488 uds). Deploy
+Railway `SUCCESS`.
+
+---
+
 ## 2026-08-19 — EXPLORACIÓN: probado `ConfColumns_Conditions_Excel` (endpoint sugerido por BinManager) — sirve por categoría, NO para "todas de un jalón"
 
 Un programador de BinManager le compartió a Jovan este endpoint como
