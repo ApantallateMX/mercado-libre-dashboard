@@ -907,11 +907,23 @@ async def lifespan(app: FastAPI):
     # Fase B rediseño bm_sku_master (2026-08-10) — 1 sola sincronización de BM
     # para todas las cuentas, en paralelo al pipeline viejo (Fase C todavía no
     # reemplaza nada) — ver project_bm_sku_master.md
-    if not _BM_DISABLED:
-        asyncio.create_task(_bm_master_sync_loop())
+    #
+    # PAUSADO 2026-08-19 (cutover aprobado por Jovan): ConfColumns_Conditions_Excel
+    # por categoría (abajo) ya escribe available_qty/total_qty/category/upc en
+    # bm_sku_master, con el fix de LOCATIONID=47,62,68 (excluye Tijuana) ya
+    # verificado contra producción real. Este loop viejo dejaba de aportar valor
+    # para esos campos -- lo único que perdemos es mty_qty/cdmx_qty/tj_qty
+    # (desglose por bodega, usado solo por Transferencias Sugeridas), que Jovan
+    # confirmó que no es prioridad ahora. El prewarm base (_startup_prewarm,
+    # arriba) SIGUE VIVO sin cambios -- alimenta alertas en tiempo real y
+    # live-check, que sí necesitan freshness al segundo (ConfColumns es
+    # demasiado lento para eso, 15min/4h). Reactivar quitando este comentario
+    # si algo depende de mty_qty/cdmx_qty/tj_qty frescos.
+    # if not _BM_DISABLED:
+    #     asyncio.create_task(_bm_master_sync_loop())
     # Migración a ConfColumns_Conditions_Excel por categoría (2026-08-19,
-    # pedido explícito de BinManager) -- corre EN PARALELO al loop de arriba,
-    # todavía no lo reemplaza (fase de validación en producción).
+    # pedido explícito de BinManager) -- YA ES LA FUENTE PRINCIPAL de
+    # bm_sku_master desde el cutover de arriba.
     if not _BM_DISABLED:
         asyncio.create_task(_conf_columns_top_categories_loop())
         asyncio.create_task(_conf_columns_longtail_loop())
