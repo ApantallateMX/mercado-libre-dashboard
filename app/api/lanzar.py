@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiosqlite
@@ -562,6 +562,24 @@ async def _run_gap_scan(user_id: str | None = None):
             _prog(15, "bm_fetch", "Descargando inventario BinManager...", "ConfColumns...")
             bm_products = await _bm_fetch_all_skus_with_stock()
 
+            # FIX 2026-08-19 (bug real confirmado en producción -- el scan de las
+            # 19:01-19:06 de hoy recibió 0 SKUs de BM por una falla silenciosa de
+            # ConfColumns_Conditions_Excel, y el código de abajo lo trató como "BM
+            # no tiene nada" -- la limpieza de gaps obsoletos usa `sku NOT IN
+            # (<lista de BM>)`, así que con la lista vacía BORRÓ los gaps
+            # 'unlaunched' de las 4 cuentas ML. El catálogo real de BM con stock
+            # siempre tiene miles de SKUs (confirmado: solo "Televisions" trae
+            # ~800) -- un total por debajo de este umbral es sin ambigüedad un
+            # fallo del fetch, no un catálogo real vacío. Se aborta ANTES de
+            # tocar bm_sku_gaps -- se conservan los gaps existentes intactos.
+            _BM_GAP_SCAN_MIN_SKUS = 1000
+            if len(bm_products) < _BM_GAP_SCAN_MIN_SKUS:
+                raise Exception(
+                    f"BM devolvió solo {len(bm_products)} SKUs con stock (mínimo esperado "
+                    f"{_BM_GAP_SCAN_MIN_SKUS}) -- probable fallo silencioso de ConfColumns, "
+                    f"no un catálogo real vacío. Abortando sin tocar bm_sku_gaps."
+                )
+
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
             _prog(28, "bm_done", "Inventario BM cargado", f"{len(bm_products)} SKUs con stock")
 
@@ -945,21 +963,37 @@ async def _run_gap_scan(user_id: str | None = None):
                 await db.commit()
 
 
-_GAP_SCAN_INTERVAL_HOURS = 3
-
-
 async def _nightly_gap_scan_loop():
-    """FIX 2026-08-13: antes corría 1x/día (3am hora México) -- un SKU que
+    """FIX 2026-08-19 (pedido por Jovan, tras el reporte real de carga alta de
+    BinManager y el bug de arriba): vuelve a 1x/día a las 3am hora México
+    (UTC-6 fijo -- México no usa horario de verano, ver reference_mi2_stack) --
+    de cada 3h (FIX 2026-08-13, ver historial abajo) a 1x/día para bajar la
+    carga sostenida hacia BM. El bug de "0 SKUs borra todo" (guard nuevo en
+    _run_gap_scan) hace que esta corrida sea segura sin importar la
+    frecuencia -- este cambio es sobre CARGA, no sobre ese bug.
+
+    Se recalcula el próximo 3am cada vuelta (no un sleep fijo de 24h) para
+    que no haya drift si el proceso se reinicia a mitad de ciclo.
+
+    Historial: antes de 2026-08-13 corría 1x/día también, pero un SKU que
     recibía stock nuevo en BM podía tardar hasta 24h en aparecer como
-    candidato a lanzar en "Sin publicar" (confirmado con SNVC000743, Jovan).
-    Ahora corre cada 3h -- mismo ritmo acordado con Jovan ("es perfecto ese
-    ritmo") y ya alineado con el lado Amazon (ver amazon_listing_sync.py
-    _GAP_SCAN_INTERVAL). Nombre de la función se conserva por compatibilidad
-    con el import en main.py, ya no es estrictamente "nocturno"."""
-    await asyncio.sleep(300)  # 5 min al arrancar -- no competir con el prewarm inicial
+    candidato a lanzar en "Sin publicar" (confirmado con SNVC000743) --
+    por eso se subió a cada 3h ese día. Jovan decide ahora que 1x/día es
+    preferible dado el costo real hacia BM; el lado Amazon
+    (amazon_listing_sync.py _GAP_SCAN_INTERVAL) queda sin cambiar por este
+    pedido -- avisar si también debe alinearse.
+
+    Nombre de la función se conserva por compatibilidad con el import en
+    main.py."""
     while True:
+        now_utc = datetime.utcnow()
+        target = now_utc.replace(hour=9, minute=0, second=0, microsecond=0)  # 09:00 UTC = 3am MX
+        if target <= now_utc:
+            target += timedelta(days=1)
+        wait_s = (target - now_utc).total_seconds()
+        logger.info(f"[GAP-SCAN] Próxima corrida: {target.isoformat()}Z (3am México) — en {wait_s/3600:.1f}h")
+        await asyncio.sleep(wait_s)
         asyncio.create_task(_run_gap_scan())
-        await asyncio.sleep(_GAP_SCAN_INTERVAL_HOURS * 3600)
 
 
 def start_gap_scan_loop():
