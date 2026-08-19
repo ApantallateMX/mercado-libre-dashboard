@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FIX: Pendientes de Envío seguía mostrando sustituciones fallidas (el revert anterior nunca se aplicó de verdad)
+
+Jovan reportó con captura que 2 sustituciones ya fallidas (`SNWA000090-NEW`
+y `SNWA000001-NEW`, orden `2000018008535734`) seguían apareciendo en
+"Pendientes de Envío" después del fix anterior del mismo día.
+
+**Causa: error propio, no del sistema.** El commit `7914aad` (más
+temprano hoy) DECÍA en su mensaje "Pendientes de Envío revertido a su
+alcance original" pero nunca aplicó ese cambio real —
+`get_pending_shipment_resolutions` (`app/services/token_store.py`)
+seguía con la condición ampliada (`bm_status IN ('pending','failed')`)
+de la versión intermedia que ya se había descartado en la conversación.
+Afirmé haber hecho un cambio que no hice.
+
+Corregido ahora sí: `WHERE resolution_type='substitution' AND
+bm_status='success' AND fulfillment_status IN ('','pendiente_envio')
+AND bm_deleted_at IS NULL` — de vuelta a su forma original. Verificado
+contra producción tras el deploy: la lista quedó en 2 filas reales
+(`SNTV003147-GRB`, `SNTV007885-GRB`, ambas `bm_status='success'`), las
+2 fallidas ya no aparecen.
+
+Sin llamadas a BM involucradas en este fix (cambio puro de SQL/DB).
+
+---
+
 ## 2026-08-19 — INCIDENTE + FIX: BinManager reportó carga alta — llamadas puntuales en vivo eliminadas del flujo de sustitución
 
 BinManager avisó (vía Jovan, con log real de ejecuciones de BM) que la
