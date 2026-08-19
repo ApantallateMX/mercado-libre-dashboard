@@ -296,18 +296,17 @@ class BinManagerClient:
                 return []
         return []
 
-    async def get_conf_columns_catalog(self, category_id: str | None = None) -> list[dict]:
-        """Catálogo completo de BM vía ConfColumns_Conditions_Excel -- 1 sola
-        llamada devuelve TODOS los SKUs con stock, una fila por SKU BASE, con
-        cada condición (GRA/GRB/GRC/NEW/ICB/ICC/ICX/BOX/DMx/etc) como su
-        propia columna + Available (total ya neto), TotalQty, Brand, Model,
-        Title, CategoryName, UPC, Size, RetailPrice, LastRetailPricePurchaseHistory.
+    async def get_conf_columns_catalog(self, category_id: str | None = None, timeout: float = 45.0) -> list[dict] | None:
+        """Catálogo de BM vía ConfColumns_Conditions_Excel -- una fila por SKU
+        BASE, con cada condición (GRA/GRB/GRC/NEW/ICB/ICC/ICX/BOX/DMx/etc)
+        como su propia columna + Available (total ya neto), TotalQty, Brand,
+        Model, Title, CategoryName, UPC, Size, RetailPrice,
+        LastRetailPricePurchaseHistory.
 
         FIX 2026-08-19 (pedido explícito de BinManager, vía Jovan): dejar de
         usar Get_GlobalStock_InventoryBySKU ("pagedata") para consumo
         automatizado de alto volumen -- ese es justo lo que generó la queja
-        de carga de hoy. Usar este endpoint ("el excel") en su lugar, que
-        BM diseñó para este tipo de descarga masiva.
+        de carga de hoy. Usar este endpoint ("el excel") en su lugar.
 
         OJO -- limitación real confirmada: este endpoint NO expone "Reserve"
         por separado. BM confirmó que 'Available' ya viene neto ("el
@@ -315,12 +314,27 @@ class BinManagerClient:
         esta fuente debe asumir reserve=0 explícito (decisión de Jovan
         2026-08-19), no inventarlo.
 
-        category_id=None trae TODO el catálogo (probado: 9,278-9,294 SKUs,
-        ~75s-5min según carga de BM). Con category_id se acota a 1 categoría
-        (probado con "Televisions": 789 filas, ~19s)."""
+        FIX 2026-08-19 #2 (bug real encontrado probando esto mismo hoy):
+        category_id=None (todo el catálogo de un jalón) puede tardar más de
+        120s de forma impredecible -- y mientras tarda, tiene el semáforo
+        global de BM ocupado, degradando TODO lo demás que la app necesita
+        de BM en ese momento (confirmado: bm_sku_master de un SKU cayó a 0
+        durante una prueba de 120s). Por eso el default aquí es 45s y
+        category_id ya NO es opcional en la práctica -- llamar SIEMPRE con
+        una categoría puntual (probado con "Televisions": 789 filas, ~19s),
+        nunca con el catálogo completo en este método.
+
+        FIX 2026-08-19 #3 (mismo bug ya corregido una vez hoy en el gap scan
+        diario -- reaparecía aquí): antes devolvía `[]` tanto si la llamada
+        falló como si tuvo éxito pero vino vacía -- el caller no podía
+        distinguir "no toques nada, esto falló" de "sí falló limpio, son
+        0 SKUs reales". Ahora devuelve `None` en cualquier fallo (timeout,
+        excepción, HTTP != 200, JSON invunder) y una lista (incluso vacía)
+        SOLO en éxito real -- el caller debe tratar `None` como "no sé,
+        conserva lo que ya había" y nunca como "0 SKUs confirmados"."""
         if not self._logged_in:
             if not await self.login():
-                return []
+                return None
         payload = {
             "COMPANYID": 1,
             "CATEGORYID": category_id,
@@ -332,19 +346,22 @@ class BinManagerClient:
         try:
             r = await self._post(
                 f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
-                json=payload, headers=_AJAX_HEADERS, timeout=120,
+                json=payload, headers=_AJAX_HEADERS, timeout=timeout,
             )
             if r is None:
-                logger.error("get_conf_columns_catalog: bm_post retornó None (sesión/red)")
-                return []
+                logger.error(f"get_conf_columns_catalog[{category_id}]: bm_post retornó None (sesión/red)")
+                return None
             if r.status_code != 200:
-                logger.error(f"get_conf_columns_catalog: HTTP {r.status_code}")
-                return []
+                logger.error(f"get_conf_columns_catalog[{category_id}]: HTTP {r.status_code}")
+                return None
             data = r.json()
-            return data if isinstance(data, list) else []
+            if not isinstance(data, list):
+                logger.error(f"get_conf_columns_catalog[{category_id}]: respuesta no es lista ({type(data).__name__})")
+                return None
+            return data
         except Exception as e:
-            logger.error(f"get_conf_columns_catalog error: {e}")
-            return []
+            logger.error(f"get_conf_columns_catalog[{category_id}] error: {type(e).__name__}: {e}")
+            return None
 
     async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68") -> list:
         """Retorna TODOS los SKUs vendibles paginando de 500 en 500.

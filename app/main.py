@@ -20223,6 +20223,17 @@ async def diag_bm_master_compare(token: str = "", sample_n: int = 20):
     })
 
 
+@app.get("/api/diag/categories-by-sales")
+async def diag_categories_by_sales(token: str = "", days: int = 90):
+    """Solo lectura, cero llamadas externas -- orden real de categorías BM
+    por ingresos (order_history), para decidir en qué orden refrescar
+    bm_sku_master vía ConfColumns por categoría (plan 2026-08-19)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    rows = await token_store.get_categories_ordered_by_sales(days=days)
+    return JSONResponse({"days": days, "categories": rows})
+
+
 # Condiciones "vendibles" reales por tipo de SKU -- ver _bm_conditions_for_sku.
 _CONF_COND_NON_TV = ("GRA", "GRB", "GRC", "NEW")
 _CONF_COND_TV_EXTRA = ("ICB", "ICC")

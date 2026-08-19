@@ -2102,6 +2102,37 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
     return out
 
 
+async def get_categories_ordered_by_sales(days: int = 90) -> list[dict]:
+    """FEATURE 2026-08-19 (pedido por Jovan, plan de migración a
+    ConfColumns_Conditions_Excel por categoría): ordena las categorías BM
+    (bm_sku_master.category, ya se completa desde el gap scan diario) por
+    ingresos reales de order_history en los últimos N días -- la prioridad
+    real para refrescar primero. SELECT puro, cero llamadas externas.
+
+    Categorías con category='' (SKUs conocidos que aún no pasaron por el
+    gap scan, o sin stock en el último scan y por eso nunca enriquecidos)
+    quedan en su propio renglón 'sin categoría' -- no se descartan, solo no
+    se pueden priorizar por categoría todavía."""
+    date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT COALESCE(bsm.category, '') AS category,
+                   SUM(oh.unit_price * oh.quantity) AS revenue_mxn,
+                   SUM(oh.quantity) AS units,
+                   COUNT(DISTINCT bsm.sku) AS skus_with_sales
+            FROM order_history oh
+            LEFT JOIN bm_sku_master bsm ON bsm.sku = oh.sku
+            WHERE oh.order_date >= ?
+              AND oh.sku != ''
+              AND LOWER(oh.status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
+            GROUP BY category
+            ORDER BY revenue_mxn DESC
+        """, (date_from,))
+        rows = [dict(r) for r in await cur.fetchall()]
+    return rows
+
+
 async def get_bm_stock_snapshot_last_update() -> float:
     """Timestamp de la foto de stock más reciente en disco, o 0 si nunca se ha tomado."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
