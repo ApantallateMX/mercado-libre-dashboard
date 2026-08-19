@@ -2426,33 +2426,34 @@ async def get_stock_alert_resolutions(limit: int = 50, closed_only: bool = False
     opt-in (default False, comportamiento sin cambios para esos 3
     callers que necesitan encontrar CUALQUIER fila, no solo las cerradas).
 
-    FIX 2026-08-19 (pedido por Jovan: "historial es solamente cuando algo
-    ya fue confirmado y enviado"): closed_only=True excluye lo que sigue
-    en proceso (verificando con BM, fallido, o aplicado-pero-sin-enviar)
-    -- eso vive únicamente en Pendientes de Envío
-    (get_pending_shipment_resolutions, ampliada el mismo día para
-    cubrirlo). La condición es el complemento EXACTO (negado) de la de
-    esa función, para garantizar que cada resolución de tipo
-    'substitution' viva en Historial o en Pendientes, nunca en ambas ni
-    en ninguna."""
+    FIX 2026-08-19: closed_only=True excluye lo que sigue en proceso
+    ("historial es solamente cuando algo ya fue confirmado y enviado",
+    Jovan) -- ver también partición de 3 vías más abajo.
+
+    FIX 2026-08-19 #2 (mismo día, corrección tras ver el resultado en
+    vivo): un intento de sustitución que YA falló contra BM (bm_status=
+    'failed') o que sigue sin resolverse (bm_status='pending') no es
+    "pendiente de envío" -- ya tiene un dictamen (falló) o simplemente no
+    se sabe qué pasó, ninguno de los dos es "todo funcionó bien esperando
+    enviarse". Jovan: "si marca un error... no debería pasar a ningún
+    lado". Partición real de 3 vías para 'substitution' (nunca en más de
+    una, nunca en ninguna de las 2 vistas para pending/failed -- el
+    pedido en sí sigue vivo en 'En vivo' para reintentarlo desde cero):
+      - bm_status='success' AND fulfillment_status IN ('','pendiente_envio')
+        -> Pendientes de Envío (get_pending_shipment_resolutions)
+      - bm_status='success' AND fulfillment_status IN ('completado','cancelada','reabierta'),
+        o resolution_type != 'substitution', o bm_deleted_at IS NOT NULL,
+        o bm_status='' (nota de Amazon, sin tracking async)
+        -> Historial (closed_only=True, aquí)
+      - bm_status IN ('pending','failed') -> en NINGUNA de las 2 vistas."""
     closed_sql = ""
     if closed_only:
-        # FIX 2026-08-19 #2: la resolución #39 (bm_status='pending',
-        # fulfillment_status='reabierta' tras reabrirse) no aparecía en
-        # NINGUNA de las 2 vistas -- esta condición no consideraba
-        # 'reabierta' para el caso pending/failed (solo lo excluía del lado
-        # de "success"). Ahora coincide EXACTO con el WHERE de
-        # get_pending_shipment_resolutions (con el mismo guard de
-        # fulfillment_status agregado ahí el mismo día).
         closed_sql = """
             AND (
                 bm_deleted_at IS NOT NULL
                 OR resolution_type != 'substitution'
-                OR fulfillment_status IN ('completado', 'cancelada', 'reabierta')
-                OR NOT (
-                    bm_status IN ('pending', 'failed')
-                    OR (bm_status = 'success' AND fulfillment_status IN ('', 'pendiente_envio'))
-                )
+                OR bm_status = ''
+                OR (bm_status = 'success' AND fulfillment_status IN ('completado', 'cancelada', 'reabierta'))
             )
         """
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:

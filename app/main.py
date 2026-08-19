@@ -109,6 +109,41 @@ def _bm_conditions_for_sku(sku: str) -> str:
     return "GRA,GRB,GRC,NEW"
 
 
+def _bm_bulk_real_conditions(base: str) -> list[dict]:
+    """FEATURE 2026-08-19 (pedido por Jovan tras reporte real de BinManager de
+    que la app le estaba pegando duro con llamadas puntuales, ver DEVLOG):
+    devuelve las condiciones con stock real (>0) para un SKU base leyendo
+    ÚNICAMENTE el bulk que YA se descarga cada _BM_BULK_TTL (10 min) para
+    bm_sku_master (_bm_bulk_gr_cache / _bm_bulk_all_cache) -- cero llamadas
+    nuevas a BM, mismo principio que feedback_preferir_solucion_simple_del_bulk.
+    Usada tanto por /api/stock/substitute-conditions (selector en el modal)
+    como por _inject_bm_alter_sku (validar el sustituto antes de escribir en
+    BM) -- una sola fuente de verdad para "qué condiciones son reales"."""
+    use_all = _bm_conditions_for_sku(base) == "GRA,GRB,GRC,ICB,ICC,NEW"
+    bulk_cache = _bm_bulk_all_cache if use_all else _bm_bulk_gr_cache
+    if not bulk_cache:
+        return []
+    _, bulk_rows = bulk_cache
+    matches = []
+    for row in (bulk_rows or []):
+        row_sku = (row.get("SKU") or "").upper().strip()
+        if _extract_base_sku(row_sku) != base:
+            continue
+        # FIX 2026-08-19 (bug real: BM a veces guarda el SKU BASE sin sufijo
+        # de condición como su propia fila en el bulk -- mismo caso ya
+        # documentado en /api/stock/live-check, "un resolved_sku sin sufijo
+        # no aporta nada nuevo, se descarta"). Sin esta condición real
+        # (GRA/GRB/GRC/NEW/ICB/ICC), no hay ProductSKU válido que inyectar.
+        condition = row_sku[len(base):].lstrip("-")
+        if not condition:
+            continue
+        qty = int(row.get("AvailableQTY") or 0)
+        if qty <= 0:
+            continue
+        matches.append({"condition": condition, "qty": qty, "sku": row_sku})
+    return sorted(matches, key=lambda c: -c["qty"])
+
+
 import re as _re
 
 
@@ -16918,33 +16953,27 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     # ProductSKU real registrado en BM. Antes, ese rechazo solo se veía en el
     # tooltip de "Falló en BM" -- nadie lo revisaba y "Reintentar" nunca podía
     # funcionar porque el par nunca va a existir. Se valida ANTES de llamar a
-    # BM (get_existence_anywhere ya usado para el mismo propósito informativo
-    # en items.py) y se rechaza de inmediato con las condiciones reales que sí
-    # existen para ese SKU, en vez de dejar que el intento falle en silencio.
-    # FIX 2026-08-19 #2 (bug real: resolución #39, orden 2000018008535734,
-    # sustituto "SNWA000001" SIN condición -- el frontend no forzaba
-    # completar el sufijo, y aquí un _sub_condition vacío SALTABA la
-    # validación de arriba en vez de rechazar, dejando que un SKU
-    # incompleto llegara hasta BM). Un sustituto sin condición nunca es un
-    # ProductSKU real -- se rechaza igual que uno con condición inventada,
-    # no se distingue como caso especial.
+    # BM y se rechaza de inmediato con las condiciones reales que sí existen
+    # para ese SKU, en vez de dejar que el intento falle en silencio.
+    # FIX 2026-08-19 #2 (bug real: resolución #39, sustituto "SNWA000001" SIN
+    # condición) -- un sustituto sin condición nunca es un ProductSKU real, se
+    # rechaza igual que uno con condición inventada.
+    # FIX 2026-08-19 #3 (pedido por Jovan tras reporte real de BinManager de
+    # que la app le estaba pegando duro): esta validación llamaba a BM EN VIVO
+    # (get_existence_anywhere) en cada intento -- se reemplaza por
+    # _bm_bulk_real_conditions(), que lee el mismo bulk cacheado que ya usa
+    # /api/stock/substitute-conditions (cero llamadas nuevas a BM).
     _sub_base = _bm_base_sku(substitute_sku)
     _sub_condition = substitute_sku.strip().upper()[len(_sub_base):].lstrip("-")
     if _sub_base:
-        from app.services.binmanager_client import get_shared_bm as _get_shared_bm_check
-        try:
-            _bm_cli_check = await _get_shared_bm_check()
-            _existence = await _bm_cli_check.get_existence_anywhere(_sub_base)
-        except Exception:
-            _existence = None
+        _real_conditions_list = _bm_bulk_real_conditions(_sub_base)
+        _real_conditions = {c["condition"] for c in _real_conditions_list}
         if not _sub_condition:
-            _valid = ", ".join(sorted(str(c.get("condition") or "").upper() for c in ((_existence or {}).get("by_condition") or []) if c.get("condition"))) or "ninguna encontrada"
+            _valid = ", ".join(sorted(_real_conditions)) or "ninguna encontrada"
             return {"ok": False, "error": f"{substitute_sku} no lleva condición (ej. -GRB, -NEW) -- condiciones reales para {_sub_base}: {_valid}"}
-        if _existence and _existence.get("found_anywhere"):
-            _real_conditions = {str(c.get("condition") or "").upper() for c in (_existence.get("by_condition") or [])}
-            if _sub_condition not in _real_conditions:
-                _valid = ", ".join(sorted(c for c in _real_conditions if c)) or "ninguna encontrada"
-                return {"ok": False, "error": f"{substitute_sku} no existe en BinManager -- condiciones reales para {_sub_base}: {_valid}"}
+        if _real_conditions and _sub_condition not in _real_conditions:
+            _valid = ", ".join(sorted(_real_conditions))
+            return {"ok": False, "error": f"{substitute_sku} no existe en BinManager -- condiciones reales para {_sub_base}: {_valid}"}
 
     payload = {
         "ProfileID": account_id,
@@ -17381,40 +17410,37 @@ async def stock_substitute_conditions(request: Request, sku: str = Query(...)):
     en BM -- dejaba el campo incompleto (ej. "SNWA000001", sin "-GRB"), que
     luego fallaba silenciosamente al querer inyectarlo a BM.
 
-    En vez de adivinar, este endpoint devuelve las condiciones REALES con
-    stock ahora mismo (get_existence_anywhere, SP en vivo sin caché -- mismo
-    mecanismo usado para diagnosticar este caso, ver
-    project_bm_bulk_ttl_reduction) para que el frontend las muestre como
-    opciones a elegir, filtradas a las condiciones de venta válidas para ese
-    tipo de SKU (_bm_conditions_for_sku -- ICB/ICC solo para SNTV*)."""
+    FIX 2026-08-19 #2 (pedido por Jovan, tras reporte real de BinManager de
+    que la app le estaba pegando duro -- ver DEVLOG): la primera versión
+    llamaba a get_existence_anywhere() EN VIVO por cada SKU tecleado. Se
+    reemplaza por la MISMA regla ya usada en todo el proyecto (ver
+    feedback_preferir_solucion_simple_del_bulk): leer del bulk que YA se
+    descarga cada _BM_BULK_TTL (10 min) para bm_sku_master
+    (_bm_bulk_gr_cache / _bm_bulk_all_cache) -- cero llamadas nuevas a BM,
+    el costo de "hasta 10 min de antigüedad" ya es aceptado en todo el resto
+    del sistema. Se muestra la antigüedad real al frontend para que no se
+    presente como dato al segundo."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     if not sku:
         return JSONResponse({"error": "sku requerido"}, status_code=400)
 
-    from app.services.sku_utils import base_sku as _subcond_base_sku
-    from app.services.binmanager_client import get_shared_bm as _get_shared_bm_subcond
-
-    base = _subcond_base_sku(sku)
+    base = _normalize_sku_imported(sku)
     if not base:
         return JSONResponse({"base": "", "conditions": []})
 
-    bm_cli = await _get_shared_bm_subcond()
-    existence = await bm_cli.get_existence_anywhere(base)
-    if not existence or not existence.get("found_anywhere"):
-        return JSONResponse({"base": base, "conditions": []})
+    use_all = _bm_conditions_for_sku(base) == "GRA,GRB,GRC,ICB,ICC,NEW"
+    bulk_cache = _bm_bulk_all_cache if use_all else _bm_bulk_gr_cache
+    if not bulk_cache:
+        return JSONResponse({"base": base, "conditions": [], "no_cache": True})
 
-    allowed = set(_bm_conditions_for_sku(base).split(","))
-    conditions = sorted(
-        (
-            {"condition": c.get("condition"), "qty": int(c.get("qty") or 0), "sku": f"{base}-{c.get('condition')}"}
-            for c in (existence.get("by_condition") or [])
-            if c.get("condition") in allowed and int(c.get("qty") or 0) > 0
-        ),
-        key=lambda c: -c["qty"],
-    )
-    return JSONResponse({"base": base, "conditions": conditions})
+    conditions = _bm_bulk_real_conditions(base)
+    return JSONResponse({
+        "base": base,
+        "conditions": conditions,
+        "cache_age_minutes": round((_time.time() - bulk_cache[0]) / 60),
+    })
 
 
 @app.post("/api/stock/alerts/resolve-substitution")
