@@ -20321,6 +20321,110 @@ async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30
     })
 
 
+def _conf_columns_row_to_master_fields(sku: str, row: dict) -> dict:
+    """Traduce 1 fila de ConfColumns_Conditions_Excel a los campos de
+    bm_sku_master. reserve_qty=0 fijo -- ver get_conf_columns_catalog()."""
+    is_tv = sku.startswith("SNTV")
+    valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
+    best_cond, best_qty = "", 0
+    for c in valid_conds:
+        q = int(row.get(c) or 0)
+        if q > best_qty:
+            best_cond, best_qty = c, q
+    avail = sum(int(row.get(c) or 0) for c in valid_conds)
+    return {
+        "sku": sku,
+        "available_qty": avail,
+        "reserve_qty": 0,
+        "total_qty": int(row.get("TotalQty") or 0),
+        "category": row.get("CategoryName") or "",
+        "upc": row.get("UPC") or row.get("Upc") or "",
+        "best_condition_sku": f"{sku}-{best_cond}" if best_cond else "",
+        "best_condition_qty": best_qty,
+        "verified": 1,
+    }
+
+
+@app.post("/api/diag/bm-master-update-category")
+async def diag_bm_master_update_category(token: str = "", category_id: str = ""):
+    """PASO 2 del plan de migración a ConfColumns por categoría (pedido por
+    Jovan 2026-08-19). Trae 1 categoría vía ConfColumns_Conditions_Excel y
+    actualiza bm_sku_master SOLO para los SKUs conocidos (get_all_known_base_skus)
+    que ya pertenecen a esa categoría o que aparecen en esta respuesta.
+
+    Escritura SEGURA -- respeta las 2 reglas ya aprendidas hoy a la fuerza:
+    1. Si el fetch FALLA (None), no toca nada -- responde error, no borra
+       ni pone en 0 lo que ya había.
+    2. Si el fetch tiene éxito, un SKU YA conocido de esta misma categoría
+       que no aparece en la respuesta se pone en available_qty=0 (mismo
+       criterio "ausencia en bulk = 0" ya usado en el resto del sistema) --
+       pero SOLO si su bm_sku_master.category actual coincide con esta
+       categoría (para no zerear un SKU que en realidad es de otra
+       categoría por un match de nombre casual)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not category_id:
+        return JSONResponse({"error": "category_id requerido"}, status_code=400)
+
+    from app.services.binmanager_client import get_shared_bm as _gsb_upd
+    bm_cli = await _gsb_upd()
+    _t0 = _time.time()
+    rows = await bm_cli.get_conf_columns_catalog(category_id=category_id)
+    _elapsed = round(_time.time() - _t0, 1)
+    if rows is None:
+        return JSONResponse({
+            "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
+            "error": "ConfColumns falló (timeout/error/HTTP!=200) -- no se tocó bm_sku_master",
+        }, status_code=502)
+
+    known_skus = set(await token_store.get_all_known_base_skus())
+    updates = []
+    seen_known_skus_in_response = set()
+    for row in rows:
+        sku = (row.get("SKU") or "").upper().strip()
+        if not sku or sku not in known_skus:
+            continue
+        seen_known_skus_in_response.add(sku)
+        updates.append(_conf_columns_row_to_master_fields(sku, row))
+
+    import aiosqlite as _aio_updcat
+    async with _aio_updcat.connect(DATABASE_PATH, timeout=15) as db:
+        for u in updates:
+            await db.execute(
+                """UPDATE bm_sku_master
+                   SET available_qty=:available_qty, reserve_qty=:reserve_qty,
+                       total_qty=:total_qty, category=:category, upc=:upc,
+                       best_condition_sku=:best_condition_sku, best_condition_qty=:best_condition_qty,
+                       verified=:verified, stock_updated_at=:stock_updated_at
+                   WHERE sku=:sku""",
+                {**u, "stock_updated_at": _time.time()},
+            )
+        # SKUs conocidos de ESTA categoría que no aparecieron -- ausencia
+        # real confirmada (el fetch sí tuvo éxito) = 0, mismo criterio ya
+        # usado en el resto del sistema. Acotado a category=? para no
+        # zerear SKUs de otras categorías.
+        cur = await db.execute(
+            "SELECT sku FROM bm_sku_master WHERE category = ?", (category_id,)
+        )
+        _existing_in_category = {r[0] for r in await cur.fetchall()}
+        _now_zero = _existing_in_category - seen_known_skus_in_response
+        for _z in _now_zero:
+            await db.execute(
+                "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, verified=1, stock_updated_at=? WHERE sku=?",
+                (_time.time(), _z),
+            )
+        await db.commit()
+
+    return JSONResponse({
+        "ok": True,
+        "category_id": category_id,
+        "elapsed_s": _elapsed,
+        "conf_columns_rows": len(rows),
+        "known_skus_updated": len(updates),
+        "known_skus_confirmed_zero": len(_now_zero),
+    })
+
+
 @app.get("/api/diag/trigger-feedback-sync")
 async def diag_trigger_feedback_sync(token: str = ""):
     """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al
