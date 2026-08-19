@@ -20223,6 +20223,93 @@ async def diag_bm_master_compare(token: str = "", sample_n: int = 20):
     })
 
 
+# Condiciones "vendibles" reales por tipo de SKU -- ver _bm_conditions_for_sku.
+_CONF_COND_NON_TV = ("GRA", "GRB", "GRC", "NEW")
+_CONF_COND_TV_EXTRA = ("ICB", "ICC")
+
+
+@app.get("/api/diag/bm-master-confcolumns-compare")
+async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30, category_id: str = ""):
+    """FASE NUEVA 2026-08-19 (pedido explícito de BinManager, vía Jovan):
+    evalúa reemplazar Get_GlobalStock_InventoryBySKU ("pagedata", el que
+    genera las ráfagas de llamadas que reportó BM) por
+    ConfColumns_Conditions_Excel ("el excel") como fuente del sync principal
+    de bm_sku_master -- 1 sola llamada para TODO el catálogo, filtrado
+    contra la lista maestra ya existente (get_all_known_base_skus) en vez
+    de las ~8 llamadas actuales por ciclo.
+
+    Mismo patrón "Fase B/C" ya usado para la migración anterior de
+    bm_sku_master (ver bm-master-compare) -- calcula qué diría el camino
+    nuevo y lo compara contra bm_sku_master actual SIN escribir nada,
+    para validar antes de cortar el cable al mecanismo viejo.
+
+    OJO: 'reserve' se asume 0 en el camino nuevo (confirmado por BinManager:
+    ConfColumns no expone reservado por separado, 'Available' ya viene
+    neto) -- decisión de Jovan 2026-08-19, no es un bug de este diag."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    from app.services.binmanager_client import get_shared_bm as _gsb_cc
+    bm_cli = await _gsb_cc()
+    _t0 = _time.time()
+    rows = await bm_cli.get_conf_columns_catalog(category_id=category_id or None)
+    _elapsed = round(_time.time() - _t0, 1)
+    if not rows:
+        return JSONResponse({"error": "ConfColumns no devolvió filas -- ver logs", "elapsed_s": _elapsed})
+
+    known_skus = set(await token_store.get_all_known_base_skus())
+    conf_map: dict[str, dict] = {}
+    for row in rows:
+        sku = (row.get("SKU") or "").upper().strip()
+        if not sku or sku not in known_skus:
+            continue
+        is_tv = sku.startswith("SNTV")
+        valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
+        best_cond, best_qty = "", 0
+        for c in valid_conds:
+            q = int(row.get(c) or 0)
+            if q > best_qty:
+                best_cond, best_qty = c, q
+        conf_map[sku] = {
+            "available_qty": sum(int(row.get(c) or 0) for c in valid_conds),
+            "total_qty": int(row.get("TotalQty") or 0),
+            "category": row.get("CategoryName") or "",
+            "upc": row.get("UPC") or row.get("Upc") or "",
+            "best_condition_sku": f"{sku}-{best_cond}" if best_cond else "",
+            "best_condition_qty": best_qty,
+        }
+
+    master_rows = await token_store.get_bm_master_rows_for_skus(list(known_skus))
+    diffs = []
+    matches = 0
+    both_have_data = 0
+    for sku, new in conf_map.items():
+        old = master_rows.get(sku)
+        if not old:
+            continue
+        both_have_data += 1
+        old_avail = old.get("available_qty", 0) or 0
+        if old_avail == new["available_qty"]:
+            matches += 1
+        elif len(diffs) < sample_n:
+            diffs.append({
+                "sku": sku, "old_available_qty": old_avail, "new_available_qty": new["available_qty"],
+                "category": new["category"],
+            })
+
+    return JSONResponse({
+        "elapsed_s": _elapsed,
+        "conf_columns_total_rows": len(rows),
+        "known_skus": len(known_skus),
+        "conf_columns_rows_matching_known_skus": len(conf_map),
+        "both_have_data_vs_bm_sku_master": both_have_data,
+        "matches": matches,
+        "mismatches": both_have_data - matches,
+        "sample_diffs": diffs,
+        "sample_conf_rows": list(conf_map.items())[:5],
+    })
+
+
 @app.get("/api/diag/trigger-feedback-sync")
 async def diag_trigger_feedback_sync(token: str = ""):
     """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al
