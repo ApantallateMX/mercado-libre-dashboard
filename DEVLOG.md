@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — BUG CRÍTICO + FIX: scan de gaps borró "No Lanzados" de las 4 cuentas ML + cadencia bajada a 1x/día
+
+Jovan reportó "No Lanzados" en 0 para la cuenta Autobot. Verificado
+contra producción (solo lectura, `/api/lanzar/gaps-summary` por cuenta):
+**las 4 cuentas ML** (APANTALLATEMX, BLOWTECHNOLOGIES, LUTEMAMEXICO,
+AUTOBOT) estaban en 0, no solo Autobot.
+
+**Causa raíz**: el scan global de las 19:01-19:06 de hoy recibió `0`
+SKUs de BM (`bm_gap_scan_status.total_skus=0`) — un fallo silencioso de
+`ConfColumns_Conditions_Excel` (posiblemente relacionado con la
+inestabilidad de sesión de BM del mismo día, ver entradas anteriores de
+hoy). El código de limpieza de gaps obsoletos (`app/api/lanzar.py`) usa
+`DELETE FROM bm_sku_gaps WHERE ... sku NOT IN (<lista de BM>)` — con la
+lista vacía, esa condición es verdadera para CUALQUIER sku real, así
+que **borró todos los gaps 'unlaunched' de las 4 cuentas** de un jalón,
+sin marcar error (`status: 'done'`, no `'error'`).
+
+**Fix**: nuevo guard — si BM devuelve menos de 1,000 SKUs con stock (el
+catálogo real siempre tiene miles, confirmado: solo "Televisions" trae
+~800), se aborta ANTES de tocar `bm_sku_gaps` y se marca `status='error'`
+en vez de `'done'`. Los gaps existentes quedan intactos ante cualquier
+fallo futuro de este tipo.
+
+**Además (pedido por Jovan, dado el reporte real de carga de
+BinManager de hoy)**: cadencia del scan bajada de cada 3h a **1 vez al
+día, 3am hora México** (fijo, sin horario de verano). Se evaluó hacer
+la llamada categoría por categoría (~120 llamadas), pero el catálogo de
+categorías de BM (vía MCP) resultó incompleto/inconsistente contra lo
+que `ConfColumns` realmente etiqueta por SKU — una lista fija de
+categorías arriesgaba omitir categorías reales en silencio, el mismo
+tipo de bug que se acaba de corregir. Se mantiene la llamada única ya
+probada (todo el catálogo de un jalón), seguro ahora sin importar la
+frecuencia gracias al guard nuevo.
+
+**Recuperación**: disparado 1 scan manual (`POST /api/lanzar/scan-all`,
+vía el mecanismo propio de la app) tras el deploy — restauró datos
+reales para las 4 cuentas: 7,012-8,168 gaps por cuenta, ~1M unidades de
+stock cada una, potencial de ingresos $2,200-2,350M MXN por cuenta.
+`total_skus: 9294` (muy por encima del umbral de 1,000 — confirma que
+el fetch estaba sano esta vez). Deploy Railway `SUCCESS`.
+
+---
+
 ## 2026-08-19 — FEAT: "No Lanzados" de Amazon igualado al desglose por categoría que ya tenía ML
 
 Continuación de la exploración de `ConfColumns_Conditions_Excel`
