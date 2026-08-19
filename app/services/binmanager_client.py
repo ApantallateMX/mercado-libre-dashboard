@@ -314,6 +314,23 @@ class BinManagerClient:
         esta fuente debe asumir reserve=0 explícito (decisión de Jovan
         2026-08-19), no inventarlo.
 
+        FIX 2026-08-19 #4 (bug real de raíz encontrado y corregido el mismo
+        día, antes de que llegara a afectar nada más allá de los 2 loops
+        automáticos que ya lo usaban): SIN 'LOCATIONID', 'Available' viene
+        MEZCLADO con Tijuana -- verificado con datos reales (SNTV006513:
+        Available=46 sin filtro, con LOCATIONID=47,62,68 da 0, que es el
+        valor real correcto porque su stock de 46 está TODO en Tijuana).
+        Tijuana está EXCLUIDA del vendible online desde 2026-08-05 (ver
+        project_bm_tijuana_exclusion) -- sin este filtro cualquier consumo
+        de 'Available' sobreestima el stock realmente vendible.
+
+        Idea de Jovan: probar si el mismo campo 'LOCATIONID' que sí filtra
+        en el endpoint hermano (Get_GlobalStock_InventoryBySKU) también
+        aplica aquí -- confirmado empíricamente que SÍ, mismo controller.
+        Con este fix, 'Available' ya representa el vendible real
+        (CDMX+Cuautitlán+MTY) en 1 sola llamada por categoría -- ya no
+        hace falta ningún fetch adicional por ubicación para ese número.
+
         FIX 2026-08-19 #2 (bug real encontrado probando esto mismo hoy):
         category_id=None (todo el catálogo de un jalón) puede tardar más de
         120s de forma impredecible -- y mientras tarda, tiene el semáforo
@@ -338,6 +355,7 @@ class BinManagerClient:
         payload = {
             "COMPANYID": 1,
             "CATEGORYID": category_id,
+            "LOCATIONID": "47,62,68",  # vendible real (CDMX+Cuautitlan+MTY) -- excluye Tijuana
             "NEEDRETAILPRICEPH": True,
             "NEEDRETAILPRICE": True,
             "NEEDAVGCOST": True,
