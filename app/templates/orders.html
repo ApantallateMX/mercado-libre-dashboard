@@ -407,12 +407,12 @@
 
     </div><!-- /alertas-view-live -->
 
-    <!-- ═══ Pendientes de Envío (sustituciones ya aplicadas en BM, esperando que la orden se envíe) ═══ -->
+    <!-- ═══ Pendientes de Envío (sustituciones sin cerrar: verificando con BM, fallidas, o aplicadas esperando envío) ═══ -->
     <div id="alertas-view-pending" class="hidden space-y-3">
-      <p class="text-xs text-gray-400 px-1">Sustituciones ya aplicadas en BinManager cuya orden todavía no se ha impreso/enviado — se revisa cada 10 min si el sustituto sigue teniendo stock y si la orden ya avanzó.</p>
+      <p class="text-xs text-gray-400 px-1">Sustituciones que todavía no están cerradas — verificando con BinManager, rechazadas (necesitan reintentar o cambiar el sustituto), o ya aplicadas esperando que la orden se envíe (se revisa cada 10 min si el sustituto sigue con stock y si la orden ya avanzó).</p>
       <div id="pending-shipment-empty" class="hidden bg-white rounded-2xl shadow-sm border border-gray-200 py-16 flex flex-col items-center justify-center gap-2">
         <div class="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center text-green-600 text-2xl">✓</div>
-        <p class="text-sm font-semibold text-gray-700">Sin sustituciones pendientes de envío</p>
+        <p class="text-sm font-semibold text-gray-700">Sin sustituciones pendientes</p>
       </div>
       <div id="pending-shipment-cards" class="space-y-2"></div>
     </div>
@@ -460,6 +460,7 @@
                oninput="_subModalLiveCheck()"
                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-400 transition">
         <p id="sub-modal-live-stock" class="text-xs text-gray-400 mt-1"></p>
+        <div id="sub-modal-conditions" class="hidden flex flex-wrap gap-1.5 mt-1.5"></div>
       </div>
       <div>
         <label class="block text-xs font-medium text-gray-600 mb-1">Nota — respaldo de que el cliente aceptó el cambio <span class="text-red-400">*</span></label>
@@ -575,6 +576,15 @@ window.setAlertasSubView = function(v) {
     if (v === 'history') loadAlertasHistory();
 };
 
+// Usada por loadPendingShipment() (más abajo) y loadAlertasHistory() -- movida
+// a alcance global 2026-08-19 (antes vivía anidada dentro de loadAlertasHistory,
+// inalcanzable desde loadPendingShipment que ahora también muestra bm_message).
+function _escBmMsg(s) {
+    return String(s || '').replace(/[&<>"']/g, function(c) {
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+}
+
 // ─── Pendientes de Envío ────────────────────────────────────────────────────
 function loadPendingShipment() {
     var container = document.getElementById('pending-shipment-cards');
@@ -590,8 +600,36 @@ function loadPendingShipment() {
                 return;
             }
             emptyEl.classList.add('hidden');
+            // FIX 2026-08-19 (pedido por Jovan): esta vista ya no es solo
+            // "aplicado en BM esperando envío" -- ahora también recibe lo que
+            // sigue verificando o falló contra BM (ver
+            // get_pending_shipment_resolutions, ampliada el mismo día). Rama
+            // por bm_status antes de asumir que ya se aplicó.
             container.innerHTML = rows.map(function(r) {
                 var fecha = new Date(r.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
+                if (r.bm_status === 'pending' || r.bm_status === 'failed') {
+                    var estadoBadge = r.bm_status === 'pending'
+                        ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700">⏳ Verificando en BM</span>'
+                        : '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">✗ Falló en BM</span>';
+                    return '<div class="bg-white rounded-xl border border-amber-200 p-4">' +
+                        '<div class="flex items-center justify-between gap-2 flex-wrap">' +
+                            '<span class="text-xs text-gray-400">' + fecha + ' · ' + (r.account_name || r.account_id) + '</span>' +
+                            estadoBadge +
+                        '</div>' +
+                        '<p class="text-sm text-gray-700 font-medium mt-1" style="display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">' + (r.titulo || '—') + '</p>' +
+                        '<div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-gray-500">' +
+                            '<span>Orden <a href="/orders?order_id=' + r.order_id + '" target="_blank" class="font-mono text-indigo-600 hover:underline">' + r.order_id + '</a></span>' +
+                        '</div>' +
+                        '<div class="text-xs text-gray-600 mt-2">' +
+                            '<span class="font-mono">' + r.original_sku + '</span> → sustituto <span class="font-mono">' + r.substitute_sku + '</span>' +
+                        '</div>' +
+                        (r.bm_message ? '<p class="text-[10px] text-red-600 mt-1">' + _escBmMsg(r.bm_message) + '</p>' : '') +
+                        '<div class="flex items-center justify-between gap-2 mt-1.5">' +
+                            '<span class="text-xs text-gray-400">' + (r.note ? _escBmMsg(r.note) + ' · ' : '') + 'registrado por ' + r.username + '</span>' +
+                            '<button onclick="retryAlertResolutionBM(' + r.id + ', this)" class="text-[10px] bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🔁 Reintentar</button>' +
+                        '</div>' +
+                    '</div>';
+                }
                 var checked = r.last_stock_check_at
                     ? new Date(r.last_stock_check_at * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'})
                     : 'aún no verificado';
@@ -714,11 +752,6 @@ function loadAlertasHistory() {
             // el historial solo mostraba "se registró aquí", sin saber si de
             // verdad se aplicó en BM. bm_deleted_at marca que ya se borró
             // desde este mismo historial (ver deleteFromBM más abajo).
-            function _escBmMsg(s) {
-                return String(s || '').replace(/[&<>"']/g, function(c) {
-                    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
-                });
-            }
             function _bmBadge(h) {
                 if (h.bm_deleted_at) {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500" title="' + (h.bm_deleted_by || '') + '">🗑 Borrado de BM</span>';
@@ -900,7 +933,13 @@ window.deleteAlertResolutionFromBM = function(id, btnEl) {
         .then(function(res) {
             if (res.ok && res.d.ok) {
                 if (window.showToast) showToast('Mapeo borrado de BinManager', 'success');
+                // FIX 2026-08-19: este botón ahora puede vivir en Historial O en
+                // Pendientes (una fila 'success' sin enviar todavía puede
+                // aparecer en cualquiera de las dos según fulfillment_status) --
+                // refrescar ambas evita que la fila borrada quede fantasma en
+                // la que no se refrescó.
                 loadAlertasHistory();
+                loadPendingShipment();
             } else {
                 if (window.showToast) showToast(res.d.detail || 'No se pudo borrar de BinManager', 'error');
                 btnEl.disabled = false; btnEl.textContent = '🗑 Borrar de BM';
@@ -928,7 +967,12 @@ window.retryAlertResolutionBM = function(id, btnEl) {
             } else {
                 if (window.showToast) showToast(res.d.detail || 'No se pudo reintentar', 'error');
             }
+            // FIX 2026-08-19: este botón ahora vive en Pendientes (pending/failed)
+            // Y en Historial (retry de una fila ya cerrada, caso raro pero
+            // posible) -- refrescar ambas mantiene todo consistente sin
+            // importar desde dónde se disparó.
             loadAlertasHistory();
+            loadPendingShipment();
         })
         .catch(function() {
             if (window.showToast) showToast('Error de conexión al reintentar', 'error');
@@ -964,10 +1008,58 @@ window.closeSubstitutionModal = function() {
 // y guarda el último resultado conocido para el chequeo final al confirmar.
 var _subModalLiveStock = null;
 var _subModalLiveCheckTimer = null;
+
+// FEATURE 2026-08-19 (pedido por Jovan, caso resolución #39 orden
+// 2000018008535734): "SNWA000001" (sin condición) — el sufijo real es lo
+// que viene después del PRIMER guion, igual que sku_utils.base_sku().
+function _bmSkuHasCondition(sku) {
+    var idx = (sku || '').indexOf('-');
+    return idx > -1 && idx < sku.length - 1;
+}
+
+function _hideSubModalConditions() {
+    var el = document.getElementById('sub-modal-conditions');
+    el.classList.add('hidden');
+    el.innerHTML = '';
+}
+
+// FEATURE 2026-08-19: cuando el SKU sigue sin condición después del
+// auto-resuelve de /api/stock/live-check (0 o >1 grupos configurados en BM,
+// ver _resolve_bm_condition_sku), en vez de dejarlo incompleto se pide
+// /api/stock/substitute-conditions (get_existence_anywhere en vivo) y se
+// muestran las condiciones reales con stock ahora mismo como botones —
+// el empleado elige, no adivina el sufijo.
+function _showSubModalConditions(baseSku) {
+    var el = document.getElementById('sub-modal-conditions');
+    fetch('/api/stock/substitute-conditions?sku=' + encodeURIComponent(baseSku))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var input = document.getElementById('sub-modal-substitute');
+            if (input.value.trim() !== baseSku) return; // el usuario ya cambió el SKU
+            var conds = d.conditions || [];
+            if (!conds.length) { _hideSubModalConditions(); return; }
+            el.classList.remove('hidden');
+            el.innerHTML = '<span class="text-xs text-gray-500 basis-full">Elige la condición real con stock:</span>' +
+                conds.map(function(c) {
+                    return '<button type="button" onclick="_pickSubModalCondition(\'' + c.sku + '\')" ' +
+                        'class="text-xs bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 rounded-lg px-2 py-1 font-mono transition">' +
+                        c.sku + ' <span class="text-indigo-400">(' + c.qty + ' disp.)</span></button>';
+                }).join('');
+        })
+        .catch(function() { _hideSubModalConditions(); });
+}
+
+window._pickSubModalCondition = function(fullSku) {
+    document.getElementById('sub-modal-substitute').value = fullSku;
+    _hideSubModalConditions();
+    _subModalLiveCheck();
+};
+
 function _subModalLiveCheck() {
     var sku = document.getElementById('sub-modal-substitute').value.trim();
     var el = document.getElementById('sub-modal-live-stock');
     clearTimeout(_subModalLiveCheckTimer);
+    _hideSubModalConditions();
     if (!sku) { el.textContent = ''; _subModalLiveStock = null; return; }
     el.textContent = 'Verificando disponibilidad...';
     el.className = 'text-xs text-gray-400 mt-1';
@@ -989,6 +1081,15 @@ function _subModalLiveCheck() {
                     sku = d.resolved_sku;
                 }
                 _subModalLiveStock = d;
+                // FIX 2026-08-19: si sigue sin condición después del intento de
+                // arriba, no se puede confiar en "available_qty" (no se sabe de
+                // qué condición es) ni se puede registrar así -- mostrar el
+                // selector de condiciones reales en vez del texto de stock.
+                if (!_bmSkuHasCondition(sku)) {
+                    el.textContent = '';
+                    _showSubModalConditions(sku);
+                    return;
+                }
                 // FIX 2026-08-18 (pedido por Jovan): esto ya no es una llamada en
                 // vivo a BM (se colgaba 60-90s+ cuando BM andaba lento) -- lee el
                 // mismo caché bulk que ya usamos para todo lo demás en Alertas de

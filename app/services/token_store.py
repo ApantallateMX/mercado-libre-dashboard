@@ -2419,12 +2419,37 @@ async def record_stock_alert_resolution(
         return cur.lastrowid
 
 
-async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
-    """Historial de resoluciones, más reciente primero — para la pestaña
-    'Historial' dentro de Alertas de Stock."""
+async def get_stock_alert_resolutions(limit: int = 50, closed_only: bool = False) -> list[dict]:
+    """Todas las resoluciones, más reciente primero. Usada tanto por la
+    pestaña 'Historial' como por reopen/retry-bm/delete-from-bm para
+    buscar una resolución puntual por id -- por eso `closed_only` es
+    opt-in (default False, comportamiento sin cambios para esos 3
+    callers que necesitan encontrar CUALQUIER fila, no solo las cerradas).
+
+    FIX 2026-08-19 (pedido por Jovan: "historial es solamente cuando algo
+    ya fue confirmado y enviado"): closed_only=True excluye lo que sigue
+    en proceso (verificando con BM, fallido, o aplicado-pero-sin-enviar)
+    -- eso vive únicamente en Pendientes de Envío
+    (get_pending_shipment_resolutions, ampliada el mismo día para
+    cubrirlo). La condición es el complemento EXACTO (negado) de la de
+    esa función, para garantizar que cada resolución de tipo
+    'substitution' viva en Historial o en Pendientes, nunca en ambas ni
+    en ninguna."""
+    closed_sql = ""
+    if closed_only:
+        closed_sql = """
+            AND (
+                bm_deleted_at IS NOT NULL
+                OR resolution_type != 'substitution'
+                OR NOT (
+                    bm_status IN ('pending', 'failed')
+                    OR (bm_status = 'success' AND fulfillment_status IN ('', 'pendiente_envio'))
+                )
+            )
+        """
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("""
+        cur = await db.execute(f"""
             SELECT id, order_id, platform, account_id, original_sku,
                    resolution_type, substitute_sku, note, username, ts,
                    reactivated_at, reactivated_by, bm_status, bm_message,
@@ -2432,6 +2457,7 @@ async def get_stock_alert_resolutions(limit: int = 50) -> list[dict]:
                    last_stock_check_at, last_stock_check_qty, shipment_resolved_at,
                    original_sku_raw
             FROM stock_alert_resolutions
+            WHERE 1=1 {closed_sql}
             ORDER BY ts DESC
             LIMIT ?
         """, (limit,))
@@ -2482,11 +2508,20 @@ async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status:
 
 
 async def get_pending_shipment_resolutions() -> list[dict]:
-    """Sustituciones ya aplicadas en BM pero cuya orden todavía no se ha
-    enviado -- ver _substitution_fulfillment_loop (main.py). fulfillment_status
-    vacío cuenta como 'pendiente_envio' (filas viejas de antes de esta
-    feature, o la primera vez que bm_status pasó a success sin haber
-    corrido aún el loop)."""
+    """Todo lo que sigue en proceso para una sustitución -- no solo lo ya
+    aplicado en BM esperando envío (bm_status='success'), sino también lo
+    que todavía se está verificando o falló contra BM (bm_status IN
+    ('pending','failed')). fulfillment_status vacío cuenta como
+    'pendiente_envio' (filas viejas de antes de esta feature, o la
+    primera vez que bm_status pasó a success sin haber corrido aún el
+    loop, ver _substitution_fulfillment_loop en main.py).
+
+    FIX 2026-08-19 (pedido por Jovan): antes solo cubría bm_status='success'
+    -- una sustitución todavía "Verificando en BM" o que falló no aparecía
+    AQUÍ, solo en Historial (que ahora es solo-cerrado, ver
+    get_stock_alert_resolutions(closed_only=True)) -- sin este cambio esas
+    filas quedarían sin aparecer en ningún lado. Esta condición es el
+    complemento EXACTO de la de esa función."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         # FEATURE 2026-08-18 (pedido por Jovan): la tarjeta solo mostraba
@@ -2498,6 +2533,7 @@ async def get_pending_shipment_resolutions() -> list[dict]:
             SELECT sar.id, sar.order_id, sar.platform, sar.account_id,
                    sar.original_sku, sar.substitute_sku,
                    sar.username, sar.ts, sar.fulfillment_status,
+                   sar.bm_status, sar.bm_message, sar.note,
                    sar.last_stock_check_at, sar.last_stock_check_qty,
                    sar.original_sku_raw,
                    COALESCE(bsm_o.title, '') AS titulo,
@@ -2510,9 +2546,11 @@ async def get_pending_shipment_resolutions() -> list[dict]:
             LEFT JOIN bm_sku_master bsm_o ON bsm_o.sku = sar.original_sku
             LEFT JOIN bm_sku_master bsm_s ON bsm_s.sku = sar.substitute_sku
             WHERE sar.resolution_type = 'substitution'
-              AND sar.bm_status = 'success'
-              AND sar.fulfillment_status IN ('', 'pendiente_envio')
               AND sar.bm_deleted_at IS NULL
+              AND (
+                  sar.bm_status IN ('pending', 'failed')
+                  OR (sar.bm_status = 'success' AND sar.fulfillment_status IN ('', 'pendiente_envio'))
+              )
             ORDER BY sar.ts ASC
         """)
         rows = [dict(r) for r in await cur.fetchall()]

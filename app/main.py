@@ -16921,15 +16921,25 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     # BM (get_existence_anywhere ya usado para el mismo propósito informativo
     # en items.py) y se rechaza de inmediato con las condiciones reales que sí
     # existen para ese SKU, en vez de dejar que el intento falle en silencio.
+    # FIX 2026-08-19 #2 (bug real: resolución #39, orden 2000018008535734,
+    # sustituto "SNWA000001" SIN condición -- el frontend no forzaba
+    # completar el sufijo, y aquí un _sub_condition vacío SALTABA la
+    # validación de arriba en vez de rechazar, dejando que un SKU
+    # incompleto llegara hasta BM). Un sustituto sin condición nunca es un
+    # ProductSKU real -- se rechaza igual que uno con condición inventada,
+    # no se distingue como caso especial.
     _sub_base = _bm_base_sku(substitute_sku)
     _sub_condition = substitute_sku.strip().upper()[len(_sub_base):].lstrip("-")
-    if _sub_base and _sub_condition:
+    if _sub_base:
         from app.services.binmanager_client import get_shared_bm as _get_shared_bm_check
         try:
             _bm_cli_check = await _get_shared_bm_check()
             _existence = await _bm_cli_check.get_existence_anywhere(_sub_base)
         except Exception:
             _existence = None
+        if not _sub_condition:
+            _valid = ", ".join(sorted(str(c.get("condition") or "").upper() for c in ((_existence or {}).get("by_condition") or []) if c.get("condition"))) or "ninguna encontrada"
+            return {"ok": False, "error": f"{substitute_sku} no lleva condición (ej. -GRB, -NEW) -- condiciones reales para {_sub_base}: {_valid}"}
         if _existence and _existence.get("found_anywhere"):
             _real_conditions = {str(c.get("condition") or "").upper() for c in (_existence.get("by_condition") or [])}
             if _sub_condition not in _real_conditions:
@@ -17362,6 +17372,51 @@ async def stock_live_check(request: Request, sku: str = Query(...), account_id: 
     })
 
 
+@app.get("/api/stock/substitute-conditions")
+async def stock_substitute_conditions(request: Request, sku: str = Query(...)):
+    """FEATURE 2026-08-19 (pedido por Jovan tras el caso de la resolución #39,
+    orden 2000018008535734): cuando el empleado escribe un SKU base sin
+    condición como sustituto, `_resolve_bm_condition_sku` (usado por
+    /api/stock/live-check) se rinde si hay 0 o más de 1 grupo ya configurado
+    en BM -- dejaba el campo incompleto (ej. "SNWA000001", sin "-GRB"), que
+    luego fallaba silenciosamente al querer inyectarlo a BM.
+
+    En vez de adivinar, este endpoint devuelve las condiciones REALES con
+    stock ahora mismo (get_existence_anywhere, SP en vivo sin caché -- mismo
+    mecanismo usado para diagnosticar este caso, ver
+    project_bm_bulk_ttl_reduction) para que el frontend las muestre como
+    opciones a elegir, filtradas a las condiciones de venta válidas para ese
+    tipo de SKU (_bm_conditions_for_sku -- ICB/ICC solo para SNTV*)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+
+    from app.services.sku_utils import base_sku as _subcond_base_sku
+    from app.services.binmanager_client import get_shared_bm as _get_shared_bm_subcond
+
+    base = _subcond_base_sku(sku)
+    if not base:
+        return JSONResponse({"base": "", "conditions": []})
+
+    bm_cli = await _get_shared_bm_subcond()
+    existence = await bm_cli.get_existence_anywhere(base)
+    if not existence or not existence.get("found_anywhere"):
+        return JSONResponse({"base": base, "conditions": []})
+
+    allowed = set(_bm_conditions_for_sku(base).split(","))
+    conditions = sorted(
+        (
+            {"condition": c.get("condition"), "qty": int(c.get("qty") or 0), "sku": f"{base}-{c.get('condition')}"}
+            for c in (existence.get("by_condition") or [])
+            if c.get("condition") in allowed and int(c.get("qty") or 0) > 0
+        ),
+        key=lambda c: -c["qty"],
+    )
+    return JSONResponse({"base": base, "conditions": conditions})
+
+
 @app.post("/api/stock/alerts/resolve-substitution")
 async def resolve_stock_alert_substitution(request: Request):
     """Registra que una orden sin stock se resolvió sustituyendo el producto
@@ -17568,12 +17623,19 @@ async def zero_stock_execute(request: Request):
 async def stock_alert_resolutions_history(request: Request, limit: int = 50, platform: str = ""):
     """Historial de resoluciones (sustituciones + stock en 0) — pestaña
     'Historial' de Alertas de Stock. `platform` acota igual que en
-    /api/stock/realtime-alerts (2026-08-18, pestaña Amazon)."""
+    /api/stock/realtime-alerts (2026-08-18, pestaña Amazon).
+
+    FIX 2026-08-19 (pedido por Jovan): 'Historial' mostraba TODO sin
+    filtro -- incluidas sustituciones todavía verificando con BM o ya
+    falladas, que él nunca considera "historial" ("es solamente cuando
+    algo ya fue confirmado y enviado"). closed_only=True deja fuera lo
+    que sigue en proceso -- eso ahora vive únicamente en
+    /api/stock/alerts/pending-shipment (ampliada el mismo día)."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     limit = max(1, min(limit, 200))
-    rows = await token_store.get_stock_alert_resolutions(limit=limit)
+    rows = await token_store.get_stock_alert_resolutions(limit=limit, closed_only=True)
     if platform:
         rows = [r for r in rows if r.get("platform") == platform]
     for row in rows:
