@@ -7,6 +7,42 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-18 — FIX: títulos de producto duplicados/"mocha" en Alertas de Stock (dato sucio de BM, limpieza en display)
+
+Jovan reportó que los títulos en "Alertas de Stock" se veían mal (ej.
+"Hampton Bay HDP99180BRN Hampton BayHDP99180BRNKelford 18 in..."). Se
+confirmó con evidencia real que **no es un bug de nuestro código** —
+`bm_sku_master.title` se toma directo del campo `Title` de BinManager sin
+tocarlo (`_row.get("Title") or ""`, `main.py` ~línea 5946); BM mismo
+guarda el título duplicado para varios SKUs (prefijo `SH..`, parece un
+feed de proveedor tipo Home Depot dropship). No se puede corregir el
+dato dentro de BinManager desde este repo — la solución es limpiarlo
+solo para mostrarlo.
+
+Implementado por `uxui-designer` (agente especializado, a petición
+explícita de Jovan): nueva `clean_bm_title(title, brand, model)` en
+`app/services/sku_utils.py` — en vez de adivinar la marca/modelo desde el
+propio texto (riesgo de falso positivo), usa los campos `brand`/`model`
+YA CONOCIDOS del mismo renglón de `bm_sku_master` como fuente de verdad;
+solo colapsa el título si empieza exacto con `"{brand} {model}"` y justo
+después viene otra copia pegada de `"{brand}{model}"`. Sin match exacto,
+el título se devuelve intacto — la mayoría de SKUs (sin este problema) no
+se tocan en absoluto.
+
+Aplicado en TODOS los puntos donde este título llega a una vista (no solo
+donde se reportó): `get_realtime_stock_alerts`, `get_replacement_sku_suggestions`,
+`get_pending_shipment_resolutions` (`token_store.py`); búsqueda de
+órdenes, gap scan/"Sin publicar", `/api/planning/unlaunched`,
+`/bm/unlaunched`, Top 30 TVs (`main.py`). Nunca se modifica la columna
+`bm_sku_master.title` en la base (se conserva el dato crudo) ni los
+endpoints `/api/diag/*` (deliberadamente muestran el dato sin procesar).
+
+Verificado con los 2 ejemplos reales de Jovan + un 3er caso real
+(Samsung) no incluido en la prueba original — los 3 quedaron limpios;
+títulos normales sin el patrón quedan exactamente igual.
+
+---
+
 ## 2026-08-18 — FIX DE RAÍZ: mismo bug "'str' object has no attribute 'get'" en 3 lugares (no solo el ya corregido) — orden real 2000018003864808 se quedaba "pending" para siempre
 
 Jovan reportó una orden nueva (`2000018003864808`) atorada en "Verificando en BM" y pidió explícitamente NO parchar una cosa a la vez sino encontrar la solución final, adaptando lo nuevo a lo ya resuelto. Tenía razón: el fix de hoy más temprano (`'str' object has no attribute 'get'`, commit `d3848d3`) solo cubrió el sitio donde apareció esa vez — pero el mismo patrón (cada caller re-parseando `response` a mano, asumiendo que siempre es un dict) estaba duplicado en otros 3 lugares, y uno de ellos es el más usado de todos.

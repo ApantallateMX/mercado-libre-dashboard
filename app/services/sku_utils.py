@@ -90,6 +90,56 @@ def normalize_to_bm_sku(sku: str) -> str:
     return s[:10].upper()
 
 
+def clean_bm_title(title: str, brand: str = "", model: str = "") -> str:
+    """Limpia el patrón de duplicación de título que viene sucio desde el
+    feed de un proveedor dropship dentro de BinManager (columna `Title`
+    cruda -- no la tocamos ni concatenamos nada de nuestro lado, ver
+    _bm_catalog_sync_via_confcolumns en main.py). BinManager mismo entrega
+    el dato así para varios SKUs (prefijo SH.., feed tipo Home Depot).
+
+    Patrón real confirmado por Jovan (2026-08-18):
+      "{Marca} {Modelo} {Marca}{Modelo}{resto del título real, sin espacio}"
+    Ejemplos reales:
+      "Hampton Bay HDP99180BRN Hampton BayHDP99180BRNKelford 18 in. 2-Light
+       Brown Vanity Bath Light - 1008480255"
+      → "Hampton Bay HDP99180BRN Kelford 18 in. 2-Light Brown Vanity Bath
+         Light - 1008480255"
+      "Toshiba WK0813CWRU ToshibaWK0813CWRU8000 BTU 115-Volt Smart Wi-Fi
+       Touch Control Window Air Conditioner"
+      → "Toshiba WK0813CWRU 8000 BTU 115-Volt Smart Wi-Fi Touch Control
+         Window Air Conditioner"
+
+    Diseño anti-falsos-positivos: en vez de adivinar la marca/modelo desde
+    el propio texto del título (riesgo de cortar texto real que no está
+    duplicado), usa los campos `brand`/`model` YA CONOCIDOS del mismo
+    renglón de bm_sku_master/BM bulk -- son la fuente de verdad, no una
+    heurística. Solo colapsa el título si:
+      1. El título empieza EXACTAMENTE con "{brand} {model}" (case-insensitive).
+      2. Justo después (con 0+ espacios) aparece OTRA COPIA de "{brand}{model}"
+         (con o sin espacio entre marca y modelo en esa 2a copia).
+    Si brand o model no están disponibles, o el patrón no calza al 100%,
+    el título se devuelve TAL CUAL -- la inmensa mayoría de SKUs (sin este
+    problema) no se toca en absoluto.
+    """
+    t = (title or "").strip()
+    b = (brand or "").strip()
+    m = (model or "").strip()
+    if not t or not b or not m:
+        return t
+
+    first = f"{b} {m}"
+    if len(t) <= len(first) or t[:len(first)].casefold() != first.casefold():
+        return t
+
+    rest = t[len(first):].lstrip(" ")
+    for glue in (f"{b}{m}", f"{b} {m}"):
+        if rest.casefold().startswith(glue.casefold()):
+            real_rest = rest[len(glue):].lstrip(" ")
+            return (first + (" " + real_rest if real_rest else "")).strip()
+
+    return t
+
+
 def base_sku(sku: str) -> str:
     """
     Normaliza un SKU a su base (sin sufijo de variante) y extrae el primer

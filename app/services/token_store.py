@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, date
 from typing import Optional
 from pathlib import Path
 from app.config import DATABASE_PATH
+from app.services.sku_utils import clean_bm_title
 
 logger = logging.getLogger(__name__)
 
@@ -2309,6 +2310,10 @@ async def get_replacement_sku_suggestions(
         if best_sku:
             row["sku"] = best_sku
             row["available_qty"] = best_qty
+        # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title): brand
+        # viene como parámetro de la función (ya filtra por marca), model
+        # viene en el propio row.
+        row["title"] = clean_bm_title(row.get("title", ""), brand, row.get("model", ""))
     return rows
 
 
@@ -2347,6 +2352,7 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
                 rsa.order_id, rsa.platform, rsa.account_id, rsa.sku,
                 COALESCE(bsm.title, '') AS titulo,
                 COALESCE(bsm.brand, '') AS brand,
+                COALESCE(bsm.model, '') AS model,
                 COALESCE(bsm.retail_ph, 0) AS retail_ph,
                 COALESCE(bsm.size, 0) AS size,
                 rsa.quantity, rsa.available_qty_at_check, rsa.order_date, rsa.detected_at
@@ -2368,8 +2374,14 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
 
     for row in rows:
         _retail_ph = row["retail_ph"]
+        _brand = row.pop("brand")
+        _model = row.pop("model")
+        # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title): limpia la
+        # duplicación "Marca Modelo Marca+Modelo..." antes de mandarlo al
+        # frontend (Alertas de Stock ML + Amazon comparten este feed).
+        row["titulo"] = clean_bm_title(row["titulo"], _brand, _model)
         row["sugerencias"] = await get_replacement_sku_suggestions(
-            row["sku"], row.pop("brand"), _retail_ph, row.pop("size"), limit=3
+            row["sku"], _brand, _retail_ph, row.pop("size"), limit=3
         )
         # Se mantiene bajo otro nombre (no se borra) — Jovan quiere comparar
         # el precio del original contra el de la sugerencia en la misma vista.
@@ -2489,7 +2501,11 @@ async def get_pending_shipment_resolutions() -> list[dict]:
                    sar.last_stock_check_at, sar.last_stock_check_qty,
                    sar.original_sku_raw,
                    COALESCE(bsm_o.title, '') AS titulo,
-                   COALESCE(bsm_s.title, '') AS substitute_titulo
+                   COALESCE(bsm_o.brand, '') AS _o_brand,
+                   COALESCE(bsm_o.model, '') AS _o_model,
+                   COALESCE(bsm_s.title, '') AS substitute_titulo,
+                   COALESCE(bsm_s.brand, '') AS _s_brand,
+                   COALESCE(bsm_s.model, '') AS _s_model
             FROM stock_alert_resolutions sar
             LEFT JOIN bm_sku_master bsm_o ON bsm_o.sku = sar.original_sku
             LEFT JOIN bm_sku_master bsm_s ON bsm_s.sku = sar.substitute_sku
@@ -2499,7 +2515,13 @@ async def get_pending_shipment_resolutions() -> list[dict]:
               AND sar.bm_deleted_at IS NULL
             ORDER BY sar.ts ASC
         """)
-        return [dict(r) for r in await cur.fetchall()]
+        rows = [dict(r) for r in await cur.fetchall()]
+    for row in rows:
+        # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title): limpia
+        # tanto el título del SKU original como el del sustituto.
+        row["titulo"] = clean_bm_title(row["titulo"], row.pop("_o_brand"), row.pop("_o_model"))
+        row["substitute_titulo"] = clean_bm_title(row["substitute_titulo"], row.pop("_s_brand"), row.pop("_s_model"))
+    return rows
 
 
 async def mark_resolution_fulfillment(

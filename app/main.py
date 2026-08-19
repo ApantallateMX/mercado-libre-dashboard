@@ -58,6 +58,7 @@ from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
 from app.services.sku_utils import base_sku as _normalize_sku_imported  # canónica — base_sku maneja bundles, sufijos y paréntesis
+from app.services.sku_utils import clean_bm_title  # limpia título duplicado "Marca Modelo Marca+Modelo..." de BM (feed sucio de proveedor)
 
 # ---------- SKU suffix helpers ----------
 _GR_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC")
@@ -4761,7 +4762,8 @@ async def _orders_search_partial(
 
     enriched = []
     for r in rows:
-        title    = r["ml_title"] or r["bm_title"] or r["sku"] or "-"
+        # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title)
+        title    = r["ml_title"] or clean_bm_title(r["bm_title"], r["brand"], r["model"]) or r["sku"] or "-"
         sku_disp = r["sku"] or "-"
         unit_price = float(r["unit_price"] or 0)
         qty        = int(r["quantity"] or 1)
@@ -14355,9 +14357,10 @@ async def _run_global_scan(threshold: int):
         rows = []
         for p_bm in synthetic:
             base = p_bm["sku"]
+            _raw_title = p_bm.get("_bm_title") or p_bm.get("title") or sku_titles.get(base, "")
             rows.append({
                 "sku": base,
-                "title": p_bm.get("_bm_title") or p_bm.get("title") or sku_titles.get(base, ""),
+                "title": clean_bm_title(_raw_title, p_bm.get("_bm_brand", ""), p_bm.get("_bm_model", "")),
                 "brand": p_bm.get("_bm_brand", ""),
                 "bm_avail": p_bm.get("_bm_avail", 0) or 0,
                 "bm_reserved": p_bm.get("_bm_reserved", 0) or 0,
@@ -18987,7 +18990,9 @@ async def diag_tv_stock_vs_sales(token: str = "", days: int = 60, weeks: int = 1
                    SUM(oh.unit_price * oh.quantity) AS revenue,
                    SUM(oh.quantity) AS units_sold,
                    COALESCE(bm.available_qty, -1) AS available_qty,
-                   COALESCE(bm.title, '') AS title
+                   COALESCE(bm.title, '') AS title,
+                   COALESCE(bm.brand, '') AS _brand,
+                   COALESCE(bm.model, '') AS _model
             FROM order_history oh
             LEFT JOIN bm_sku_master bm ON bm.sku = oh.sku
             WHERE oh.sku LIKE 'SNTV%' AND oh.order_date >= ?
@@ -18996,6 +19001,9 @@ async def diag_tv_stock_vs_sales(token: str = "", days: int = 60, weeks: int = 1
             LIMIT 30
         """, (date_from,))
         top_tv_skus = [dict(r) for r in await cur.fetchall()]
+        for _r in top_tv_skus:
+            # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title)
+            _r["title"] = clean_bm_title(_r["title"], _r.pop("_brand"), _r.pop("_model"))
 
         # Tendencia semanal de ingresos — TODAS las plataformas/cuentas, últimas N semanas
         weeks_from = (_dt_tv.utcnow() - _td_tv(weeks=weeks)).strftime("%Y-%m-%d")
@@ -25687,11 +25695,14 @@ async def planning_unlaunched():
         _fx_unl = _manual_fx_rate if _manual_fx_rate > 0 else _last_fx_rate
         rev_potential = round(stock * float(retail_usd) * _fx_unl, 0) if retail_usd else 0
 
+        _unl_brand = row.get("Brand", "") or row.get("BRAND", "")
+        _unl_model = row.get("Model", "") or row.get("MODEL", "")
         entry = {
             "sku": sku,
-            "title": row.get("Title", "") or row.get("Model", sku),
-            "brand": row.get("Brand", "") or row.get("BRAND", ""),
-            "model": row.get("Model", "") or row.get("MODEL", ""),
+            # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title)
+            "title": clean_bm_title(row.get("Title", ""), _unl_brand, _unl_model) or _unl_model or sku,
+            "brand": _unl_brand,
+            "model": _unl_model,
             "category": row.get("CategoryName", "") or row.get("Category", ""),
             "stock": stock,
             "retail_price_usd": float(retail_usd),
@@ -25918,7 +25929,8 @@ async def bm_launch_opportunities(
             all_items.append({
                 "bm_sku":   bm_sku,
                 "sku_raw":  raw_sku,
-                "title":    item.get("Title") or "",
+                # FIX 2026-08-18 (título sucio de BM, ver clean_bm_title)
+                "title":    clean_bm_title(item.get("Title") or "", item.get("Brand") or "", item.get("Model") or ""),
                 "brand":    item.get("Brand") or "",
                 "model":    item.get("Model") or "",
                 "category": item.get("CategoryName") or "",
