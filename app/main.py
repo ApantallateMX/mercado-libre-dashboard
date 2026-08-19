@@ -20424,6 +20424,74 @@ async def diag_confcolumns_location_check(token: str = "", category_id: str = "T
     })
 
 
+@app.get("/api/diag/confcolumns-location-param-test")
+async def diag_confcolumns_location_param_test(
+    token: str = "", category_id: str = "Televisions",
+    test_sku: str = "SNTV006513", location_id: str = "47,62,68",
+):
+    """Prueba empírica (pregunta de Jovan 2026-08-19): ¿ConfColumns_Conditions_Excel
+    respeta un parámetro de ubicación aunque el payload documentado no lo tenga?
+    El endpoint hermano (Get_GlobalStock_InventoryBySKU) SÍ usa 'LOCATIONID' -- prueba
+    si el mismo campo, en el mismo controller, filtra también aquí.
+
+    Hace 2 llamadas reales (sin location vs con LOCATIONID=vendible) y compara el
+    Available de un SKU con stock CONFIRMADO en Tijuana (ver confcolumns-location-check).
+    Si el número no cambia, el parámetro no tiene efecto -- BM lo ignora."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_lp
+    bm = await _gsb_lp()
+    if not bm._logged_in:
+        if not await bm.login():
+            return JSONResponse({"error": "BM login failed"}, status_code=503)
+
+    async def _fetch(extra_fields: dict):
+        payload = {
+            "COMPANYID": 1, "CATEGORYID": category_id,
+            "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True,
+            "NEEDAVGCOST": True, "NEEDSALES": False,
+            **extra_fields,
+        }
+        r = await bm._post(f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
+                            json=payload, headers=_AJAX_HEADERS, timeout=45.0)
+        if r is None or r.status_code != 200:
+            return None, f"HTTP {getattr(r, 'status_code', 'sin respuesta')}"
+        data = r.json()
+        if not isinstance(data, list):
+            return None, "respuesta no es lista"
+        return data, None
+
+    is_tv = test_sku.upper().startswith("SNTV")
+    valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
+
+    def _row_available(rows, sku):
+        row = next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku.upper()), None)
+        if row is None:
+            return "SKU no encontrado en la respuesta"
+        return sum(int(row.get(c) or 0) for c in valid_conds)
+
+    rows_no_loc, err_no_loc = await _fetch({})
+    rows_with_loc, err_with_loc = await _fetch({"LOCATIONID": location_id})
+
+    return JSONResponse({
+        "category_id": category_id, "test_sku": test_sku, "location_id_tested": location_id,
+        "sin_LOCATIONID": {
+            "error": err_no_loc, "rows": len(rows_no_loc) if rows_no_loc else 0,
+            "available_test_sku": _row_available(rows_no_loc, test_sku) if rows_no_loc else None,
+        },
+        "con_LOCATIONID": {
+            "error": err_with_loc, "rows": len(rows_with_loc) if rows_with_loc else 0,
+            "available_test_sku": _row_available(rows_with_loc, test_sku) if rows_with_loc else None,
+        },
+        "conclusion": (
+            "PARAMETRO_FUNCIONA -- el numero cambio, BM SI filtra por LOCATIONID en este endpoint"
+            if (rows_no_loc and rows_with_loc
+                and _row_available(rows_no_loc, test_sku) != _row_available(rows_with_loc, test_sku))
+            else "PARAMETRO_IGNORADO_O_ERROR -- revisar los 2 bloques de arriba"
+        ),
+    })
+
+
 @app.get("/api/diag/bm-master-confcolumns-compare")
 async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30, category_id: str = ""):
     """FASE NUEVA 2026-08-19 (pedido explícito de BinManager, vía Jovan):
