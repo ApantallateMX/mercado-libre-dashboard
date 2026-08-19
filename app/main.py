@@ -909,6 +909,12 @@ async def lifespan(app: FastAPI):
     # reemplaza nada) — ver project_bm_sku_master.md
     if not _BM_DISABLED:
         asyncio.create_task(_bm_master_sync_loop())
+    # Migración a ConfColumns_Conditions_Excel por categoría (2026-08-19,
+    # pedido explícito de BinManager) -- corre EN PARALELO al loop de arriba,
+    # todavía no lo reemplaza (fase de validación en producción).
+    if not _BM_DISABLED:
+        asyncio.create_task(_conf_columns_top_categories_loop())
+        asyncio.create_task(_conf_columns_longtail_loop())
     # Red de seguridad de "Alertas de Stock" (2026-08-14) — re-evalúa órdenes
     # pagadas recientes que el webhook ya no vuelve a tocar por su cuenta.
     asyncio.create_task(_realtime_stock_reconcile_loop())
@@ -6843,6 +6849,69 @@ async def _bm_master_sync_loop():
         except Exception as e:
             logger.error(f"[BM-MASTER-SYNC] Error inesperado: {e}")
         await asyncio.sleep(120)
+
+
+# FEATURE 2026-08-19 (pedido explícito de BinManager, vía Jovan): migración
+# de Get_GlobalStock_InventoryBySKU ("pagedata") a ConfColumns_Conditions_Excel
+# ("el excel") por categoría, en orden de ventas reales. Corre EN PARALELO a
+# _bm_master_sync_loop (arriba) -- todavía NO lo reemplaza, es la Fase de
+# validación en producción antes de apagar el mecanismo viejo.
+#
+# 2 loops con cadencia distinta (pedido: "primero los SKUs con ventas"):
+# - Top N categorías (>90% de los ingresos reales, ej. Televisions+Air
+#   Conditioners) se refrescan seguido.
+# - El resto (cola larga) se refresca mucho más espaciado -- no aportan
+#   suficiente valor para pagar el mismo costo de llamadas.
+# Cada llamada va sola, acotada (~15-20s por categoría, probado en vivo),
+# con una pausa real entre cada una -- nunca ráfaga, sin importar la
+# cadencia (lección del incidente de carga BM de hoy mismo).
+_CONF_COLUMNS_TOP_N = 5
+_CONF_COLUMNS_TOP_INTERVAL_S = 900       # 15 min
+_CONF_COLUMNS_LONGTAIL_INTERVAL_S = 4 * 3600  # 4 horas
+_CONF_COLUMNS_DELAY_BETWEEN_S = 10
+
+
+async def _conf_columns_top_categories_loop():
+    await asyncio.sleep(600)  # dejar que el arranque normal termine primero
+    while True:
+        try:
+            cats = await token_store.get_categories_ordered_by_sales(days=90)
+            top = [c["category"] for c in cats if c["category"]][:_CONF_COLUMNS_TOP_N]
+            if top:
+                from app.services.binmanager_client import get_shared_bm as _gsb_top
+                bm_cli = await _gsb_top()
+                for cat in top:
+                    try:
+                        result = await _update_bm_master_for_category(bm_cli, cat)
+                        logger.info(f"[CONFCOL-TOP] {cat}: {result}")
+                    except Exception as e:
+                        logger.error(f"[CONFCOL-TOP] {cat} error inesperado: {e}")
+                    await asyncio.sleep(_CONF_COLUMNS_DELAY_BETWEEN_S)
+        except Exception as e:
+            logger.error(f"[CONFCOL-TOP] loop error: {e}")
+        await asyncio.sleep(_CONF_COLUMNS_TOP_INTERVAL_S)
+
+
+async def _conf_columns_longtail_loop():
+    await asyncio.sleep(1800)  # arranca después del loop top, no compite con él al inicio
+    while True:
+        try:
+            cats = await token_store.get_categories_ordered_by_sales(days=90)
+            top_set = {c["category"] for c in cats[:_CONF_COLUMNS_TOP_N]}
+            rest = [c["category"] for c in cats if c["category"] and c["category"] not in top_set]
+            if rest:
+                from app.services.binmanager_client import get_shared_bm as _gsb_tail
+                bm_cli = await _gsb_tail()
+                for cat in rest:
+                    try:
+                        result = await _update_bm_master_for_category(bm_cli, cat)
+                        logger.info(f"[CONFCOL-TAIL] {cat}: {result}")
+                    except Exception as e:
+                        logger.error(f"[CONFCOL-TAIL] {cat} error inesperado: {e}")
+                    await asyncio.sleep(_CONF_COLUMNS_DELAY_BETWEEN_S)
+        except Exception as e:
+            logger.error(f"[CONFCOL-TAIL] loop error: {e}")
+        await asyncio.sleep(_CONF_COLUMNS_LONGTAIL_INTERVAL_S)
 
 
 async def _bm_verify_sku_direct(bm_cli, sku: str) -> dict | None:
@@ -20345,37 +20414,35 @@ def _conf_columns_row_to_master_fields(sku: str, row: dict) -> dict:
     }
 
 
-@app.post("/api/diag/bm-master-update-category")
-async def diag_bm_master_update_category(token: str = "", category_id: str = ""):
+async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     """PASO 2 del plan de migración a ConfColumns por categoría (pedido por
-    Jovan 2026-08-19). Trae 1 categoría vía ConfColumns_Conditions_Excel y
-    actualiza bm_sku_master SOLO para los SKUs conocidos (get_all_known_base_skus)
-    que ya pertenecen a esa categoría o que aparecen en esta respuesta.
+    Jovan/BinManager 2026-08-19). Trae 1 categoría vía
+    ConfColumns_Conditions_Excel y actualiza bm_sku_master SOLO para los
+    SKUs conocidos (get_all_known_base_skus) que ya pertenecen a esa
+    categoría o que aparecen en esta respuesta.
 
-    Escritura SEGURA -- respeta las 2 reglas ya aprendidas hoy a la fuerza:
-    1. Si el fetch FALLA (None), no toca nada -- responde error, no borra
-       ni pone en 0 lo que ya había.
+    Escritura SEGURA -- respeta las 2 reglas ya aprendidas hoy a la fuerza
+    (2 bugs reales del mismo tipo encontrados hoy mismo en otras partes):
+    1. Si el fetch FALLA (None), no toca nada -- devuelve ok=False, no
+       borra ni pone en 0 lo que ya había.
     2. Si el fetch tiene éxito, un SKU YA conocido de esta misma categoría
        que no aparece en la respuesta se pone en available_qty=0 (mismo
        criterio "ausencia en bulk = 0" ya usado en el resto del sistema) --
        pero SOLO si su bm_sku_master.category actual coincide con esta
        categoría (para no zerear un SKU que en realidad es de otra
-       categoría por un match de nombre casual)."""
-    if token != _DIAG_TOKEN:
-        return JSONResponse({"error": "token inválido"}, status_code=403)
-    if not category_id:
-        return JSONResponse({"error": "category_id requerido"}, status_code=400)
+       categoría por un match de nombre casual).
 
-    from app.services.binmanager_client import get_shared_bm as _gsb_upd
-    bm_cli = await _gsb_upd()
+    Usado tanto por el diag manual (bm-master-update-category) como por
+    los loops automáticos (_conf_columns_top_categories_loop/_longtail_loop)
+    -- una sola implementación, sin duplicar la lógica de escritura."""
     _t0 = _time.time()
     rows = await bm_cli.get_conf_columns_catalog(category_id=category_id)
     _elapsed = round(_time.time() - _t0, 1)
     if rows is None:
-        return JSONResponse({
+        return {
             "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
             "error": "ConfColumns falló (timeout/error/HTTP!=200) -- no se tocó bm_sku_master",
-        }, status_code=502)
+        }
 
     known_skus = set(await token_store.get_all_known_base_skus())
     updates = []
@@ -20415,14 +20482,28 @@ async def diag_bm_master_update_category(token: str = "", category_id: str = "")
             )
         await db.commit()
 
-    return JSONResponse({
+    return {
         "ok": True,
         "category_id": category_id,
         "elapsed_s": _elapsed,
         "conf_columns_rows": len(rows),
         "known_skus_updated": len(updates),
         "known_skus_confirmed_zero": len(_now_zero),
-    })
+    }
+
+
+@app.post("/api/diag/bm-master-update-category")
+async def diag_bm_master_update_category(token: str = "", category_id: str = ""):
+    """Endpoint manual -- ver _update_bm_master_for_category() para la
+    lógica real (compartida con los loops automáticos)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not category_id:
+        return JSONResponse({"error": "category_id requerido"}, status_code=400)
+    from app.services.binmanager_client import get_shared_bm as _gsb_upd
+    bm_cli = await _gsb_upd()
+    result = await _update_bm_master_for_category(bm_cli, category_id)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 502)
 
 
 @app.get("/api/diag/trigger-feedback-sync")
