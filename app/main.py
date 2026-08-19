@@ -20880,6 +20880,42 @@ async def diag_bm_category_bulk_probe(token: str = "", category_id: str = ""):
     })
 
 
+@app.get("/api/diag/top-skus-by-sales")
+async def diag_top_skus_by_sales(token: str = "", days: int = 90, limit: int = 60):
+    """DIAGNÓSTICO TEMPORAL 2026-08-19 -- pedido por Jovan: decidir en qué
+    categorías vale la pena usar ConfColumns_Conditions_Excel según qué
+    genera ventas de verdad, no una categoría al azar. Pura lectura de
+    nuestra propia base (order_history + bm_sku_master, ambas plataformas,
+    todas las cuentas) -- CERO llamadas a BM ni a ML/Amazon en vivo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    days = max(7, min(365, days))
+    limit = max(1, min(200, limit))
+    date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    import aiosqlite as _aio_top
+    async with _aio_top.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_top.Row
+        cur = await db.execute("""
+            SELECT oh.sku AS sku,
+                   SUM(oh.quantity) AS units,
+                   SUM(oh.unit_price * oh.quantity) AS revenue_mxn,
+                   COUNT(DISTINCT oh.platform || ':' || oh.account_id) AS accounts,
+                   COALESCE(bsm.brand, '') AS brand,
+                   COALESCE(bsm.model, '') AS model,
+                   COALESCE(bsm.title, '') AS title
+            FROM order_history oh
+            LEFT JOIN bm_sku_master bsm ON bsm.sku = oh.sku
+            WHERE oh.order_date >= ?
+              AND oh.sku != ''
+              AND LOWER(oh.status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
+            GROUP BY oh.sku
+            ORDER BY units DESC
+            LIMIT ?
+        """, (date_from, limit))
+        rows = [dict(r) for r in await cur.fetchall()]
+    return JSONResponse({"days": days, "date_from": date_from, "count": len(rows), "top_skus": rows})
+
+
 @app.get("/api/debug/item-stock")
 async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
     """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
