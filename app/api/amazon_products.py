@@ -4410,14 +4410,19 @@ async def amazon_sin_lanzar(
             params + [per_page, off],
         )).fetchall()
 
-        # Categorías disponibles (solo de unlaunched con retail price)
+        # FEATURE 2026-08-19 (pedido por Jovan, "dejar todo al 100"): antes
+        # era solo una lista de nombres sin conteo -- se iguala al mismo
+        # desglose que ya tiene ML en /api/lanzar/filters (get_gap_filters,
+        # lanzar.py) para que "No Lanzados" de Amazon muestre cuántos SKUs
+        # y cuánto stock hay por categoría, no solo el nombre.
         cat_rows = await (await db.execute(
-            """SELECT DISTINCT category FROM amz_sku_gaps
+            """SELECT category, COUNT(*) as cnt, SUM(avail_qty) as total_stock
+               FROM amz_sku_gaps
                WHERE seller_id=? AND status='unlaunched' AND category!=''
-               ORDER BY category""",
+               GROUP BY category ORDER BY cnt DESC""",
             (sid,),
         )).fetchall()
-        categories = [r[0] for r in cat_rows]
+        categories = [{"category": r[0], "count": r[1], "total_stock": r[2] or 0} for r in cat_rows]
 
         # Conteo sin precio
         sin_precio_cnt = (await (await db.execute(

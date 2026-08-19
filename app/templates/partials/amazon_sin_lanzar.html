@@ -103,9 +103,9 @@
     <select id="sl-cat-select"
             onchange="window._amzSlFilterCat(this.value)"
             class="flex-1 min-w-[180px] text-sm px-3 py-1.5 border border-gray-200 rounded-lg outline-none focus:border-orange-400 transition bg-white">
-        <option value="">— Todas —</option>
+        <option value="">Todas las categorías ({{ total }})</option>
         {% for cat in categories %}
-        <option value="{{ cat }}" {% if category == cat %}selected{% endif %}>{{ cat }}</option>
+        <option value="{{ cat.category }}" {% if category == cat.category %}selected{% endif %}>{{ cat.category }} ({{ cat.count }}, {{ cat.total_stock }} uds)</option>
         {% endfor %}
     </select>
     {% if category %}
@@ -313,6 +313,9 @@
                                     {% if g.brand %}
                                     <span class="text-xs text-gray-300">·</span>
                                     <span class="text-xs text-gray-400">{{ g.brand }}{% if g.model %} {{ g.model }}{% endif %}</span>
+                                    {% endif %}
+                                    {% if g.category %}
+                                    <span class="px-1 py-0.5 bg-orange-50 text-orange-600 text-[9px] rounded border border-orange-100">{{ g.category }}</span>
                                     {% endif %}
                                 </div>
                                 {% if g.upc %}
