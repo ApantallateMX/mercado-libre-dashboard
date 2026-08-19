@@ -112,36 +112,21 @@ def _bm_conditions_for_sku(sku: str) -> str:
 def _bm_bulk_real_conditions(base: str) -> list[dict]:
     """FEATURE 2026-08-19 (pedido por Jovan tras reporte real de BinManager de
     que la app le estaba pegando duro con llamadas puntuales, ver DEVLOG):
-    devuelve las condiciones con stock real (>0) para un SKU base leyendo
-    ÚNICAMENTE el bulk que YA se descarga cada _BM_BULK_TTL (10 min) para
-    bm_sku_master (_bm_bulk_gr_cache / _bm_bulk_all_cache) -- cero llamadas
-    nuevas a BM, mismo principio que feedback_preferir_solucion_simple_del_bulk.
-    Usada tanto por /api/stock/substitute-conditions (selector en el modal)
-    como por _inject_bm_alter_sku (validar el sustituto antes de escribir en
-    BM) -- una sola fuente de verdad para "qué condiciones son reales"."""
-    use_all = _bm_conditions_for_sku(base) == "GRA,GRB,GRC,ICB,ICC,NEW"
-    bulk_cache = _bm_bulk_all_cache if use_all else _bm_bulk_gr_cache
-    if not bulk_cache:
+    devuelve las condiciones con stock real (>0) para un SKU base.
+
+    FIX 2026-08-19 #2 (mismo día, pedido explícito de Jovan tras validar el
+    full-resync de las 59 categorías): antes leía el bulk viejo
+    (_bm_bulk_gr_cache/_bm_bulk_all_cache, Get_GlobalStock_InventoryBySKU --
+    el mismo endpoint que BinManager pidió dejar de usar). Ahora lee
+    _bm_master_mem (espejo de bm_sku_master, alimentado por ConfColumns con
+    LOCATIONID=47,62,68 ya verificado -- excluye Tijuana correctamente) --
+    mismo shape de salida ([{condition, qty, sku}] ordenado por qty desc),
+    para no romper /api/stock/substitute-conditions ni _inject_bm_alter_sku,
+    que siguen siendo los 2 consumidores de esta función."""
+    entry = _bm_master_mem.get(base.upper().strip())
+    if not entry:
         return []
-    _, bulk_rows = bulk_cache
-    matches = []
-    for row in (bulk_rows or []):
-        row_sku = (row.get("SKU") or "").upper().strip()
-        if _extract_base_sku(row_sku) != base:
-            continue
-        # FIX 2026-08-19 (bug real: BM a veces guarda el SKU BASE sin sufijo
-        # de condición como su propia fila en el bulk -- mismo caso ya
-        # documentado en /api/stock/live-check, "un resolved_sku sin sufijo
-        # no aporta nada nuevo, se descarta"). Sin esta condición real
-        # (GRA/GRB/GRC/NEW/ICB/ICC), no hay ProductSKU válido que inyectar.
-        condition = row_sku[len(base):].lstrip("-")
-        if not condition:
-            continue
-        qty = int(row.get("AvailableQTY") or 0)
-        if qty <= 0:
-            continue
-        matches.append({"condition": condition, "qty": qty, "sku": row_sku})
-    return sorted(matches, key=lambda c: -c["qty"])
+    return entry.get("conditions") or []
 
 
 import re as _re
@@ -691,6 +676,7 @@ async def lifespan(app: FastAPI):
         # Cargar catálogo de productos BM (retail_ph, brand, model) desde DB
         # Para que VS REF% en planeación funcione desde el primer request.
         await _load_catalog_from_db()
+        await _bm_master_mem_warm_start()
     except Exception as _e_load:
         logger.error(f"[STARTUP] Carga de caché desde DB falló: {_e_load}")
 
@@ -2241,30 +2227,21 @@ def _shipment_should_alert(shipment: dict) -> bool:
 
 
 def _bm_bulk_available_qty(sku: str) -> int | None:
-    """Busca `sku` (ya normalizado a base BM) en el archivo bulk de BM que ya
-    tenemos en memoria (mismo _bm_bulk_gr_cache/_bm_bulk_all_cache que usa
-    _bm_master_sync_once_inner()). BM omite del bulk cualquier SKU con
-    stock=0 -- por diseño, "no aparece en el bulk" significa "sin stock",
-    no "no verificado todavía". Por eso esta función retorna None cuando el
-    SKU no aparece, y el caller trata None como 0 para efectos de alerta --
-    en vez de leer bm_sku_master, que puede tener un valor de una
-    reconciliación de hace horas (causa real de "Sin Stock" detectado en BM
-    sin alerta nuestra, ver DEVLOG 2026-08-14). Decisión de Jovan: no
-    intentar imitar la lógica de fulfillment de BM (condición específica
-    agotada dentro de un total agregado con stock) -- ese caso queda fuera
-    a propósito, es un límite operativo de BM, no algo que debamos adivinar."""
-    cache = _bm_bulk_all_cache if _bm_conditions_for_sku(sku) == "GRA,GRB,GRC,ICB,ICC,NEW" else _bm_bulk_gr_cache
-    if not cache:
+    """FIX 2026-08-19 (pedido explícito de Jovan: mover alertas en tiempo
+    real a la fuente ConfColumns/LOCATIONID=47,62,68, ya verificada contra
+    producción -- excluye Tijuana correctamente, a diferencia del bulk
+    viejo Get_GlobalStock_InventoryBySKU que motivó el bloqueo de BM).
+
+    Lee _bm_master_mem (espejo en memoria de bm_sku_master, sincronizado
+    en el mismo instante en que ConfColumns escribe -- ver
+    _update_bm_master_for_category). `verified=False` (SKU nunca
+    confirmado por ningún ciclo, ej. recién lanzado) devuelve None -- el
+    caller trata None como "no se sabe" (equivalente al viejo "ausencia en
+    el bulk"), nunca como 0 falso."""
+    entry = _bm_master_mem.get(sku.upper().strip())
+    if not entry or not entry.get("verified"):
         return None
-    rows = cache[1] or []
-    sku_u = sku.upper()
-    exact = next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku_u), None)
-    if exact is not None:
-        return int(exact.get("AvailableQTY") or 0)
-    base_matches = [r for r in rows if _extract_base_sku((r.get("SKU") or "").upper().strip()) == sku_u]
-    if base_matches:
-        return sum(int(r.get("AvailableQTY") or 0) for r in base_matches)
-    return None
+    return int(entry.get("available_qty") or 0)
 
 
 async def _evaluate_order_stock_alert(order_id: str, user_id: str, client) -> None:
@@ -6270,6 +6247,42 @@ async def _load_bm_cache_from_db():
             logger.warning(f"[BM-DB] Error cargando bulk '{_bulk_name}' desde disco: {_e_bulk}")
 
 
+async def _bm_master_mem_warm_start():
+    """Carga TODO bm_sku_master a memoria (_bm_master_mem) al arrancar --
+    sin esto, las alertas en tiempo real y "Sustituir" quedarían sin datos
+    los primeros 10-30 min tras cada deploy (los loops de ConfColumns
+    duermen 600s/1800s antes de su primer ciclo). Un SELECT completo de
+    ~37,000 filas tarda <1s -- sin costo real."""
+    import json as _json_ws
+    try:
+        import aiosqlite as _aio_ws
+        async with _aio_ws.connect(DATABASE_PATH, timeout=15) as db:
+            db.row_factory = _aio_ws.Row
+            cur = await db.execute(
+                "SELECT sku, available_qty, reserve_qty, best_condition_sku, "
+                "conditions_json, verified, stock_updated_at FROM bm_sku_master"
+            )
+            rows = await cur.fetchall()
+        loaded = 0
+        for r in rows:
+            try:
+                conditions = _json_ws.loads(r["conditions_json"]) if r["conditions_json"] else []
+            except Exception:
+                conditions = []
+            _bm_master_mem[r["sku"]] = {
+                "available_qty": r["available_qty"] or 0,
+                "reserve_qty": r["reserve_qty"] or 0,
+                "best_condition_sku": r["best_condition_sku"] or "",
+                "conditions": conditions,
+                "verified": bool(r["verified"]),
+                "stock_updated_at": r["stock_updated_at"] or 0,
+            }
+            loaded += 1
+        logger.info(f"[BM-MASTER-MEM] Warm-start: {loaded} SKUs cargados a memoria desde bm_sku_master")
+    except Exception as _e:
+        logger.warning(f"[BM-MASTER-MEM] Error en warm-start: {_e}")
+
+
 async def _load_stock_issues_from_db():
     """Carga stock_issues_cache desde SQLite al arrancar.
     El Stock tab muestra datos inmediatamente post-deploy en vez de 'Calculando...'
@@ -6422,6 +6435,15 @@ _bm_bulk_loc47_all_cache: tuple[float, list] | None = None  # (timestamp, ALL ro
 _bm_bulk_loc68_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC68 = MTY (TVs ICB/ICC)
 _bm_bulk_loctj_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) LOC45+69+43+42 = Tijuana (TVs ICB/ICC)
 _bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (evita instancias concurrentes)
+# FEATURE 2026-08-19 (pedido por Jovan: mover alertas en tiempo real +
+# sustitutos/sugerencias de "Sustituir" a la fuente ConfColumns, no al bulk
+# viejo Get_GlobalStock_InventoryBySKU): espejo en memoria de bm_sku_master
+# -- sku(base) -> {available_qty, reserve_qty, best_condition_sku,
+# conditions (lista [{condition,qty,sku}] ordenada por qty desc), verified,
+# stock_updated_at}. Se mantiene sincronizado en el mismo instante en que
+# _update_bm_master_for_category() escribe en SQLite (sin releer la DB en
+# cada lookup) + un warm-start completo al arrancar (_bm_master_mem_warm_start).
+_bm_master_mem: dict[str, dict] = {}
 # FIX 2026-08-10: _fetch_activate_wh y _do_bulk_miss_retry (mas abajo) NO tenian
 # este mismo guard -- cada una de las 4 cuentas del loop de _startup_prewarm
 # disparaba su propia instancia fire-and-forget sin revisar si otra cuenta ya
@@ -17389,36 +17411,21 @@ def _split_bm_sku_condition(sku: str) -> tuple[str, str]:
 
 
 def _bm_bulk_stock_lookup(sku: str) -> dict | None:
-    """Igual que _bm_bulk_available_qty() pero también devuelve Reserve, el
-    SKU exacto con condición (cuando hay un solo match, igual que
-    _resolve_bm_condition_sku pero sin llamar a BM) y la edad del bulk.
-    None si el bulk todavía no se cargó ni una vez (cold start)."""
-    cache = _bm_bulk_all_cache if _bm_conditions_for_sku(sku) == "GRA,GRB,GRC,ICB,ICC,NEW" else _bm_bulk_gr_cache
-    if not cache:
+    """FIX 2026-08-19 (pedido explícito de Jovan: mover live-check/Sustituir
+    a la fuente ConfColumns, ya con LOCATIONID=47,62,68 verificado). Lee
+    _bm_master_mem -- ya no hay ambigüedad de "más de 1 condición con
+    stock": conditions_json guarda TODAS, y best_condition_sku ya es la de
+    mayor stock (antes se dejaba vacío por no poder decidir). None solo si
+    el SKU nunca apareció en ningún ciclo (recién lanzado, sin categoría
+    asignada todavía)."""
+    entry = _bm_master_mem.get(sku.upper().strip())
+    if not entry:
         return None
-    ts, rows = cache
-    rows = rows or []
-    sku_u = sku.upper()
-    age_seconds = _time.time() - ts
-    exact = next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku_u), None)
-    if exact is not None:
-        return {
-            "available_qty": int(exact.get("AvailableQTY") or 0),
-            "reserve": int(exact.get("Reserve") or 0),
-            "resolved_sku": exact.get("SKU") or "",
-            "age_seconds": age_seconds,
-        }
-    base_matches = [r for r in rows if _extract_base_sku((r.get("SKU") or "").upper().strip()) == sku_u]
-    if not base_matches:
-        return {"available_qty": 0, "reserve": 0, "resolved_sku": "", "age_seconds": age_seconds}
     return {
-        "available_qty": sum(int(r.get("AvailableQTY") or 0) for r in base_matches),
-        "reserve": sum(int(r.get("Reserve") or 0) for r in base_matches),
-        # Si hay más de 1 variante de condición con stock no hay forma segura de
-        # decir cuál es "la" real (mismo límite que _resolve_bm_condition_sku) --
-        # se deja vacío en vez de adivinar.
-        "resolved_sku": base_matches[0].get("SKU") or "" if len(base_matches) == 1 else "",
-        "age_seconds": age_seconds,
+        "available_qty": int(entry.get("available_qty") or 0),
+        "reserve": int(entry.get("reserve_qty") or 0),
+        "resolved_sku": entry.get("best_condition_sku") or "",
+        "age_seconds": _time.time() - (entry.get("stock_updated_at") or 0),
     }
 
 
@@ -17456,7 +17463,7 @@ async def stock_live_check(request: Request, sku: str = Query(...), account_id: 
     base, _cond = _split_bm_sku_condition(sku)
     result = _bm_bulk_stock_lookup(base)
     if result is None:
-        return JSONResponse({"sku": sku, "resolved_sku": "", "available_qty": None, "error": "Todavía no hay caché de BM (esperando al primer prewarm)."})
+        return JSONResponse({"sku": sku, "resolved_sku": "", "available_qty": None, "error": "SKU sin datos todavía en bm_sku_master (nunca apareció en ningún ciclo de ConfColumns)."})
 
     # FIX 2026-08-18 (bug real confirmado por Jovan): BM a veces guarda el
     # SKU BASE sin sufijo de condición como su propia fila en el bulk (con
@@ -17523,16 +17530,18 @@ async def stock_substitute_conditions(request: Request, sku: str = Query(...)):
     if not base:
         return JSONResponse({"base": "", "conditions": []})
 
-    use_all = _bm_conditions_for_sku(base) == "GRA,GRB,GRC,ICB,ICC,NEW"
-    bulk_cache = _bm_bulk_all_cache if use_all else _bm_bulk_gr_cache
-    if not bulk_cache:
+    # FIX 2026-08-19 #3 (pedido explícito de Jovan, mismo día): ya no depende
+    # del bulk viejo -- lee _bm_master_mem (ConfColumns, LOCATIONID=47,62,68
+    # ya verificado) a través de _bm_bulk_real_conditions().
+    mem_entry = _bm_master_mem.get(base)
+    if not mem_entry:
         return JSONResponse({"base": base, "conditions": [], "no_cache": True})
 
     conditions = _bm_bulk_real_conditions(base)
     return JSONResponse({
         "base": base,
         "conditions": conditions,
-        "cache_age_minutes": round((_time.time() - bulk_cache[0]) / 60),
+        "cache_age_minutes": round((_time.time() - (mem_entry.get("stock_updated_at") or 0)) / 60),
     })
 
 
@@ -20593,14 +20602,24 @@ async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30
 
 def _conf_columns_row_to_master_fields(sku: str, row: dict) -> dict:
     """Traduce 1 fila de ConfColumns_Conditions_Excel a los campos de
-    bm_sku_master. reserve_qty=0 fijo -- ver get_conf_columns_catalog()."""
+    bm_sku_master. reserve_qty=0 fijo -- ver get_conf_columns_catalog().
+
+    FEATURE 2026-08-19 (pedido por Jovan: mover alertas/sustitutos a esta
+    fuente): además del "best_condition", ahora guarda TODAS las
+    condiciones con stock real (>0) en 'conditions' -- mismo shape que
+    _bm_bulk_real_conditions() del bulk viejo ({condition, qty, sku}
+    ordenado por qty desc), para que el selector de "Sustituir" siga
+    ofreciendo todas las opciones reales, no solo la mejor."""
     is_tv = sku.startswith("SNTV")
     valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
-    best_cond, best_qty = "", 0
-    for c in valid_conds:
-        q = int(row.get(c) or 0)
-        if q > best_qty:
-            best_cond, best_qty = c, q
+    conditions = sorted(
+        (
+            {"condition": c, "qty": int(row.get(c) or 0), "sku": f"{sku}-{c}"}
+            for c in valid_conds if int(row.get(c) or 0) > 0
+        ),
+        key=lambda x: -x["qty"],
+    )
+    best_cond, best_qty = (conditions[0]["condition"], conditions[0]["qty"]) if conditions else ("", 0)
     avail = sum(int(row.get(c) or 0) for c in valid_conds)
     return {
         "sku": sku,
@@ -20611,6 +20630,7 @@ def _conf_columns_row_to_master_fields(sku: str, row: dict) -> dict:
         "upc": row.get("UPC") or row.get("Upc") or "",
         "best_condition_sku": f"{sku}-{best_cond}" if best_cond else "",
         "best_condition_qty": best_qty,
+        "conditions": conditions,
         "verified": 1,
     }
 
@@ -20656,17 +20676,31 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         updates.append(_conf_columns_row_to_master_fields(sku, row))
 
     import aiosqlite as _aio_updcat
+    import json as _json_updcat
+    _now_ts = _time.time()
     async with _aio_updcat.connect(DATABASE_PATH, timeout=15) as db:
         for u in updates:
+            _conds_json = _json_updcat.dumps(u["conditions"])
             await db.execute(
                 """UPDATE bm_sku_master
                    SET available_qty=:available_qty, reserve_qty=:reserve_qty,
                        total_qty=:total_qty, category=:category, upc=:upc,
                        best_condition_sku=:best_condition_sku, best_condition_qty=:best_condition_qty,
+                       conditions_json=:conditions_json,
                        verified=:verified, stock_updated_at=:stock_updated_at
                    WHERE sku=:sku""",
-                {**u, "stock_updated_at": _time.time()},
+                {**{k: v for k, v in u.items() if k != "conditions"},
+                 "conditions_json": _conds_json, "stock_updated_at": _now_ts},
             )
+            # Mantener el espejo en memoria (_bm_master_mem) sincronizado en el
+            # mismo instante -- así las 3 funciones que leen de ahí (alertas en
+            # tiempo real + Sustituir/sugerencias) ven el dato fresco sin
+            # esperar al próximo warm-start ni hacer una consulta a SQLite.
+            _bm_master_mem[u["sku"]] = {
+                "available_qty": u["available_qty"], "reserve_qty": u["reserve_qty"],
+                "best_condition_sku": u["best_condition_sku"], "conditions": u["conditions"],
+                "verified": True, "stock_updated_at": _now_ts,
+            }
         # SKUs conocidos de ESTA categoría que no aparecieron -- ausencia
         # real confirmada (el fetch sí tuvo éxito) = 0, mismo criterio ya
         # usado en el resto del sistema. Acotado a category=? para no
@@ -20678,9 +20712,14 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         _now_zero = _existing_in_category - seen_known_skus_in_response
         for _z in _now_zero:
             await db.execute(
-                "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, verified=1, stock_updated_at=? WHERE sku=?",
-                (_time.time(), _z),
+                "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, best_condition_sku='', "
+                "conditions_json='[]', verified=1, stock_updated_at=? WHERE sku=?",
+                (_now_ts, _z),
             )
+            _bm_master_mem[_z] = {
+                "available_qty": 0, "reserve_qty": 0, "best_condition_sku": "",
+                "conditions": [], "verified": True, "stock_updated_at": _now_ts,
+            }
         await db.commit()
 
     return {

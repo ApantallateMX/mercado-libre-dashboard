@@ -1215,6 +1215,13 @@ async def init_db():
             # con esa frecuencia.
             ("category", "TEXT NOT NULL DEFAULT ''"),
             ("upc", "TEXT NOT NULL DEFAULT ''"),
+            # FEATURE 2026-08-19 (pedido por Jovan: mover alertas en tiempo real +
+            # sustitutos/sugerencias a bm_sku_master): las alertas y el modal
+            # "Sustituir" necesitaban CADA condición con stock real (GRA/GRB/
+            # GRC/NEW/ICB/ICC), no solo la mejor -- lista JSON [{condition, qty,
+            # sku}] ordenada por qty desc, mismo shape que ya devolvía
+            # _bm_bulk_real_conditions() del bulk viejo, para reemplazo directo.
+            ("conditions_json", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
