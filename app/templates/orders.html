@@ -440,6 +440,7 @@
           </tbody>
         </table>
       </div>
+      <div id="alertas-history-pagination"></div>
     </div>
 
 </div>
@@ -778,7 +779,12 @@ function loadAlertasHistory() {
                 if (h.bm_status !== 'pending' && h.bm_status !== 'failed') return '';
                 return '<button onclick="retryAlertResolutionBM(' + h.id + ', this)" class="text-[10px] bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 rounded-lg px-2 py-1 font-medium transition whitespace-nowrap">🔁 Reintentar</button>';
             }
-            tbody.innerHTML = rows.map(function(h) {
+            // FEATURE 2026-08-19 (pedido por Jovan: "se está haciendo muy
+            // larga") -- antes se volcaban las 100 filas de golpe. Se
+            // arma el HTML de cada fila/card UNA vez y de ahí en adelante
+            // se pagina en cliente (20/página) con el mismo patrón de
+            // _applySkuPage/_renderSkuPagination ya usado en este archivo.
+            _histAllRowsHtml = rows.map(function(h) {
                 var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
                 var tipoBadge = h.resolution_type === 'substitution'
                     ? '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">🔁 Sustitución</span>'
@@ -794,8 +800,8 @@ function loadAlertasHistory() {
                     '<td class="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">' + h.username + '</td>' +
                     '<td class="px-3 py-2.5 text-center whitespace-nowrap" id="alert-hist-action-' + h.id + '">' + _deleteBtn(h) + _retryBtn(h) + '</td>' +
                     '</tr>';
-            }).join('');
-            cards.innerHTML = rows.map(function(h) {
+            });
+            _histAllCardsHtml = rows.map(function(h) {
                 var fecha = new Date(h.ts * 1000).toLocaleString('es-MX', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'});
                 var tipoBadge = h.resolution_type === 'substitution'
                     ? '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">🔁 Sustitución</span>'
@@ -814,12 +820,75 @@ function loadAlertasHistory() {
                     (h.note ? '<p class="text-xs text-gray-500 mt-1">' + h.note + '</p>' : '') +
                     ((_deleteBtn(h) || _retryBtn(h)) ? '<div class="mt-2 flex gap-1.5" id="alert-hist-action-card-' + h.id + '">' + _deleteBtn(h) + _retryBtn(h) + '</div>' : '') +
                 '</div>';
-            }).join('');
+            });
+            _histPage = 1;
+            _applyHistoryPage(1);
         })
         .catch(function() {
             tbody.innerHTML = '<tr><td colspan="9" class="text-center py-6 text-red-500 text-sm">Error cargando historial.</td></tr>';
         });
 }
+
+// FEATURE 2026-08-19 (pedido por Jovan): paginación de Historial, 20/página --
+// mismo patrón que _applySkuPage/_renderSkuPagination (Por SKU) ya usado en
+// este archivo, sobre el HTML ya armado por loadAlertasHistory().
+var _HIST_PER_PAGE = 20;
+var _histPage = 1;
+var _histAllRowsHtml = [];
+var _histAllCardsHtml = [];
+
+function _applyHistoryPage(page) {
+    var total = _histAllRowsHtml.length;
+    var tbody = document.getElementById('alertas-history-tbody');
+    var cards = document.getElementById('alertas-history-cards');
+    if (!total) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</td></tr>';
+        cards.innerHTML = '<p class="text-center py-8 text-gray-400 text-sm">Sin resoluciones registradas todavía.</p>';
+        document.getElementById('alertas-history-pagination').innerHTML = '';
+        return;
+    }
+
+    var totalPages = Math.max(1, Math.ceil(total / _HIST_PER_PAGE));
+    _histPage = Math.max(1, Math.min(page, totalPages));
+
+    var start = (_histPage - 1) * _HIST_PER_PAGE;
+    var end = start + _HIST_PER_PAGE;
+    tbody.innerHTML = _histAllRowsHtml.slice(start, end).join('');
+    cards.innerHTML = _histAllCardsHtml.slice(start, end).join('');
+    _renderHistoryPagination(total, _histPage, totalPages, end);
+}
+
+function _renderHistoryPagination(total, page, totalPages, end) {
+    var container = document.getElementById('alertas-history-pagination');
+    if (!container) return;
+    if (total <= _HIST_PER_PAGE) { container.innerHTML = ''; return; }
+
+    var start = (page - 1) * _HIST_PER_PAGE + 1;
+    var shownEnd = Math.min(end, total);
+
+    var pageBtns = '';
+    var last = 0;
+    for (var p = 1; p <= totalPages; p++) {
+        var near = p >= page - 2 && p <= page + 2;
+        var edge = p === 1 || p === totalPages;
+        if (!near && !edge) continue;
+        if (last > 0 && p - last > 1) pageBtns += '<span class="px-1 text-gray-300 select-none text-xs">…</span>';
+        last = p;
+        if (p === page) {
+            pageBtns += '<button class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border bg-yellow-400 text-gray-800 border-yellow-400 cursor-default">' + p + '</button>';
+        } else {
+            pageBtns += '<button onclick="window._paginateHistory(' + p + ')" class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">' + p + '</button>';
+        }
+    }
+
+    container.innerHTML =
+        '<div class="px-4 py-3 border-t border-gray-100 bg-white flex flex-wrap items-center justify-between gap-3">' +
+            '<span class="text-xs text-gray-400">' + start + '–' + shownEnd + ' de ' + total + '</span>' +
+            '<div class="flex items-center gap-1">' + pageBtns + '</div>' +
+        '</div>';
+}
+
+window._paginateHistory = function(p) { _applyHistoryPage(p); };
 
 // FEATURE 2026-08-17: borra en BinManager el mapeo de SKU alternativo que se
 // creo al hacer "Sustituir" -- botón "🗑 Borrar de BM" del historial.
