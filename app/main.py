@@ -20819,6 +20819,67 @@ async def diag_bm_web_payload(token: str = "", sku: str = "SNHT000293"):
     return JSONResponse({"logged_in": bm._logged_in, "sku_searched": sku, "variants": results})
 
 
+@app.get("/api/diag/bm-category-bulk-probe")
+async def diag_bm_category_bulk_probe(token: str = "", category_id: str = ""):
+    """DIAGNÓSTICO TEMPORAL 2026-08-19 -- pedido por Jovan: un programador de
+    BinManager le compartió ConfColumns_Conditions_Excel como alternativa para
+    bajar un lote completo de una categoría (retail/tier/UPC/avgcost incluidos,
+    NEEDFILE controla si trae fotos, no genera un Excel descargable) en vez de
+    consultar SKU por SKU. UNA sola llamada de prueba, vía el cliente
+    compartido (respeta _BM_GLOBAL_SEM) -- category_id='' prueba si
+    CATEGORYID=None trae TODAS las categorías de un jalón (ideal, evita tener
+    que iterar ~120 categorías cada 10 min); si no, category_id='Televisions'
+    prueba el caso puntual que ya compartió el programador."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_catprobe
+    bm = await _gsb_catprobe()
+    if not bm._logged_in:
+        await bm.login()
+
+    conditions = "GRA,GRB,GRC,ICB,ICC,ICX,NEW"
+    payload = {
+        "COMPANYID": 1, "CATEGORYID": category_id or None, "WAREHOUSEID": None,
+        "LOCATIONID": None, "BINID": None, "BRAND": None, "MODEL": None,
+        "SIZE": None, "SUPPLIERS": None, "Tags": None, "TAGSNOTIN": None,
+        "Tier": None, "LCN": None, "OPENCELL": None, "OCCOMPTABILITY": "",
+        "SEARCH": None, "filterUPC": None, "CONCEPTID": 1,
+        "CONDITION": conditions, "FORINVENTORY": None, "BUSCADOR": False,
+        "NEEDFILE": False, "NEEDRETAILPRICE": True, "NEEDRETAILPRICEPH": True,
+        "NEEDTIER": True, "NEEDUPC": True, "NEEDAVGCOST": False,
+        "NEEDFLOORPRICE": False, "NEEDINCOMINGQTY": False, "NEEDIPS": False,
+        "NEEDLASTREPORTEDSALESPRICE": False, "NEEDPORCENTAGE": False,
+        "NEEDVIRTUALQTY": False, "PorcentajeFloor": 20,
+        "ORDERBYNAME": "TotalQTY", "ORDERBYTYPE": False,
+        "JSONDATA": '[{"LRow":1,"FColumn":null,"FCondition":null,"FValue":null,"CheckAnother":false,"AndOr":null,"SCondition":null,"SValue":null}]',
+    }
+    try:
+        r = await bm._post(
+            f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
+            json=payload, headers=_AJAX_HEADERS, timeout=60,
+        )
+    except Exception as e:
+        logger.error(f"[BM-CAT-PROBE] {type(e).__name__}: {e}")
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    if r.status_code != 200:
+        return JSONResponse({"status_code": r.status_code, "body_sample": r.text[:500]}, status_code=502)
+    try:
+        data = r.json()
+    except Exception as e:
+        return JSONResponse({"error": f"no es JSON: {e}", "status_code": r.status_code, "body_sample": r.text[:500]})
+
+    rows = data if isinstance(data, list) else (data.get("Data") or data.get("data") or [data])
+    sample = rows[:3] if isinstance(rows, list) else rows
+    categories_seen = sorted({str(row.get("CategoryName") or row.get("Category") or "") for row in rows if isinstance(row, dict)}) if isinstance(rows, list) else []
+    return JSONResponse({
+        "category_id_sent": category_id or None,
+        "status_code": r.status_code,
+        "total_rows": len(rows) if isinstance(rows, list) else None,
+        "distinct_categories_in_response": categories_seen[:30],
+        "sample_rows": sample,
+    })
+
+
 @app.get("/api/debug/item-stock")
 async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
     """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
