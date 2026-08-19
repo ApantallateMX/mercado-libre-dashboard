@@ -7,6 +7,57 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — INCIDENTE + FIX: BinManager reportó carga alta — llamadas puntuales en vivo eliminadas del flujo de sustitución
+
+BinManager avisó (vía Jovan, con log real de ejecuciones de BM) que la
+app le estaba pegando duro — ráfaga de ~18 consultas en <2 min desde
+`Claude.Jovan@mitechnologiesinc.com`.
+
+**Causa real, no la app en producción operando normal:** durante el
+diagnóstico del caso SNWA000024 de esta misma sesión, se corrieron
+varios scripts de Python sueltos (`py -c "..."`) que cada uno abre su
+propia sesión con BM — **no pasan por el semáforo global
+`_BM_GLOBAL_SEM`** (pensado para 1 sola request activa en TODA la app),
+porque cada script es un proceso aparte sin coordinación con nada. Sumado
+al tráfico normal de la app, generó la ráfaga.
+
+**Cambio de fondo, más allá del incidente puntual:** los 2 endpoints
+nuevos de hoy (`/api/stock/substitute-conditions` y la validación en
+`_inject_bm_alter_sku`) llamaban a `get_existence_anywhere()` EN VIVO —
+uno por cada SKU tecleado en el modal "Sustituir", el otro por cada
+intento de sustitución. Jovan pidió explícitamente reemplazarlos por el
+mismo bulk que YA se descarga cada `_BM_BULK_TTL` (10 min) para
+`bm_sku_master` — mismo principio que
+`feedback_preferir_solucion_simple_del_bulk`. Nuevo helper compartido
+`_bm_bulk_real_conditions()` (`app/main.py`) — cero llamadas nuevas a BM
+en todo el flujo de sustitución.
+
+**2 bugs reales encontrados al reemplazar (no solo "funcionó a la
+primera")**:
+1. La versión anterior de `/api/stock/substitute-conditions` tenía una
+   variable (`bm_cli`) sin asignar — por eso fallaba rápido y en
+   silencio (un `except Exception` genérico lo capturaba), no era
+   degradación de sesión de BM como se sospechó al investigar.
+2. BM a veces guarda el SKU base SIN sufijo de condición como su propia
+   fila en el bulk (mismo caso ya conocido y descartado en
+   `/api/stock/live-check`, "un resolved_sku sin sufijo no aporta nada
+   nuevo") — sin filtrarlo, aparecía como opción de condición vacía.
+
+**Además (pedido explícito de Jovan, corrección de diseño):**
+`Pendientes de Envío` vuelve a su alcance original
+(`bm_status='success'` únicamente) — el ensanche de la entrada anterior
+del mismo día (incluir `pending`/`failed`) fue un error de diseño: un
+intento fallido ya tiene su dictamen, uno sin resolver no es "todo
+funcionó bien esperando enviarse", ninguno de los 2 pertenece ahí. Esas
+órdenes siguen vivas en "En vivo" para reintentarse desde cero (ahora sin
+riesgo de repetir un SKU inválido, gracias al selector de condiciones).
+
+Verificado contra producción: `/api/stock/substitute-conditions`
+responde en milisegundos leyendo solo caché en memoria, sin ninguna
+llamada nueva a BM. Deploy Railway `SUCCESS`.
+
+---
+
 ## 2026-08-19 — FEAT: Historial solo-cerrado + Pendientes ampliado + selector de condiciones reales
 
 Cierre de los 2 pendientes de diseño que quedaron aprobados (no
