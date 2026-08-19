@@ -18598,7 +18598,7 @@ async def diag_bm_sku_master_lookup(token: str = "", sku: str = "", fix_zero: bo
             )
             await db.commit()
         master = await (await db.execute(
-            "SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at FROM bm_sku_master WHERE sku=?",
+            "SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at, category, upc FROM bm_sku_master WHERE sku=?",
             (base,),
         )).fetchone()
         amz_rows = await (await db.execute(
