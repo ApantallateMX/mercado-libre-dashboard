@@ -6199,7 +6199,7 @@ async def _load_bm_cache_from_db():
     # prellenado de Brand/Model) se quedaban sin datos varios minutos hasta
     # que el prewarm los reconstruia desde cero. Se cargan aqui con su
     # timestamp REAL (no forzado a 0) -- la logica de staleness ya existente
-    # (_age_gr < 900, etc.) decide sola si hace falta re-fetch.
+    # (_age_gr < _BM_BULK_TTL, etc.) decide sola si hace falta re-fetch.
     global _bm_bulk_gr_cache, _bm_bulk_all_cache, _bm_bulk_loctj_cache, _bm_bulk_loc47_cache, _bm_bulk_loc68_cache
     for _bulk_name, _setter in (
         ("gr",     lambda v: globals().__setitem__("_bm_bulk_gr_cache", v)),
@@ -6348,6 +6348,16 @@ _catalog_sync_task: object = None  # asyncio.Task actual — para poder cancelar
 _catalog_sync_history: list = []   # últimas 10 corridas: {ts, skus, elapsed_s, source, ok, error}
 # Estadísticas de cobertura BM del último bulk fetch — para diagnóstico en Sync Stock
 _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
+
+# FIX 2026-08-19 (pedido explícito por Jovan, tras el caso SNWA000024 donde
+# esta caché quedó 15 min mostrando un número que ya no reflejaba la
+# realidad): bajado de 900s a 600s. Se evaluó bajar a 300s (5 min) pero los
+# incidentes reales del 12-ago y 18-ago (ciclos colgados 7 min y 4.5h) fueron
+# causados por presionar a BM con más frecuencia de la que sostiene bajo
+# carga -- un solo ciclo de refresco (GR+LOC47+LOC68+LOCTJ+ALL secuenciales,
+# mismo semáforo global) puede tardar hasta ~10-14 min en el peor caso, así
+# que 300s arriesgaba ciclos solapados. 600s es el punto seguro.
+_BM_BULK_TTL = 600  # 10 min
 
 # --- BM Bulk Caches (dos: GR-only y ALL-conditions) ---
 _bm_bulk_gr_cache:   tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/NEW rows) LOC47+68
@@ -6620,7 +6630,7 @@ async def _bm_master_sync_once():
     NO hace fetches propios de bulk a BM — lee los caches compartidos
     (_bm_bulk_gr_cache / _bm_bulk_all_cache / _bm_bulk_loc47_cache /
     _bm_bulk_loc68_cache / _bm_bulk_loctj_cache) que el pipeline viejo
-    por-cuenta (_startup_prewarm) ya mantiene frescos cada ~15 min. Cero
+    por-cuenta (_startup_prewarm) ya mantiene frescos cada ~10 min. Cero
     llamadas nuevas a BM en esta fase para el universo cubierto por el bulk
     — solo la reconciliación de "misses" (SKUs que el bulk omite por tener
     stock=0) hace consultas individuales, y esas sí son nuevas, pero UNA
@@ -7537,7 +7547,7 @@ async def _fetch_tv_wh_breakdown():
         from app.services.binmanager_client import get_shared_bm as _gsbm
         _tv_bm = await _gsbm()
         _TV_COND = "GRA,GRB,GRC,ICB,ICC,NEW"
-        _ttl = 900
+        _ttl = _BM_BULK_TTL
         _now = _time.time()
 
         # ── LOC47 ALL ───────────────────────────────────────────────────────
@@ -8044,7 +8054,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
         _need_all = any(_bm_conditions_for_sku(s) == _BM_COND_ALL for s in to_fetch)
 
-        # ── GR bulk (15 min TTL normal; ilimitado cuando BM está caído) ────────
+        # ── GR bulk (10 min TTL normal; ilimitado cuando BM está caído) ────────
         _bm_is_down_now = _bm_health.get("consecutive_failures", 0) >= 2
         _bulk_returned_empty = False  # True si BM respondió OK pero devolvió lista vacía
         _bulk_gr_rows = None
@@ -8058,14 +8068,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         _gr_fresh_attempt_failed = False
         if _bm_bulk_gr_cache:
             _age_gr = _time.time() - _bm_bulk_gr_cache[0]
-            # Servir cache si: fresco (<15 min) O BM marcado caído Y no excede 2h.
+            # Servir cache si: fresco (<10 min) O BM marcado caído Y no excede 2h.
             # Cap de 2h: aunque BM esté "caído" según health check, forzar re-intento
             # si el bulk tiene >2h — el health check puede estar equivocado (endpoint
             # individual falla pero bulk funciona). El except abajo tiene fallback a stale.
-            _use_cache = _age_gr < 900 or (_bm_is_down_now and _age_gr < 7200)
+            _use_cache = _age_gr < _BM_BULK_TTL or (_bm_is_down_now and _age_gr < 7200)
             if _use_cache:
                 _bulk_gr_rows = _bm_bulk_gr_cache[1]
-                _age_label = f"{round(_age_gr)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_gr >= 900 else "")
+                _age_label = f"{round(_age_gr)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_gr >= _BM_BULK_TTL else "")
                 logger.info(f"[BM-CACHE] Reutilizando GR bulk cache ({_age_label})")
         if _bulk_gr_rows is None and _bm_bulk_recently_failed("gr") and _bm_bulk_gr_cache:
             _bulk_gr_rows = _bm_bulk_gr_cache[1]
@@ -8137,7 +8147,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         _bulk_loctj_rows = None  # Tijuana (LOC 45,69,43,42)
         if _bulk_gr_rows is not None and not _bm_is_down_now and not _gr_fresh_attempt_failed:
             # Reutilizar si la cache de ubicación es tan fresca como el GR bulk
-            _loc_ttl = 900  # mismo TTL que GR bulk
+            _loc_ttl = _BM_BULK_TTL  # mismo TTL que GR bulk
             if _bm_bulk_loc47_cache and (_time.time() - _bm_bulk_loc47_cache[0]) < _loc_ttl:
                 _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
                 logger.info(f"[BM-CACHE] Reutilizando LOC47 (CDMX) cache ({len(_bulk_loc47_rows)} rows)")
@@ -8254,10 +8264,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         if _need_all:
             if _bm_bulk_all_cache:
                 _age_all = _time.time() - _bm_bulk_all_cache[0]
-                _use_cache_all = _age_all < 900 or (_bm_is_down_now and _age_all < 7200)
+                _use_cache_all = _age_all < _BM_BULK_TTL or (_bm_is_down_now and _age_all < 7200)
                 if _use_cache_all:
                     _bulk_all_rows = _bm_bulk_all_cache[1]
-                    _age_label_all = f"{round(_age_all)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_all >= 900 else "")
+                    _age_label_all = f"{round(_age_all)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_all >= _BM_BULK_TTL else "")
                     logger.info(f"[BM-CACHE] Reutilizando ALL bulk cache ({_age_label_all})")
             if _bulk_all_rows is None and _bm_bulk_recently_failed("all") and _bm_bulk_all_cache:
                 _bulk_all_rows = _bm_bulk_all_cache[1]
