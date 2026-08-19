@@ -17464,21 +17464,21 @@ async def stock_live_check(request: Request, sku: str = Query(...), account_id: 
     if resolved_sku and _split_bm_sku_condition(resolved_sku)[1] == "":
         resolved_sku = ""
 
-    # La condición real solo la garantiza GetAlterSKUMappingByWebSKU (el
-    # mismo mecanismo que usa la inyección real a BM, ver
-    # _resolve_bm_condition_sku) -- se intenta en vivo con un techo bajo de
-    # 10s (consulta puntual por SKU, no el reporte bulk completo que causó
-    # el colgado de 300s/502 del incidente anterior) para que lo que se ve
-    # en el modal sea lo mismo que se va a mandar a BM al confirmar. Si no
-    # responde a tiempo, se sigue con lo que ya haya salido del bulk (o
-    # nada) -- nunca bloquea la respuesta más de 10s.
-    if account_id:
-        try:
-            _live_resolved = await asyncio.wait_for(_resolve_bm_condition_sku(account_id, base), timeout=10.0)
-            if _live_resolved:
-                resolved_sku = _live_resolved
-        except Exception:
-            pass
+    # FIX 2026-08-19 #4 (pedido explícito de Jovan -- BinManager identificó
+    # ESTA llamada en vivo, no las de ConfColumns, como la causante real del
+    # bloqueo de hoy): este endpoint se dispara por cada tecla mientras se
+    # escribe en el modal "Sustituir" (debounce 500ms) -- con varios
+    # empleados usándolo a la vez, eso es exactamente el patrón de ráfaga
+    # que BM reporta, sin importar que cada llamada individual sea rápida.
+    # Se reemplaza por _bm_bulk_real_conditions() (mismo mecanismo ya usado
+    # por /api/stock/substitute-conditions desde hoy mismo) -- lee SOLO el
+    # bulk ya en memoria, cero llamadas nuevas a BM. La condición 100%
+    # garantizada (GetAlterSKUMappingByWebSKU) sigue resolviéndose en vivo,
+    # pero SOLO 1 vez, al momento de inyectar de verdad la sustitución
+    # confirmada (_inject_bm_alter_sku) -- no en cada tecla.
+    _real_conds = _bm_bulk_real_conditions(base)
+    if _real_conds:
+        resolved_sku = _real_conds[0]["sku"]
 
     return JSONResponse({
         "sku": sku,
