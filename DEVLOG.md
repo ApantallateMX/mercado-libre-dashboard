@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — PERF/DECISION: TTL de cache bulk de stock BM bajado de 15 a 10 min + aclaración fuente MCP vs. fuente propia
+
+Mismo caso de `SNWA000024` destapó una segunda confusión: Jovan preguntó
+por qué le reporté 15 unidades disponibles cuando BM en vivo mostraba
+mucho menos, y si la tabla que consulté era "la misma que usamos para
+todo".
+
+**No lo era.** Son dos sistemas separados:
+- El conector MCP de BinManager (usado por mí para diagnosticar en el
+  chat) tiene su PROPIA tabla materializada (`BM.MCP_InventorySnapshot_ByLocation`),
+  en infraestructura de BM, fuera de nuestro control — ahí fue el error,
+  no en nuestro pipeline.
+- Nuestra fuente real (`bm_sku_master`, la que alimenta Alertas de Stock,
+  gaps, todo) ya tenía el número correcto (`available_qty: 0`) desde
+  antes de esta conversación — verificado con `sp_Get_GlobalStock_InventoryBySKU_Condition`
+  en vivo (2 llamadas, resultados idénticos, mismos seriales/bins): 0
+  unidades reales en GRA/GRB/GRC/NEW, todo lo demás en Pendiente de Caja/
+  Reparación/Dañado, y 1 unidad "Producto Vendible" pero en condición ICC
+  — que por regla del proyecto (ICB/ICC solo para SNTV*, TVs) no cuenta
+  como vendible para este SKU (no es TV).
+
+**Cambio real aprobado por Jovan:** bajar el TTL de nuestras 5 cachés
+bulk de stock BM (`_bm_bulk_gr_cache`/`_all`/`_loc47`/`_loc68`/`_loctj`,
+que alimentan `bm_sku_master`) de 900s a 600s (15→10 min). Se descartó
+5 min: un ciclo de refresco completo (GR+LOC47+LOC68+LOCTJ+ALL,
+secuencial, mismo semáforo global) puede tardar hasta ~10-14 min bajo BM
+degradado — los incidentes reales del 12-ago y 18-ago fueron causados
+exactamente por este tipo de presión de frecuencia. Nueva constante
+compartida `_BM_BULK_TTL` (`app/main.py` ~6352), reemplaza el literal
+900 hardcodeado en 4 lugares (GR, LOC, ALL/TVs, desglose MTY/CDMX/TJ
+para TVs).
+
+**Hacia adelante:** para cualquier número de stock que le reporte a
+Jovan, uso `inventory_by_sku_condition` (SP en vivo, sin caché) del MCP
+de BM, o nuestro propio `/api/diag/sku` — nunca `inventory_by_sku` (la
+tabla materializada de 15 min que causó este error).
+
+Verificado localmente antes de subir. Deploy Railway `76e92c95` —
+`SUCCESS`.
+
+---
+
 ## 2026-08-19 — FIX: sustitución de SKU a BinManager fallaba en silencio con AlterSKU inexistente (orden 2000018008535734)
 
 Jovan reportó que varias sustituciones seguían fallando ("Falló en BM") y
