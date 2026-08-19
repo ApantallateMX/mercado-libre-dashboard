@@ -20702,6 +20702,118 @@ async def diag_bm_master_update_category(token: str = "", category_id: str = "")
     return JSONResponse(result, status_code=200 if result.get("ok") else 502)
 
 
+@app.post("/api/diag/bm-master-backup")
+async def diag_bm_master_backup(token: str = ""):
+    """Pedido por Jovan 2026-08-19 antes de correr el backfill completo de
+    las 59 categorías: copia exacta de bm_sku_master en una tabla nueva
+    con timestamp, para poder revertir si algo sale mal. Puro SQL local,
+    cero llamadas a BM, instantáneo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_bk
+    backup_name = f"bm_sku_master_backup_{_time.strftime('%Y%m%d_%H%M%S')}"
+    async with _aio_bk.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(f"CREATE TABLE {backup_name} AS SELECT * FROM bm_sku_master")
+        cur = await db.execute(f"SELECT COUNT(*) FROM {backup_name}")
+        row = await cur.fetchone()
+        await db.commit()
+    return JSONResponse({"ok": True, "backup_table": backup_name, "rows_backed_up": row[0] if row else 0})
+
+
+@app.post("/api/diag/bm-master-restore-backup")
+async def diag_bm_master_restore_backup(token: str = "", backup_table: str = ""):
+    """Revierte bm_sku_master al contenido exacto de una tabla de backup
+    creada por bm-master-backup. Reemplaza fila por fila (UPDATE por sku
+    ya existente) -- no borra ni recrea la tabla real, para no perder
+    índices/estructura."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not backup_table or not backup_table.startswith("bm_sku_master_backup_"):
+        return JSONResponse({"error": "backup_table requerido, debe empezar con 'bm_sku_master_backup_'"}, status_code=400)
+    import aiosqlite as _aio_rst
+    async with _aio_rst.connect(DATABASE_PATH, timeout=30) as db:
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (backup_table,)
+        )
+        if not await cur.fetchone():
+            return JSONResponse({"error": f"tabla {backup_table} no existe"}, status_code=404)
+        cur = await db.execute(f"SELECT * FROM {backup_table}")
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in await cur.fetchall()]
+        set_clause = ", ".join(f"{c}=:{c}" for c in cols if c != "sku")
+        for r in rows:
+            await db.execute(f"UPDATE bm_sku_master SET {set_clause} WHERE sku=:sku", r)
+        await db.commit()
+    return JSONResponse({"ok": True, "restored_from": backup_table, "rows_restored": len(rows)})
+
+
+_full_resync_progress = {
+    "running": False, "done": 0, "total": 0, "current_category": "",
+    "started_at": None, "finished_at": None, "results": [], "error": None,
+}
+
+
+async def _bm_master_full_resync_runner():
+    global _full_resync_progress
+    _full_resync_progress = {
+        "running": True, "done": 0, "total": 0, "current_category": "",
+        "started_at": _time.time(), "finished_at": None, "results": [], "error": None,
+    }
+    try:
+        from app.services.binmanager_client import get_shared_bm as _gsb_full
+        bm_cli = await _gsb_full()
+        categories = await token_store.get_all_known_categories()
+        _full_resync_progress["total"] = len(categories)
+        for cat in categories:
+            _full_resync_progress["current_category"] = cat
+            try:
+                result = await _update_bm_master_for_category(bm_cli, cat)
+            except Exception as e:
+                result = {"ok": False, "category_id": cat, "error": f"excepción inesperada: {e}"}
+            _full_resync_progress["results"].append(result)
+            _full_resync_progress["done"] += 1
+            logger.info(f"[FULL-RESYNC] {_full_resync_progress['done']}/{_full_resync_progress['total']} {cat}: {result}")
+            await asyncio.sleep(_CONF_COLUMNS_DELAY_BETWEEN_S)
+    except Exception as e:
+        _full_resync_progress["error"] = str(e)
+    finally:
+        _full_resync_progress["running"] = False
+        _full_resync_progress["current_category"] = ""
+        _full_resync_progress["finished_at"] = _time.time()
+
+
+@app.post("/api/diag/bm-master-full-resync")
+async def diag_bm_master_full_resync(token: str = ""):
+    """Prueba pedida por Jovan 2026-08-19: correr las 59 categorías
+    conocidas 1 por 1 vía ConfColumns (mismo helper seguro de los loops
+    automáticos, mismo espaciado de 10s entre cada una -- nunca ráfaga).
+    Corre en background (asyncio.create_task) porque tomaría 15-25 min,
+    muy por encima del timeout del proxy de Railway (~100s) -- este
+    endpoint responde de inmediato, usar bm-master-full-resync-status
+    para ver el progreso."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if _full_resync_progress["running"]:
+        return JSONResponse({"error": "ya hay un full-resync corriendo", "progress": _full_resync_progress}, status_code=409)
+    asyncio.create_task(_bm_master_full_resync_runner())
+    return JSONResponse({"ok": True, "message": "full-resync iniciado en background -- consultar bm-master-full-resync-status"})
+
+
+@app.get("/api/diag/bm-master-full-resync-status")
+async def diag_bm_master_full_resync_status(token: str = ""):
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    p = _full_resync_progress
+    elapsed = (( p["finished_at"] or _time.time()) - p["started_at"]) if p["started_at"] else 0
+    return JSONResponse({
+        "running": p["running"], "done": p["done"], "total": p["total"],
+        "current_category": p["current_category"], "elapsed_s": round(elapsed),
+        "error": p["error"],
+        "failures": [r for r in p["results"] if not r.get("ok")],
+        "last_5_results": p["results"][-5:],
+    })
+
+
 @app.get("/api/diag/trigger-feedback-sync")
 async def diag_trigger_feedback_sync(token: str = ""):
     """Dispara el sync de Feedback (Amazon + ML) manualmente sin esperar al
