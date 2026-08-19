@@ -6896,9 +6896,16 @@ async def _conf_columns_longtail_loop():
     await asyncio.sleep(1800)  # arranca después del loop top, no compite con él al inicio
     while True:
         try:
+            # FIX 2026-08-19: antes "el resto" salía de get_categories_ordered_by_sales
+            # (solo categorías CON venta en 90d) -- una categoría sin venta reciente
+            # nunca aparecía ahí y se quedaba huérfana para siempre, en ningún loop.
+            # Ahora "el resto" es el universo COMPLETO de categorías conocidas
+            # (get_all_known_categories) menos el top-5 -- cubre TODO SKU conocido
+            # de todas las cuentas, tenga o no venta reciente.
             cats = await token_store.get_categories_ordered_by_sales(days=90)
-            top_set = {c["category"] for c in cats[:_CONF_COLUMNS_TOP_N]}
-            rest = [c["category"] for c in cats if c["category"] and c["category"] not in top_set]
+            top_set = set([c["category"] for c in cats if c["category"]][:_CONF_COLUMNS_TOP_N])
+            all_known_cats = await token_store.get_all_known_categories()
+            rest = [c for c in all_known_cats if c not in top_set]
             if rest:
                 from app.services.binmanager_client import get_shared_bm as _gsb_tail
                 bm_cli = await _gsb_tail()
@@ -20301,6 +20308,33 @@ async def diag_categories_by_sales(token: str = "", days: int = 90):
         return JSONResponse({"error": "token inválido"}, status_code=403)
     rows = await token_store.get_categories_ordered_by_sales(days=days)
     return JSONResponse({"days": days, "categories": rows})
+
+
+@app.get("/api/diag/confcolumns-coverage")
+async def diag_confcolumns_coverage(token: str = ""):
+    """Verifica que los 2 loops automáticos (_conf_columns_top_categories_loop
+    + _conf_columns_longtail_loop) cubran el 100% de categorías conocidas
+    (ML+Amazon), no solo las que vendieron en 90d -- fix 2026-08-19."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    cats = await token_store.get_categories_ordered_by_sales(days=90)
+    sales_categories = [c["category"] for c in cats if c["category"]]
+    top = sales_categories[:_CONF_COLUMNS_TOP_N]
+    top_set = set(top)
+    all_known = await token_store.get_all_known_categories()
+    rest = [c for c in all_known if c not in top_set]
+    orphaned_before_fix = [c for c in rest if c not in set(sales_categories)]
+    covered = set(top) | set(rest)
+    missing = [c for c in all_known if c not in covered]
+    return JSONResponse({
+        "top_categories": top,
+        "known_categories_total": len(all_known),
+        "sales_categories_90d": len(sales_categories),
+        "longtail_covers": len(rest),
+        "categories_covered_total": len(covered),
+        "categories_missing": missing,
+        "categories_that_were_orphaned_before_this_fix": orphaned_before_fix,
+    })
 
 
 # Condiciones "vendibles" reales por tipo de SKU -- ver _bm_conditions_for_sku.

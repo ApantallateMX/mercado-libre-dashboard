@@ -2133,6 +2133,30 @@ async def get_categories_ordered_by_sales(days: int = 90) -> list[dict]:
     return rows
 
 
+async def get_all_known_categories() -> list[str]:
+    """Universo COMPLETO de categorías (bm_sku_master.category) para los
+    SKUs conocidos (ml_listings+amazon_listings) -- a diferencia de
+    get_categories_ordered_by_sales(), NO depende de que haya vendido algo
+    en los últimos N días. FIX 2026-08-19: _conf_columns_longtail_loop
+    usaba solo categorías con venta en 90d para su 'resto', dejando
+    huérfanas (nunca refrescadas) categorías de rotación nula -- este es
+    el universo real que debe cubrir para que ningún SKU conocido quede
+    fuera de los 2 loops."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute("""
+            SELECT DISTINCT bsm.category
+            FROM bm_sku_master bsm
+            WHERE bsm.category != ''
+              AND bsm.sku IN (
+                  SELECT DISTINCT base_sku FROM ml_listings
+                  WHERE base_sku != '' AND status IN ('active', 'paused', 'inactive')
+                  UNION
+                  SELECT DISTINCT base_sku FROM amazon_listings WHERE base_sku != ''
+              )
+        """)
+        return [r[0] for r in await cur.fetchall() if r[0]]
+
+
 async def get_bm_stock_snapshot_last_update() -> float:
     """Timestamp de la foto de stock más reciente en disco, o 0 si nunca se ha tomado."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
