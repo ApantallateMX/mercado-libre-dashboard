@@ -621,6 +621,35 @@ async def _run_gap_scan(user_id: str | None = None):
                 if base not in bm_map or qty > _bm_qty(bm_map[base]):
                     bm_map[base] = prod
 
+            # FEATURE 2026-08-19 (pedido por Jovan: "no estaría bien manejar
+            # una misma [tabla]?"): bm_sku_master (ciclo de 10 min, main.py)
+            # no trae category/UPC. En vez de fusionar las 2 tablas (cada una
+            # tiene su propósito real -- ver DEVLOG del mismo día), se
+            # aprovecha esta misma descarga diaria -- YA en memoria, cero
+            # llamadas nuevas a BM -- para completar esos 2 campos en los
+            # SKUs que bm_sku_master YA conoce. No inserta filas nuevas
+            # (WHERE sku=? no-opea para SKUs desconocidos -- ese universo
+            # completo sigue siendo exclusivo de bm_sku_gaps).
+            try:
+                _enrich_rows = [
+                    (prod.get("CategoryName") or "", prod.get("UPC") or prod.get("Upc") or "", base)
+                    for base, prod in bm_map.items()
+                    if (prod.get("CategoryName") or prod.get("UPC") or prod.get("Upc"))
+                ]
+                if _enrich_rows:
+                    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as _db_enrich:
+                        await _db_enrich.executemany(
+                            """UPDATE bm_sku_master
+                               SET category = CASE WHEN ? != '' THEN ? ELSE category END,
+                                   upc      = CASE WHEN ? != '' THEN ? ELSE upc END
+                               WHERE sku = ?""",
+                            [(cat, cat, upc, upc, base) for cat, upc, base in _enrich_rows],
+                        )
+                        await _db_enrich.commit()
+                    logger.info(f"[GAP-SCAN] bm_sku_master enriquecido: category/upc para hasta {len(_enrich_rows)} SKUs conocidos")
+            except Exception as _e_enrich:
+                logger.warning(f"[GAP-SCAN] no se pudo enriquecer bm_sku_master (no crítico): {_e_enrich}")
+
             # Cruzar contra _bm_stock_cache (en memoria, sin llamadas BM extra).
             # Si avail_total verificado (CONCEPTID=1 LOCATIONID=47,62,68) confirma 0
             # → excluir del gap list (stock en warehouse no vendible o realmente agotado).

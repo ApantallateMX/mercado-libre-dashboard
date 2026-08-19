@@ -1205,6 +1205,16 @@ async def init_db():
             # (ya tiene acceso a las filas exactas por condición del bulk).
             ("best_condition_sku", "TEXT NOT NULL DEFAULT ''"),
             ("best_condition_qty", "INTEGER NOT NULL DEFAULT 0"),
+            # FEATURE 2026-08-19 (pedido por Jovan): bm_sku_master no tenía
+            # categoría ni UPC -- se completan desde la corrida diaria del
+            # gap scan (ConfColumns_Conditions_Excel, app/api/lanzar.py), que
+            # SÍ trae esos campos y ya se descarga 1x/día sin costo extra.
+            # No se fusiona con bm_sku_gaps -- cada tabla conserva su propio
+            # ritmo (10 min para stock aquí, 1x/día para el catálogo
+            # completo allá); esto solo completa 2 columnas que no cambian
+            # con esa frecuencia.
+            ("category", "TEXT NOT NULL DEFAULT ''"),
+            ("upc", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
