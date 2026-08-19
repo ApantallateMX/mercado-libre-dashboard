@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FEAT: automatizados los 2 loops de ConfColumns por categoría (cierre del plan de BinManager)
+
+Cierre del plan pedido por BinManager (ver entrada anterior del mismo
+día, Fases 1-2). Extraída la lógica de escritura segura de
+`/api/diag/bm-master-update-category` a `_update_bm_master_for_category()`
+(compartida) y conectada a 2 loops nuevos:
+
+- `_conf_columns_top_categories_loop()` — top 5 categorías por ventas
+  reales (Televisions/Air Conditioners/etc.), cada **15 min**.
+- `_conf_columns_longtail_loop()` — el resto de categorías conocidas,
+  cada **4 horas**.
+
+Ambos con 10s de pausa real entre cada categoría (nunca ráfaga) y las
+mismas 2 reglas de seguridad validadas hoy (fetch fallido no toca nada;
+ausencia confirmada = 0 solo dentro de la misma categoría).
+
+**Corren EN PARALELO al mecanismo viejo** (`_bm_master_sync_loop`/
+`Get_GlobalStock_InventoryBySKU`) -- todavía sin apagar, deliberadamente:
+primero validar en producción real por un tiempo antes de cortar el
+cable al camino viejo. Deploy Railway `SUCCESS` -- el loop top arranca
+solo ~10 min después del deploy, el de cola larga ~30 min después, sin
+necesidad de disparar nada a mano.
+
+**Pendiente real para retomar**: una vez confirmado estable, decidir
+cuándo apagar `get_bulk_stock`/`Get_GlobalStock_InventoryBySKU` para
+`bm_sku_master` -- ese mecanismo también alimenta el desglose MTY/CDMX/TJ
+(Transferencias Sugeridas), que ConfColumns no provee -- ese desglose
+necesita su propio plan aparte antes de poder apagar el viejo por
+completo.
+
+---
+
 ## 2026-08-19 — FEAT: migración a ConfColumns_Conditions_Excel por categoría (pedido explícito de BinManager) — Fase 1 y 2 validadas
 
 BinManager pidió (vía Jovan) dejar de usar `Get_GlobalStock_InventoryBySKU`
