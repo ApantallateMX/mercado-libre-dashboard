@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FIX: sustitución de SKU a BinManager fallaba en silencio con AlterSKU inexistente (orden 2000018008535734)
+
+Jovan reportó que varias sustituciones seguían fallando ("Falló en BM") y
+"Reintentar" nunca lograba nada — caso puntual: orden `2000018008535734`
+(BLOWTECHNOLOGIES), SKU original `SNWA000024`, intentos de sustituto
+`SNWA000001-NEW` y `SNWA000090-NEW`.
+
+Diagnóstico contra BM real (BM MCP + `/api/diag/order-lookup` +
+`/api/diag/bm-alter-sku-groups`, sin tocar nada): **no era un bug de
+timing ni de conexión** — `SNWA000001` solo tiene las condiciones
+`BOX,DMB,DMT,GRB,GRC,ICC,ICX` y `SNWA000090` solo `BOX,GRB,ICX`. Ninguno
+de los dos tiene condición `-NEW`. BM rechaza `AddAlterSKUMappingByWebSKU`
+con HTTP 200 cuando el AlterSKU pedido no es un ProductSKU real (mismo
+patrón ya documentado en `project_bm_alter_sku_mapping.md`, bug #3) —
+"Reintentar" jamás podía funcionar porque el par (ProductSKU, AlterSKU)
+nunca iba a existir. El motivo real sí se guardaba en `bm_message`, pero
+solo se veía al pasar el mouse sobre el badge "✗ Falló en BM" (nadie lo
+revisaba).
+
+**Fix (2 partes, `app/main.py` ~16899 / `app/templates/orders.html`
+~712-733):**
+1. `_inject_bm_alter_sku` ahora valida el `substitute_sku` contra
+   `BinManagerClient.get_existence_anywhere()` (mismo helper ya usado
+   para el panel informativo de `items.py`) ANTES de llamar a BM — si la
+   condición pedida no existe, rechaza de inmediato con las condiciones
+   reales disponibles para ese SKU, sin gastar un intento contra BM.
+2. El historial de Alertas de Stock ahora muestra el `bm_message` real
+   como texto visible debajo del badge "Falló en BM", no solo en tooltip.
+
+Para la orden puntual: `SNWA000024-GRB` (15 uds en MTY) ya está
+configurado como alternativa `GLOBAL` en BM desde 2025-04-07 — cubre esta
+orden sin necesidad de crear ningún mapeo nuevo (verificado en vivo,
+`already_existed: true`).
+
+Verificado localmente (`py -m uvicorn`, llamada directa a
+`_inject_bm_alter_sku` contra BM real) antes de subir: rechazo correcto
+para `SNWA000090-NEW`, y `already_existed` correcto para
+`SNWA000024-GRB` sin ningún POST de escritura. Deploy Railway
+`4b1cb697` — `SUCCESS` (2026-08-19 16:54 UTC).
+
+---
+
 ## 2026-08-18 — FIX: títulos de producto duplicados/"mocha" en Alertas de Stock (dato sucio de BM, limpieza en display)
 
 Jovan reportó que los títulos en "Alertas de Stock" se veían mal (ej.
