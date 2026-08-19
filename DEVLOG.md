@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FEAT: Historial solo-cerrado + Pendientes ampliado + selector de condiciones reales
+
+Cierre de los 2 pendientes de diseño que quedaron aprobados (no
+implementados) en la entrada anterior del mismo día:
+
+1. **Historial = solo cerrado.** `get_stock_alert_resolutions(closed_only=True)`
+   (`app/services/token_store.py`) excluye ahora lo que sigue en proceso
+   (verificando con BM, fallido, o aplicado-sin-enviar) — "Historial es
+   solamente cuando algo ya fue confirmado y enviado" (Jovan). El
+   parámetro es opt-in porque 3 endpoints más (reopen/retry-bm/
+   delete-from-bm) siguen necesitando encontrar CUALQUIER fila por id.
+2. **Pendientes de Envío ampliado.** `get_pending_shipment_resolutions`
+   ya no solo cubre `bm_status='success'` esperando envío — también
+   `pending`/`failed`, con botón "🔁 Reintentar" visible ahí mismo
+   (`app/templates/orders.html`). Es el complemento EXACTO de la
+   condición de Historial (misma fórmula negada) para que cada
+   resolución viva en un solo lado, nunca en ambos ni en ninguno.
+3. **Selector de condiciones reales.** Nuevo endpoint
+   `GET /api/stock/substitute-conditions` (`get_existence_anywhere` en
+   vivo, filtrado a condiciones de venta válidas por tipo de SKU) — al
+   escribir un SKU base sin sufijo en el modal "Sustituir", se muestran
+   botones tipo "SNWA000001-GRC (1 disp.)" en vez de dejar el campo
+   incompleto como pasó con la resolución #39. De paso, `_inject_bm_alter_sku`
+   ahora RECHAZA un sustituto sin condición en vez de saltarse la
+   validación (hueco real que dejó pasar exactamente ese caso).
+
+**Bug real encontrado al verificar contra producción (no solo local)
+tras el primer deploy**: la resolución #39 (reabierta mientras
+`bm_status` seguía en `'pending'`) no aparecía en NINGUNA de las 2
+vistas — el guard de `fulfillment_status='reabierta'` solo se había
+agregado al lado `success` de la condición de Pendientes, no al lado
+`pending`/`failed`. Corregido en ambas queries (mismo guard, mismo
+complemento exacto) y reverificado en producción: `pending-shipment` ya
+no trae el id 39, `resolutions` (Historial) sí lo trae.
+
+Deploy Railway `SUCCESS` (2 despliegues: fix inicial + corrección del
+gap encontrado al verificar).
+
+---
+
 ## 2026-08-19 — OPERACION + FEAT: resolución #39 atorada (orden 2000018008535734) + Historial paginado
 
 Jovan reportó otro detalle del mismo caso: la resolución #39 (Alex,
