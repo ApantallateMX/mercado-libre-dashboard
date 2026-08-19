@@ -20342,6 +20342,88 @@ _CONF_COND_NON_TV = ("GRA", "GRB", "GRC", "NEW")
 _CONF_COND_TV_EXTRA = ("ICB", "ICC")
 
 
+@app.get("/api/diag/confcolumns-location-check")
+async def diag_confcolumns_location_check(token: str = "", category_id: str = "Televisions", sample_n: int = 20):
+    """Pregunta de Jovan 2026-08-19 antes de decidir el cutover completo:
+    'Available' de ConfColumns_Conditions_Excel -- ¿ya viene limpio (solo
+    CDMX+MTY, LOC47+68) o mezcla también Tijuana (LOC45,69,43,42, NO
+    vendible online, ver project_bm_tijuana_exclusion)? El payload de
+    ConfColumns no tiene parámetro de ubicación -- esto lo confirma con
+    datos reales en vez de asumir por el shape del payload.
+
+    Cruza 1 fetch nuevo de ConfColumns (ya aprobado, categoría puntual)
+    contra las cachés de loc47/loc68/loctj YA EN MEMORIA del prewarm viejo
+    -- cero llamadas nuevas a BM para esa parte. Solo mira SKUs con stock
+    real confirmado en Tijuana (si no hay stock en TJ, no hay nada que
+    distinguir)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import get_shared_bm as _gsb_loc
+    bm_cli = await _gsb_loc()
+    rows = await bm_cli.get_conf_columns_catalog(category_id=category_id)
+    if rows is None:
+        return JSONResponse({"error": "ConfColumns falló -- ver logs"})
+
+    def _idx(cache):
+        out = {}
+        if not cache:
+            return out
+        for r in (cache[1] or []):
+            sk = (r.get("SKU") or "").upper().strip()
+            if sk:
+                out[sk] = out.get(sk, 0) + int(r.get("AvailableQTY") or 0)
+        return out
+
+    idx47 = _idx(_bm_bulk_loc47_cache)
+    idx68 = _idx(_bm_bulk_loc68_cache)
+    idxtj = _idx(_bm_bulk_loctj_cache)
+    loc_cache_ages = {
+        "loc47_age_s": round(_time.time() - _bm_bulk_loc47_cache[0]) if _bm_bulk_loc47_cache else None,
+        "loc68_age_s": round(_time.time() - _bm_bulk_loc68_cache[0]) if _bm_bulk_loc68_cache else None,
+        "loctj_age_s": round(_time.time() - _bm_bulk_loctj_cache[0]) if _bm_bulk_loctj_cache else None,
+    }
+
+    samples = []
+    matches_cdmx_mty_only = 0
+    matches_plus_tj = 0
+    matches_neither = 0
+    for row in rows:
+        sku = (row.get("SKU") or "").upper().strip()
+        if not sku:
+            continue
+        tj = idxtj.get(sku, 0)
+        if tj <= 0:
+            continue  # sin stock en TJ no hay nada que distinguir
+        is_tv = sku.startswith("SNTV")
+        valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
+        conf_avail = sum(int(row.get(c) or 0) for c in valid_conds)
+        cdmx_mty = idx47.get(sku, 0) + idx68.get(sku, 0)
+        row_out = {
+            "sku": sku, "conf_columns_available": conf_avail,
+            "cdmx_mty_only_47_68": cdmx_mty, "tijuana_only": tj,
+            "cdmx_mty_plus_tj": cdmx_mty + tj,
+        }
+        if conf_avail == cdmx_mty:
+            matches_cdmx_mty_only += 1
+        elif conf_avail == cdmx_mty + tj:
+            matches_plus_tj += 1
+        else:
+            matches_neither += 1
+        if len(samples) < sample_n:
+            samples.append(row_out)
+
+    return JSONResponse({
+        "category_id": category_id,
+        "conf_columns_rows": len(rows),
+        "loc_cache_ages": loc_cache_ages,
+        "skus_with_tj_stock_found": matches_cdmx_mty_only + matches_plus_tj + matches_neither,
+        "matches_cdmx_mty_only_SAFE": matches_cdmx_mty_only,
+        "matches_cdmx_mty_plus_tj_RISK_INCLUYE_TIJUANA": matches_plus_tj,
+        "matches_neither": matches_neither,
+        "samples": samples,
+    })
+
+
 @app.get("/api/diag/bm-master-confcolumns-compare")
 async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30, category_id: str = ""):
     """FASE NUEVA 2026-08-19 (pedido explícito de BinManager, vía Jovan):
