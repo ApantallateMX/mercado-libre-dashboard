@@ -7,6 +7,50 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FEAT: migración a ConfColumns_Conditions_Excel por categoría (pedido explícito de BinManager) — Fase 1 y 2 validadas
+
+BinManager pidió (vía Jovan) dejar de usar `Get_GlobalStock_InventoryBySKU`
+("pagedata") para el sync automatizado de alto volumen y migrar a
+`ConfColumns_Conditions_Excel` ("el excel"). Diseño acordado tras varias
+vueltas: por categoría, en orden de ventas reales (no todo el catálogo
+de un jalón — probado hoy mismo que eso puede tardar >120s de forma
+impredecible y degradar todo lo demás mientras el semáforo global de
+BM está ocupado).
+
+**Confirmado por BinManager**: este endpoint no expone `Reserve` por
+separado -- `Available` ya viene neto. Decisión de Jovan: `reserve_qty=0`
+fijo para datos de esta fuente (ya no se muestra el desglose reservado
+para estos SKUs).
+
+**Fase 1 — orden de categorías por ventas** (`get_categories_ordered_by_sales()`,
+`token_store.py`, solo lectura): Televisiones domina con **$56.3M MXN**
+en 90 días (13,727 unidades), Aires Acondicionados segundo con $3.78M —
+todo lo demás es cola larga. Nuevo diag `/api/diag/categories-by-sales`.
+
+**Fase 2 — actualización segura por categoría** (`get_conf_columns_catalog()`
+corregido + `/api/diag/bm-master-update-category`, POST): 2 reglas de
+seguridad (aprendidas a la fuerza hoy mismo con 2 bugs reales del mismo
+tipo): (1) fetch fallido (`None`) nunca toca `bm_sku_master`; (2) fetch
+exitoso pero un SKU conocido de la MISMA categoría ausente = confirmado
+en 0 (mismo criterio "ausencia en bulk = 0" ya usado en el resto del
+sistema), acotado por categoría para no zerear SKUs de otra categoría
+por error.
+
+**Probado con la categoría #1 (Televisions), 1 sola llamada real**: 1,750
+filas en ~15s, 1,234 SKUs conocidos actualizados, 507 confirmados en 0.
+Verificado `SNTV001764`: `available_qty=39` (correcto, solo condiciones
+vendibles) vs `total_qty=4346` (bruto, incluye no-vendibles) -- la
+distinción funciona bien.
+
+**Pendiente (siguiente sesión o continuación)**: automatizar esto en un
+loop recurrente (por ahora son 2 pasos manuales via diag), decidir
+cadencia por nivel de prioridad (categorías top más seguido, cola larga
+más espaciado), y solo entonces apagar el mecanismo viejo
+(`Get_GlobalStock_InventoryBySKU`/`get_bulk_stock`) que sigue corriendo
+en paralelo sin cambios.
+
+---
+
 ## 2026-08-19 — BUG CRÍTICO + FIX: scan de gaps borró "No Lanzados" de las 4 cuentas ML + cadencia bajada a 1x/día
 
 Jovan reportó "No Lanzados" en 0 para la cuenta Autobot. Verificado
