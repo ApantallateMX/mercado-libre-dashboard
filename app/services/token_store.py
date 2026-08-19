@@ -2517,20 +2517,21 @@ async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status:
 
 
 async def get_pending_shipment_resolutions() -> list[dict]:
-    """Todo lo que sigue en proceso para una sustitución -- no solo lo ya
-    aplicado en BM esperando envío (bm_status='success'), sino también lo
-    que todavía se está verificando o falló contra BM (bm_status IN
-    ('pending','failed')). fulfillment_status vacío cuenta como
-    'pendiente_envio' (filas viejas de antes de esta feature, o la
-    primera vez que bm_status pasó a success sin haber corrido aún el
-    loop, ver _substitution_fulfillment_loop en main.py).
+    """Sustituciones ya aplicadas en BM (bm_status='success') cuya orden
+    todavía no se ha enviado -- ver _substitution_fulfillment_loop
+    (main.py). fulfillment_status vacío cuenta como 'pendiente_envio'
+    (filas viejas de antes de esta feature, o la primera vez que
+    bm_status pasó a success sin haber corrido aún el loop).
 
-    FIX 2026-08-19 (pedido por Jovan): antes solo cubría bm_status='success'
-    -- una sustitución todavía "Verificando en BM" o que falló no aparecía
-    AQUÍ, solo en Historial (que ahora es solo-cerrado, ver
-    get_stock_alert_resolutions(closed_only=True)) -- sin este cambio esas
-    filas quedarían sin aparecer en ningún lado. Esta condición es el
-    complemento EXACTO de la de esa función."""
+    FIX 2026-08-19 #2 (corregido tras verlo en vivo en la UI -- Jovan:
+    "si marca un error... no debería pasar a ningún lado"): hubo una
+    versión intermedia el mismo día que amplió esto a bm_status IN
+    ('pending','failed') -- se DESHIZO porque un intento ya fallido tiene
+    su propio dictamen (no es "pendiente"), y uno sin resolver tampoco es
+    "todo funcionó bien esperando enviarse". Esas filas ahora no
+    aparecen en NINGUNA vista (ni aquí ni en Historial, ver
+    get_stock_alert_resolutions(closed_only=True)) -- el pedido en sí
+    sigue vivo en 'En vivo' para reintentarlo desde cero."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         # FEATURE 2026-08-18 (pedido por Jovan): la tarjeta solo mostraba
@@ -2555,12 +2556,9 @@ async def get_pending_shipment_resolutions() -> list[dict]:
             LEFT JOIN bm_sku_master bsm_o ON bsm_o.sku = sar.original_sku
             LEFT JOIN bm_sku_master bsm_s ON bsm_s.sku = sar.substitute_sku
             WHERE sar.resolution_type = 'substitution'
+              AND sar.bm_status = 'success'
+              AND sar.fulfillment_status IN ('', 'pendiente_envio')
               AND sar.bm_deleted_at IS NULL
-              AND sar.fulfillment_status NOT IN ('completado', 'cancelada', 'reabierta')
-              AND (
-                  sar.bm_status IN ('pending', 'failed')
-                  OR (sar.bm_status = 'success' AND sar.fulfillment_status IN ('', 'pendiente_envio'))
-              )
             ORDER BY sar.ts ASC
         """)
         rows = [dict(r) for r in await cur.fetchall()]
