@@ -2437,10 +2437,18 @@ async def get_stock_alert_resolutions(limit: int = 50, closed_only: bool = False
     en ninguna."""
     closed_sql = ""
     if closed_only:
+        # FIX 2026-08-19 #2: la resolución #39 (bm_status='pending',
+        # fulfillment_status='reabierta' tras reabrirse) no aparecía en
+        # NINGUNA de las 2 vistas -- esta condición no consideraba
+        # 'reabierta' para el caso pending/failed (solo lo excluía del lado
+        # de "success"). Ahora coincide EXACTO con el WHERE de
+        # get_pending_shipment_resolutions (con el mismo guard de
+        # fulfillment_status agregado ahí el mismo día).
         closed_sql = """
             AND (
                 bm_deleted_at IS NOT NULL
                 OR resolution_type != 'substitution'
+                OR fulfillment_status IN ('completado', 'cancelada', 'reabierta')
                 OR NOT (
                     bm_status IN ('pending', 'failed')
                     OR (bm_status = 'success' AND fulfillment_status IN ('', 'pendiente_envio'))
@@ -2547,6 +2555,7 @@ async def get_pending_shipment_resolutions() -> list[dict]:
             LEFT JOIN bm_sku_master bsm_s ON bsm_s.sku = sar.substitute_sku
             WHERE sar.resolution_type = 'substitution'
               AND sar.bm_deleted_at IS NULL
+              AND sar.fulfillment_status NOT IN ('completado', 'cancelada', 'reabierta')
               AND (
                   sar.bm_status IN ('pending', 'failed')
                   OR (sar.bm_status = 'success' AND sar.fulfillment_status IN ('', 'pendiente_envio'))
