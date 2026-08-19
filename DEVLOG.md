@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — EXPLORACIÓN: probado `ConfColumns_Conditions_Excel` (endpoint sugerido por BinManager) — sirve por categoría, NO para "todas de un jalón"
+
+Un programador de BinManager le compartió a Jovan este endpoint como
+alternativa para bajar un lote completo por categoría en vez de SKU por
+SKU. Se corrigió primero una idea equivocada: `NEEDFILE` no genera un
+Excel descargable, es para incluir fotos — el endpoint devuelve JSON
+normal.
+
+**2 llamadas de prueba, controladas, vía el diag nuevo
+`/api/diag/bm-category-bulk-probe`** (respeta `_BM_GLOBAL_SEM`, no scripts
+sueltos — ver [[feedback_no_scripts_sueltos_contra_bm]]):
+
+1. `CATEGORYID=None` ("todas las categorías de un jalón") — **falló**
+   (excepción sin mensaje, probablemente demasiado pesado para BM sin
+   paginación — el payload no tiene `NUMBERPAGE`/`RECORDSPAGE` a
+   diferencia de `Get_GlobalStock_InventoryBySKU`).
+2. `CATEGORYID="Televisions"` — **funcionó**, 789 filas en ~19s. Formato
+   genuinamente distinto y más rico que nuestro bulk actual: **una fila
+   por SKU base**, con cada condición como su propia columna
+   (`GRA`,`GRB`,`GRC`,`NEW`,`ICB`,`ICC`,`ICX`,`BOX`,`DMT`, etc. — ~30
+   columnas de condición), más `Brand`/`Model`/`Title`/`UPC`/`Size`/
+   `LastRetailPricePurchaseHistory`/`Tier`/`Available`/`TotalQty`. (Ojo:
+   `RetailPrice` viene en 0 con `RetailPriceAvailable:false` — coincide
+   con lo ya documentado en CLAUDE.md, usar `LastRetailPricePurchaseHistory`.)
+
+**Conclusión sobre "todas las categorías" (lo que pidió Jovan):** NO es
+viable en una sola llamada, y bajarlo categoría por categoría (~120
+categorías reales en BM, confirmado con el catálogo del MCP) tampoco es
+viable cada 10 min (~19s × 120 ≈ 38 min por ciclo, secuencial por el
+semáforo — justo el tipo de carga que generó la queja de BinManager
+esta misma sesión). Si se quiere usar, tendría más sentido acotado a
+categorías puntuales de alto valor (ej. solo "Televisions", que ya tiene
+manejo especial ICB/ICC) o como herramienta de auditoría ocasional, no
+como reemplazo del ciclo de 10 min actual.
+
+Diag dejado en el repo (solo lectura, gated por `DIAG_TOKEN`, no se
+llama automáticamente) para retomar si se decide explorar más.
+
+---
+
 ## 2026-08-19 — FIX: Pendientes de Envío seguía mostrando sustituciones fallidas (el revert anterior nunca se aplicó de verdad)
 
 Jovan reportó con captura que 2 sustituciones ya fallidas (`SNWA000090-NEW`
