@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — OPERACION + FEAT: resolución #39 atorada (orden 2000018008535734) + Historial paginado
+
+Jovan reportó otro detalle del mismo caso: la resolución #39 (Alex,
+sustituto `SNWA000001` sin condición) llevaba 11.5 min en
+`bm_status='pending'` mostrada en Historial. Verificado contra
+producción (sesión real, no supuesto) y contra BM en vivo
+(`/api/diag/bm-alter-sku-groups`): nunca se intentó de verdad contra
+BM — los 3 AlterSKUs de `SNWA000024-GRC` siguen siendo los mismos de
+abril 2025 (GRB/NEW/GRA), no rechazada, simplemente atorada (el
+background task nunca corrió, mismo patrón ya documentado de "perdió su
+turno"). Por instrucción explícita de Jovan, NO se inyectó ese SKU
+incompleto a BM — se usó `/api/stock/alerts/resolutions/39/reopen`
+(reabre la orden en "En vivo" con sugerencias frescas de sustitutos con
+stock real: `SNAC000045`, `SNPA000019`, `SNDH000031`).
+
+**Pendiente de diseño (aprobado por Jovan, sin implementar aún):**
+1. Selector de condiciones reales (GRA/GRB/GRC/NEW etc.) al escribir un
+   SKU base sin sufijo en el modal de "Sustituir" — hoy el auto-resuelve
+   (`_resolve_bm_condition_sku`) se rinde si hay 0 o >1 grupos y deja el
+   campo tal cual (esto fue lo que causó el `SNWA000001` sin condición).
+2. `Historial` debe mostrar solo lo cerrado (`bm_status='success' AND
+   fulfillment_status IN ('completado','cancelada')`, o borrado de BM);
+   todo lo demás (verificando, fallido, aplicado-sin-enviar) debe vivir
+   solo en `Pendientes de Envío`. Hoy Historial muestra todo sin filtro.
+
+**Hecho ya:** Historial paginado a 20 filas/página (`app/templates/orders.html`,
+mismo patrón `_applySkuPage`/`_renderSkuPagination` ya usado en "Por
+SKU") — la tabla se estaba haciendo muy larga con 100 filas de golpe.
+Deploy Railway `SUCCESS`.
+
+---
+
 ## 2026-08-19 — PERF/DECISION: TTL de cache bulk de stock BM bajado de 15 a 10 min + aclaración fuente MCP vs. fuente propia
 
 Mismo caso de `SNWA000024` destapó una segunda confusión: Jovan preguntó
