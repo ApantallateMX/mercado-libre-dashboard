@@ -6874,13 +6874,18 @@ async def _bm_master_sync_loop():
 #   Conditioners) se refrescan seguido.
 # - El resto (cola larga) se refresca mucho más espaciado -- no aportan
 #   suficiente valor para pagar el mismo costo de llamadas.
-# Cada llamada va sola, acotada (~15-20s por categoría, probado en vivo),
-# con una pausa real entre cada una -- nunca ráfaga, sin importar la
-# cadencia (lección del incidente de carga BM de hoy mismo).
+# Cada llamada va sola, acotada (~15-20s por categoría, probado en vivo).
+# FIX 2026-08-19: BinManager confirmó (vía Jovan) que el problema real es
+# la CONCURRENCIA/ráfaga, no la falta de pausa entre llamadas ya
+# serializadas -- "puedes correr todo en cola, no ocupamos esperar los
+# 10s, termina uno sigue el otro". El semáforo global (_BM_GLOBAL_SEM,
+# 1 sola request activa en toda la app) ya garantiza que nunca hay 2
+# llamadas a la vez -- la pausa de 10s era una precaución adicional que
+# ya no hace falta. Bajada a 0.
 _CONF_COLUMNS_TOP_N = 5
 _CONF_COLUMNS_TOP_INTERVAL_S = 900       # 15 min
 _CONF_COLUMNS_LONGTAIL_INTERVAL_S = 4 * 3600  # 4 horas
-_CONF_COLUMNS_DELAY_BETWEEN_S = 10
+_CONF_COLUMNS_DELAY_BETWEEN_S = 0
 
 
 async def _conf_columns_top_categories_loop():
