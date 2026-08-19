@@ -713,6 +713,11 @@ function loadAlertasHistory() {
             // el historial solo mostraba "se registró aquí", sin saber si de
             // verdad se aplicó en BM. bm_deleted_at marca que ya se borró
             // desde este mismo historial (ver deleteFromBM más abajo).
+            function _escBmMsg(s) {
+                return String(s || '').replace(/[&<>"']/g, function(c) {
+                    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+                });
+            }
             function _bmBadge(h) {
                 if (h.bm_deleted_at) {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500" title="' + (h.bm_deleted_by || '') + '">🗑 Borrado de BM</span>';
@@ -720,8 +725,13 @@ function loadAlertasHistory() {
                 if (h.bm_status === 'success') {
                     return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700" title="' + (h.bm_message || '') + '">✓ Aplicado en BM</span>';
                 }
+                // FIX 2026-08-19 (orden 2000018008535734 -- BM rechazaba con HTTP 200
+                // por AlterSKU inexistente y nadie veía el motivo real, solo el badge
+                // genérico + tooltip que nadie abría): el motivo real ahora se ve
+                // siempre, no solo al pasar el mouse.
                 if (h.bm_status === 'failed') {
-                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700" title="' + (h.bm_message || '') + '">✗ Falló en BM</span>';
+                    return '<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">✗ Falló en BM</span>' +
+                        (h.bm_message ? '<div class="text-[10px] text-red-600 mt-0.5">' + _escBmMsg(h.bm_message) + '</div>' : '');
                 }
                 // FIX 2026-08-17: la inyección a BM ahora corre en background
                 // (ver resolve_stock_alert_substitution) -- este estado se ve

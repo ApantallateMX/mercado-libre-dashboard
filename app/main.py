@@ -16902,6 +16902,30 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     ):
         return {"ok": True, "already_existed": True, "response": {"MessageReturn": "El mapeo ya existía en BinManager para esta orden"}}
 
+    # FIX 2026-08-19 (bug real confirmado: orden 2000018008535734, cuenta
+    # BLOWTECHNOLOGIES) -- BM rechaza AddAlterSKUMappingByWebSKU con HTTP 200
+    # cuando el AlterSKU pedido (SKU+condición, ej. "SNWA000001-NEW") no es un
+    # ProductSKU real registrado en BM. Antes, ese rechazo solo se veía en el
+    # tooltip de "Falló en BM" -- nadie lo revisaba y "Reintentar" nunca podía
+    # funcionar porque el par nunca va a existir. Se valida ANTES de llamar a
+    # BM (get_existence_anywhere ya usado para el mismo propósito informativo
+    # en items.py) y se rechaza de inmediato con las condiciones reales que sí
+    # existen para ese SKU, en vez de dejar que el intento falle en silencio.
+    _sub_base = _bm_base_sku(substitute_sku)
+    _sub_condition = substitute_sku.strip().upper()[len(_sub_base):].lstrip("-")
+    if _sub_base and _sub_condition:
+        from app.services.binmanager_client import get_shared_bm as _get_shared_bm_check
+        try:
+            _bm_cli_check = await _get_shared_bm_check()
+            _existence = await _bm_cli_check.get_existence_anywhere(_sub_base)
+        except Exception:
+            _existence = None
+        if _existence and _existence.get("found_anywhere"):
+            _real_conditions = {str(c.get("condition") or "").upper() for c in (_existence.get("by_condition") or [])}
+            if _sub_condition not in _real_conditions:
+                _valid = ", ".join(sorted(c for c in _real_conditions if c)) or "ninguna encontrada"
+                return {"ok": False, "error": f"{substitute_sku} no existe en BinManager -- condiciones reales para {_sub_base}: {_valid}"}
+
     payload = {
         "ProfileID": account_id,
         "SiteAccountID": account_id,
