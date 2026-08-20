@@ -2310,6 +2310,23 @@ async def delete_realtime_stock_alerts_for_order_except_skus(
         return cur.rowcount
 
 
+async def delete_realtime_stock_alert_for_order_sku(order_id: str, platform: str, sku: str) -> int:
+    """FIX 2026-08-19 (pedido por Jovan, urgente): _evaluate_order_stock_alert
+    solo CREABA/ACTUALIZABA la alerta cuando avail<=0 -- nunca la borraba si
+    el stock se corregía después (ej. el fix de hoy de bm_sku_master, que
+    pasó decenas de SKUs de "0 falso" a stock real). Sin esto, una alerta
+    quedaba viva para siempre aunque el SKU ya tuviera stock real. Borra
+    SOLO la fila de este SKU en esta orden -- no toca otros SKUs de la
+    misma orden que sí sigan sin stock real."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "DELETE FROM realtime_stock_alerts WHERE order_id = ? AND platform = ? AND sku = ?",
+            (order_id, platform, sku),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_all_realtime_alerts_for_reconcile() -> list[dict]:
     """Todas las alertas activas — para el loop periódico que revisa el
     estado REAL de cada envío (no depende de que llegue una notificación

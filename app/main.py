@@ -2311,6 +2311,16 @@ async def _evaluate_order_stock_alert(order_id: str, user_id: str, client) -> No
                     quantity=quantity, available_qty=(avail or 0), order_date=order_date,
                     shipping_id=str(shipping_id), sku_raw=sku_raw,
                 )
+            else:
+                # FIX 2026-08-19 (pedido por Jovan, urgente -- el fix de hoy de
+                # bm_sku_master corrigió decenas de SKUs de "0 falso" a stock
+                # real, pero las alertas ya creadas nunca se autolimpiaban):
+                # si este SKU YA tiene stock real ahora, borrar cualquier
+                # alerta viva de este mismo SKU en esta orden -- ya no es
+                # accionable.
+                await token_store.delete_realtime_stock_alert_for_order_sku(
+                    str(order.get("id", "")), "ml", sku,
+                )
     else:
         # ML reenvía la notificación en cada cambio de estado de la misma
         # orden — si ya se había alertado antes y ahora es FULL o pasó a
