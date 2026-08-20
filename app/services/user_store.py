@@ -184,10 +184,23 @@ def _expand_legacy_sections(sections: list) -> list:
     return sorted(out)
 
 
+# Tabs que exigen role=="admin" a nivel de PÁGINA (ej. stock_sync_page en
+# main.py redirige a cualquier no-admin sin importar qué diga esta lógica de
+# permisos) -- PERMISSION_TREE nunca debe otorgar acceso real aquí a un
+# no-admin, aunque la clave exista como dato legacy/stray en su
+# allowed_sections. Incidente 2026-08-20: un usuario con allowed_sections=
+# ["ml.sync"] (dato viejo, nunca debió otorgarse) quedó en loop infinito de
+# redirects entre /stock-sync (rechaza no-admin -> /dashboard) y /dashboard
+# (rechazado por el middleware, que lo mandaba de vuelta a /stock-sync).
+_ADMIN_ONLY_TABS = {"ml.sync"}
+
+
 def has_tab_access(sections: list, platform: str, tab: str) -> bool:
     """True si el usuario tiene acceso a TODO o a AL MENOS UN subtab del tab."""
-    exp = _expand_legacy_sections(sections)
     whole = f"{platform}.{tab}"
+    if whole in _ADMIN_ONLY_TABS:
+        return False
+    exp = _expand_legacy_sections(sections)
     if whole in exp:
         return True
     prefix = whole + "."
@@ -204,6 +217,8 @@ def get_allowed_subtabs(sections: list, platform: str, tab: str) -> list:
     """Lista de keys de subtabs permitidos para ese tab. Si el tab no tiene
     subtabs definidos en el árbol, o el usuario tiene el tab completo,
     retorna TODAS las keys de subtabs (o [] si el tab no tiene subtabs)."""
+    if f"{platform}.{tab}" in _ADMIN_ONLY_TABS:
+        return []
     all_subtabs = (PERMISSION_TREE.get(platform, {}).get(tab, {}) or {}).get("subtabs")
     if not all_subtabs:
         return []

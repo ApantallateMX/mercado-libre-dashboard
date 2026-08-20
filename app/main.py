@@ -1202,7 +1202,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 if denied:
                     # Redirigir al primer tab/subtab permitido
                     dplat, dtab, _dsub = user_store.first_allowed_location(allowed_sections)
-                    first_url = _tab_url(dplat, dtab) if dplat else "/facturacion"
+                    first_url = _tab_url(dplat, dtab) if dplat else None
+                    # FIX 2026-08-20 (incidente real: ERR_TOO_MANY_REDIRECTS):
+                    # si no hay ningún destino válido, o el destino calculado
+                    # es la MISMA página que ya se negó, redirigir causaría un
+                    # loop infinito (ej. allowed_sections solo tenía una clave
+                    # que no mapea a ninguna sección real alcanzable). Mostrar
+                    # un mensaje inline en vez de redirigir -- nunca un 302
+                    # hacia la página que ya se está evaluando.
+                    if not first_url or first_url == path:
+                        return HTMLResponse(
+                            "<div style='font-family:sans-serif;padding:60px 20px;"
+                            "text-align:center;color:#555'>No tienes acceso a "
+                            "ninguna sección del dashboard.<br>Contacta a tu "
+                            "administrador.</div>",
+                            status_code=403,
+                        )
                     return RedirectResponse(first_url, status_code=302)
         request.state.dashboard_user = du
         # Registrar presencia activa (fire-and-forget — no bloquea la respuesta)
