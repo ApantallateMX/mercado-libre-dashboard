@@ -17100,6 +17100,18 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
             _valid = ", ".join(sorted(_real_conditions))
             return {"ok": False, "error": f"{substitute_sku} no existe en BinManager -- condiciones reales para {_sub_base}: {_valid}"}
 
+    # FIX 2026-08-19 #4 (bug real confirmado: orden 2000018021258108,
+    # resolución #41, "said" aprobó sustituir SNTV002236 por SNTV002236-GRB --
+    # BM rechazó con "Payload Error!" porque GRB YA ES el ProductSKU real
+    # registrado de este WebSKU, no una condición alterna. El payload mandaba
+    # ProductSKU == AlterSKU, que BM rechaza -- antes esto fallaba en silencio
+    # (bm_status quedaba "pending" para siempre porque nunca se completaba el
+    # retry, y el rechazo real no se veía hasta reintentar a mano). Se valida
+    # ANTES de llamar a BM: sustituir un producto por sí mismo no tiene
+    # sentido, se rechaza de inmediato con un mensaje claro.
+    if real_product_sku and substitute_sku.strip().upper() == real_product_sku.strip().upper():
+        return {"ok": False, "error": f"{substitute_sku} ya ES el producto real registrado para {web_sku} -- no se puede sustituir por sí mismo, elige una condición distinta"}
+
     payload = {
         "ProfileID": account_id,
         "SiteAccountID": account_id,
