@@ -20867,13 +20867,11 @@ async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30
 def _conf_columns_row_to_master_fields(sku: str, row: dict) -> dict:
     """Traduce 1 fila de ConfColumns_Conditions_Excel a los campos de
     bm_sku_master. reserve_qty=0 fijo -- ver get_conf_columns_catalog().
-
-    FEATURE 2026-08-19 (pedido por Jovan: mover alertas/sustitutos a esta
-    fuente): además del "best_condition", ahora guarda TODAS las
-    condiciones con stock real (>0) en 'conditions' -- mismo shape que
-    _bm_bulk_real_conditions() del bulk viejo ({condition, qty, sku}
-    ordenado por qty desc), para que el selector de "Sustituir" siga
-    ofreciendo todas las opciones reales, no solo la mejor."""
+    DEJADO DE USAR 2026-08-19 en _update_bm_master_for_category (ver
+    _bulk_stock_rows_to_master_fields) -- ConfColumns mezcla stock en
+    bins no vendibles (TRANSITO), confirmado con datos reales
+    (SNSB000022/SNHP000093/097). Se conserva por si algún diag viejo
+    todavía la referencia."""
     is_tv = sku.startswith("SNTV")
     valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
     conditions = sorted(
@@ -20899,12 +20897,62 @@ def _conf_columns_row_to_master_fields(sku: str, row: dict) -> dict:
     }
 
 
+def _bulk_stock_rows_to_master_fields(base: str, rows: list[dict]) -> dict:
+    """FIX 2026-08-19 (pedido explícito de Jovan tras confirmar con datos
+    reales que Get_GlobalStock_InventoryBySKU YA excluye bins no vendibles
+    -- TRANSITO/etc -- por sí solo, a diferencia de ConfColumns_Conditions_Excel):
+    traduce las filas de este endpoint (agrupadas por SKU base) a los
+    campos de bm_sku_master. Verificado: SNSB000022 y SNHP000093/097
+    (100% de su stock en bins TRANSITO) dan AvailableQTY=0/ausentes aquí,
+    mientras ConfColumns los mostraba inflados (654/463/2051).
+
+    Cada fila puede traer su propio sufijo de condición en 'SKU' (ej.
+    'SNHP000130-GRB') o venir SIN sufijo si todo el vendible de ese SKU
+    cae en una sola fila agregada -- en ese caso 'conditions' queda vacío
+    para ese SKU (mismo límite ya conocido del bulk viejo antes de
+    ConfColumns: sin sufijo no hay ProductSKU válido que ofrecer en el
+    selector de Sustituir), pero available_qty/reserve/total SIGUEN
+    siendo correctos -- la inyección real a BM igual resuelve la
+    condición en vivo antes de escribir (_resolve_bm_condition_sku)."""
+    conditions = []
+    avail_total = reserve_total = total_total = 0
+    category = upc = ""
+    for row in rows:
+        row_sku = (row.get("SKU") or "").upper().strip()
+        cond = row_sku[len(base):].lstrip("-") if row_sku.startswith(base) else ""
+        qty = int(row.get("AvailableQTY") or 0)
+        avail_total += qty
+        reserve_total += int(row.get("Reserve") or 0)
+        total_total += int(row.get("TotalQty") or 0)
+        category = category or (row.get("CategoryName") or "")
+        upc = upc or (row.get("UPC") or row.get("Upc") or "")
+        if cond and qty > 0:
+            conditions.append({"condition": cond, "qty": qty, "sku": f"{base}-{cond}"})
+    conditions.sort(key=lambda x: -x["qty"])
+    best_cond, best_qty = (conditions[0]["condition"], conditions[0]["qty"]) if conditions else ("", 0)
+    return {
+        "sku": base,
+        "available_qty": avail_total,
+        "reserve_qty": reserve_total,
+        "total_qty": total_total,
+        "category": category,
+        "upc": upc,
+        "best_condition_sku": f"{base}-{best_cond}" if best_cond else "",
+        "best_condition_qty": best_qty,
+        "conditions": conditions,
+        "verified": 1,
+    }
+
+
 async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
-    """PASO 2 del plan de migración a ConfColumns por categoría (pedido por
-    Jovan/BinManager 2026-08-19). Trae 1 categoría vía
-    ConfColumns_Conditions_Excel y actualiza bm_sku_master SOLO para los
-    SKUs conocidos (get_all_known_base_skus) que ya pertenecen a esa
-    categoría o que aparecen en esta respuesta.
+    """PASO 3 (2026-08-19, pedido explícito de Jovan): trae 1 categoría vía
+    Get_GlobalStock_InventoryBySKU (CONCEPTID=1 -- YA excluye bins no
+    vendibles por sí solo, ver _bulk_stock_rows_to_master_fields) y
+    actualiza bm_sku_master SOLO para los SKUs conocidos
+    (get_all_known_base_skus) que ya pertenecen a esa categoría o que
+    aparecen en esta respuesta. Reemplaza el paso anterior con
+    ConfColumns_Conditions_Excel (mismo día) -- ConfColumns mezclaba stock
+    de bins TRANSITO como si fuera vendible, confirmado con datos reales.
 
     Escritura SEGURA -- respeta las 2 reglas ya aprendidas hoy a la fuerza
     (2 bugs reales del mismo tipo encontrados hoy mismo en otras partes):
@@ -20921,23 +20969,36 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     los loops automáticos (_conf_columns_top_categories_loop/_longtail_loop)
     -- una sola implementación, sin duplicar la lógica de escritura."""
     _t0 = _time.time()
-    rows = await bm_cli.get_conf_columns_catalog(category_id=category_id)
+    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW" if category_id.strip() == "Televisions" else "GRA,GRB,GRC,NEW"
+    rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions=_conditions_str)
     _elapsed = round(_time.time() - _t0, 1)
     if rows is None:
         return {
             "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
-            "error": "ConfColumns falló (timeout/error/HTTP!=200) -- no se tocó bm_sku_master",
+            "error": "Get_GlobalStock_InventoryBySKU falló (timeout/error/HTTP!=200) -- no se tocó bm_sku_master",
+        }
+    if not isinstance(rows, list):
+        return {
+            "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
+            "error": f"respuesta no es lista ({type(rows).__name__}) -- no se tocó bm_sku_master",
         }
 
     known_skus = set(await token_store.get_all_known_base_skus())
+    _by_base: dict[str, list] = {}
+    for row in rows:
+        row_sku = (row.get("SKU") or "").upper().strip()
+        if not row_sku:
+            continue
+        base = _extract_base_sku(row_sku)
+        if base not in known_skus:
+            continue
+        _by_base.setdefault(base, []).append(row)
+
     updates = []
     seen_known_skus_in_response = set()
-    for row in rows:
-        sku = (row.get("SKU") or "").upper().strip()
-        if not sku or sku not in known_skus:
-            continue
-        seen_known_skus_in_response.add(sku)
-        updates.append(_conf_columns_row_to_master_fields(sku, row))
+    for base, base_rows in _by_base.items():
+        seen_known_skus_in_response.add(base)
+        updates.append(_bulk_stock_rows_to_master_fields(base, base_rows))
 
     import aiosqlite as _aio_updcat
     import json as _json_updcat
