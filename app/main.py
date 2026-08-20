@@ -20601,6 +20601,37 @@ async def diag_warehouse_endpoint_raw_test(token: str = "", test_sku: str = "SNH
     return JSONResponse({"test_sku": test_sku, "rows_count": len(rows) if isinstance(rows, list) else 0, "raw_rows": rows})
 
 
+@app.get("/api/diag/globalstock-category-test")
+async def diag_globalstock_category_test(token: str = "", category_id: str = "Headphones-JLab "):
+    """Prueba 2026-08-19 (pedido de Jovan: identificar/excluir bins TRANSITO
+    nosotros mismos): Get_GlobalStock_InventoryBySKU (CONCEPTID=1) ya excluye
+    correctamente el stock en bins no vendibles POR SÍ SOLO -- verificado con
+    SNSB000022 y SNHP000093/097 (0 vendible real, este endpoint ya da 0) y
+    SNTV001864 (número correcto). A diferencia de ConfColumns_Conditions_Excel,
+    que SÍ mezcla Tijuana/tránsito.
+
+    Esta prueba llama get_bulk_stock() con category_id (parámetro nuevo,
+    CATEGORYID en el payload, ya declarado sin usar) para una categoría
+    completa -- si trae resultados reales y SNHP000093/097 salen en 0 o
+    ausentes, confirma que podemos migrar _update_bm_master_for_category()
+    de ConfColumns a este endpoint sin perder el ahorro de "1 llamada por
+    categoría" que ya logramos hoy."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import get_shared_bm as _gsb_gct
+    bm = await _gsb_gct()
+    _t0 = _time.time()
+    rows = await bm.get_bulk_stock(category_id=category_id)
+    _elapsed = round(_time.time() - _t0, 1)
+    problem_skus = {"SNHP000093", "SNHP000097", "SNSB000022"}
+    problem_hits = [r for r in rows if (r.get("SKU") or "").upper().strip().split("-")[0] in problem_skus]
+    return JSONResponse({
+        "category_id": category_id, "elapsed_s": _elapsed, "rows_count": len(rows),
+        "problem_skus_found": problem_hits,
+        "sample_rows": rows[:3],
+    })
+
+
 @app.get("/api/diag/confcolumns-bintype-test")
 async def diag_confcolumns_bintype_test(
     token: str = "", category_id: str = "Soundbars", test_sku: str = "SNSB000022",

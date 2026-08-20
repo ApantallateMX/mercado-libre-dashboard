@@ -381,7 +381,7 @@ class BinManagerClient:
             logger.error(f"get_conf_columns_catalog[{category_id}] error: {type(e).__name__}: {e}")
             return None
 
-    async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68") -> list:
+    async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,62,68", category_id: str | None = None) -> list:
         """Retorna TODOS los SKUs vendibles paginando de 500 en 500.
 
         location_id: "47,62,68" = MTY+CDMX+Cuautitlán, único stock vendible online (default).
@@ -395,6 +395,16 @@ class BinManagerClient:
         conditions: qué condiciones incluir. Default GRA,GRB,GRC,NEW (excluye ICB/ICC).
         Para SKUs con sufijo -ICB/-ICC pasar "GRA,GRB,GRC,ICB,ICC,NEW".
         Incluye AvgCostQTY, LastRetailPricePurchaseHistory y NoVendibleQty.
+
+        category_id (2026-08-19, pedido por Jovan): este endpoint (CONCEPTID=1,
+        "Producto Vendible") ya EXCLUYE correctamente stock en bins no vendibles
+        (TRANSITO/DEFECTUOSO/etc) por sí solo -- verificado con datos reales
+        (SNSB000022 y SNHP000093/097, con stock 100% en bins TRANSITO, dan
+        AvailableQTY=0 aquí; SNTV001864, con stock real, da el número correcto).
+        ConfColumns_Conditions_Excel NO hace esta exclusión (mismo día,
+        confirmado con 3 pruebas de parámetros sin efecto) -- por eso este
+        parámetro se agrega: permite acotar get_bulk_stock() por categoría,
+        igual que ConfColumns, pero con el filtro de vendibilidad correcto.
 
         Fix 2026-06-24: Arrayfilters_Condition debe ser array (no null) —
           BM lanza NullReferenceException (HTTP 500) si recibe null.
@@ -414,7 +424,7 @@ class BinManagerClient:
             "FORINVENTORY": 0, "BUSCADOR": False,
             "RECORDSPAGE": _BM_PAGE_SIZE,
             "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
-            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+            "CATEGORYID": category_id, "WAREHOUSEID": None, "BINID": None,
             "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
             "OPENCELL": "", "OCCOMPTABILITY": "",
             "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
