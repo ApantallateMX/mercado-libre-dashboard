@@ -5749,37 +5749,37 @@ def _refresh_bm_avail_live(ctx: dict) -> None:
     -- sin llamadas a BM, sin esperar nada. Solo AJUSTA A LA BAJA _bm_avail
     (nunca lo sube por encima del nuevo raw) para no reintroducir riesgo de
     sobreventa si el stock real bajo desde el prewarm; el reparto por-cuenta
-    ya calculado se conserva mientras siga siendo <= el nuevo raw."""
+    ya calculado se conserva mientras siga siendo <= el nuevo raw.
+
+    FIX 2026-08-19 #2 (bug real confirmado por Jovan con evidencia -- captura
+    de "Activar" mostrando SNHP000114 en 0 mientras bm_sku_master, refrescado
+    minutos antes, ya tenía 98 unidades reales): _bm_stock_cache puede quedar
+    "verificado" (_v=True) con un 0 FALSO -- el endpoint que lo alimenta
+    (InventoryBySKUAndCondicion_Quantity) está confirmado roto del lado de
+    BM (SQL "Invalid column name 'binid'", ver app/api/sku_inventory.py y
+    amazon_products.py) y a veces responde 200 con datos corruptos en vez de
+    fallar limpio -- el fix anterior (#1, chequear _v) no alcanza porque
+    aquí SÍ viene marcado como verificado. Se cambia la fuente de este
+    refresh de _bm_stock_cache a _bm_master_mem (bm_sku_master vía
+    ConfColumns, ya migrado hoy para alertas/Sustituir) -- mismo criterio
+    "solo ajusta a la baja", pero ya no depende del endpoint roto."""
     for _lk in _STOCK_LIST_KEYS:
         for p in ctx.get(_lk, None) or []:
             sku = p.get("sku", "")
             if not sku:
                 continue
-            entry = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-            if not entry:
+            entry = _bm_master_mem.get(normalize_to_bm_sku(sku))
+            if not entry or not entry.get("verified"):
                 continue
-            # FIX 2026-08-19 (bug real confirmado por Jovan: SNHP000121 y otros
-            # mostraban "BM Disponible: 0" en pantalla mientras la sugerencia IA
-            # seguia con un valor positivo -- la entrada de _bm_stock_cache tenia
-            # avail_total=0 pero _v=False, es decir un intento de verificacion en
-            # vivo que FALLO (bm_live devolvio error), no un 0 confirmado por BM.
-            # Este bloque solo debe AJUSTAR A LA BAJA con datos realmente
-            # verificados -- confiar en un 0 sin verificar oculta stock real y
-            # bloquea reactivaciones validas.
-            if not entry[1].get("_v"):
-                continue
-            live_raw = entry[1].get("avail_total")
+            live_raw = entry.get("available_qty")
             if live_raw is None or p.get("_bm_avail_raw") == live_raw:
                 continue
             p["_bm_avail_raw"] = live_raw
             p["_bm_avail"] = min(int(p.get("_bm_avail") or 0), live_raw) if p.get("_bm_avail") is not None else live_raw
-            p["_bm_reserved"] = entry[1].get("reserved_total", p.get("_bm_reserved", 0))
-            # Desglose MTY/CDMX/TJ vive en la misma entrada de cache -- si el
-            # raw quedo desfasado, el desglose tambien (misma foto congelada).
-            if p.get("_bm_wh_fetched"):
-                p["_bm_mty"]  = entry[1].get("mty", p.get("_bm_mty", 0))
-                p["_bm_cdmx"] = entry[1].get("cdmx", p.get("_bm_cdmx", 0))
-                p["_bm_tj"]   = entry[1].get("tj", p.get("_bm_tj", 0))
+            p["_bm_reserved"] = entry.get("reserve_qty", p.get("_bm_reserved", 0))
+            # Desglose MTY/CDMX/TJ NO viene de bm_sku_master/ConfColumns --
+            # se deja como estaba (foto del prewarm), este fix es solo del
+            # numero de disponible.
 
 
 @app.get("/partials/products-stock-issues", response_class=HTMLResponse)
