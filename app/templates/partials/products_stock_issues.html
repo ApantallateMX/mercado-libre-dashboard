@@ -200,9 +200,9 @@ window._stockFilter = function(q) {
     {% if price_risk_count %}
     <div onclick="document.getElementById('price-risk-section').scrollIntoView({behavior:'smooth'})"
          class="bg-white rounded-lg shadow p-4 border-l-4 border-pink-400 cursor-pointer hover:shadow-md hover:bg-pink-50/30 transition kpi-card">
-        <p class="text-xs text-gray-500">Precio &lt; Retail PH</p>
+        <p class="text-xs text-gray-500">Margen Real Insuficiente</p>
         <p class="text-2xl font-bold text-pink-600">{{ price_risk_count }}</p>
-        <p class="text-[10px] text-gray-400">Gap prom. ${{ "{:,.0f}".format(price_risk_gap / price_risk_count) }}</p>
+        <p class="text-[10px] text-gray-400">Faltante prom. ${{ "{:,.0f}".format(price_risk_gap / price_risk_count) }} vs meta</p>
     </div>
     {% endif %}
     {% if no_bm_sku_count %}
@@ -1580,11 +1580,16 @@ window._stockFilter = function(q) {
 <div class="mb-8" id="price-risk-section">
     <div class="flex items-center gap-2 mb-3">
         <div class="w-1 h-6 bg-pink-400 rounded"></div>
-        <h3 class="text-sm md:text-base font-bold text-gray-800">Precio &lt; Retail PH</h3>
-        <span class="text-xs text-gray-400">(vendiendo por debajo del precio histórico de compra BM)</span>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Margen Real Insuficiente</h3>
+        <span class="text-xs text-gray-400">(neto real después de comisión ML + envío + socio, por debajo de la meta de recuperación)</span>
     </div>
+    <!-- FIX 2026-08-20 (auditoría de alertas): antes comparaba precio MeLi vs
+    RetailPrice PH crudo -- medía la variable equivocada (retail histórico,
+    no margen real) y era más débil que el estándar interno del sistema.
+    Ahora usa el mismo criterio ya validado en Deals (_recup_below_target /
+    _neto_ml_negative), calculado en el mismo ciclo por _calc_margins. -->
     <div class="bg-pink-50 border border-pink-200 rounded-lg px-4 py-2 mb-3 text-xs text-pink-800">
-        Estás vendiendo por debajo del precio de compra histórico (Retail PH en BM). Puede indicar márgenes negativos o stock comprado caro. Revisa precio y costo.
+        Neto real (después de comisión ML escalonada, retenciones fiscales, envío y comisión de socio) por debajo de la meta de recuperación de retail (TVs 80%, resto 60%), o directamente negativo. Revisa precio y costo.
     </div>
     <!-- Desktop -->
     <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
@@ -1594,9 +1599,9 @@ window._stockFilter = function(q) {
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio MeLi</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail PH BM</th>
-                    <th class="text-right px-3 py-2 text-red-600 font-medium text-xs">Gap</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Margen Est.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Neto ML real</th>
+                    <th class="text-right px-3 py-2 text-red-600 font-medium text-xs">% Recuperación</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Meta</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
                 </tr>
             </thead>
@@ -1611,11 +1616,11 @@ window._stockFilter = function(q) {
                     </td>
                     <td class="px-3 py-2"><span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span></td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">${{ "{:,.0f}".format(p.get('price', 0)) }}</td>
-                    <td class="px-3 py-2 text-right font-bold text-pink-700">${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0)) }}</td>
-                    <td class="px-3 py-2 text-right font-bold text-red-600">-${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0) - p.get('price', 0)) }}</td>
-                    <td class="px-3 py-2 text-right {% if p.get('_margen_pct') is not none and p._margen_pct < 0 %}text-red-600 font-bold{% else %}text-gray-600{% endif %}">
-                        {% if p.get('_margen_pct') is not none %}{{ p._margen_pct }}%{% else %}—{% endif %}
+                    <td class="px-3 py-2 text-right font-bold {% if p.get('_neto_ml_negative') %}text-red-600{% else %}text-pink-700{% endif %}">${{ "{:,.0f}".format(p.get('_neto_ml', 0) or 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">
+                        {% if p.get('_recup_retail_pct') is not none %}{{ p._recup_retail_pct }}%{% else %}— (sin RetailPH){% endif %}
                     </td>
+                    <td class="px-3 py-2 text-right text-gray-500">{{ p.get('_recup_target_pct', 60) }}%</td>
                     <td class="px-3 py-2 text-center">
                         <a href="https://www.mercadolibre.com.mx/anuncios/{{ p.id }}" target="_blank"
                            class="text-xs text-blue-600 hover:underline">Ver →</a>
@@ -1639,8 +1644,8 @@ window._stockFilter = function(q) {
             </div>
             <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">${{ "{:,.0f}".format(p.get('price', 0)) }}</span></div>
-                <div><span class="text-gray-500">Retail PH:</span> <span class="font-bold text-pink-700">${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0)) }}</span></div>
-                <div><span class="text-red-600 font-bold">Gap: -${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0) - p.get('price', 0)) }}</span></div>
+                <div><span class="text-gray-500">Neto real:</span> <span class="font-bold {% if p.get('_neto_ml_negative') %}text-red-600{% else %}text-pink-700{% endif %}">${{ "{:,.0f}".format(p.get('_neto_ml', 0) or 0) }}</span></div>
+                <div><span class="text-red-600 font-bold">Recuperación: {% if p.get('_recup_retail_pct') is not none %}{{ p._recup_retail_pct }}%{% else %}— (sin RetailPH){% endif %}</span></div>
             </div>
         </div>
         {% endfor %}
@@ -1750,7 +1755,7 @@ function syncRestockItem(itemId, finalQty, btn) {
 function bulkSyncRestock() {
     var allItems = [
         {% for p in restock %}
-        {% if not p.get('is_full') and not p.get('has_variations') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }} }{% if not loop.last %},{% endif %}{% endif %}
+        {% if not p.get('is_full') and not p.get('has_variations') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }}, recQty: {{ p.get('_rec_qty') or 0 }} }{% if not loop.last %},{% endif %}{% endif %}
         {% endfor %}
     ].filter(Boolean);
     // Filtrar solo los que siguen en DOM (no procesados aún)
@@ -1758,7 +1763,10 @@ function bulkSyncRestock() {
         return document.getElementById('restock-d-' + x.id) || document.getElementById('restock-m-' + x.id);
     });
     if (!items.length) { alert('No hay items pendientes en Reabastecer.'); return; }
-    if (!confirm('¿Sincronizar stock BM→ML para ' + items.length + ' producto(s)?\n\nEsto actualizará las cantidades en Mercado Libre al 60% del stock de BinManager.')) return;
+    // FIX 2026-08-20 (auditoría de alertas, mismo bug que "Activar Todos"):
+    // mandaba 60% plano del stock BM sin mirar demanda real -- el botón
+    // individual sí usa _rec_qty (ventas reales de 30d).
+    if (!confirm('¿Sincronizar stock BM→ML para ' + items.length + ' producto(s)?\n\nSe usará la cantidad recomendada por IA (ventas reales de 30d) donde exista, o 60% del stock BM como respaldo si no hay historial de ventas.')) return;
     var btn = document.getElementById('bulk-restock-btn');
     var msg = document.getElementById('bulk-restock-msg');
     btn.disabled = true;
@@ -1769,7 +1777,7 @@ function bulkSyncRestock() {
         msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
     }
     items.forEach(function(item) {
-        var qty = Math.floor(item.bm * 0.6);
+        var qty = item.recQty > 0 ? item.recQty : Math.max(1, Math.floor(item.bm * 0.6));
         fetch('/api/items/' + item.id + '/stock', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
@@ -2339,7 +2347,7 @@ function bulkConcentrateCritical() {
 function bulkActivateAll() {
     var allItems = [
         {% for p in activate %}
-        {id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }}, status: '{{ p.status }}' }{{ ',' if not loop.last else '' }}
+        {id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }}, recQty: {{ p.get('_rec_qty') or 0 }}, status: '{{ p.status }}' }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];
     // Solo los que siguen visibles en DOM
@@ -2347,7 +2355,14 @@ function bulkActivateAll() {
         return document.getElementById('act-d-' + x.id) || document.getElementById('act-m-' + x.id);
     });
     if (!items.length) { alert('No hay items pendientes en Activar.'); return; }
-    if (!confirm('Activar ' + items.length + ' productos?\n\nSe sincronizara 60% del stock BM y se activaran los pausados.')) return;
+    // FIX 2026-08-20 (auditoría de alertas): este botón mandaba un 60% plano
+    // del stock BM crudo sin mirar demanda real -- el botón individual
+    // "Sync + Activar" sí usa _rec_qty (cantidad real recomendada por ventas
+    // de 30d, con tope conservador si no hay historial). "Activar Todos" era
+    // el único camino que ignoraba esa lógica, justo el que se usa para
+    // despachar el backlog rápido -- mismo riesgo que ya causó el incidente
+    // documentado de SHIL000531 (comprometer stock sin demanda probada).
+    if (!confirm('Activar ' + items.length + ' productos?\n\nSe usará la cantidad recomendada por IA (ventas reales de 30d) donde exista, o 60% del stock BM como respaldo si no hay historial de ventas.')) return;
     var btn = document.getElementById('bulk-activate-btn');
     var msg = document.getElementById('bulk-activate-msg');
     btn.disabled = true;
@@ -2358,7 +2373,7 @@ function bulkActivateAll() {
         msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
     }
     items.forEach(function(item) {
-        var qty = Math.max(1, Math.floor(item.bm * 0.6));
+        var qty = item.recQty > 0 ? item.recQty : Math.max(1, Math.floor(item.bm * 0.6));
         fetch('/api/items/' + item.id + '/stock', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},

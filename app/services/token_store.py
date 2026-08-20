@@ -2362,8 +2362,13 @@ async def get_replacement_sku_suggestions(
     sku: str, brand: str, retail_ph: float, size: int = 0, limit: int = 3
 ) -> list[dict]:
     """Sugiere SKUs de reemplazo con stock disponible: misma marca + precio
-    parecido (retail_ph), ordenado por cercanía de precio. Pura lectura de
-    bm_sku_master (ya sincronizado) — sin llamadas nuevas a BM.
+    parecido (retail_ph) como filtro de candidatos plausibles, priorizados
+    por MARGEN real dentro de ese grupo (FIX 2026-08-20, auditoría de
+    alertas — antes solo ordenaba por cercanía de precio, ignorando por
+    completo `cost_usd` aunque ya vive en la misma tabla; dos sustitutos al
+    mismo precio pueden diferir mucho en margen y el sistema era indiferente
+    a eso). Pura lectura de bm_sku_master (ya sincronizado) — sin llamadas
+    nuevas a BM.
 
     Si el SKU original tiene "size" (tamaño de pantalla en pulgadas, campo
     real de BM — ej. TVs) > 0, la búsqueda EXIGE el mismo tamaño exacto —
@@ -2376,9 +2381,14 @@ async def get_replacement_sku_suggestions(
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         size_clause = "AND size = ?" if size and size > 0 else ""
-        params = [retail_ph, brand, sku] + ([size] if size and size > 0 else []) + [limit]
+        # Ventana de candidatos plausibles por precio (más amplia que `limit`
+        # final) -- el reordenamiento por margen ocurre DENTRO de este grupo,
+        # nunca sugiere un sustituto a un precio descabellado solo porque
+        # tuviera mejor margen.
+        _candidate_n = max(limit * 4, 8)
+        params = [retail_ph, brand, sku] + ([size] if size and size > 0 else []) + [_candidate_n]
         cur = await db.execute(f"""
-            SELECT sku, title, model, retail_ph, available_qty, size,
+            SELECT sku, title, model, retail_ph, cost_usd, available_qty, size,
                    best_condition_sku, best_condition_qty,
                    ABS(retail_ph - ?) AS price_diff
             FROM bm_sku_master
@@ -2387,6 +2397,21 @@ async def get_replacement_sku_suggestions(
             LIMIT ?
         """, params)
         rows = [dict(r) for r in await cur.fetchall()]
+        for row in rows:
+            _cost = row.get("cost_usd") or 0
+            _rph = row.get("retail_ph") or 0
+            # margin_pct=None (no cost_usd confiable) cae al final, ordenado
+            # por cercanía de precio entre sí -- nunca se inventa un margen.
+            row["_margin_pct"] = ((_rph - _cost) / _rph) if (_cost > 0 and _rph > 0) else None
+        rows.sort(key=lambda r: (
+            r["_margin_pct"] is None,       # False (tiene margen real) ordena antes que True
+            -(r["_margin_pct"] or 0),       # mayor margen primero
+            r["price_diff"],                # tie-break / fallback: precio más cercano
+        ))
+        rows = rows[:limit]
+        for row in rows:
+            row.pop("_margin_pct", None)
+            row.pop("cost_usd", None)
     # FEATURE 2026-08-17 (pedido por Jovan): available_qty es la suma de
     # TODAS las condiciones -- no dice en cuál hay stock real. Si se pudo
     # resolver la condición ganadora (ver _bm_master_sync_once_inner), se

@@ -611,7 +611,7 @@
             <div id="wiz-price-breakdown" class="hidden mt-1 p-2 bg-gray-50 rounded-lg text-[10px] text-gray-500 space-y-0.5">
               <div class="font-semibold text-gray-600 mb-1">Desglose de precio</div>
               <div class="flex justify-between"><span>Costo BM (MXN):</span><span id="pb-cost" class="font-medium">—</span></div>
-              <div class="flex justify-between"><span>Comisión ML (<span id="pb-comm-pct">12.5</span>%):</span><span id="pb-comm" class="font-medium text-red-500">—</span></div>
+              <div class="flex justify-between"><span>Comisión ML (<span id="pb-comm-pct">12.5</span>% + retención fiscal):</span><span id="pb-comm" class="font-medium text-red-500">—</span></div>
               <div class="flex justify-between"><span>Envío gratis (est.):</span><span id="pb-ship" class="font-medium text-red-500">~$150</span></div>
               <div class="flex justify-between border-t border-gray-200 pt-0.5 mt-0.5"><span class="font-semibold">Ganancia neta:</span><span id="pb-margin" class="font-semibold text-green-600">—</span></div>
               <div class="flex justify-between"><span>Margen %:</span><span id="pb-margin-pct" class="font-semibold">—</span></div>
@@ -3769,17 +3769,32 @@
     var gap = _wiz.gap;
     // Costo BM = retail_price_usd × 18 (retail BM es nuestro precio de adquisición)
     var costMxn = (gap.retail_price_usd || 0) * 18;
-    var listingTypeEl = document.getElementById('wiz-f-listing-type');
-    var listingType = listingTypeEl ? listingTypeEl.value : 'gold_special';
-    var commPct = listingType === 'gold_special' ? 12.5 : listingType === 'gold_premium' ? 12.5 : 8.0;
-    var comm = price * commPct / 100;
-    var ship = 150;
-    var netProfit = price - costMxn - comm - ship;
-    var marginPct = costMxn > 0 ? (netProfit / costMxn * 100) : 0;
-    var minPrice20 = costMxn > 0 ? Math.ceil((costMxn + ship) / (1 - commPct/100 - 0.20)) : 0;
+    // FIX 2026-08-20 (auditoría de alertas): la tabla anterior (12.5% Clásica /
+    // 8% Premium, seleccionando Premium por default) tenía el % INVERTIDO
+    // respecto a la realidad, no incluía retenciones fiscales, y el envío
+    // era un texto fijo "~$150" que nunca se actualizaba sin importar el
+    // tamaño del producto (letal para TVs, que llegan a costar $600-1,500
+    // MXN de envío real). Ahora usa EXACTAMENTE la misma tarifa escalonada
+    // por precio + retención fiscal (9.05%) + envío por tramo + comisión de
+    // socio (7%) que ya usa `_neto_ml`/`_recup_below_target` en
+    // app/main.py (_calc_margins) -- una sola fuente de verdad para "cuánto
+    // se recupera realmente en ML" en vez de una tabla aparte y
+    // desactualizada aquí.
+    var feePct = price >= 5000 ? 0.12 : price >= 1500 ? 0.14 : price >= 500 ? 0.16 : 0.18;
+    var comm = price * feePct;
+    var retencion = price * 0.0905;
+    var ship = costMxn >= 5000 ? 400 : costMxn >= 2500 ? 250 : costMxn >= 1000 ? 150 : 100;
+    var netMl = price * (1 - feePct - 0.0905) - ship;
+    var netAfterPartner = netMl * (1 - 0.07);  // 7% comisión de socio
+    var netProfit = netAfterPartner - costMxn;
+    var marginPct = costMxn > 0 ? (netAfterPartner / costMxn * 100) : 0;
+    // Precio mínimo para 20% de margen sobre costo, resolviendo hacia adelante
+    // con la misma fórmula (costo×1.20 = neto tras comisión+retención+envío+socio):
+    var minPrice20 = costMxn > 0 ? Math.ceil((costMxn * 1.20 / (1 - 0.07) + ship) / (1 - feePct - 0.0905)) : 0;
     document.getElementById('pb-cost').textContent = costMxn > 0 ? '$' + Math.round(costMxn).toLocaleString() : 'N/A';
-    document.getElementById('pb-comm-pct').textContent = commPct;
-    document.getElementById('pb-comm').textContent = '-$' + Math.round(comm).toLocaleString();
+    document.getElementById('pb-comm-pct').textContent = (feePct * 100).toFixed(0);
+    document.getElementById('pb-comm').textContent = '-$' + Math.round(comm + retencion).toLocaleString();
+    document.getElementById('pb-ship').textContent = '~$' + ship;
     document.getElementById('pb-margin').textContent = '$' + Math.round(netProfit).toLocaleString() + ' MXN';
     document.getElementById('pb-margin-pct').textContent = marginPct.toFixed(1) + '%';
     document.getElementById('pb-margin').className = 'font-semibold ' + (netProfit >= 0 ? 'text-green-600' : 'text-red-600');

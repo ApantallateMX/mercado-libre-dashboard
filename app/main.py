@@ -205,6 +205,17 @@ _RECOVERY_TARGET_TV = 80.0
 _RECOVERY_TARGET_OTHER = 60.0
 
 
+def _price_risk_shortfall_mxn(p: dict) -> float:
+    """FIX 2026-08-20 (auditoría de alertas): reemplaza el viejo "gap" de
+    price_risk (_retail_ph_mxn - price, que medía la variable equivocada).
+    Pesos que faltan para alcanzar la meta de recuperación de retail
+    (_recup_target_pct% de _retail_mxn) con el neto real (_neto_ml) -- 0 si
+    ya la alcanza. Para SKUs sin RetailPH (target_mxn=0) esto colapsa a
+    "cuánto pierde de plano" (-_neto_ml), que sigue siendo el número correcto."""
+    target_mxn = (p.get("_recup_target_pct") or 0) / 100 * (p.get("_retail_mxn") or 0)
+    return max(0.0, target_mxn - (p.get("_neto_ml") or 0))
+
+
 def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.15, retail_target_pct: float = 1.0,
                    shipping_avg_map: dict | None = None):
     """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto.
@@ -290,11 +301,19 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
             p["_recup_target_pct"] = _RECOVERY_TARGET_TV if (p.get("sku") or "").upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
             p["_recup_below_target"] = p["_recup_retail_pct"] is not None and p["_recup_retail_pct"] < p["_recup_target_pct"]
+            # FIX 2026-08-20 (auditoría de alertas): hueco silencioso real --
+            # _recup_below_target depende de _retail_mxn>0 (RetailPH en BM).
+            # Un SKU sin RetailPH nunca disparaba "margen negativo" sin
+            # importar cuán negativo fuera _neto_ml de verdad. Esta bandera
+            # es independiente de si hay RetailPH -- solo mira si el deal
+            # pierde dinero de verdad.
+            p["_neto_ml_negative"] = p["_neto_ml"] < 0
         else:
             p["_neto_ml"] = None
             p["_recup_retail_pct"] = None
             p["_recup_target_pct"] = None
             p["_recup_below_target"] = None
+            p["_neto_ml_negative"] = None
 
         # ── Aportación MeLi (PRE_NEGOTIATED) — ML subsidia parte del descuento ──
         _meli_pct = p.get("_meli_promo_pct", 0) or 0
@@ -7416,7 +7435,10 @@ async def _prewarm_caches(user_id: str = None):
                 # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
                 # porque (None or 0)==0. Solo flaggear cuando BM confirmó explícitamente avail=0.
                 oversell_risk = [p for p in products if p.get("status") == "active" and p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and (p.get("_bm_avail_raw") or 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
-                oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
+                # FIX 2026-08-20 (auditoría de alertas): ordenaba por unidades publicadas,
+                # no por dinero en riesgo -- un TV caro con pocas unidades quedaba detrás
+                # de accesorios baratos con más unidades.
+                oversell_risk.sort(key=lambda x: x.get("available_quantity", 0) * (x.get("price") or 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
                 # _bm_avail_verified_zero: si per-SKU verificó 0 recientemente, no incluir aunque
                 # el bulk diga >0 — bulk de BM puede devolver phantom stock (bug BM server-side).
@@ -7438,6 +7460,12 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("sku")
                     and p.get("id") not in _synced_ids
                     and _bm_bulk_ok(p.get("sku", ""))
+                    # FIX 2026-08-20 (auditoría de alertas): sin este filtro, un SKU con
+                    # 0 ventas en 30d podía aparecer AQUÍ ("comprar ya") Y en "stagnant"
+                    # ("considera liquidar") al mismo tiempo -- contradicción real de
+                    # negocio, no una combinación informativa. "Crítico" solo tiene
+                    # sentido para un SKU que SÍ se está vendiendo.
+                    and p.get("units", 0) > 0
                 ]
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
                 full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
@@ -7463,18 +7491,28 @@ async def _prewarm_caches(user_id: str = None):
                     reverse=True
                 )
 
-                # GAP 5: Precio MeLi por debajo del RetailPrice PH de BM
+                # GAP 5: margen real insuficiente (antes: "precio MeLi < RetailPrice
+                # PH de BM"). FIX 2026-08-20 (auditoría de alertas): ese criterio
+                # medía la variable equivocada -- comparaba contra el valor de
+                # retail original, no contra costo/margen real, y era más débil
+                # que el propio estándar interno del sistema (que ya exige vender
+                # un 15% SOBRE retail_ph, ver _precio_sugerido_ph). Con 265 SKUs
+                # marcados y gap promedio $737, la mayoría eran casi seguro falsos
+                # positivos (electrónica reacondicionada vendida bajo retail por
+                # diseño del modelo de negocio), mientras SKUs que sí venden sobre
+                # retail_ph pero no alcanzan el margen real mínimo pasaban
+                # invisibles. Ahora usa el MISMO criterio ya validado en Deals
+                # (_recup_below_target / _neto_ml_negative, calculado en el mismo
+                # ciclo por _calc_margins -- cero llamadas nuevas a BM).
                 price_risk = [
                     p for p in bm_candidates
                     if p.get("price", 0) > 0
-                    and p.get("_retail_ph_mxn", 0) > 0
-                    and p["price"] < p["_retail_ph_mxn"]
                     and p.get("available_quantity", 0) > 0
                     and p.get("sku")
+                    and (p.get("_recup_below_target") or p.get("_neto_ml_negative"))
                 ]
                 price_risk.sort(
-                    key=lambda x: x.get("_retail_ph_mxn", 0) - x.get("price", 0),
-                    reverse=True
+                    key=lambda x: (x.get("_recup_retail_pct") if x.get("_recup_retail_pct") is not None else (x.get("_neto_ml") or 0)) - (x.get("_recup_target_pct") or 0)
                 )
 
                 # Desbalance peligroso: MeLi publica más stock del que hay en BM
@@ -7485,7 +7523,9 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("sku")
                     and _bm_bulk_ok(p.get("sku", ""))
                 ]
-                imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0), reverse=True)
+                # FIX 2026-08-20 (auditoría de alertas): ordenaba por gap en unidades --
+                # mismo criterio corregido que oversell_risk arriba, ahora por dinero.
+                imbalanced.sort(key=lambda x: (x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0)) * (x.get("price") or 0), reverse=True)
                 # Racha de Desbalance — memoria de cuántas horas seguidas lleva un SKU
                 # así, para distinguir "recién detectado" de "posible error de config BM
                 # persistente" (ej. LocationID mal clasificado, como 62/63 resuelto antes).
@@ -7590,7 +7630,7 @@ async def _prewarm_caches(user_id: str = None):
                     "full_no_stock_count": len(full_no_stock), "full_no_stock_bm": sum(p.get("_bm_avail", 0) for p in full_no_stock),
                     "imbalanced_count": len(imbalanced), "imbalanced_gap": sum(p.get("available_quantity", 0) - (p.get("_bm_avail") or 0) for p in imbalanced),
                     "stagnant_count": len(stagnant), "stagnant_bm": sum(p.get("_bm_avail", 0) for p in stagnant),
-                    "price_risk_count": len(price_risk), "price_risk_gap": sum(p.get("_retail_ph_mxn", 0) - p.get("price", 0) for p in price_risk),
+                    "price_risk_count": len(price_risk), "price_risk_gap": sum(_price_risk_shortfall_mxn(p) for p in price_risk),
                     "no_bm_sku_count": len(no_bm_sku),
                     "bm_catalog_size": len(_bm_catalog_skus),
                     "threshold": _DEFAULT_THRESHOLD,
@@ -10129,9 +10169,13 @@ async def products_deals_partial(request: Request):
         # confirmado no confiable) — se usa _recup_retail_pct (neto real después
         # de fee ML + retenciones + envío + comisión de socio, contra retail BM)
         # con meta por categoría (TV 80%, otras 60%, ver _RECOVERY_TARGET_*).
-        neg_margin = [p for p in active_deals if p.get("_recup_below_target")]
+        # FIX 2026-08-20 (auditoría de alertas): _recup_below_target requiere
+        # RetailPH en BM -- un deal con pérdida real (_neto_ml<0) pero SIN
+        # RetailPH no disparaba esta alerta nunca. Se agrega _neto_ml_negative
+        # como criterio independiente para no dejar ese hueco.
+        neg_margin = [p for p in active_deals if p.get("_recup_below_target") or p.get("_neto_ml_negative")]
         if neg_margin:
-            neg_margin.sort(key=lambda p: (p.get("_recup_retail_pct") or 0) - (p.get("_recup_target_pct") or 0))
+            neg_margin.sort(key=lambda p: (p.get("_recup_retail_pct") if p.get("_recup_retail_pct") is not None else (p.get("_neto_ml") or 0)) - (p.get("_recup_target_pct") or 0))
             recs.append({
                 "type": "danger", "icon": "!",
                 "title": f"{len(neg_margin)} deal(s) por debajo de la meta de recuperación",
@@ -13999,7 +14043,7 @@ def _evict_item_from_alerts(uid: str, item_id: str):
             data["stagnant_bm"] = sum(p.get("_bm_avail", 0) for p in data.get("stagnant", []))
             data["price_risk_count"] = len(data.get("price_risk", []))
             data["price_risk_gap"] = sum(
-                p.get("_retail_ph_mxn", 0) - p.get("price", 0) for p in data.get("price_risk", [])
+                _price_risk_shortfall_mxn(p) for p in data.get("price_risk", [])
             )
             _stock_issues_cache[key] = (ts, data)
             logger.info(f"[ALERTS-EVICT] item {item_id} eliminado de alertas uid={uid}")
@@ -18896,12 +18940,18 @@ async def _compute_oversell_exposure(limit: int = 100) -> dict:
     FULL/FBA -- comparar bm_avail contra esa cantidad SIEMPRE da falsa
     sobreventa, porque son dos inventarios que ML ya gestiona por separado
     del nuestro, no un mismo pool. Antes de este fix, ~20 SKUs de TVs
-    aparecían como "sobreventa" sin serlo -- ver project_oversell_cross_account."""
+    aparecían como "sobreventa" sin serlo -- ver project_oversell_cross_account.
+
+    FIX 2026-08-20 (auditoría de alertas): antes ordenaba por gap en unidades
+    -- un TV de $12,000 con gap de 4 quedaba invisible detrás de accesorios
+    de $150 con gap de 30. Ahora ordena por gap × retail_ph (USD), y expone
+    "exposure_usd" por fila -- prioriza primero lo que de verdad mueve
+    dinero, no lo que tiene más piezas."""
     import aiosqlite as _aio_ov
     async with _aio_ov.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_ov.Row
         rows = await (await db.execute("""
-            SELECT bm.sku AS sku, bm.available_qty AS bm_avail,
+            SELECT bm.sku AS sku, bm.available_qty AS bm_avail, bm.retail_ph AS retail_ph_usd,
                    COALESCE(ml.ml_sum, 0) AS ml_sum,
                    COALESCE(amz.amz_sum, 0) AS amz_sum,
                    COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) AS total_exposed,
@@ -18918,7 +18968,7 @@ async def _compute_oversell_exposure(limit: int = 100) -> dict:
             ) amz ON amz.base_sku = bm.sku
             WHERE (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0)) > bm.available_qty
               AND bm.stock_updated_at > 0
-            ORDER BY (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) - bm.available_qty) DESC
+            ORDER BY (COALESCE(ml.ml_sum, 0) + COALESCE(amz.amz_sum, 0) - bm.available_qty) * MAX(bm.retail_ph, 0.01) DESC
             LIMIT ?
         """, (limit,))).fetchall()
         total_count = (await (await db.execute("""
@@ -18937,7 +18987,13 @@ async def _compute_oversell_exposure(limit: int = 100) -> dict:
     return {
         "total_skus_oversold": total_count,
         "showing": len(rows),
-        "rows": [dict(r) | {"gap": r["total_exposed"] - r["bm_avail"]} for r in rows],
+        "rows": [
+            dict(r) | {
+                "gap": r["total_exposed"] - r["bm_avail"],
+                "exposure_usd": round((r["total_exposed"] - r["bm_avail"]) * (r["retail_ph_usd"] or 0), 2),
+            }
+            for r in rows
+        ],
     }
 
 

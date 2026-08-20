@@ -498,6 +498,57 @@ def _priority_score(stock_total: int, retail_usd: float, cost_usd: float) -> int
     return int(stock_score + price_score + margin_score)
 
 
+def _ml_fee_tier(price_mxn: float) -> float:
+    """Tarifa ML escalonada por precio -- MISMA tabla que app.main._ml_fee.
+    Duplicada aquí (no importada) para evitar import circular main<->lanzar
+    -- si se cambia una tabla, cambiar la otra."""
+    if price_mxn >= 5000:
+        return 0.12
+    if price_mxn >= 1500:
+        return 0.14
+    if price_mxn >= 500:
+        return 0.16
+    return 0.18
+
+
+def _ml_suggested_price_mxn(cost_mxn: float) -> float:
+    """FIX 2026-08-20 (auditoría de alertas): reemplaza `retail_usd*18*1.20`,
+    que ignoraba la comisión real de ML y el envío -- el precio sugerido
+    nacía con margen de contribución NEGATIVO en casi todos los casos
+    (retail×18×1.20 - comisión real 17%+IVA - envío ≈ retail×(-0.037) -
+    envío). Ahora resuelve el precio de lista que recupera el 100% de
+    `cost_mxn` (mismo estándar ya usado en Amazon: retail/0.75) después de
+    la comisión ML escalonada real, retenciones fiscales (~9.05%, IVA+ISR),
+    envío estimado por tramo de retail y el 7% de comisión de socio --
+    EXACTAMENTE el mismo modelo que ya usa `_calc_margins`/`_neto_ml` en
+    app/main.py, resuelto hacia adelante (precio) en vez de hacia atrás
+    (margen) -- sin inventar una fórmula nueva.
+
+    2 pasadas: la tarifa ML depende del precio final (escalonada), así que
+    se aproxima con el costo como tier inicial y se refina una vez con el
+    precio resultante -- suficiente precisión para un precio SUGERIDO que
+    de todos modos se revisa en el wizard antes de publicar."""
+    PARTNER_COMMISSION_PCT = 0.07
+    RETENTION_PCT = 0.0905
+    if cost_mxn >= 5000:
+        ship_est = 400
+    elif cost_mxn >= 2500:
+        ship_est = 250
+    elif cost_mxn >= 1000:
+        ship_est = 150
+    else:
+        ship_est = 100
+    ship_component = ship_est * (1 - PARTNER_COMMISSION_PCT)
+    price = cost_mxn
+    for _ in range(2):
+        fee_pct = _ml_fee_tier(price)
+        k = (1 - fee_pct - RETENTION_PCT) * (1 - PARTNER_COMMISSION_PCT)
+        if k <= 0:
+            break
+        price = (cost_mxn + ship_component) / k
+    return round(price, 0)
+
+
 def _prog(pct: int, phase: str, label: str, detail: str = "") -> None:
     """Actualiza progreso in-memory del scan."""
     _scan_progress.update({"pct": pct, "phase": phase, "label": label, "detail": detail})
@@ -717,10 +768,10 @@ async def _run_gap_scan(user_id: str | None = None):
                 retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
                 stock     = _bm_qty(prod)
                 score     = _priority_score(stock, retail, 0)
-                # Precio sugerido: retail_usd × 18 (FX) × 1.20 (20% margen)
-                suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
-                # Costo BM en MXN = retail_usd × 18 (el retail de BM ES nuestro costo de adquisición)
-                cost_mxn  = round(retail * 18, 0) if retail > 0 else 0
+                # Costo BM en MXN = retail_usd × FX real (el retail de BM ES nuestro costo de adquisición)
+                cost_mxn  = round(retail * fx, 0) if retail > 0 else 0
+                # Precio sugerido: recupera 100% de cost_mxn neto de comisión ML real + envío (ver _ml_suggested_price_mxn)
+                suggested = _ml_suggested_price_mxn(cost_mxn) if cost_mxn > 0 else 0
                 global_gaps_base.append({
                     "sku":               base_sku,
                     "product_title":     prod.get("Title", "") or "",
@@ -840,7 +891,7 @@ async def _run_gap_scan(user_id: str | None = None):
                         if stock <= 0:
                             continue
                         retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                        suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
+                        suggested = _ml_suggested_price_mxn(retail * fx) if retail > 0 else 0
                         title     = prod.get("Title", "") or ""
                         for iid in item_ids_list:
                             await db.execute("""
@@ -862,7 +913,7 @@ async def _run_gap_scan(user_id: str | None = None):
                         if not prod:
                             continue
                         retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                        suggested = round(retail * 18 * 1.20, 0)
+                        suggested = _ml_suggested_price_mxn(retail * fx) if retail > 0 else 0
                         if retail <= 0 or suggested <= 0:
                             continue
                         for item_info in item_list:
@@ -1699,8 +1750,12 @@ async def debug_scan(sku: str = ""):
 
 @router.post("/recalc-prices")
 async def recalc_prices():
-    """Recalcula suggested_price_mxn y cost_price_mxn en la DB usando fórmula actual
-    (retail × 18 × 1.20) sin necesidad de hacer un nuevo scan completo."""
+    """Recalcula suggested_price_mxn y cost_price_mxn en la DB usando la fórmula
+    actual (_ml_suggested_price_mxn: recupera 100% del costo neto de comisión ML
+    real + envío, ver FIX 2026-08-20) sin necesidad de hacer un nuevo scan
+    completo. Usa el FX fallback (17.5) -- este endpoint no tiene contexto de
+    cuenta ML para pedir el tipo de cambio real."""
+    _FX_FALLBACK = 17.5
     updated = 0
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         rows = await (await db.execute(
@@ -1708,15 +1763,15 @@ async def recalc_prices():
         )).fetchall()
         for row in rows:
             rowid, retail, cost = row[0], float(row[1] or 0), float(row[2] or 0)
-            new_suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
-            new_cost_mxn  = round(cost * 18, 0) if (0 < cost < 9000) else 0
+            new_cost_mxn  = round(cost * _FX_FALLBACK, 0) if (0 < cost < 9000) else 0
+            new_suggested = _ml_suggested_price_mxn(retail * _FX_FALLBACK) if retail > 0 else 0
             await db.execute(
                 "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=? WHERE rowid=?",
                 (new_suggested, new_cost_mxn, rowid)
             )
             updated += 1
         await db.commit()
-    return {"updated": updated, "formula": "retail × 18 × 1.20"}
+    return {"updated": updated, "formula": "_ml_suggested_price_mxn (recupera 100% del costo neto de comisión ML real + envío)"}
 
 
 @router.post("/clear-sku-cache")
