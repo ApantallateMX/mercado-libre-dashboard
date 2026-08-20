@@ -296,6 +296,17 @@ function toggleSubtabList(btn) {
   btn.textContent = (list.classList.contains('hidden') ? '▸' : '▾') + ' subtabs';
 }
 
+// Blindado contra DOM viejo en caché (browser sin recargar tras un deploy):
+// nunca debe tronar el guardado completo solo porque este checkbox no exista.
+function zeroStockCbGet(prefix) {
+  var el = document.getElementById(prefix+'-zero-stock-ml');
+  return el ? el.checked : false;
+}
+function zeroStockCbSet(prefix, value) {
+  var el = document.getElementById(prefix+'-zero-stock-ml');
+  if (el) el.checked = value;
+}
+
 function getSectionCheckboxes(prefix) {
   var container = document.getElementById(prefix+'-sections-checkboxes');
   var checked = [];
@@ -338,7 +349,7 @@ function openCreateUser(){
   document.getElementById('modal-create').classList.remove('hidden');
   document.getElementById('new-username').focus();
   renderSectionCheckboxes('create', []);
-  document.getElementById('create-zero-stock-ml').checked = false;
+  zeroStockCbSet('create', false);
   onRoleChange('create');
 }
 function closeCreateUser(){
@@ -354,7 +365,7 @@ async function submitCreateUser(){
   var display=document.getElementById('new-display-name').value.trim();
   var role=document.getElementById('new-role').value;
   var sections=getSectionCheckboxes('create');
-  if(document.getElementById('create-zero-stock-ml').checked) sections.push('action:zero_stock_ml');
+  if(zeroStockCbGet('create')) sections.push('action:zero_stock_ml');
   var msg=document.getElementById('create-msg');
   var btn=document.getElementById('btn-create-user');
   if(!username){
@@ -391,7 +402,7 @@ function openEditUser(id, username, displayName, role, active, currentSections){
   document.getElementById('edit-role').value=role;
   document.getElementById('edit-msg').classList.add('hidden');
   renderSectionCheckboxes('edit', currentSections || []);
-  document.getElementById('edit-zero-stock-ml').checked = (currentSections || []).indexOf('action:zero_stock_ml') >= 0;
+  zeroStockCbSet('edit', (currentSections || []).indexOf('action:zero_stock_ml') >= 0);
   onRoleChange('edit');
   document.getElementById('modal-edit').classList.remove('hidden');
 }
@@ -403,7 +414,7 @@ async function submitEditUser(){
   var display=document.getElementById('edit-display-name').value.trim();
   var role=document.getElementById('edit-role').value;
   var sections=getSectionCheckboxes('edit');
-  if(document.getElementById('edit-zero-stock-ml').checked) sections.push('action:zero_stock_ml');
+  if(zeroStockCbGet('edit')) sections.push('action:zero_stock_ml');
   var msg=document.getElementById('edit-msg');
   var btn=document.getElementById('btn-edit-user');
   btn.disabled=true; btn.textContent='Guardando...';

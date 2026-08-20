@@ -18335,6 +18335,32 @@ _DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e"
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
+@app.get("/api/diag/user-permissions")
+async def diag_user_permissions(username: str = "", token: str = ""):
+    """Diagnóstico de solo lectura: rol y allowed_sections REALES en DB para
+    un usuario del dashboard, más el can_zero_stock que tendría su PRÓXIMA
+    sesión si hiciera login ahora -- para confirmar si un checkbox de
+    permisos otorgado en /usuarios (ej. "Sin Stock") de verdad se guardó,
+    sin necesitar forjar ninguna sesión ni pedirle a nadie que revise
+    manualmente. Agregado 2026-08-20 tras reporte de Jovan de que el
+    checkbox no estaba tomando efecto para Said/Alex."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    row = await user_store.get_user_by_username(username.strip().lower())
+    if not row:
+        return JSONResponse({"error": "usuario no encontrado"}, status_code=404)
+    raw_sections = row.get("allowed_sections") or []
+    would_have_zero_stock = row.get("role") == "admin" or user_store.ZERO_STOCK_ACTION_KEY in raw_sections
+    return JSONResponse({
+        "username": row.get("username"),
+        "role": row.get("role"),
+        "active": row.get("active"),
+        "allowed_sections_raw": raw_sections,
+        "has_zero_stock_marker": user_store.ZERO_STOCK_ACTION_KEY in raw_sections,
+        "would_have_zero_stock_on_next_login": would_have_zero_stock,
+    })
+
+
 @app.get("/api/diag/bm-sku-gaps-row")
 async def diag_bm_sku_gaps_row(sku: str = "", token: str = ""):
     """Diagnóstico: estado de un SKU en bm_sku_gaps (todas las cuentas) +
