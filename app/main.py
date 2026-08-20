@@ -20518,6 +20518,86 @@ async def diag_confcolumns_location_param_test(
     })
 
 
+@app.get("/api/diag/confcolumns-bintype-test")
+async def diag_confcolumns_bintype_test(
+    token: str = "", category_id: str = "Soundbars", test_sku: str = "SNSB000022",
+):
+    """Prueba empírica (pedido de Jovan 2026-08-19 -- BinManager le comentó que
+    se puede filtrar por tipo de bin, "de eso vivimos sobre el inventario"):
+    ¿ConfColumns_Conditions_Excel respeta un parámetro de BinTypeID? BM.BinTypes
+    (via MCP list_bin_types) tiene 23 tipos -- algunos claramente NO vendibles
+    (TRANSITO=1, DEFECTUOSO=3, RECYCLE=7, MISSING=16, PENDING=17, Proceso
+    Entrada=22, Proceso Salida=23) y otros que sí son producto terminado
+    (PRODUCTO TERMINADO=2, Finished Good=6, ECOMMERCE=19).
+
+    Prueba con el campo BINTYPEID (mismo estilo ALL-CAPS que LOCATIONID/
+    WAREHOUSEID/BINID, que sí existen en el payload de Get_GlobalStock_
+    InventoryBySKU) usando SNSB000022 como referencia (654 unidades reales,
+    confirmadas por SP en vivo el mismo día). Si el número cambia según el
+    BinTypeID, confirma que CONCEPTID=1 (nuestro filtro actual, "Producto
+    Vendible") NO excluye bin types no vendibles por sí solo -- habría que
+    sumar el filtro de BinType explícito a todo el pipeline."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_bt
+    bm = await _gsb_bt()
+    if not bm._logged_in:
+        if not await bm.login():
+            return JSONResponse({"error": "BM login failed"}, status_code=503)
+
+    is_tv = test_sku.upper().startswith("SNTV")
+    valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if is_tv else ())
+
+    def _row_available(rows, sku):
+        row = next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku.upper()), None)
+        if row is None:
+            return "SKU no encontrado en la respuesta"
+        return sum(int(row.get(c) or 0) for c in valid_conds)
+
+    async def _fetch(extra_fields: dict):
+        payload = {
+            "COMPANYID": 1, "CATEGORYID": category_id, "LOCATIONID": "47,62,68",
+            "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True,
+            "NEEDAVGCOST": True, "NEEDSALES": False,
+            **extra_fields,
+        }
+        r = await bm._post(f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
+                            json=payload, headers=_AJAX_HEADERS, timeout=45.0)
+        if r is None or r.status_code != 200:
+            return None, f"HTTP {getattr(r, 'status_code', 'sin respuesta')}"
+        data = r.json()
+        if not isinstance(data, list):
+            return None, "respuesta no es lista"
+        return data, None
+
+    results = {}
+    for _label, _fields in (
+        ("sin_BINTYPEID", {}),
+        ("BINTYPEID_finished_good_2_6_19", {"BINTYPEID": "2,6,19"}),
+        ("BINTYPEID_no_vendible_7", {"BINTYPEID": "7"}),
+    ):
+        rows, err = await _fetch(_fields)
+        results[_label] = {
+            "error": err, "rows": len(rows) if rows else 0,
+            "available_test_sku": _row_available(rows, test_sku) if rows else None,
+        }
+
+    base = results["sin_BINTYPEID"]["available_test_sku"]
+    fg = results["BINTYPEID_finished_good_2_6_19"]["available_test_sku"]
+    nv = results["BINTYPEID_no_vendible_7"]["available_test_sku"]
+    if isinstance(base, int) and isinstance(fg, int) and isinstance(nv, int) and (fg != base or nv != base):
+        conclusion = "PARAMETRO_FUNCIONA -- BINTYPEID SI cambia el resultado, hay que agregarlo al pipeline"
+    elif isinstance(base, int) and isinstance(fg, int) and isinstance(nv, int) and fg == base == nv:
+        conclusion = "PARAMETRO_IGNORADO -- BM no filtra por BINTYPEID en este endpoint (o CONCEPTID=1 ya excluye no-vendibles internamente)"
+    else:
+        conclusion = "ERROR_O_SKU_NO_ENCONTRADO -- revisar resultados"
+
+    return JSONResponse({
+        "category_id": category_id, "test_sku": test_sku,
+        "results": results, "conclusion": conclusion,
+    })
+
+
 @app.get("/api/diag/bm-master-confcolumns-compare")
 async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30, category_id: str = ""):
     """FASE NUEVA 2026-08-19 (pedido explícito de BinManager, vía Jovan):
