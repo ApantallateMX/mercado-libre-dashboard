@@ -2743,25 +2743,16 @@ async def _check_one_substitution_fulfillment(row: dict) -> None:
             return
 
         # Sigue pendiente de envío -- verificar si el sustituto TODAVÍA
-        # tiene stock (mismo mecanismo del live-check del modal "Sustituir").
-        base, cond = _split_bm_sku_condition(row["substitute_sku"])
-        conditions_param = cond if cond else _bm_conditions_for_sku(base)
-        from app.services.binmanager_client import get_shared_bm as _gsbm_fulfillment
-        bm_cli = await _gsbm_fulfillment()
-        # FIX 2026-08-17 (2): el timeout default de 7s (pensado para ciclos
-        # que revisan muchos SKUs seguidos) resultó insuficiente en vivo --
-        # BM tardó más de 14s (7+7 de los 2 intentos internos) en varias
-        # pruebas reales del mismo día para estos SKUs puntuales. Este loop
-        # revisa 1-5 filas cada 10 min, hay margen de sobra para esperar más
-        # en vez de rendirse y dejar "sin verificar" para siempre.
-        result = await bm_cli.get_stock_with_reserve(base, conditions=conditions_param, timeout=20.0)
-        # FIX 2026-08-17 (bug real reportado por Jovan): si BM no responde
-        # (timeout, ya visto antes con otro SKU) NO hay que pisar el último
-        # dato REAL conocido (ej. "0 disponibles") con "sin verificar" --
-        # eso borraba información real por un fallo transitorio. Solo se
-        # actualiza cuando de verdad se obtuvo una lectura nueva.
-        if result is not None:
-            await token_store.mark_resolution_fulfillment(row["id"], "pendiente_envio", stock_qty=result[0])
+        # tiene stock. FIX 2026-08-20 (directiva de Jovan tras bloqueo real
+        # de BM): antes llamaba a BM en vivo por SKU -- ahora lee
+        # bm_sku_master (ya lo mantiene fresco el loop de categorías, cero
+        # llamadas nuevas a BM). Solo se actualiza cuando el dato está
+        # verificado -- mismo criterio que el resto del proyecto, para no
+        # pisar el último dato real conocido con un valor sin confirmar.
+        base, _cond = _split_bm_sku_condition(row["substitute_sku"])
+        _master_row = (await token_store.get_bm_master_rows_for_skus([base])).get(base)
+        if _master_row and _master_row.get("verified"):
+            await token_store.mark_resolution_fulfillment(row["id"], "pendiente_envio", stock_qty=_master_row.get("available_qty", 0) or 0)
     except Exception as e:
         logger.warning(f"[SUB-FULFILLMENT] error revisando resolution_id={row['id']} orden={order_id}: {e}")
     finally:
@@ -7689,38 +7680,38 @@ async def _prewarm_caches(user_id: str = None):
                             return
                         _activate_wh_running = True
                         try:
+                            # FIX 2026-08-20 (directiva de Jovan tras bloqueo real de BM):
+                            # esto hacía 1 llamada EN VIVO a BM por SKU (hasta 60, con 1s de
+                            # pausa entre cada una) -- por cuenta, en cada ciclo de prewarm.
+                            # Con 4 cuentas ML, esto solo era uno de varios mecanismos
+                            # paralelos golpeando a BM fuera del loop de categorías, y la
+                            # suma de todos causó el bloqueo real de hoy. Ahora lee
+                            # bm_sku_master (ya lo mantiene fresco el loop de categorías,
+                            # cero llamadas nuevas a BM) en una sola consulta SQL para
+                            # todos los SKUs a la vez.
                             _updated = list(_act)
                             _n_ok = 0
                             _n_evict = 0
-                            from app.services.binmanager_client import get_shared_bm as _gsbm_act
-                            _bm_cli_act = await _gsbm_act()
+                            _act_skus = [_ap.get("sku", "") for _ap in _act if _ap.get("sku")]
+                            _master_rows = await token_store.get_bm_master_rows_for_skus(_act_skus)
                             for _i, _ap in enumerate(_act):
                                 _asku = _ap.get("sku", "")
                                 if not _asku:
                                     continue
-                                try:
-                                    _entry = await _bm_verify_sku_direct(_bm_cli_act, _asku)
-                                    if _entry:
-                                        _avail = _entry.get("avail_total", 0)
-                                        _ver   = _entry.get("_v", False)
-                                        if _ver and _avail > 0:
-                                            # Per-SKU confirmó stock — actualizar ítem con avail real.
-                                            _pu = dict(_ap)
-                                            _pu["_bm_avail"]    = _avail
-                                            _pu["_bm_reserved"] = _entry.get("reserved_total", 0)
-                                            _pu["_bm_mty"]      = _entry.get("mty", 0)
-                                            _pu["_bm_cdmx"]     = _entry.get("cdmx", 0)
-                                            _pu["_bm_tj"]       = _entry.get("tj", 0)
-                                            _updated[_i] = _pu
-                                            _n_ok += 1
-                                        elif _ver and _avail == 0:
-                                            # Per-SKU confirmó 0 en LOC47+68 — evictar de Activar.
-                                            _updated[_i] = None
-                                            _n_evict += 1
-                                        # else: BM falló (_v=False) — conservar valor del bulk.
-                                except Exception:
-                                    pass
-                                await asyncio.sleep(1)
+                                _entry = _master_rows.get(_asku)
+                                if not _entry or not _entry.get("verified"):
+                                    continue  # sin dato confirmado -- conservar valor del bulk
+                                _avail = _entry.get("available_qty", 0) or 0
+                                if _avail > 0:
+                                    _pu = dict(_ap)
+                                    _pu["_bm_avail"]    = _avail
+                                    _pu["_bm_reserved"] = _entry.get("reserve_qty", 0) or 0
+                                    _updated[_i] = _pu
+                                    _n_ok += 1
+                                else:
+                                    # bm_sku_master confirmó 0 -- evictar de Activar.
+                                    _updated[_i] = None
+                                    _n_evict += 1
                             # Actualizar snapshot: filtrar None (evictados) y limitar a IDs actuales.
                             # CRÍTICO: _cur_ids filtra ítems removidos por un prewarm más reciente.
                             _cur = _stock_issues_cache.get(_key)
@@ -8170,6 +8161,43 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             # Si no hay nada en caché, result_map no tiene entrada → _bm_avail=None
             # → no se genera alerta de oversell por dato desconocido
         return result_map
+
+    # FIX 2026-08-20 (directiva de Jovan tras bloqueo real de BM): a partir de
+    # aquí, el código histórico de abajo (hasta el final de la función) hacía
+    # llamadas EN VIVO a BM -- bulk GR/LOC47/LOC68/Tijuana, per-SKU warehouse,
+    # desglose de TVs -- duplicando lo que el loop de categorías
+    # (_update_bm_master_for_category) ya mantiene fresco en bm_sku_master.
+    # Con 4 cuentas ML disparando esto en cada ciclo de prewarm, la SUMA de
+    # este mecanismo + los demás (_fetch_activate_wh, _fetch_tv_wh_breakdown)
+    # causó el bloqueo real de BM del 2026-08-20. Regla nueva: NADA fuera del
+    # loop de categorías puede llamar a BM -- todo se alimenta de
+    # bm_sku_master. Incluso en modo prewarm (retry_stale=True) se lee
+    # bm_sku_master en una sola consulta SQL, cero llamadas nuevas a BM. El
+    # código de abajo queda INALCANZABLE (no se borra, por si hace falta
+    # revertir) -- ver DEVLOG 2026-08-20.
+    _master_rows_bmc = await token_store.get_bm_master_rows_for_skus(to_fetch)
+    _now_bmc = _time.time()
+    for _sku in to_fetch:
+        _bk = normalize_to_bm_sku(_sku)
+        _row = _master_rows_bmc.get(_bk)
+        if _row:
+            _entry = {
+                "mty": _row.get("mty_qty", 0) or 0,
+                "cdmx": _row.get("cdmx_qty", 0) or 0,
+                "tj": _row.get("tj_qty", 0) or 0,
+                "total": _row.get("total_qty", 0) or 0,
+                "avail_total": _row.get("available_qty", 0) or 0,
+                "reserved_total": _row.get("reserve_qty", 0) or 0,
+                "no_vendible": _row.get("no_vendible_qty", 0) or 0,
+                "_v": bool(_row.get("verified")),
+            }
+            _bm_stock_cache[_bk] = (_now_bmc, _entry)
+            result_map[_sku] = _entry
+        else:
+            _stale = _bm_stock_cache.get(_bk)
+            if _stale:
+                result_map[_sku] = _stale[1]
+    return result_map
 
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0, "no_vendible": 0}
 
