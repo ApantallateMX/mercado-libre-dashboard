@@ -218,7 +218,7 @@ def describe_section_key(key: str) -> str:
     """Etiqueta legible para una clave del árbol ('ml.salud.messages' →
     'ML · Salud → Mensajes'). Usada en los chips del panel de usuarios."""
     if not key or "." not in key:
-        return {"deuda": "Deuda"}.get(key, key)
+        return {"deuda": "Deuda", ZERO_STOCK_ACTION_KEY: "⛔ Sin Stock (ML)"}.get(key, key)
     parts = key.split(".")
     platform_label = "ML" if parts[0] == "ml" else "Amazon"
     tab_meta = PERMISSION_TREE.get(parts[0], {}).get(parts[1], {})
@@ -227,6 +227,27 @@ def describe_section_key(key: str) -> str:
         return f"{platform_label} · {tab_label}"
     subtab_label = (tab_meta.get("subtabs") or {}).get(parts[2], parts[2])
     return f"{platform_label} · {tab_label} → {subtab_label}"
+
+
+ZERO_STOCK_ACTION_KEY = "action:zero_stock_ml"
+
+
+def can_zero_stock(du: dict) -> bool:
+    """Permiso especial para la acción destructiva "⛔ Sin stock" en Alertas
+    de Stock (ML) -- pone available_quantity=0 en las 4 cuentas ML de un
+    jalón. Deliberadamente NO es parte del árbol tab/subtab: otorgar acceso
+    a un subtab de Ventas no debe implicar poder ejecutar esta acción, y
+    viceversa. Se otorga explícito por usuario vía un checkbox aparte en
+    /usuarios (guardado como marcador ZERO_STOCK_ACTION_KEY dentro de la
+    columna allowed_sections), pero create_session()/get_session() lo
+    separan a su propio flag "can_zero_stock" -- así el marcador nunca
+    contamina los chequeos de "¿tiene restricciones de sección?" que
+    asumen que allowed_sections solo contiene claves plataforma.tab[.subtab]
+    (2026-08-20, pedido de Jovan tras notar que no había forma de dárselo
+    a alguien más que él sin volverlo un checkbox real)."""
+    if not du:
+        return False
+    return du.get("role") == "admin" or bool(du.get("can_zero_stock"))
 
 
 def first_allowed_location(sections: list) -> tuple:
@@ -488,6 +509,15 @@ async def create_session(user_id: int, ip: str = None) -> str:
     Sobrevive reinicios del contenedor mientras SECRET_KEY sea estable."""
     user = await get_user_by_id(user_id)
     exp = int(time.time()) + _SESSION_DAYS * 86400
+    raw_sections = _parse_allowed_sections(user.get("allowed_sections")) if user else []
+    # ZERO_STOCK_ACTION_KEY vive en la misma columna que el resto de permisos
+    # (para que /usuarios lo edite con el resto), pero se separa a su propio
+    # flag "zst" en el JWT -- si se dejara dentro de "sec", un usuario sin
+    # ninguna otra restricción quedaría con allowed_sections=[ese marcador]
+    # (no vacío) y el resto del código lo trataría como "tiene restricciones
+    # de sección" -- perdiendo todo su acceso real.
+    can_zero = ZERO_STOCK_ACTION_KEY in raw_sections
+    sec_for_jwt = [s for s in raw_sections if s != ZERO_STOCK_ACTION_KEY]
     payload = {
         "uid": user_id,
         "exp": exp,
@@ -495,7 +525,8 @@ async def create_session(user_id: int, ip: str = None) -> str:
         "dn": user.get("display_name", "") if user else "",
         "role": user.get("role", "viewer") if user else "viewer",
         "mcp": user.get("must_change_pw", 0) if user else 0,
-        "sec": _parse_allowed_sections(user.get("allowed_sections")) if user else [],
+        "sec": sec_for_jwt,
+        "zst": 1 if can_zero else 0,
     }
     token = _jwt_sign(payload)
     # Persistir en DB para auditoría y soporte de logout (best-effort)
@@ -527,6 +558,7 @@ async def get_session(token: str) -> Optional[dict]:
             "role": payload.get("role", "viewer"),
             "must_change_pw": payload.get("mcp", 0),
             "allowed_sections": payload.get("sec", []),
+            "can_zero_stock": bool(payload.get("zst", 0)),
         }
     # Fallback DB para tokens opacos legacy
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -543,7 +575,9 @@ async def get_session(token: str) -> Optional[dict]:
             if not row:
                 return None
             d = dict(row)
-            d["allowed_sections"] = _parse_allowed_sections(d.get("allowed_sections"))
+            raw_sections = _parse_allowed_sections(d.get("allowed_sections"))
+            d["can_zero_stock"] = ZERO_STOCK_ACTION_KEY in raw_sections
+            d["allowed_sections"] = [s for s in raw_sections if s != ZERO_STOCK_ACTION_KEY]
             return d
     except Exception:
         return None

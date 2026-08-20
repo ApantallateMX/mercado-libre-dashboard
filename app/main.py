@@ -17941,9 +17941,10 @@ async def resolve_stock_alert_substitution(request: Request):
 @app.get("/api/stock/alerts/zero-stock-preview")
 async def zero_stock_preview(request: Request, sku: str = Query(...)):
     """Preview de poner stock=0 en todas las cuentas ML para un SKU sin
-    stock — admin-only, no ejecuta ningún cambio."""
+    stock — requiere permiso can_zero_stock (admin, o checkbox otorgado en
+    /usuarios), no ejecuta ningún cambio."""
     du = getattr(request.state, "dashboard_user", None) or {}
-    if du.get("role") != "admin":
+    if not user_store.can_zero_stock(du):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     sku = sku.split("/")[0].strip()
     from app.services.stock_concentrator import preview_zero_all
@@ -17955,9 +17956,10 @@ async def zero_stock_preview(request: Request, sku: str = Query(...)):
 async def zero_stock_execute(request: Request):
     """Ejecuta poner stock=0 en todas las cuentas ML para un SKU sin stock
     y resuelve TODAS las alertas activas de ese SKU de un jalón (no solo la
-    orden que se estaba viendo) — admin-only. Body: {sku, note}."""
+    orden que se estaba viendo) — requiere permiso can_zero_stock (admin, o
+    checkbox otorgado en /usuarios). Body: {sku, note}."""
     du = getattr(request.state, "dashboard_user", None) or {}
-    if du.get("role") != "admin":
+    if not user_store.can_zero_stock(du):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()

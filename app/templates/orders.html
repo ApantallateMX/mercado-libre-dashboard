@@ -553,7 +553,9 @@ if ('{{ view }}' === 'alertas_stock') {
 // ════════════════════════════════════════════════════════════════════════════
 // Alertas de Stock (movida de Sync Stock) — feed en vivo de órdenes ML sin stock
 // ════════════════════════════════════════════════════════════════════════════
-var IS_ADMIN_ALERTAS = {{ 'true' if dashboard_user and dashboard_user.role == 'admin' else 'false' }};
+// Admin siempre puede; otros roles solo si tienen el checkbox "Sin Stock"
+// otorgado en /usuarios (user_store.can_zero_stock).
+var IS_ADMIN_ALERTAS = {{ 'true' if dashboard_user and (dashboard_user.role == 'admin' or dashboard_user.can_zero_stock) else 'false' }};
 var _alertasRowsHtml = [];
 var _ALERTAS_PAGE_SIZE = 10;
 var _alertasLastLoadTs = 0;

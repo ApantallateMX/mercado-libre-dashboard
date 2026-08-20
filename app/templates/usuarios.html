@@ -142,6 +142,10 @@
         <div id="create-sections-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto">
           <!-- renderizado por JS -->
         </div>
+        <label class="flex items-start gap-2 text-sm border border-red-100 bg-red-50 rounded-lg px-3 py-2 cursor-pointer">
+          <input type="checkbox" id="create-zero-stock-ml" class="mt-0.5 rounded border-gray-300 text-red-600 focus:ring-red-500">
+          <span class="text-red-700">⛔ Puede poner "Sin Stock" en ML <span class="text-red-500 font-normal">(pone qty=0 en las 4 cuentas ML de un jalón — acción destructiva, aparte del acceso a Ventas)</span></span>
+        </label>
       </div>
 
       <div id="create-msg" class="hidden text-sm rounded-lg px-3 py-2"></div>
@@ -204,6 +208,10 @@
         <div id="edit-sections-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-80 overflow-y-auto">
           <!-- renderizado por JS -->
         </div>
+        <label class="flex items-start gap-2 text-sm border border-red-100 bg-red-50 rounded-lg px-3 py-2 cursor-pointer">
+          <input type="checkbox" id="edit-zero-stock-ml" class="mt-0.5 rounded border-gray-300 text-red-600 focus:ring-red-500">
+          <span class="text-red-700">⛔ Puede poner "Sin Stock" en ML <span class="text-red-500 font-normal">(pone qty=0 en las 4 cuentas ML de un jalón — acción destructiva, aparte del acceso a Ventas)</span></span>
+        </label>
       </div>
 
       <div id="edit-msg" class="hidden text-sm rounded-lg px-3 py-2"></div>
@@ -330,6 +338,7 @@ function openCreateUser(){
   document.getElementById('modal-create').classList.remove('hidden');
   document.getElementById('new-username').focus();
   renderSectionCheckboxes('create', []);
+  document.getElementById('create-zero-stock-ml').checked = false;
   onRoleChange('create');
 }
 function closeCreateUser(){
@@ -345,6 +354,7 @@ async function submitCreateUser(){
   var display=document.getElementById('new-display-name').value.trim();
   var role=document.getElementById('new-role').value;
   var sections=getSectionCheckboxes('create');
+  if(document.getElementById('create-zero-stock-ml').checked) sections.push('action:zero_stock_ml');
   var msg=document.getElementById('create-msg');
   var btn=document.getElementById('btn-create-user');
   if(!username){
@@ -381,6 +391,7 @@ function openEditUser(id, username, displayName, role, active, currentSections){
   document.getElementById('edit-role').value=role;
   document.getElementById('edit-msg').classList.add('hidden');
   renderSectionCheckboxes('edit', currentSections || []);
+  document.getElementById('edit-zero-stock-ml').checked = (currentSections || []).indexOf('action:zero_stock_ml') >= 0;
   onRoleChange('edit');
   document.getElementById('modal-edit').classList.remove('hidden');
 }
@@ -392,6 +403,7 @@ async function submitEditUser(){
   var display=document.getElementById('edit-display-name').value.trim();
   var role=document.getElementById('edit-role').value;
   var sections=getSectionCheckboxes('edit');
+  if(document.getElementById('edit-zero-stock-ml').checked) sections.push('action:zero_stock_ml');
   var msg=document.getElementById('edit-msg');
   var btn=document.getElementById('btn-edit-user');
   btn.disabled=true; btn.textContent='Guardando...';
