@@ -469,9 +469,11 @@ async def update_user(user_id: int, **kwargs) -> bool:
         )
         await db.commit()
     if "allowed_sections" in fields or "role" in fields:
-        # Los permisos van embebidos en el JWT de sesión — si no se invalida,
-        # el usuario sigue con los permisos viejos hasta que el token expire
-        # (30 días) o cierre sesión manualmente. Forzar re-login inmediato.
+        # FIX 2026-08-20: get_session() ya relee rol/allowed_sections frescos
+        # de la DB en cada request (ya no confía en el JWT para eso) -- un
+        # simple refresh del usuario afectado basta, esto solo limpia las
+        # filas legacy de user_sessions (fallback de tokens opacos viejos),
+        # no es necesario para que el cambio tome efecto.
         await delete_user_sessions(user_id)
     return True
 
@@ -505,28 +507,25 @@ async def delete_user(user_id: int):
 
 # ─── Sesiones ─────────────────────────────────────────────────────────────────
 async def create_session(user_id: int, ip: str = None) -> str:
-    """Genera un JWT firmado con los datos del usuario embebidos.
-    Sobrevive reinicios del contenedor mientras SECRET_KEY sea estable."""
+    """Genera un JWT firmado que prueba identidad (uid) y sobrevive reinicios
+    del contenedor mientras SECRET_KEY sea estable.
+
+    FIX 2026-08-20 (Jovan: "los cambios deben aplicar con un refresh, no
+    logout/login"): el payload YA NO embebe rol/allowed_sections/etc --
+    esos se leían congelados desde este momento hasta que el token
+    expirara (30 días) o el usuario cerrara sesión manualmente, así que
+    un admin cambiando un permiso en /usuarios no se reflejaba hasta
+    relogin. get_session() ahora relee esos campos frescos de
+    dashboard_users por uid en cada request. Se dejan username/dn/role
+    solo como metadata legible del token (nunca usados para autorizar)."""
     user = await get_user_by_id(user_id)
     exp = int(time.time()) + _SESSION_DAYS * 86400
-    raw_sections = _parse_allowed_sections(user.get("allowed_sections")) if user else []
-    # ZERO_STOCK_ACTION_KEY vive en la misma columna que el resto de permisos
-    # (para que /usuarios lo edite con el resto), pero se separa a su propio
-    # flag "zst" en el JWT -- si se dejara dentro de "sec", un usuario sin
-    # ninguna otra restricción quedaría con allowed_sections=[ese marcador]
-    # (no vacío) y el resto del código lo trataría como "tiene restricciones
-    # de sección" -- perdiendo todo su acceso real.
-    can_zero = ZERO_STOCK_ACTION_KEY in raw_sections
-    sec_for_jwt = [s for s in raw_sections if s != ZERO_STOCK_ACTION_KEY]
     payload = {
         "uid": user_id,
         "exp": exp,
         "username": user.get("username", "") if user else "",
         "dn": user.get("display_name", "") if user else "",
         "role": user.get("role", "viewer") if user else "viewer",
-        "mcp": user.get("must_change_pw", 0) if user else 0,
-        "sec": sec_for_jwt,
-        "zst": 1 if can_zero else 0,
     }
     token = _jwt_sign(payload)
     # Persistir en DB para auditoría y soporte de logout (best-effort)
@@ -545,20 +544,34 @@ async def create_session(user_id: int, ip: str = None) -> str:
 
 async def get_session(token: str) -> Optional[dict]:
     """Valida la sesión. Primero intenta verificar el JWT (sin DB).
-    Si no es JWT válido, intenta lookup en DB (tokens legacy)."""
+    Si no es JWT válido, intenta lookup en DB (tokens legacy).
+
+    FIX 2026-08-20 (Jovan: "los cambios deben aplicar con un refresh, no
+    logout/login"): el JWT ya NO es la fuente de rol/permisos -- solo
+    prueba identidad (firma + uid + exp, sobrevive reinicios). Rol,
+    allowed_sections, can_zero_stock y display_name se leen SIEMPRE frescos
+    de dashboard_users por uid. Antes venían embebidos en el payload
+    (congelados desde el login, hasta 30 días o hasta forzar
+    delete_user_sessions -- que de todos modos no invalida el JWT, solo
+    la tabla legacy) -- un admin cambiaba un permiso y el usuario afectado
+    no lo veía hasta cerrar sesión manualmente."""
     if not token:
         return None
-    # Verificar JWT — no requiere DB, sobrevive reinicios
     payload = _jwt_verify(token)
     if payload:
+        uid = payload.get("uid")
+        user = await get_user_by_id(uid) if uid else None
+        if not user or not user.get("active", 1):
+            return None
+        raw_sections = _parse_allowed_sections(user.get("allowed_sections"))
         return {
-            "id": payload.get("uid"),
-            "username": payload.get("username", ""),
-            "display_name": payload.get("dn", ""),
-            "role": payload.get("role", "viewer"),
-            "must_change_pw": payload.get("mcp", 0),
-            "allowed_sections": payload.get("sec", []),
-            "can_zero_stock": bool(payload.get("zst", 0)),
+            "id": user.get("id"),
+            "username": user.get("username", ""),
+            "display_name": user.get("display_name", ""),
+            "role": user.get("role", "viewer"),
+            "must_change_pw": user.get("must_change_pw", 0),
+            "allowed_sections": [s for s in raw_sections if s != ZERO_STOCK_ACTION_KEY],
+            "can_zero_stock": ZERO_STOCK_ACTION_KEY in raw_sections,
         }
     # Fallback DB para tokens opacos legacy
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
