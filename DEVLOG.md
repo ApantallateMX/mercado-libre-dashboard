@@ -7,6 +7,56 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — CIERRE DEL INCIDENTE: causa real era un HTTP 500 de BM (no bloqueo) + 5ta vía corregida
+
+### Diagnóstico real vía logs de Railway
+
+Con la visibilidad de progreso recién agregada (`bm-category-loop-status`),
+la primera corrida del loop top mostró las 5 categorías con `ok:false`.
+Jovan confirmó con BinManager que NO hay ningún bloqueo puesto a la cuenta
+`Claude.Jovan@mitechnologiesinc.com` (mandó captura de BM con datos reales
+en su propia sesión).
+
+Se consultó la API GraphQL de Railway (`deploymentLogs`, con filtro de
+texto y ventana de tiempo — primera vez que se usa esta vía) y se
+encontró la causa real: `[BM] get_bulk_stock pág 1 HTTP no-200 --
+status=500 body[:300]='...<title>Object reference not set to an
+instance of an object.</title>...'` — BM devuelve un **NullReferenceException
+real de su propio servidor .NET**, no un rechazo de acceso. Confirmado
+además de forma independiente vía el MCP de BinManager (solo lectura):
+"Televisions" SÍ tiene stock real y fresco ahora mismo. BM en general
+funciona; el error 500 es específico del endpoint/parámetros que usa
+nuestra app.
+
+`get_bulk_stock()` ya maneja el HTTP 500 correctamente (retorna lista
+vacía) y el fix del mismo día ("0 filas = no tocar nada") ya lo cubre —
+no hay corrupción, solo falta de datos frescos hasta que BinManager
+corrija su servidor. No hay más acción de código posible de nuestro lado
+para esto.
+
+### 5ta vía encontrada y corregida (commit `92f5152`)
+
+Los mismos logs revelaron `_enrich_bm_amz`/`_fetch_base`
+(`app/api/amazon_products.py`) — 3 llamadas EN VIVO por SKU base de
+Amazon (warehouse + stock + info), disparado por `_refresh_bm_all_bg`
+para el catálogo Amazon completo cada 15 min. No se detectó en el primer
+barrido porque vive en otro archivo. Corregido: `get_bm_master_rows_
+for_skus()` (`token_store.py`) extendida con `retail_ph`/`cost_usd`, y
+`_enrich_bm_amz` reemplazado por una sola consulta SQL batched. Limpieza
+de código muerto asociado (`_parse_wh_rows_amz`, URLs sin uso).
+
+### Herramienta nueva para diagnóstico
+
+Railway GraphQL `deploymentLogs(deploymentId, startDate, endDate, filter,
+limit)` — busca logs reales de producción por texto/ventana de tiempo.
+Mucho más preciso que especular con diag endpoints agregados. Usar esto
+la próxima vez que algo falle sin explicación clara antes de asumir
+causa.
+
+Memoria actualizada: `.claude/memory/project_bm_call_consolidation_2026-08-20.md`.
+
+---
+
 ## 2026-08-20 — CONTINUACIÓN DEL INCIDENTE + FEAT: auto-halt del loop de categorías top ante patrón de 0 filas
 
 ### Segunda corrupción el mismo día
