@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FIX: respaldo getOrder puntual para alertas Amazon que getOrders (lista) no devuelve
+
+Tercer y último hallazgo de la revisión del lado Amazon pedida por Jovan
+(mismo día, ver entrada de abajo para los 2 primeros). De las 7 alertas
+VECKTOR fantasma, 3 órdenes (`701-0674967-4481812`, `701-6812787-3779429`,
+`702-3480491-5024235`) resultaron estar YA en status `Shipped` (confirmado
+con `getOrder` puntual vía `/api/diag/amazon-order-status`), pero seguían
+sin limpiarse porque `getOrders` (la lista, con la MISMA ventana de fecha y
+status) simplemente no las devolvía — el mismo quirk de SP-API ya
+documentado 2026-08-18 para esta cuenta (`/api/diag/amazon-orders-list`),
+nunca cerrado del todo en ese momento.
+
+Verificación independiente de que estos 6 SKUs no son catálogo BM en
+absoluto (más allá de `/api/diag/sku`): las tools MCP de BinManager
+(`sc_exists_lpn_or_sku` + `inventory_snapshot`) confirman `Is_SKU=false`,
+`Is_LPN=false`, 0 filas para los 6 — BM no los conoce por ningún camino.
+
+`_run_amazon_stock_reconcile_pass` (`app/main.py`) se refactorizó: la
+evaluación por-orden vive ahora en `_process_one_amazon_order()` (compartida
+por el camino normal vía `getOrders` y por el respaldo, para no duplicar el
+criterio en 2 lugares que puedan divergir). Al final de cada pasada, cualquier
+orden con una alerta Amazon abierta que la lista NO devolvió se revisa con
+`AmazonClient.get_order()` (nuevo wrapper de `GET /orders/v0/orders/{id}`,
+`amazon_client.py`) antes de cerrar el ciclo — cierra el hueco sin depender
+de que Amazon corrija su propia lista.
+
+Commit `fadeedf`, deploy Railway `SUCCESS`.
+
+---
+
 ## 2026-08-19 — FIX: alertas de stock Amazon (VECKTOR) — mismo bug de auto-heal del lado ML + filas fantasma de SKUs no-BM
 
 ### Contexto
