@@ -20621,31 +20621,43 @@ async def diag_confcolumns_bintype_test(
             return None, "respuesta no es lista"
         return data, None
 
+    def _row_raw(rows, sku):
+        if not rows:
+            return None
+        return next((r for r in rows if (r.get("SKU") or "").upper().strip() == sku.upper()), None)
+
     results = {}
+    raw_rows = {}
+    # FIX 2026-08-19 #2: el desarrollador de BinManager (Alberto) confirmó el
+    # nombre real del campo -- "InventoryType", no "BINTYPEID" (adivinado
+    # antes, sin efecto). Mismos valores de prueba (BinTypeID de list_bin_types).
     for _label, _fields in (
-        ("sin_BINTYPEID", {}),
-        ("BINTYPEID_finished_good_2_6_19", {"BINTYPEID": "2,6,19"}),
-        ("BINTYPEID_no_vendible_7", {"BINTYPEID": "7"}),
+        ("sin_InventoryType", {}),
+        ("InventoryType_finished_good_2_6_19", {"InventoryType": "2,6,19"}),
+        ("InventoryType_no_vendible_7", {"InventoryType": "7"}),
+        ("InventoryType_transito_1", {"InventoryType": "1"}),
     ):
         rows, err = await _fetch(_fields)
         results[_label] = {
             "error": err, "rows": len(rows) if rows else 0,
             "available_test_sku": _row_available(rows, test_sku) if rows else None,
         }
+        raw_rows[_label] = _row_raw(rows, test_sku)
 
-    base = results["sin_BINTYPEID"]["available_test_sku"]
-    fg = results["BINTYPEID_finished_good_2_6_19"]["available_test_sku"]
-    nv = results["BINTYPEID_no_vendible_7"]["available_test_sku"]
+    base = results["sin_InventoryType"]["available_test_sku"]
+    fg = results["InventoryType_finished_good_2_6_19"]["available_test_sku"]
+    nv = results["InventoryType_no_vendible_7"]["available_test_sku"]
+    tr = results["InventoryType_transito_1"]["available_test_sku"]
     if isinstance(base, int) and isinstance(fg, int) and isinstance(nv, int) and (fg != base or nv != base):
-        conclusion = "PARAMETRO_FUNCIONA -- BINTYPEID SI cambia el resultado, hay que agregarlo al pipeline"
-    elif isinstance(base, int) and isinstance(fg, int) and isinstance(nv, int) and fg == base == nv:
-        conclusion = "PARAMETRO_IGNORADO -- BM no filtra por BINTYPEID en este endpoint (o CONCEPTID=1 ya excluye no-vendibles internamente)"
+        conclusion = "PARAMETRO_FUNCIONA -- InventoryType SI cambia el resultado, hay que agregarlo al pipeline"
+    elif isinstance(base, int) and isinstance(fg, int) and isinstance(nv, int) and fg == base == nv == (tr if isinstance(tr, int) else base):
+        conclusion = "PARAMETRO_IGNORADO -- BM no filtra por InventoryType en este endpoint (o CONCEPTID=1 ya excluye no-vendibles internamente)"
     else:
         conclusion = "ERROR_O_SKU_NO_ENCONTRADO -- revisar resultados"
 
     return JSONResponse({
         "category_id": category_id, "test_sku": test_sku,
-        "results": results, "conclusion": conclusion,
+        "results": results, "raw_rows": raw_rows, "conclusion": conclusion,
     })
 
 
