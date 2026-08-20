@@ -2468,6 +2468,122 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
     errors: list = []
     trace: list = []  # solo se llena si debug=True (2026-08-18, depuración caso VECKTOR)
 
+    processed_order_ids: set = set()
+    clients_by_seller: dict = {}
+
+    async def _process_one_amazon_order(client, seller_id: str, order: dict) -> None:
+        """Evalúa/limpia la alerta de UNA orden ya resuelta (misma forma
+        "Order" tanto si vino de getOrders/lista como de getOrder/puntual,
+        ver fallback más abajo) -- factorizado 2026-08-19 para que el
+        fallback getOrder use EXACTAMENTE la misma lógica que el camino
+        normal, sin duplicar (mismo criterio que el resto del proyecto:
+        nunca 2 implementaciones del mismo criterio que puedan divergir)."""
+        nonlocal n
+        order_id = order.get("AmazonOrderId", "")
+        if not order_id:
+            return
+        processed_order_ids.add(order_id)
+        # FIX 2026-08-18 (confirmado por Jovan: ExclusiveBulbs opera
+        # "más por FBA que Merchant") -- FBA (FulfillmentChannel=AFN)
+        # lo surte Amazon desde SU propio almacén, no depende de
+        # nuestro stock BM -- mismo motivo por el que ML excluye
+        # logistic_type="fulfillment" (FULL) de esta alerta. Se
+        # filtra por ORDEN, no por cuenta completa -- una cuenta
+        # mayormente FBA puede tener alguna orden Merchant suelta.
+        if order.get("FulfillmentChannel") == "AFN":
+            if debug:
+                trace.append({"order_id": order_id, "step": "skip_afn"})
+            return
+        status = order.get("OrderStatus", "")
+        should_alert = status in ("Unshipped", "PartiallyShipped")
+        n += 1
+        if not should_alert:
+            # Ya se envió/canceló -- ya no es accionable, igual que
+            # _evaluate_order_stock_alert cuando should_alert=False.
+            await token_store.delete_realtime_stock_alerts_for_order(order_id, platform="amazon")
+            if debug:
+                trace.append({"order_id": order_id, "step": "not_alertable", "status": status})
+            return
+        try:
+            items = await client.get_order_items(order_id)
+        except Exception as e:
+            errors.append({"order_id": order_id, "error": str(e)[:200]})
+            if debug:
+                trace.append({"order_id": order_id, "step": "get_order_items_failed", "error": str(e)[:200]})
+            return
+        order_date = (order.get("PurchaseDate") or "")[:10]
+        # FIX 2026-08-18 (bug real encontrado probando contra las 3
+        # cuentas reales antes de desplegar): "SKU no encontrado en
+        # el bulk" NO siempre significa "sin stock" -- también puede
+        # significar "este SKU no es catálogo de BM en absoluto".
+        # Confirmado con datos reales: VECKTOR tiene solo ~48% de su
+        # catálogo Amazon en convención SN/SH (el resto, códigos de
+        # fabricante/dropship sin relación con BM); AUTOBOT ~94%.
+        # Sin este filtro, CADA item no-BM de una orden generaba una
+        # falsa alerta "sin stock". Se exige que el SKU exista en
+        # bm_sku_master (el catálogo maestro persistido, no solo el
+        # bulk en memoria) antes de evaluar/alertar -- mismo criterio
+        # que ya se usó para excluir ExclusiveBulbs, aplicado a nivel
+        # SKU en vez de a nivel cuenta completa.
+        skus_this_order = {
+            normalize_to_bm_sku((it.get("SellerSKU") or "").strip())
+            for it in items if (it.get("SellerSKU") or "").strip()
+        }
+        known_skus = await token_store.get_bm_master_rows_for_skus(list(skus_this_order))
+        # FIX 2026-08-19 (revisión pedida por Jovan del lado Amazon tras
+        # cerrar el bug de ConfColumns/TRANSITO): el filtro de arriba
+        # (2026-08-18) solo exigía que la fila EXISTIERA en bm_sku_master,
+        # pero encontramos filas fantasma (available_qty=0, category='',
+        # verified=0) para SKUs numéricos de VECKTOR (ej. 8508943) que
+        # BM NUNCA confirmó en ningún ciclo -- ni cache, ni bulk, ni BM
+        # en vivo (verificado con /api/diag/sku) -- mientras Amazon
+        # mostraba 48-50 piezas reales en sus propias variantes
+        # (8508943-B-1/-W-1). Esas filas fantasma quedaron de una corrida
+        # vieja que sembraba un 0 para TODO known_base_sku sin distinguir
+        # "BM no tiene este producto" de "BM sí lo tiene, en 0". Ahora se
+        # exige verified=1 (BM confirmó el dato en algún ciclo real) --
+        # no solo presencia de la fila -- para tratarlo como catálogo BM.
+        verified_skus = [s for s, row in known_skus.items() if row.get("verified")]
+        # Limpieza dirigida: si algún SKU de esta orden se alertó
+        # ANTES de este fix sin ser catálogo BM (o sin estar verificado),
+        # se corrige aquí mismo sin esperar a que la orden se envíe/cancele.
+        deleted = await token_store.delete_realtime_stock_alerts_for_order_except_skus(
+            order_id, "amazon", verified_skus,
+        )
+        if debug:
+            trace.append({
+                "order_id": order_id, "step": "processed",
+                "skus_this_order": list(skus_this_order),
+                "known_skus": list(known_skus.keys()),
+                "verified_skus": verified_skus,
+                "deleted_rows": deleted,
+            })
+        for item in items:
+            sku_raw = (item.get("SellerSKU") or "").strip()
+            if not sku_raw:
+                continue
+            sku = normalize_to_bm_sku(sku_raw)
+            if sku not in known_skus or not known_skus[sku].get("verified"):
+                continue  # no es catálogo BM confirmado -- no nos corresponde alertar
+            quantity = int(item.get("QuantityOrdered") or 1)
+            avail = _bm_bulk_available_qty(sku)
+            if avail is None or avail <= 0:
+                await token_store.record_realtime_stock_alert(
+                    order_id=order_id, item_id=str(item.get("OrderItemId", "")),
+                    platform="amazon", account_id=seller_id, sku=sku,
+                    quantity=quantity, available_qty=(avail or 0), order_date=order_date,
+                    shipping_id="", sku_raw=sku_raw,
+                )
+            else:
+                # FIX 2026-08-19 (mismo bug encontrado del lado ML,
+                # revisado a pedido de Jovan del lado Amazon): esta
+                # pasada solo CREABA la alerta cuando avail<=0, nunca
+                # la borraba si el stock se corregía después -- ver
+                # delete_realtime_stock_alert_for_order_sku (ML).
+                await token_store.delete_realtime_stock_alert_for_order_sku(
+                    order_id, "amazon", sku,
+                )
+
     for acc in accounts:
         seller_id = acc.get("seller_id", "")
         if not seller_id or seller_id not in _AMAZON_STOCK_ALERT_ENABLED_SELLERS:
@@ -2477,114 +2593,13 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
             client = await get_amazon_client(seller_id)
             if not client:
                 continue
+            clients_by_seller[seller_id] = client
             orders = await client.get_orders(
                 created_after,
                 order_statuses=["Unshipped", "PartiallyShipped", "Shipped", "Canceled"],
             )
             for order in orders:
-                order_id = order.get("AmazonOrderId", "")
-                if not order_id:
-                    continue
-                # FIX 2026-08-18 (confirmado por Jovan: ExclusiveBulbs opera
-                # "más por FBA que Merchant") -- FBA (FulfillmentChannel=AFN)
-                # lo surte Amazon desde SU propio almacén, no depende de
-                # nuestro stock BM -- mismo motivo por el que ML excluye
-                # logistic_type="fulfillment" (FULL) de esta alerta. Se
-                # filtra por ORDEN, no por cuenta completa -- una cuenta
-                # mayormente FBA puede tener alguna orden Merchant suelta.
-                if order.get("FulfillmentChannel") == "AFN":
-                    if debug:
-                        trace.append({"order_id": order_id, "step": "skip_afn"})
-                    continue
-                status = order.get("OrderStatus", "")
-                should_alert = status in ("Unshipped", "PartiallyShipped")
-                n += 1
-                if not should_alert:
-                    # Ya se envió/canceló -- ya no es accionable, igual que
-                    # _evaluate_order_stock_alert cuando should_alert=False.
-                    await token_store.delete_realtime_stock_alerts_for_order(order_id, platform="amazon")
-                    if debug:
-                        trace.append({"order_id": order_id, "step": "not_alertable", "status": status})
-                    continue
-                try:
-                    items = await client.get_order_items(order_id)
-                except Exception as e:
-                    errors.append({"order_id": order_id, "error": str(e)[:200]})
-                    if debug:
-                        trace.append({"order_id": order_id, "step": "get_order_items_failed", "error": str(e)[:200]})
-                    continue
-                order_date = (order.get("PurchaseDate") or "")[:10]
-                # FIX 2026-08-18 (bug real encontrado probando contra las 3
-                # cuentas reales antes de desplegar): "SKU no encontrado en
-                # el bulk" NO siempre significa "sin stock" -- también puede
-                # significar "este SKU no es catálogo de BM en absoluto".
-                # Confirmado con datos reales: VECKTOR tiene solo ~48% de su
-                # catálogo Amazon en convención SN/SH (el resto, códigos de
-                # fabricante/dropship sin relación con BM); AUTOBOT ~94%.
-                # Sin este filtro, CADA item no-BM de una orden generaba una
-                # falsa alerta "sin stock". Se exige que el SKU exista en
-                # bm_sku_master (el catálogo maestro persistido, no solo el
-                # bulk en memoria) antes de evaluar/alertar -- mismo criterio
-                # que ya se usó para excluir ExclusiveBulbs, aplicado a nivel
-                # SKU en vez de a nivel cuenta completa.
-                skus_this_order = {
-                    normalize_to_bm_sku((it.get("SellerSKU") or "").strip())
-                    for it in items if (it.get("SellerSKU") or "").strip()
-                }
-                known_skus = await token_store.get_bm_master_rows_for_skus(list(skus_this_order))
-                # FIX 2026-08-19 (revisión pedida por Jovan del lado Amazon tras
-                # cerrar el bug de ConfColumns/TRANSITO): el filtro de arriba
-                # (2026-08-18) solo exigía que la fila EXISTIERA en bm_sku_master,
-                # pero encontramos filas fantasma (available_qty=0, category='',
-                # verified=0) para SKUs numéricos de VECKTOR (ej. 8508943) que
-                # BM NUNCA confirmó en ningún ciclo -- ni cache, ni bulk, ni BM
-                # en vivo (verificado con /api/diag/sku) -- mientras Amazon
-                # mostraba 48-50 piezas reales en sus propias variantes
-                # (8508943-B-1/-W-1). Esas filas fantasma quedaron de una corrida
-                # vieja que sembraba un 0 para TODO known_base_sku sin distinguir
-                # "BM no tiene este producto" de "BM sí lo tiene, en 0". Ahora se
-                # exige verified=1 (BM confirmó el dato en algún ciclo real) --
-                # no solo presencia de la fila -- para tratarlo como catálogo BM.
-                verified_skus = [s for s, row in known_skus.items() if row.get("verified")]
-                # Limpieza dirigida: si algún SKU de esta orden se alertó
-                # ANTES de este fix sin ser catálogo BM (o sin estar verificado),
-                # se corrige aquí mismo sin esperar a que la orden se envíe/cancele.
-                deleted = await token_store.delete_realtime_stock_alerts_for_order_except_skus(
-                    order_id, "amazon", verified_skus,
-                )
-                if debug:
-                    trace.append({
-                        "order_id": order_id, "step": "processed",
-                        "skus_this_order": list(skus_this_order),
-                        "known_skus": list(known_skus.keys()),
-                        "verified_skus": verified_skus,
-                        "deleted_rows": deleted,
-                    })
-                for item in items:
-                    sku_raw = (item.get("SellerSKU") or "").strip()
-                    if not sku_raw:
-                        continue
-                    sku = normalize_to_bm_sku(sku_raw)
-                    if sku not in known_skus or not known_skus[sku].get("verified"):
-                        continue  # no es catálogo BM confirmado -- no nos corresponde alertar
-                    quantity = int(item.get("QuantityOrdered") or 1)
-                    avail = _bm_bulk_available_qty(sku)
-                    if avail is None or avail <= 0:
-                        await token_store.record_realtime_stock_alert(
-                            order_id=order_id, item_id=str(item.get("OrderItemId", "")),
-                            platform="amazon", account_id=seller_id, sku=sku,
-                            quantity=quantity, available_qty=(avail or 0), order_date=order_date,
-                            shipping_id="", sku_raw=sku_raw,
-                        )
-                    else:
-                        # FIX 2026-08-19 (mismo bug encontrado del lado ML,
-                        # revisado a pedido de Jovan del lado Amazon): esta
-                        # pasada solo CREABA la alerta cuando avail<=0, nunca
-                        # la borraba si el stock se corregía después -- ver
-                        # delete_realtime_stock_alert_for_order_sku (ML).
-                        await token_store.delete_realtime_stock_alert_for_order_sku(
-                            order_id, "amazon", sku,
-                        )
+                await _process_one_amazon_order(client, seller_id, order)
                 await asyncio.sleep(0.3)  # espaciar getOrderItems entre órdenes (rate limit propio)
         except Exception as e:
             # AmazonClient no mantiene conexión persistente (cada _request abre
@@ -2593,6 +2608,52 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
             errors.append({"order_id": f"cuenta {seller_id}", "error": str(e)[:200]})
             if debug:
                 trace.append({"order_id": f"cuenta {seller_id}", "step": "account_exception", "error": str(e)[:200]})
+
+    # FIX 2026-08-19 (revisión pedida por Jovan del lado Amazon): getOrders
+    # (la lista) confirmado NO devuelve consistentemente todas las órdenes
+    # dentro de su propia ventana de fecha/status (caso real ya documentado
+    # 2026-08-18, orden VECKTOR 702-3480491-5024235 -- getOrder puntual sí
+    # la confirmaba Unshipped/Shipped mientras getOrders la omitía). Sin
+    # este respaldo, una alerta de una orden "invisible" para la lista se
+    # queda viva para siempre aunque la orden ya se haya enviado de verdad.
+    # Respaldo: cualquier orden con alerta Amazon ABIERTA que este pase NO
+    # vio en la lista se revisa con getOrder puntual (confiable) antes de
+    # cerrar el ciclo.
+    try:
+        open_alerts = await token_store.get_all_realtime_alerts_for_reconcile()
+    except Exception as e:
+        open_alerts = []
+        errors.append({"order_id": "fallback_lookup", "error": f"get_all_realtime_alerts_for_reconcile: {str(e)[:200]}"})
+    missed: dict[str, str] = {}
+    for a in open_alerts:
+        if a.get("platform") != "amazon":
+            continue
+        oid = a.get("order_id", "")
+        seller_id = a.get("account_id", "")
+        if not oid or oid in processed_order_ids or seller_id not in _AMAZON_STOCK_ALERT_ENABLED_SELLERS:
+            continue
+        missed.setdefault(oid, seller_id)
+    for order_id, seller_id in missed.items():
+        try:
+            client = clients_by_seller.get(seller_id)
+            if not client:
+                from app.services.amazon_client import get_amazon_client
+                client = await get_amazon_client(seller_id)
+                if not client:
+                    continue
+                clients_by_seller[seller_id] = client
+            order = await client.get_order(order_id)
+            if not order.get("AmazonOrderId"):
+                continue
+            if debug:
+                trace.append({"order_id": order_id, "step": "fallback_getOrder"})
+            await _process_one_amazon_order(client, seller_id, order)
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            errors.append({"order_id": order_id, "error": f"fallback getOrder: {str(e)[:200]}"})
+            if debug:
+                trace.append({"order_id": order_id, "step": "fallback_getOrder_failed", "error": str(e)[:200]})
+
     if debug:
         return n, errors, trace
     return n, errors

@@ -317,6 +317,18 @@ class AmazonClient:
 
         return orders
 
+    async def get_order(self, order_id: str) -> dict:
+        """Estado real y actual de UNA orden puntual (getOrder, no la lista
+        getOrders). FIX 2026-08-19: getOrders (lista) confirmado NO devuelve
+        consistentemente todas las órdenes dentro de su propia ventana de
+        fecha/status (caso real documentado 2026-08-18, orden VECKTOR
+        702-3480491-5024235) -- getOrder puntual sí es confiable. Usado como
+        respaldo en _run_amazon_stock_reconcile_pass para las órdenes que
+        siguen con una alerta abierta pero ya no aparecen en la lista."""
+        async with _ORDERS_SEMAPHORE:
+            result = await self._request("GET", f"/orders/v0/orders/{order_id}")
+        return result.get("payload", {})
+
     async def get_order_items(self, order_id: str) -> list:
         """
         Obtiene los productos (line items) de una orden específica.
