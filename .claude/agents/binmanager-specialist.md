@@ -27,6 +27,8 @@ En la práctica:
 - Antes de agregar o tocar CUALQUIER código que llame a un método de `binmanager_client.py`, pregúntate: ¿esto corre automáticamente (loop, background task, prewarm) o es un click humano puntual (botón "Sync ahora", diag manual)? Solo lo segundo es tolerable fuera del loop de categorías, y solo si es de verdad ocasional.
 - Pendiente conocido, NO corregido aún (menor prioridad porque corre 1x/día, no contribuyó al bloqueo): `amazon_lanzar.py:299` (gap scan nocturno de Amazon) tiene su propio `get_bulk_stock()` separado, porque necesita `ImageURL` que `bm_sku_master` no guarda.
 
+**Actualizado el mismo día (commit `d368e17`):** el fix de "0 filas no cuenta como confirmado" no bastó solo — BM volvió a devolver 0 filas para "Televisions" incluso después de que Jovan confirmó "ya estamos desbloqueados", corrompiendo de nuevo `available_qty` real de TVs (segunda vez el mismo día, restaurado otra vez desde backup). Por directiva explícita de Jovan ("si detectas un patrón que es 0, 0, 0 de categorías muy vendibles debes parar y alertar"), el loop top-5 (`_conf_columns_top_categories_loop`) ahora se **auto-pausa** si una categoría de alta venta devuelve 0 filas 3 veces seguidas (`_bm_top_category_empty_streak`/`_bm_category_loop_halt_reason`) — deja de llamar a BM hasta limpiarse manualmente vía `POST /api/diag/bm-category-loop-resume` (solo tras confirmar con `bm-master-update-category` que BM ya responde con datos reales). Estado consultable en `GET /api/diag/bm-category-loop-status`, visible también en la página Sync Stock.
+
 Ver `.claude/memory/project_bm_call_consolidation_2026-08-20.md` para el detalle completo.
 
 ---

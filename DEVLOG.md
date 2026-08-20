@@ -7,6 +7,53 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — CONTINUACIÓN DEL INCIDENTE + FEAT: auto-halt del loop de categorías top ante patrón de 0 filas
+
+### Segunda corrupción el mismo día
+
+Tras confirmar "ya estamos desbloqueados" y reactivar `DISABLE_BM_MONITOR=false`,
+una prueba manual a `/api/diag/bm-master-update-category?category_id=Televisions`
+volvió a traer 0 filas de BM (HTTP 200 vacío) — el fix de "no tocar en 0
+filas" (ver entrada de abajo) todavía no estaba desplegado en ese momento,
+así que puso en 0 el `available_qty` real de TVs otra vez (SNTV001764,
+SNTV007270, SNTV005362). Re-pausado `DISABLE_BM_MONITOR=true` de
+inmediato, restaurado desde `bm_sku_master_backup_20260820_043936` (misma
+backup que la primera vez), desplegado el fix real
+(`_update_bm_master_for_category`: `rows=[]` se trata igual que
+`rows=None`, nunca zerea nada), y forzado un restart extra para que
+`_bm_master_mem` (el espejo en memoria de las alertas en tiempo real)
+también se recargara con los datos restaurados.
+
+### FEAT: auto-halt ante patrón "0,0,0" en categoría de alta venta (commit `d368e17`)
+
+Directiva explícita de Jovan: "si detectas un patrón que es 0, 0, 0 de
+categorías muy vendibles debes parar y alertar."
+
+- `_bm_top_category_empty_streak` cuenta "0 filas" consecutivas por
+  categoría top (las 5 de mayor venta, refrescadas cada 15 min); se
+  resetea en cuanto una respuesta trae datos reales.
+- Al llegar a 3, `_bm_category_loop_halt_reason` se llena y
+  `_conf_columns_top_categories_loop` deja de llamar a BM en cada ciclo
+  (solo duerme y vuelve a chequear) hasta limpiarse manualmente.
+- El motivo se reusa en el campo `error` de `/api/stock/prewarm-status`
+  — se muestra automáticamente en la fila de estado de Sync Stock al
+  abrir la página, sin HTML nuevo.
+- Nuevos endpoints: `GET /api/diag/bm-category-loop-status` (ver estado)
+  y `POST /api/diag/bm-category-loop-resume` (limpiar, solo tras
+  confirmar con `bm-master-update-category` que BM ya responde con datos
+  reales).
+- Nota: el estado vive en memoria del proceso — un restart de Railway lo
+  resetea a 0/limpio, igual que otros flags similares del proyecto.
+
+Verificado en producción: `bm-category-loop-status` responde
+`{"halted":false}`, TVs restaurados siguen con stock real tras el
+restart, monitor reactivado.
+
+Memoria actualizada: `.claude/memory/project_bm_call_consolidation_2026-08-20.md`
+(ampliada con este segundo incidente y el auto-halt), `.claude/agents/binmanager-specialist.md`.
+
+---
+
 ## 2026-08-20 — INCIDENTE CRÍTICO + FIX: BinManager bloqueó el acceso real — 4 mecanismos automáticos fuera del loop de categorías
 
 ### Contexto
