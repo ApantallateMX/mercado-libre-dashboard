@@ -2532,17 +2532,32 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
                     for it in items if (it.get("SellerSKU") or "").strip()
                 }
                 known_skus = await token_store.get_bm_master_rows_for_skus(list(skus_this_order))
+                # FIX 2026-08-19 (revisión pedida por Jovan del lado Amazon tras
+                # cerrar el bug de ConfColumns/TRANSITO): el filtro de arriba
+                # (2026-08-18) solo exigía que la fila EXISTIERA en bm_sku_master,
+                # pero encontramos filas fantasma (available_qty=0, category='',
+                # verified=0) para SKUs numéricos de VECKTOR (ej. 8508943) que
+                # BM NUNCA confirmó en ningún ciclo -- ni cache, ni bulk, ni BM
+                # en vivo (verificado con /api/diag/sku) -- mientras Amazon
+                # mostraba 48-50 piezas reales en sus propias variantes
+                # (8508943-B-1/-W-1). Esas filas fantasma quedaron de una corrida
+                # vieja que sembraba un 0 para TODO known_base_sku sin distinguir
+                # "BM no tiene este producto" de "BM sí lo tiene, en 0". Ahora se
+                # exige verified=1 (BM confirmó el dato en algún ciclo real) --
+                # no solo presencia de la fila -- para tratarlo como catálogo BM.
+                verified_skus = [s for s, row in known_skus.items() if row.get("verified")]
                 # Limpieza dirigida: si algún SKU de esta orden se alertó
-                # ANTES de este fix sin ser catálogo BM, se corrige aquí
-                # mismo sin esperar a que la orden se envíe/cancele.
+                # ANTES de este fix sin ser catálogo BM (o sin estar verificado),
+                # se corrige aquí mismo sin esperar a que la orden se envíe/cancele.
                 deleted = await token_store.delete_realtime_stock_alerts_for_order_except_skus(
-                    order_id, "amazon", list(known_skus.keys()),
+                    order_id, "amazon", verified_skus,
                 )
                 if debug:
                     trace.append({
                         "order_id": order_id, "step": "processed",
                         "skus_this_order": list(skus_this_order),
                         "known_skus": list(known_skus.keys()),
+                        "verified_skus": verified_skus,
                         "deleted_rows": deleted,
                     })
                 for item in items:
@@ -2550,8 +2565,8 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
                     if not sku_raw:
                         continue
                     sku = normalize_to_bm_sku(sku_raw)
-                    if sku not in known_skus:
-                        continue  # no es catálogo BM -- no nos corresponde alertar
+                    if sku not in known_skus or not known_skus[sku].get("verified"):
+                        continue  # no es catálogo BM confirmado -- no nos corresponde alertar
                     quantity = int(item.get("QuantityOrdered") or 1)
                     avail = _bm_bulk_available_qty(sku)
                     if avail is None or avail <= 0:
@@ -2560,6 +2575,15 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
                             platform="amazon", account_id=seller_id, sku=sku,
                             quantity=quantity, available_qty=(avail or 0), order_date=order_date,
                             shipping_id="", sku_raw=sku_raw,
+                        )
+                    else:
+                        # FIX 2026-08-19 (mismo bug encontrado del lado ML,
+                        # revisado a pedido de Jovan del lado Amazon): esta
+                        # pasada solo CREABA la alerta cuando avail<=0, nunca
+                        # la borraba si el stock se corregía después -- ver
+                        # delete_realtime_stock_alert_for_order_sku (ML).
+                        await token_store.delete_realtime_stock_alert_for_order_sku(
+                            order_id, "amazon", sku,
                         )
                 await asyncio.sleep(0.3)  # espaciar getOrderItems entre órdenes (rate limit propio)
         except Exception as e:
