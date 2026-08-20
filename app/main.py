@@ -21161,6 +21161,19 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
             "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
             "error": f"respuesta no es lista ({type(rows).__name__}) -- no se tocó bm_sku_master",
         }
+    # FIX 2026-08-20 (incidente real: BM bloqueado devolvió HTTP 200 con lista
+    # vacía -- no None, no excepción -- para "Televisions" Y "Headphones-JLab",
+    # y el código de abajo lo interpretó como "categoría confirmada sin stock"
+    # y puso en 0 el available_qty real de TVs con decenas de unidades reales
+    # en ML. 0 filas para una categoría que ya tenía datos casi siempre es
+    # síntoma de bloqueo/fallo silencioso de BM, NUNCA "confirmado sin stock"
+    # -- tratar igual que rows is None: no tocar nada.
+    if not rows:
+        return {
+            "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
+            "error": "Get_GlobalStock_InventoryBySKU devolvió 0 filas (HTTP 200 vacío) -- "
+                     "tratado como fallo/bloqueo de BM, no se tocó bm_sku_master",
+        }
 
     known_skus = set(await token_store.get_all_known_base_skus())
     _by_base: dict[str, list] = {}
