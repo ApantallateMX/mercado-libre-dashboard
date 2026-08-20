@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FEAT: permiso otorgable "⛔ Sin Stock" (ML) separado del rol admin
+
+**Archivos:** `app/services/user_store.py`, `app/main.py`, `app/templates/orders.html`, `app/templates/usuarios.html`.
+
+Jovan reportó que Said y Alex ya no veían el botón "⛔ Sin stock" (Ventas →
+Alertas de Stock ML) y pidió poder dárselo desde permisos — pero ese botón
+nació admin-only desde su creación (2026-07-21, ver entrada de esa fecha),
+sin ningún checkbox en `/usuarios` para otorgarlo a nadie más. No fue un
+bug de código: fue una funcionalidad que faltaba (delegar el permiso).
+
+- `user_store.can_zero_stock(du)`: nueva función, `True` si `role=="admin"`
+  o si el usuario tiene el flag `can_zero_stock` en su sesión.
+- El permiso se guarda como marcador `ZERO_STOCK_ACTION_KEY =
+  "action:zero_stock_ml"` dentro de la misma columna `allowed_sections`
+  (reusa la infraestructura existente, sin migración de DB), pero
+  deliberadamente NO es parte del árbol tab/subtab — otorgar un subtab de
+  Ventas no debe implicar esta acción destructiva, y viceversa.
+- **Bug evitado durante el diseño**: si el marcador se dejara mezclado en
+  `allowed_sections` tal cual, un usuario SIN ninguna otra restricción
+  (`allowed_sections` vacío = acceso legacy total) que recibiera solo este
+  checkbox habría quedado con `allowed_sections=["action:zero_stock_ml"]`
+  (ya no vacío) — y el resto del código (`AuthMiddleware`,
+  `amazon_dashboard()`) lo habría tratado como "tiene restricciones de
+  sección", perdiendo TODO su acceso real por error. Fix: `create_session`/
+  `get_session` separan el marcador a su propio campo `can_zero_stock`
+  (columna `zst` en el JWT) antes de exponer `allowed_sections`, así el
+  árbol de permisos nunca ve ese marcador.
+- `/usuarios`: nuevo checkbox "⛔ Puede poner Sin Stock en ML" en los
+  modales de crear/editar usuario (fuera del árbol de checkboxes de
+  secciones, para que "Todas"/"Ninguna" no lo toquen por accidente).
+- `zero-stock-preview`/`zero-stock` (antes `role != "admin"`) y el gate del
+  botón en `orders.html` (`IS_ADMIN_ALERTAS`) ahora usan
+  `user_store.can_zero_stock(du)`.
+
+Probado localmente (3 sesiones JWT: admin, viewer sin permiso, viewer con
+el checkbox otorgado): 200/403/200 en el endpoint y `true`/`false`/`true`
+en `IS_ADMIN_ALERTAS`, respectivamente. Verificado además con un usuario
+de prueba real (creado y borrado en la DB local) que otorgar SOLO este
+permiso no restringe el resto de su acceso (`allowed_sections` queda
+vacío, `can_zero_stock=True`).
+
+---
+
 ## 2026-08-20 — CIERRE DEL INCIDENTE: causa real era un HTTP 500 de BM (no bloqueo) + 5ta vía corregida
 
 ### Diagnóstico real vía logs de Railway
