@@ -145,13 +145,11 @@ def _flx_cache_valid(seller_id: str) -> bool:
 
 
 # ─── BinManager (para tab Inventario) ────────────────────────────────────────
-_BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-# InventoryBySKUAndCondicion_Quantity está roto (SQL "Invalid column name 'binid'")
-# GlobalStock_InventoryBySKU_Condition — BROKEN: status siempre retorna "Otro", no usar para avail/reserved
-_BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
-_BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-_BM_LOC_IDS  = "47,62,68,45,69,43,42"          # desglose MTY/CDMX/TJ (Warehouse endpoint) — incluye Tijuana
-_BM_LOC_IDS_VENDIBLE = "47,62,68"              # stock vendible online real — Tijuana excluida (2026-08-05)
+# FIX 2026-08-20 (directiva de Jovan): _enrich_bm_amz ya no llama a BM en vivo
+# (lee bm_sku_master) -- las URLs/LOCATIONID que este bloque usaba quedaron
+# sin uso, se quitan. InventoryBySKUAndCondicion_Quantity está roto (SQL
+# "Invalid column name 'binid'") y GlobalStock_InventoryBySKU_Condition
+# también (status siempre "Otro") -- por eso nunca se llamaron directo aquí.
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
 _bm_all_refreshing:   set   = set()  # "bm_all" cuando BG pre-fetch activo
@@ -1359,21 +1357,6 @@ def _amz_base_sku(sku: str) -> str:
 
 
 
-def _parse_wh_rows_amz(rows: list) -> tuple:
-    """Parsea filas del Warehouse endpoint. Retorna (mty, cdmx, tj)."""
-    mty = cdmx = tj = 0
-    for row in (rows or []):
-        qty = row.get("QtyTotal", 0) or 0
-        wname = (row.get("WarehouseName") or "").lower()
-        if "monterrey" in wname or "maxx" in wname:
-            mty += qty
-        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-            cdmx += qty
-        else:
-            tj += qty
-    return mty, cdmx, tj
-
-
 _BM_EMPTY = {"bm_mty": 0, "bm_cdmx": 0, "bm_tj": 0, "bm_avail": 0, "bm_reserved": 0,
              "_bm_retail_ph": 0, "_bm_avg_cost": 0}
 
@@ -1388,18 +1371,21 @@ def _bm_from_cache(sku: str) -> dict:
 
 async def _enrich_bm_amz(items: list, timeout_s: float | None = None) -> None:
     """
-    Enriquece items in-place con datos BinManager (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
+    Enriquece items in-place con datos de bm_sku_master (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
 
-    - Condiciones siempre: GRA,GRB,GRC,NEW (aplica para todos los SKUs Amazon).
-    - Deduplica por SKU base: SNFN000941-NEW-02 y SNFN000941-FLX01 → 1 sola llamada BM.
-    - Caché 15 min por Amazon SKU.
-    - timeout_s: si se especifica, cancela el gather tras N segundos (page requests).
-      Items sin enriquecer quedan con _BM_EMPTY (valores 0). BG prefetch usa None (sin límite).
+    - Deduplica por SKU base: SNFN000941-NEW-02 y SNFN000941-FLX01 → 1 sola lectura.
+    - Caché 15 min por Amazon SKU (igual que antes, aunque ya no hay costo de
+      red que ahorrar -- se conserva para no recalcular en cada render).
+    - FIX 2026-08-20: antes hacía 3 llamadas EN VIVO a BM por SKU base
+      (warehouse + stock + info); ahora es una sola consulta SQL a
+      bm_sku_master para todos los bases a la vez -- cero llamadas a BM.
+      timeout_s queda como parámetro sin efecto real (la consulta SQL es
+      demasiado rápida para necesitarlo) -- se conserva por compatibilidad
+      con los callers existentes, no se tocó su firma.
     """
     if not items:
         return
 
-    _BM_COND = "GRA,GRB,GRC,NEW"
     now = _time.time()
 
     # 1. Mapear Amazon SKU → lista de items (varios items pueden tener el mismo SKU)
@@ -1431,112 +1417,36 @@ async def _enrich_bm_amz(items: list, timeout_s: float | None = None) -> None:
     if not base_to_amz_skus:
         return
 
-    logger.info(f"[BM-AMZ] Consultando {len(base_to_amz_skus)} SKUs base: {list(base_to_amz_skus)}")
-    from app.services.binmanager_client import bm_post as _bm_post_amz
-
-    async def _fetch_base(base: str, amz_skus: list[str]) -> None:
-        wh_payload = {
-            "COMPANYID": 1, "SKU": base, "WarehouseID": None,
-            "LocationID": _BM_LOC_IDS, "BINID": None,
-            "Condition": _BM_COND, "SUPPLIERS": None, "ForInventory": 0,
-        }
-        # Get_GlobalStock_InventoryBySKU CONCEPTID=1: stock vendible con TotalQty y Reserve
-        stock_payload = {
-            "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 1,
-            "NUMBERPAGE": 1, "RECORDSPAGE": 5,
-            "NEEDRETAILPRICEPH": False, "NEEDRETAILPRICE": False, "NEEDAVGCOST": False,
-            "LOCATIONID": _BM_LOC_IDS_VENDIBLE,
-        }
-        # InventoryReport: RetailPH + AvgCost por SKU
-        inv_payload = {
-            "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
-            "NUMBERPAGE": 1, "RECORDSPAGE": 5,
-            "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True, "NEEDAVGCOST": True,
-        }
-        wh_rows: list = []
-        stock_rows: list = []
-        inv_rows: list = []
-        try:
-            r_wh = await _bm_post_amz(_BM_WH_URL, wh_payload, timeout=15.0)
-            if r_wh and r_wh.status_code == 200:
-                wh_rows = r_wh.json()
-                if not isinstance(wh_rows, list):
-                    wh_rows = []
-            elif r_wh:
-                logger.warning(f"[BM-AMZ] WH HTTP {r_wh.status_code} para base={base}")
-            r_stock = await _bm_post_amz(_BM_INV_URL, stock_payload, timeout=15.0)
-            if r_stock and r_stock.status_code == 200:
-                stock_rows = r_stock.json()
-                if not isinstance(stock_rows, list):
-                    stock_rows = []
-            elif r_stock:
-                logger.warning(f"[BM-AMZ] STOCK HTTP {r_stock.status_code} para base={base}")
-            r_inv = await _bm_post_amz(_BM_INV_URL, inv_payload, timeout=15.0)
-            if r_inv and r_inv.status_code == 200:
-                inv_rows = r_inv.json()
-                if not isinstance(inv_rows, list):
-                    inv_rows = []
-        except Exception as exc:
-            logger.warning(f"[BM-AMZ] Error al conectar BM para base={base}: {exc}")
-
-        mty, cdmx, tj = _parse_wh_rows_amz(wh_rows)
-
-        # Get_GlobalStock_InventoryBySKU CONCEPTID=1: AvailableQTY y Reserve directos
-        avail = reserved = 0
-        for row in stock_rows:
-            if row.get("SKU", "").upper() == base.upper():
-                avail    = int(row.get("AvailableQTY") or 0)
-                reserved = int(row.get("Reserve") or 0)
-                break
-        if not avail and not reserved and stock_rows:
-            # fallback: primer row si ninguno matchea exacto
-            row = stock_rows[0]
-            avail    = int(row.get("AvailableQTY") or 0)
-            reserved = int(row.get("Reserve") or 0)
-
-        # Extraer RetailPH y AvgCost del InventoryReport
-        retail_ph = avg_cost = 0.0
-        for row in inv_rows:
-            if row.get("SKU", "").upper() == base:
-                retail_ph = float(row.get("LastRetailPricePurchaseHistory") or 0)
-                rp = float(row.get("RetailPrice") or 0)
-                if retail_ph == 0:
-                    retail_ph = rp
-                avg_cost = float(row.get("AvgCostQTY") or 0)
-                break
-        if not retail_ph and inv_rows:
-            row = inv_rows[0]
-            retail_ph = float(row.get("LastRetailPricePurchaseHistory") or row.get("RetailPrice") or 0)
-            avg_cost  = float(row.get("AvgCostQTY") or 0)
-
-        inv = {"bm_mty": mty, "bm_cdmx": cdmx, "bm_tj": tj,
-               "bm_avail": avail, "bm_reserved": reserved,
-               "_bm_retail_ph": retail_ph, "_bm_avg_cost": avg_cost}
-        logger.info(
-            f"[BM-AMZ] {base} => mty={mty} cdmx={cdmx} tj={tj} "
-            f"avail={avail} reserved={reserved} retail_ph={retail_ph} avg_cost={avg_cost} (SKUs: {amz_skus})"
-        )
-        # Cachear y aplicar resultado a TODOS los Amazon SKUs que comparten este base
-        ts_now = _time.time()
+    # FIX 2026-08-20 (directiva de Jovan tras el bloqueo/incidente de BM del
+    # mismo día): esto hacía 3 llamadas EN VIVO a BM por cada SKU base
+    # (warehouse breakdown + stock CONCEPTID=1 + info CONCEPTID=8), disparado
+    # por _refresh_bm_all_bg para el catálogo Amazon COMPLETO -- exactamente
+    # el mismo patrón (mecanismo automático fuera del loop de categorías)
+    # que ya se corrigió en app/main.py el mismo día. Ahora lee bm_sku_master
+    # (ya lo mantiene fresco el loop de categorías) en UNA sola consulta SQL
+    # para todos los SKUs base a la vez -- cero llamadas nuevas a BM.
+    logger.info(f"[BM-AMZ] Consultando {len(base_to_amz_skus)} SKUs base (bm_sku_master): {list(base_to_amz_skus)}")
+    from app.services import token_store as _ts_amz
+    master_rows = await _ts_amz.get_bm_master_rows_for_skus(list(base_to_amz_skus))
+    ts_now = _time.time()
+    for base, amz_skus in base_to_amz_skus.items():
+        row = master_rows.get(base)
+        if row and row.get("verified"):
+            inv = {
+                "bm_mty": row.get("mty_qty", 0) or 0,
+                "bm_cdmx": row.get("cdmx_qty", 0) or 0,
+                "bm_tj": row.get("tj_qty", 0) or 0,
+                "bm_avail": row.get("available_qty", 0) or 0,
+                "bm_reserved": row.get("reserve_qty", 0) or 0,
+                "_bm_retail_ph": row.get("retail_ph", 0) or 0,
+                "_bm_avg_cost": row.get("cost_usd", 0) or 0,
+            }
+        else:
+            inv = _BM_EMPTY
         for amz_sku in amz_skus:
             _bm_amz_cache[amz_sku.upper()] = (ts_now, inv)
             for item in sku_to_items.get(amz_sku, []):
                 item.update(inv)
-
-    _gather = asyncio.gather(
-        *[_fetch_base(base, skus) for base, skus in base_to_amz_skus.items()],
-        return_exceptions=True,
-    )
-    if timeout_s is not None:
-        try:
-            await asyncio.wait_for(_gather, timeout=timeout_s)
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"[BM-AMZ] Timeout {timeout_s}s — {len(base_to_amz_skus)} SKUs sin enriquecer "
-                f"(probablemente no existen en BM, mostrando columnas BM en 0)"
-            )
-    else:
-        await _gather
 
 
 async def _refresh_bm_all_bg(listings: list) -> None:

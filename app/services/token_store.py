@@ -2088,7 +2088,10 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
     llamadas a BM. Usado por el nuevo camino de alertas (Fase C) para hacer
     el JOIN listings-vs-maestro en vez del merge en vivo que usa el pipeline
     viejo. Retorna {sku: {available_qty, reserve_qty, total_qty, mty_qty,
-    cdmx_qty, tj_qty, no_vendible_qty, verified, stock_updated_at}}."""
+    cdmx_qty, tj_qty, no_vendible_qty, verified, stock_updated_at, retail_ph,
+    cost_usd}}. retail_ph/cost_usd agregados 2026-08-20 (directiva de Jovan
+    de consolidar TODO lo que hoy llama a BM fuera del loop de categorías --
+    ver _fetch_base en amazon_products.py)."""
     if not skus:
         return {}
     out = {}
@@ -2100,7 +2103,7 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
             placeholders = ",".join("?" * len(chunk))
             cur = await db.execute(
                 f"""SELECT sku, available_qty, reserve_qty, total_qty, mty_qty, cdmx_qty,
-                           tj_qty, no_vendible_qty, verified, stock_updated_at
+                           tj_qty, no_vendible_qty, verified, stock_updated_at, retail_ph, cost_usd
                     FROM bm_sku_master WHERE sku IN ({placeholders})""",
                 chunk,
             )
