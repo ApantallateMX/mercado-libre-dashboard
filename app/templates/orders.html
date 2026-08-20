@@ -1347,8 +1347,11 @@ function alertasLoadData() {
                 if (sugerencias.length) {
                     var s = sugerencias[0];
                     sugHtml =
-                        '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:' + d2.clamp + '; -webkit-box-orient:vertical; overflow:hidden;" title="' + (s.title || '').replace(/"/g, '&quot;') + '">' +
-                            '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
+                        '<div class="relative group">' +
+                            '<div class="text-xs text-gray-700" style="display:-webkit-box; -webkit-line-clamp:' + d2.clamp + '; -webkit-box-orient:vertical; overflow:hidden;">' +
+                                '<span class="font-mono">' + s.sku + '</span> — ' + (s.title || '—') +
+                            '</div>' +
+                            '<div class="hidden group-hover:block absolute z-20 left-0 top-full mt-1 max-w-xs bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg leading-snug">' + (s.title || '').replace(/"/g, '&quot;') + '</div>' +
                         '</div>' +
                         '<div class="text-xs text-gray-400 mt-0.5 whitespace-nowrap">$' + Math.round(s.retail_ph) + ' USD · disp. ' + s.available_qty + '</div>';
                 }
@@ -1362,7 +1365,10 @@ function alertasLoadData() {
                     '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-500 whitespace-nowrap align-top">' + detectedLabel + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.order_id + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' font-mono ' + d2.text + ' whitespace-nowrap align-top">' + row.sku + '</td>' +
-                    '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-600 align-top" style="display:-webkit-box; -webkit-line-clamp:' + d2.clamp + '; -webkit-box-orient:vertical; overflow:hidden;" title="' + (row.titulo || '').replace(/"/g, '&quot;') + '">' + (row.titulo || '—') + '</td>' +
+                    '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-600 align-top relative group">' +
+                        '<div style="display:-webkit-box; -webkit-line-clamp:' + d2.clamp + '; -webkit-box-orient:vertical; overflow:hidden;">' + (row.titulo || '—') + '</div>' +
+                        '<div class="hidden group-hover:block absolute z-20 left-0 top-full mt-1 max-w-xs bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-lg leading-snug">' + (row.titulo || '').replace(/"/g, '&quot;') + '</div>' +
+                    '</td>' +
                     '<td class="px-3 ' + d2.pad + ' ' + d2.text + ' text-gray-500 whitespace-nowrap align-top">' + (row.account_name || row.account_id) + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + row.quantity + '</td>' +
                     '<td class="px-3 ' + d2.pad + ' text-right whitespace-nowrap align-top">' + avail + '</td>' +
