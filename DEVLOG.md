@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — FIX: alertas de stock Amazon (VECKTOR) — mismo bug de auto-heal del lado ML + filas fantasma de SKUs no-BM
+
+### Contexto
+
+Tras cerrar el bug de ConfColumns/TRANSITO (entrada de abajo) y el self-heal
+de alertas ML (misma fecha), Jovan pidió revisar también el lado Amazon:
+las 12 alertas restantes de la reconciliación de esa tarde incluían 7 de
+VECKTOR con SKUs numéricos (8508943, 8508614, 8508883, 8508808, 8508515,
+8508800) — nunca confirmadas como "genuinamente sin stock", solo como
+pendiente de revisar.
+
+### 2 bugs reales encontrados en `_run_amazon_stock_reconcile_pass`
+
+**1. Mismo bug de auto-heal que ML** — esta pasada solo CREABA una alerta
+cuando `avail<=0`, nunca la borraba cuando el stock volvía a estar
+disponible. Fix: mismo patrón que ML, `delete_realtime_stock_alert_for_order_sku`
+en el `else`.
+
+**2. Filas fantasma en `bm_sku_master` para SKUs que BM nunca reconoció.**
+Los 7 SKUs de VECKTOR resultaron ser productos dropship (códigos de
+fabricante, no convención SN/SH) que BinManager JAMÁS ha confirmado en
+ningún ciclo — verificado de forma independiente con `/api/diag/sku`
+(cache/bulk/BM en vivo, los 3 en `found: false`) y con las tools MCP de
+BinManager (`sc_exists_lpn_or_sku` + `inventory_snapshot`, ambas sin
+resultado para los 6 SKUs). Mientras tanto, Amazon SÍ mostraba 48-50
+piezas reales en las variantes efectivamente vendidas (`8508943-B-1`,
+`8508943-W-1`, etc.) — el filtro "es catálogo BM" agregado el 2026-08-18
+solo exigía que la fila EXISTIERA en `bm_sku_master`, y estas filas
+fantasma (`available_qty=0, category='', verified=0`) la satisfacían
+igual que un SKU real. Fix: el filtro ahora exige también `verified=1`
+(BM confirmó el dato en algún ciclo real de sync), no solo presencia de
+la fila — limpia de inmediato las 7 alertas fantasma en el siguiente
+ciclo de reconciliación (cada 5 min), sin script de limpieza aparte.
+
+Commit `31af9f1`, deploy Railway `SUCCESS`.
+
+---
+
 ## 2026-08-19 — BUG CRÍTICO + ARQUITECTURA: ConfColumns mezclaba bins TRANSITO como vendible — `bm_sku_master` migró de vuelta a `Get_GlobalStock_InventoryBySKU`
 
 ### Contexto — reversa de la migración logueada arriba en el mismo día
