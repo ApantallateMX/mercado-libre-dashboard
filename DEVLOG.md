@@ -7,6 +7,74 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — INCIDENTE CRÍTICO + FIX: BinManager bloqueó el acceso real — 4 mecanismos automáticos fuera del loop de categorías
+
+### Contexto
+
+Jovan compartió captura del log real de BM (LogID/ExecutionDate/
+P_LocationID/P_Condition) mostrando ~1 llamada cada 3-5 segundos sostenida
+por más de un minuto bajo la cuenta de servicio, con LocationID/condición
+mezclados en la misma ventana. Confirmó que BM bloqueó el acceso.
+
+### Root cause (confirmado leyendo código, no suposición)
+
+NO fue un script suelto (como el incidente del 2026-08-19). Fueron **4
+mecanismos automáticos independientes** en `app/main.py`, cada uno
+llamando a BM por su cuenta en cada ciclo de prewarm (×4 cuentas ML):
+
+1. `_fetch_activate_wh` — 1 llamada EN VIVO por SKU (hasta 60, con 1s de
+   pausa entre cada una) para la lista "Activar".
+2. Bloque bulk dentro de `_get_bm_stock_cached()` (modo `retry_stale=True`)
+   — GR + LOC47 + LOC68 + Tijuana + per-SKU warehouse, hasta 5+ llamadas
+   de catálogo completo por invocación.
+3. `_fetch_tv_wh_breakdown()` — desglose MTY/CDMX/TJ de TVs, programado
+   desde dentro del mismo bloque del punto 2.
+4. `_check_one_substitution_fulfillment` — verificaba el sustituto
+   llamando a BM cada 10 min.
+
+Los 4 duplicaban lo que el loop de categorías
+(`_conf_columns_top_categories_loop`/`_conf_columns_longtail_loop` →
+`_update_bm_master_for_category`, cutover del 2026-08-19) ya mantenía
+fresco en `bm_sku_master` — ninguno leía esa tabla.
+
+### Directiva de Jovan (regla absoluta, cita textual)
+
+"NADA debe pegar a BM, SOLO cuando traemos las categorías con toda la
+información, y de esa información debemos alimentar TODO."
+
+### Fix (commit `fdef53d`)
+
+- `_fetch_activate_wh`: reemplazado el loop per-SKU+sleep por una sola
+  consulta `token_store.get_bm_master_rows_for_skus()`.
+- `_get_bm_stock_cached`: `return` insertado justo antes del bloque de
+  llamadas en vivo — ahora lee `bm_sku_master` en una consulta y retorna;
+  el código viejo queda inalcanzable (no se borró, por si hace falta
+  revertir). Esto también apagó `_fetch_tv_wh_breakdown` de forma
+  indirecta (solo se programaba desde ese bloque muerto) — coherente con
+  la decisión ya tomada por Jovan el 2026-08-19 de que ese desglose no es
+  prioridad.
+- `_check_one_substitution_fulfillment`: reemplazado por lectura de
+  `bm_sku_master`.
+
+### Mitigación operativa
+
+`DISABLE_BM_MONITOR=true` en Railway mientras se desplegaba el fix (pausa
+TODO tráfico automático, incluyendo el loop de categorías bueno) →
+reactivado (`false`) tras confirmar el deploy en producción, dejando
+activo solo el loop de categorías.
+
+### Pendiente (menor prioridad, no contribuyó al bloqueo de hoy por ser 1×/día)
+
+`app/api/amazon_lanzar.py:299` (gap scan nocturno de Amazon) tiene su
+propio `get_bulk_stock()` separado del catálogo de ML — requiere más
+cuidado porque usa `ImageURL`, campo que `bm_sku_master` no guarda.
+
+Memoria actualizada: `.claude/memory/project_bm_call_consolidation_2026-08-20.md`,
+`.claude/agents/binmanager-specialist.md` (nueva sección al inicio, por
+encima de la Regla de Oro de stock).
+
+---
+
 ## 2026-08-20 — AUDITORÍA + FIX: 8 correcciones de alto impacto/bajo esfuerzo sobre la lógica de alertas
 
 ### Contexto

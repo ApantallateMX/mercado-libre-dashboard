@@ -9,6 +9,28 @@ Eres el especialista en **BinManager** — el WMS (Warehouse Management System) 
 
 ---
 
+## 🚨 REGLA MÁS IMPORTANTE DE TODAS — QUIÉN PUEDE LLAMAR A BM (2026-08-20)
+
+**BinManager bloqueó el acceso real el 2026-08-20** por exceso de tráfico. Root cause confirmado (no sospecha): NO fue un solo script suelto — fueron **al menos 4 mecanismos automáticos independientes** en `app/main.py`, cada uno llamando a BM por su cuenta en cada ciclo de prewarm (×4 cuentas ML), todos duplicando lo que el loop de categorías ya mantenía fresco en `bm_sku_master`:
+1. `_fetch_activate_wh` — 1 llamada en vivo por SKU (hasta 60, con 1s de pausa) para la lista "Activar".
+2. El bloque bulk dentro de `_get_bm_stock_cached` (modo `retry_stale=True`) — GR + LOC47 + LOC68 + Tijuana + per-SKU warehouse, varias llamadas de catálogo completo por invocación.
+3. `_fetch_tv_wh_breakdown` — desglose MTY/CDMX/TJ de TVs, programado desde dentro del mismo bloque anterior.
+4. `_check_one_substitution_fulfillment` — verificaba el sustituto llamando a BM cada 10 min.
+
+Los 4 fueron corregidos (commit `fdef53d`, 2026-08-20) para leer `bm_sku_master` en vez de llamar a BM — ninguno hace ya una llamada HTTP real.
+
+**Directiva explícita de Jovan, LEY ABSOLUTA a partir de ahora: "NADA debe pegar a BM, SOLO cuando traemos las categorías con toda la información, y de esa información debemos alimentar TODO."**
+
+En la práctica:
+- La ÚNICA llamada automática/en background permitida a BM es el loop de categorías (`_conf_columns_top_categories_loop` / `_conf_columns_longtail_loop` → `_update_bm_master_for_category` → `bm_cli.get_bulk_stock(category_id=...)`), que escribe en `bm_sku_master`.
+- CUALQUIER otra necesidad de stock/desglose/verificación (Activar, Sustituir, sustitución pendiente de envío, desglose MTY/CDMX/TJ, lo que sea) **debe leer `bm_sku_master`** (vía `token_store.get_bm_master_rows_for_skus()` o el espejo en memoria `_bm_master_mem`) — **JAMÁS una llamada nueva a `BinManagerClient`**.
+- Antes de agregar o tocar CUALQUIER código que llame a un método de `binmanager_client.py`, pregúntate: ¿esto corre automáticamente (loop, background task, prewarm) o es un click humano puntual (botón "Sync ahora", diag manual)? Solo lo segundo es tolerable fuera del loop de categorías, y solo si es de verdad ocasional.
+- Pendiente conocido, NO corregido aún (menor prioridad porque corre 1x/día, no contribuyó al bloqueo): `amazon_lanzar.py:299` (gap scan nocturno de Amazon) tiene su propio `get_bulk_stock()` separado, porque necesita `ImageURL` que `bm_sku_master` no guarda.
+
+Ver `.claude/memory/project_bm_call_consolidation_2026-08-20.md` para el detalle completo.
+
+---
+
 ## ⚠️ REGLA DE ORO — STOCK VENDIBLE (OBLIGATORIA, SIN EXCEPCIONES)
 
 Para consultar **stock disponible / vendible / reservado** de un SKU, SIEMPRE y ÚNICAMENTE usa:
