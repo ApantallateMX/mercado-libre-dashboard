@@ -7,6 +7,80 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — AUDITORÍA + FIX: 8 correcciones de alto impacto/bajo esfuerzo sobre la lógica de alertas
+
+### Contexto
+
+Jovan pidió una auditoría a fondo de "todas las alertas... ventas, ordenes,
+stock, sobreventa, no vendibles, no listados, venta con poco margen, riesgo
+de sobre vender, etc." — no de los bugs de datos (ya resueltos el día
+anterior), sino de si la LÓGICA de negocio de cada sistema maximiza ventas
+y ganancia. Se lanzaron 6 revisiones con agentes especializados
+(marketplace-strategist / marketplace-ads-strategist / planning-specialist)
+cubriendo 7 sistemas: Alertas de Stock, Sobreventa (3 mecanismos),
+Sin Publicar/No Lanzados, Restock Watch + Activar, Márgenes/Deals/
+coverage-price-alerts, Stock Crítico + Inventario Estancado, FULL Sin
+Stock + huérfanos. Reporte consolidado publicado como Artifact.
+
+Patrón repetido en casi todos: el dato correcto (margen real, días de
+cobertura, cantidad recomendada por IA) ya estaba calculado en el mismo
+ciclo — el filtro/orden simplemente no lo usaba. Segundo patrón: casi todo
+ordenaba por unidades, no por dinero en riesgo.
+
+### Los 8 fixes de "Empieza aquí" (aprobados por Jovan, implementados y desplegados — commit `a3dc790`)
+
+1. **Fórmula de precio sugerido para gaps de ML** (`app/api/lanzar.py`,
+   nueva `_ml_suggested_price_mxn`): reemplaza `retail_usd×18×1.20` (ignoraba
+   comisión real de ML + envío, nacía con margen NEGATIVO en casi todos los
+   casos) por una fórmula que resuelve el precio que recupera 100% del
+   costo — EXACTAMENTE el mismo modelo que `_neto_ml`/`_calc_margins` en
+   `app/main.py` (fee escalonado 12-18%, retención 9.05%, envío por tramo,
+   7% comisión de socio). También usa el FX real ya obtenido (antes
+   hardcodeaba 18). Verificado numéricamente: recupera exactamente 100% del
+   costo en los 5 tramos probados. Aplicado retroactivamente a los 30,937
+   gaps ya en DB vía `/api/lanzar/recalc-prices`.
+2. **"Precio < Retail PH" → "Margen Real Insuficiente"** (`price_risk`,
+   `app/main.py`): sustituido por `_recup_below_target`/`_neto_ml_negative`
+   (mismo criterio ya validado en Deals) en vez de comparar contra
+   RetailPrice PH crudo — medía la variable equivocada, con 265 falsos
+   positivos probables. Verificado en producción: ahora muestra casos
+   reales de margen negativo (ej. SNHT000171, $100 MXN, neto real -$25).
+3. **"Activar Todos" y "Sync Reabastecer" (bulk)**
+   (`products_stock_issues.html`): usan `_rec_qty` real (ventas de 30d)
+   cuando existe, ya no un 60% plano del stock BM crudo — mismo riesgo del
+   incidente ya documentado de SHIL000531.
+4. **"Stock Crítico" excluye SKUs con 0 ventas** (`critical`,
+   `app/main.py`) — ya no aparece simultáneamente en "comprar ya" y
+   "Estancado" (liquidar) para el mismo SKU.
+5. **Sugerencias de sustituto de Alertas de Stock priorizadas por margen**
+   (`get_replacement_sku_suggestions`) — ventana de candidatos plausibles
+   por precio, reordenados por margen real (`cost_usd` ya vivía en la
+   tabla, antes ignorado).
+6. **3 mecanismos de sobreventa ordenan por dinero en riesgo**, no unidades
+   — `oversell_risk`, `imbalanced` (×`price`) y `_compute_oversell_exposure`
+   (×`retail_ph`, expone `exposure_usd` por fila). Verificado en producción.
+7. **Calculadora de margen del wizard de lanzamiento** (`lanzar_gaps.html`):
+   tenía el % de comisión INVERTIDO (Premium/gold_pro default = 8%,
+   Clásica = 12.5%), sin retención fiscal, envío fijo $150 sin importar
+   tamaño. Ahora usa la misma fórmula que `_neto_ml`.
+8. **"Deal con margen negativo" ya no depende de tener RetailPH** — nuevo
+   campo `_neto_ml_negative` en `_calc_margins`, independiente de
+   `_retail_mxn>0`. Antes un deal con pérdida real sin RetailPH en BM nunca
+   disparaba la alerta.
+
+Ninguno automatiza escrituras nuevas a ML/Amazon/BM — solo corrige qué se
+sugiere/prioriza/ordena; las acciones siguen 100% gateadas por click
+humano. Deploy Railway `SUCCESS`, verificado contra producción (oversell
+audit ordenado por `exposure_usd`, Stock Crítico bajó de 222 a 1 para la
+cuenta admin tras excluir 0-ventas, price_risk mostrando neto real
+negativo). Resto de recomendaciones de la auditoría (conectar sobreventa
+con velocidad de venta, notificaciones proactivas, unificar Restock Watch/
+Reabastecer, extender coverage-price-alerts a Amazon, etc.) quedan
+pendientes de aprobación — ver
+`.claude/memory/project_alerts_audit_2026-08-20.md`.
+
+---
+
 ## 2026-08-19 — FIX: respaldo getOrder puntual para alertas Amazon que getOrders (lista) no devuelve
 
 Tercer y último hallazgo de la revisión del lado Amazon pedida por Jovan
