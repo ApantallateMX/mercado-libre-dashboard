@@ -20661,6 +20661,64 @@ async def diag_confcolumns_bintype_test(
     })
 
 
+@app.get("/api/diag/globalstock-bintype-test")
+async def diag_globalstock_bintype_test(token: str = "", test_sku: str = "SNSB000022"):
+    """FIX 2026-08-19 #3: InventoryType (confirmado por Alberto, dev de
+    BinManager) NO tuvo efecto en ConfColumns_Conditions_Excel (ver
+    confcolumns-bintype-test -- misma fila cruda en los 4 casos, ese
+    endpoint no hace join con BinTypes). Prueba el mismo campo, más
+    "StatusConcept" (ya declarado sin usar en _GS_BASE_PAYLOAD, coincide
+    con el campo "status" visto en inventory_by_sku_condition del MCP),
+    en el endpoint HERMANO Get_GlobalStock_InventoryBySKU -- ese SÍ
+    respeta LOCATIONID/WAREHOUSEID/BINID, quizá también estos.
+
+    Referencia: SNSB000022 tiene 930 uds físicas, 100% en bins
+    BinTypeName=TRANSITO (confirmado por binmanager-specialist vía MCP
+    inventory_no_vendible) -- vendible real = 0. Si algún campo aquí
+    hace bajar AvailableQTY de 654 (o lo que sea que reporte este
+    endpoint) hacia 0, ese es el mecanismo real a usar."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_gst
+    bm = await _gsb_gst()
+    if not bm._logged_in:
+        if not await bm.login():
+            return JSONResponse({"error": "BM login failed"}, status_code=503)
+
+    async def _fetch(extra_fields: dict):
+        payload = {
+            "COMPANYID": 1, "SEARCH": test_sku, "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68", "CONDITION": "GRA,GRB,GRC,NEW",
+            "FORINVENTORY": 0, "BUSCADOR": False, "RECORDSPAGE": 10, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
+            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+            "Jsonfilter": "[]",
+            **extra_fields,
+        }
+        r = await bm._post(f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                            json=payload, headers=_AJAX_HEADERS, timeout=30.0)
+        if r is None or r.status_code != 200:
+            return None, f"HTTP {getattr(r, 'status_code', 'sin respuesta')}"
+        data = r.json()
+        if not isinstance(data, list):
+            return None, "respuesta no es lista"
+        return data, None
+
+    results = {}
+    for _label, _fields in (
+        ("baseline", {}),
+        ("InventoryType_1_transito", {"InventoryType": 1}),
+        ("InventoryType_2_6_19_vendible", {"InventoryType": "2,6,19"}),
+        ("StatusConcept_1", {"StatusConcept": 1}),
+    ):
+        rows, err = await _fetch(_fields)
+        results[_label] = {
+            "error": err, "rows": rows if rows else [],
+        }
+
+    return JSONResponse({"test_sku": test_sku, "results": results})
+
+
 @app.get("/api/diag/bm-master-confcolumns-compare")
 async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30, category_id: str = ""):
     """FASE NUEVA 2026-08-19 (pedido explícito de BinManager, vía Jovan):
