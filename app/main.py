@@ -20569,6 +20569,38 @@ async def diag_confcolumns_location_param_test(
     })
 
 
+@app.get("/api/diag/warehouse-endpoint-raw-test")
+async def diag_warehouse_endpoint_raw_test(token: str = "", test_sku: str = "SNHP000093"):
+    """Pedido de Jovan 2026-08-19: ¿podemos identificar y excluir bins TRANSITO
+    NOSOTROS MISMOS, sin depender de que BM confirme un parámetro para
+    ConfColumns? Get_GlobalStock_InventoryBySKU_Warehouse SÍ es HTTP-callable
+    directo (no MCP-only, ver app/main.py:14142) -- ya lo usamos para el
+    desglose MTY/CDMX pero solo extraemos WarehouseName/QtyTotal. Esta prueba
+    muestra la fila CRUDA completa para ver si trae BinCode/BinTypeName (con
+    eso podríamos restar TRANSITO nosotros mismos, sin esperar a BM)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import bm_post as _bm_post_whtest
+    BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+    conditions = _bm_conditions_for_sku(test_sku)
+    r = await _bm_post_whtest(BM_WH_URL, {
+        "COMPANYID": 1, "SKU": test_sku, "WarehouseID": None,
+        "LocationID": "47,62,68", "BINID": None,
+        "Condition": conditions, "ForInventory": 0, "SUPPLIERS": None,
+    }, timeout=20.0)
+    if r is None:
+        return JSONResponse({"error": "sin respuesta de BM"}, status_code=502)
+    if r.status_code != 200:
+        return JSONResponse({"error": f"HTTP {r.status_code}", "body": r.text[:500]})
+    try:
+        rows = r.json()
+    except Exception as e:
+        return JSONResponse({"error": f"no es JSON: {e}", "raw_text": r.text[:500]})
+    if isinstance(rows, dict):
+        rows = [rows]
+    return JSONResponse({"test_sku": test_sku, "rows_count": len(rows) if isinstance(rows, list) else 0, "raw_rows": rows})
+
+
 @app.get("/api/diag/confcolumns-bintype-test")
 async def diag_confcolumns_bintype_test(
     token: str = "", category_id: str = "Soundbars", test_sku: str = "SNSB000022",
