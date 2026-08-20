@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FIX CRÍTICO: loop infinito de redirects (ERR_TOO_MANY_REDIRECTS) para usuarios con permisos huérfanos
+
+**Archivos:** `app/services/user_store.py`, `app/main.py`.
+
+Incidente en producción: 2 usuarios no podían entrar al dashboard,
+navegador mostraba "This page isn't working... redirected you too many
+times". Causa: un usuario (no-admin) tenía `allowed_sections=["ml.sync"]`
+— dato viejo, previo a esta sesión de trabajo. `/stock-sync` rechaza a
+cualquier no-admin (`stock_sync_page`, redirige a `/dashboard`), pero el
+árbol de permisos SÍ le daba acceso a "sync" — el middleware entonces lo
+mandaba de vuelta a `/stock-sync` vía `first_allowed_location()`. Loop
+infinito entre esas 2 páginas. El fix inmediatamente anterior (permisos
+frescos en cada request, sin necesitar relogin) expuso este dato huérfano
+de inmediato — antes, el JWT viejo de ese usuario simplemente nunca
+reflejaba ese permiso stray hasta su próximo login.
+
+Dos fixes complementarios:
+1. `user_store.py`: `_ADMIN_ONLY_TABS = {"ml.sync"}` — "Sync Stock" exige
+   `role=="admin"` a nivel de PÁGINA, así que `has_tab_access`/
+   `get_allowed_subtabs`/`first_allowed_location` ahora lo ignoran por
+   completo, sin importar qué diga `allowed_sections`.
+2. `main.py` (`AuthMiddleware`): red de seguridad general — si
+   `first_allowed_location` no encuentra ningún destino válido, o el
+   destino calculado es la MISMA página que ya se negó, ya NO redirige
+   (eso es exactamente lo que causa un loop) — muestra un mensaje inline
+   "no tienes acceso a ninguna sección" (403) en su lugar. Esto previene
+   cualquier futuro caso similar, no solo el de "ml.sync".
+
+Probado localmente antes de desplegar: `has_tab_access(["ml.sync"], "ml",
+"sync")` → `False`, `first_allowed_location(["ml.sync"])` → `(None, None,
+None)`.
+
+---
+
 ## 2026-08-20 — FIX: permisos ya no requieren logout/login, se releen frescos en cada request
 
 **Archivo:** `app/services/user_store.py`.
