@@ -7,6 +7,106 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-19 — BUG CRÍTICO + ARQUITECTURA: ConfColumns mezclaba bins TRANSITO como vendible — `bm_sku_master` migró de vuelta a `Get_GlobalStock_InventoryBySKU`
+
+### Contexto — reversa de la migración logueada arriba en el mismo día
+
+Después de completar y automatizar la migración a `ConfColumns_Conditions_Excel`
+(entradas de arriba, mismo día), se detectó que ese endpoint filtra
+`LOCATIONID` correctamente pero **no excluye stock físicamente sentado en
+un bin de `BinTypeID=1 "TRANSITO"`** (bins temporales, ej. `TRMXB2B002`,
+`TRANSFR001/002/003` en Autobot CDMX) aunque la condición sea vendible
+(GRA/GRB/GRC/NEW). Prueba en la categoría "Headphones-JLab": **117 de 123
+SKUs conocidos mostraban disponibilidad falsa** por esta causa — sistémico,
+no un caso raro (detectado al investigar SNHP000093/SNHP000097 a pedido
+de Jovan).
+
+Se probaron 2 nombres de parámetro para filtrar tránsito
+(`BINTYPEID`, y `InventoryType` — sugerido directamente por Alberto,
+desarrollador de BinManager) en `ConfColumns_Conditions_Excel` Y en
+`Get_GlobalStock_InventoryBySKU`: **ambos endpoints ignoran el parámetro
+silenciosamente**, sin excepción, en las 4 combinaciones probadas
+(`/api/diag/confcolumns-bintype-test`, `/api/diag/globalstock-bintype-test`).
+
+### Fix real: no fue un parámetro, fue volver a cambiar de fuente
+
+`Get_GlobalStock_InventoryBySKU` (CONCEPTID=1, el mismo endpoint que ya
+usa `_refresh_bm_avail_live` para verificación puntual) **ya excluye
+tránsito correctamente sin ningún parámetro extra** — confirmado con
+`inventory_no_vendible` (BinManager MCP) y con pruebas cruzadas en los
+SKUs afectados. Jovan confirmó explícitamente: "ENtonces pdemos usar este
+como el maestro para todo?" → sí, cutover completo:
+
+- `binmanager_client.get_bulk_stock()`: nuevo param `category_id`, ya no
+  hardcodeado a `None` — permite scoping por categoría igual que
+  ConfColumns.
+- `app/main.py` — `_update_bm_master_for_category()` reescrito para
+  llamar `get_bulk_stock(category_id=..., conditions=...)` en vez de
+  ConfColumns (Televisions sigue usando `GRA,GRB,GRC,ICB,ICC,NEW`, el
+  resto `GRA,GRB,GRC,NEW`).
+- Nueva `_bulk_stock_rows_to_master_fields()` reemplaza
+  `_conf_columns_row_to_master_fields()` (dejada en el código, marcada
+  DEPRECATED, no se borra por si algún diag viejo la referencia).
+- Backup de `bm_sku_master` antes del cutover (`/api/diag/bm-master-backup`)
+  + full-resync de las 59 categorías (`/api/diag/bm-master-full-resync`),
+  verificado categoría por categoría.
+
+### FIX relacionado — "Activar" mostraba falsos "0 disponible"
+
+Reporte real de Jovan con capturas: la página Activar (Productos) mostraba
+0 disponible para SKUs que sí tenían stock real. Root cause:
+`_refresh_bm_avail_live()` leía de `_bm_stock_cache`, alimentado por
+`InventoryBySKUAndCondicion_Quantity` — endpoint confirmado roto
+server-side (error SQL "Invalid column name 'binid'", ya documentado en
+varios archivos de `app/api/`) que a veces regresa HTTP 200 con datos
+corruptos marcados como éxito. Fix: `_refresh_bm_avail_live` ahora lee de
+`_bm_master_mem` (requiere `entry.get("verified")`), la misma fuente ya
+corregida arriba. Verificado: SNHP000114 pasó de 0 → 468 piezas reales.
+
+### FIX — alertas de stock en tiempo real nunca se auto-resolvían
+
+`_evaluate_order_stock_alert()` solo creaba/actualizaba la alerta cuando
+`avail<=0`, nunca la borraba cuando el stock volvía a estar disponible
+(ni por el cutover de arriba ni por ningún otro evento). Fix: nueva
+`token_store.delete_realtime_stock_alert_for_order_sku()`, llamada en el
+`else` de `_evaluate_order_stock_alert` cuando `avail>0`. **Solo
+bookkeeping interno en DB — no automatiza ninguna acción de marketplace**
+(Activar/Ajustar/Sustituir siguen 100% gateados por botón humano, sin
+excepción — confirmado explícitamente con Jovan). Ya corre dentro de los
+loops de reconciliación existentes (`_realtime_stock_reconcile_loop`
+cada 5 min + `_realtime_stock_reconcile_wide_loop` cada 2h) — no hizo
+falta crear una cadencia nueva de 15 min, ya existía una más frecuente.
+Verificado con 3 pasadas de reconciliación (ventanas 48h→336h): alertas
+18→13→12, las 12 restantes confirmadas como genuinamente sin stock real.
+
+### FIX — sustitución BM rechazada cuando el "sustituto" es el producto real ya registrado
+
+`_inject_bm_alter_sku()`: nueva validación que rechaza de inmediato
+(antes de llamar BM) cuando `substitute_sku == real_product_sku` ya
+resuelto — antes BM devolvía el mismo "Payload Error!" genérico que otros
+2 casos distintos, sin indicar la causa real (caso SNTV002236-GRB, que
+era el ProductSKU real registrado, no una condición alterna válida). Ver
+`.claude/memory/project_bm_alter_sku_mapping.md` para el detalle completo
+de los 4 bugs de esta feature.
+
+### FIX UI — tooltip nativo feo en Alertas de Stock
+
+`orders.html`, tabla Alertas de Stock, columnas Sugerencia y Título:
+reemplazado el `title=""` nativo del navegador (se veía cortado/mal
+posicionado en captura real de Jovan) por un tooltip custom (Tailwind
+`relative group` + `hidden group-hover:block absolute`, fondo oscuro).
+Solo aplicado en estas 2 columnas — el mismo patrón nativo existe en
+~30 templates más del proyecto, pendiente como tarea aparte si se pide.
+
+Todo lo anterior verificado en producción (Railway) y push a `origin` +
+`mi2`. Memoria del proyecto actualizada: `.claude/agents/
+binmanager-specialist.md` (Regla de Oro + LOCATIONID vendible corregido
+a `47,62,68`, Tijuana excluida desde 2026-08-05 — esa corrección estaba
+pendiente de reflejarse ahí) y memoria personal
+(`project_bm_confcolumns_transito_bug_and_master_cutover.md`).
+
+---
+
 ## 2026-08-19 — FEAT: automatizados los 2 loops de ConfColumns por categoría (cierre del plan de BinManager)
 
 Cierre del plan pedido por BinManager (ver entrada anterior del mismo
