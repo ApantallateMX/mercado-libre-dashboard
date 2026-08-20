@@ -7024,10 +7024,29 @@ _CONF_COLUMNS_TOP_INTERVAL_S = 900       # 15 min
 _CONF_COLUMNS_LONGTAIL_INTERVAL_S = 4 * 3600  # 4 horas
 _CONF_COLUMNS_DELAY_BETWEEN_S = 0
 
+# FIX 2026-08-20 (directiva explícita de Jovan tras el incidente de datos
+# corrompidos del mismo día): si una categoría de ALTA venta (top-5, la
+# que este loop refresca cada 15 min) devuelve 0 filas de BM varias veces
+# seguidas, es un patrón de bloqueo/fallo -- nunca "confirmado sin stock"
+# (ver _update_bm_master_for_category, que ya ignora una sola respuesta
+# vacía). Al llegar al límite, el loop se AUTO-PAUSA y deja el motivo
+# visible en /api/stock/prewarm-status -- no sigue reintentando solo.
+_bm_top_category_empty_streak: dict[str, int] = {}
+_bm_category_loop_halt_reason: str = ""  # "" = sin pausa
+_BM_CATEGORY_EMPTY_STREAK_LIMIT = 3
+
 
 async def _conf_columns_top_categories_loop():
+    global _bm_category_loop_halt_reason
     await asyncio.sleep(600)  # dejar que el arranque normal termine primero
     while True:
+        if _bm_category_loop_halt_reason:
+            logger.error(
+                f"[CONFCOL-TOP] PAUSADO: {_bm_category_loop_halt_reason} -- "
+                "revisar BM y limpiar con POST /api/diag/bm-category-loop-resume"
+            )
+            await asyncio.sleep(_CONF_COLUMNS_TOP_INTERVAL_S)
+            continue
         try:
             cats = await token_store.get_categories_ordered_by_sales(days=90)
             top = [c["category"] for c in cats if c["category"]][:_CONF_COLUMNS_TOP_N]
@@ -7038,6 +7057,19 @@ async def _conf_columns_top_categories_loop():
                     try:
                         result = await _update_bm_master_for_category(bm_cli, cat)
                         logger.info(f"[CONFCOL-TOP] {cat}: {result}")
+                        if result.get("ok"):
+                            _bm_top_category_empty_streak[cat] = 0
+                        elif "0 filas" in (result.get("error") or ""):
+                            _n = _bm_top_category_empty_streak.get(cat, 0) + 1
+                            _bm_top_category_empty_streak[cat] = _n
+                            if _n >= _BM_CATEGORY_EMPTY_STREAK_LIMIT:
+                                _bm_category_loop_halt_reason = (
+                                    f"'{cat}' (categoría de alta venta) devolvió 0 filas de BM "
+                                    f"{_n} veces seguidas -- patrón de bloqueo/fallo, loop pausado "
+                                    f"{_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                )
+                                logger.error(f"[CONFCOL-TOP] 🚨 HALT: {_bm_category_loop_halt_reason}")
+                                break
                     except Exception as e:
                         logger.error(f"[CONFCOL-TOP] {cat} error inesperado: {e}")
                     await asyncio.sleep(_CONF_COLUMNS_DELAY_BETWEEN_S)
@@ -17037,7 +17069,12 @@ async def prewarm_status():
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
-        "error": _prewarm_error[:300] if _prewarm_error else "",
+        # FIX 2026-08-20: si el loop de categorías se auto-pausó por el
+        # patrón "0 filas repetidas en categoría de alta venta", reusa este
+        # mismo campo (ya renderizado como "⚠ Error: ..." en stock_sync.html
+        # sin necesitar HTML nuevo) para que sea visible de inmediato.
+        "error": (_bm_category_loop_halt_reason or _prewarm_error)[:300] if (_bm_category_loop_halt_reason or _prewarm_error) else "",
+        "category_loop_halted": bool(_bm_category_loop_halt_reason),
         "last_updated_s": last_updated,
         "bulk_age_s": bulk_age_s,
         "progress": progress,
@@ -21373,6 +21410,33 @@ async def diag_bm_master_full_resync_status(token: str = ""):
         "failures": [r for r in p["results"] if not r.get("ok")],
         "last_5_results": p["results"][-5:],
     })
+
+
+@app.get("/api/diag/bm-category-loop-status")
+async def diag_bm_category_loop_status(token: str = ""):
+    """Estado del auto-halt del loop de categorías top (2026-08-20) --
+    ver _bm_top_category_empty_streak / _bm_category_loop_halt_reason."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return JSONResponse({
+        "halted": bool(_bm_category_loop_halt_reason),
+        "reason": _bm_category_loop_halt_reason,
+        "empty_streaks": dict(_bm_top_category_empty_streak),
+    })
+
+
+@app.post("/api/diag/bm-category-loop-resume")
+async def diag_bm_category_loop_resume(token: str = ""):
+    """Limpia el auto-halt manualmente -- usar SOLO después de confirmar
+    con /api/diag/bm-master-update-category que BM ya devuelve datos
+    reales (no 0 filas) para la categoría que disparó la pausa."""
+    global _bm_category_loop_halt_reason
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    _prev = _bm_category_loop_halt_reason
+    _bm_category_loop_halt_reason = ""
+    _bm_top_category_empty_streak.clear()
+    return JSONResponse({"ok": True, "was_halted": bool(_prev), "previous_reason": _prev})
 
 
 @app.get("/api/diag/trigger-feedback-sync")
