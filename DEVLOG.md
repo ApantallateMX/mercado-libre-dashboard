@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FIX: permisos ya no requieren logout/login, se releen frescos en cada request
+
+**Archivo:** `app/services/user_store.py`.
+
+Jovan otorgó el permiso "Sin Stock" a Said, refrescó, y seguía sin verlo
+aunque el checkbox ya estaba bien guardado en DB (confirmado con
+`/api/diag/user-permissions`). Causa real: el JWT embebía rol/
+allowed_sections/can_zero_stock congelados desde el momento del login —
+un cambio de permisos no se reflejaba hasta que el token expirara (30
+días) o el usuario cerrara sesión manualmente. Jovan fue claro: "los
+cambios deben aplicar con un refresh solamente".
+
+`get_session()` ahora usa el JWT SOLO para probar identidad (uid + firma
+válida) y relee rol/allowed_sections/can_zero_stock/must_change_pw
+FRESCOS de `dashboard_users` en cada request. `create_session()` ya no
+embebe esos campos (quedan solo username/dn/role como metadata legible
+del token, nunca usados para autorizar). `update_user()` sigue llamando
+`delete_user_sessions()` al cambiar rol/secciones, pero ahora es solo
+limpieza de las filas legacy — no hace falta para que el cambio tome
+efecto.
+
+Probado localmente: mismo token de sesión (sin relogin), un permiso
+otorgado vía `update_user()` toma efecto en la siguiente llamada a
+`get_session()` — exactamente el comportamiento de "un refresh basta".
+
+---
+
 ## 2026-08-20 — FEAT: permiso otorgable "⛔ Sin Stock" (ML) separado del rol admin
 
 **Archivos:** `app/services/user_store.py`, `app/main.py`, `app/templates/orders.html`, `app/templates/usuarios.html`.
