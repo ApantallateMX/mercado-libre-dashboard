@@ -18350,6 +18350,37 @@ _DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e"
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
+@app.post("/api/diag/user-fix-orphan-sections")
+async def diag_user_fix_orphan_sections(token: str = "", dry_run: bool = True):
+    """Escritura controlada (DIAG_TOKEN, sin sesión) para el incidente
+    2026-08-20: quita de allowed_sections cualquier clave que hoy esté en
+    user_store._ADMIN_ONLY_TABS (ej. "ml.sync") -- esas claves ya no otorgan
+    ningún acceso real (ver has_tab_access), así que dejarlas solo puede
+    causar que un usuario se quede sin ningún destino válido ("no tienes
+    acceso a ninguna sección"). Recorre TODOS los usuarios no-admin, no solo
+    uno -- por si más de 2 personas tenían el mismo dato huérfano.
+    dry_run=true (default): solo reporta qué cambiaría, no escribe nada.
+    dry_run=false: aplica el fix de verdad."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    users = await user_store.list_users()
+    changed = []
+    for u in users:
+        if u.get("role") == "admin":
+            continue
+        raw = user_store._parse_allowed_sections(u.get("allowed_sections"))
+        if not raw:
+            continue
+        cleaned = [s for s in raw if s not in user_store._ADMIN_ONLY_TABS]
+        if cleaned != raw:
+            changed.append({
+                "username": u["username"], "before": raw, "after": cleaned,
+            })
+            if not dry_run:
+                await user_store.update_user(u["id"], allowed_sections=cleaned)
+    return JSONResponse({"dry_run": dry_run, "changed": changed, "count": len(changed)})
+
+
 @app.get("/api/diag/user-permissions")
 async def diag_user_permissions(username: str = "", token: str = ""):
     """Diagnóstico de solo lectura: rol y allowed_sections REALES en DB para
