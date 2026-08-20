@@ -7035,6 +7035,16 @@ _bm_top_category_empty_streak: dict[str, int] = {}
 _bm_category_loop_halt_reason: str = ""  # "" = sin pausa
 _BM_CATEGORY_EMPTY_STREAK_LIMIT = 3
 
+# FIX 2026-08-20 (pedido por Jovan: ver qué categoría va corriendo y el
+# tiempo real de cada una, no solo el resultado agregado). Progreso EN
+# VIVO de los 2 loops recurrentes -- separado de _full_resync_progress
+# (ese es para el resync manual único, este es continuo).
+_conf_columns_progress = {
+    "top":      {"current_category": "", "started_at": None, "history": []},
+    "longtail": {"current_category": "", "started_at": None, "history": []},
+}
+_CONF_COLUMNS_HISTORY_MAX = 15
+
 
 async def _conf_columns_top_categories_loop():
     global _bm_category_loop_halt_reason
@@ -7054,9 +7064,19 @@ async def _conf_columns_top_categories_loop():
                 from app.services.binmanager_client import get_shared_bm as _gsb_top
                 bm_cli = await _gsb_top()
                 for cat in top:
+                    _conf_columns_progress["top"]["current_category"] = cat
+                    _conf_columns_progress["top"]["started_at"] = _time.time()
+                    _cat_t0 = _time.time()
                     try:
                         result = await _update_bm_master_for_category(bm_cli, cat)
+                        _cat_elapsed = round(_time.time() - _cat_t0, 1)
                         logger.info(f"[CONFCOL-TOP] {cat}: {result}")
+                        _conf_columns_progress["top"]["history"].append({
+                            "category": cat, "elapsed_s": _cat_elapsed,
+                            "ok": result.get("ok"), "rows": result.get("conf_columns_rows"),
+                            "finished_at": _time.time(),
+                        })
+                        _conf_columns_progress["top"]["history"] = _conf_columns_progress["top"]["history"][-_CONF_COLUMNS_HISTORY_MAX:]
                         if result.get("ok"):
                             _bm_top_category_empty_streak[cat] = 0
                         elif "0 filas" in (result.get("error") or ""):
@@ -7073,6 +7093,8 @@ async def _conf_columns_top_categories_loop():
                     except Exception as e:
                         logger.error(f"[CONFCOL-TOP] {cat} error inesperado: {e}")
                     await asyncio.sleep(_CONF_COLUMNS_DELAY_BETWEEN_S)
+                _conf_columns_progress["top"]["current_category"] = ""
+                _conf_columns_progress["top"]["started_at"] = None
         except Exception as e:
             logger.error(f"[CONFCOL-TOP] loop error: {e}")
         await asyncio.sleep(_CONF_COLUMNS_TOP_INTERVAL_S)
@@ -7096,12 +7118,24 @@ async def _conf_columns_longtail_loop():
                 from app.services.binmanager_client import get_shared_bm as _gsb_tail
                 bm_cli = await _gsb_tail()
                 for cat in rest:
+                    _conf_columns_progress["longtail"]["current_category"] = cat
+                    _conf_columns_progress["longtail"]["started_at"] = _time.time()
+                    _cat_t0 = _time.time()
                     try:
                         result = await _update_bm_master_for_category(bm_cli, cat)
+                        _cat_elapsed = round(_time.time() - _cat_t0, 1)
                         logger.info(f"[CONFCOL-TAIL] {cat}: {result}")
+                        _conf_columns_progress["longtail"]["history"].append({
+                            "category": cat, "elapsed_s": _cat_elapsed,
+                            "ok": result.get("ok"), "rows": result.get("conf_columns_rows"),
+                            "finished_at": _time.time(),
+                        })
+                        _conf_columns_progress["longtail"]["history"] = _conf_columns_progress["longtail"]["history"][-_CONF_COLUMNS_HISTORY_MAX:]
                     except Exception as e:
                         logger.error(f"[CONFCOL-TAIL] {cat} error inesperado: {e}")
                     await asyncio.sleep(_CONF_COLUMNS_DELAY_BETWEEN_S)
+                _conf_columns_progress["longtail"]["current_category"] = ""
+                _conf_columns_progress["longtail"]["started_at"] = None
         except Exception as e:
             logger.error(f"[CONFCOL-TAIL] loop error: {e}")
         await asyncio.sleep(_CONF_COLUMNS_LONGTAIL_INTERVAL_S)
@@ -21415,13 +21449,30 @@ async def diag_bm_master_full_resync_status(token: str = ""):
 @app.get("/api/diag/bm-category-loop-status")
 async def diag_bm_category_loop_status(token: str = ""):
     """Estado del auto-halt del loop de categorías top (2026-08-20) --
-    ver _bm_top_category_empty_streak / _bm_category_loop_halt_reason."""
+    ver _bm_top_category_empty_streak / _bm_category_loop_halt_reason.
+    También expone progreso EN VIVO (categoría corriendo ahora + cuánto
+    lleva) e historial reciente con tiempo por categoría de ambos loops
+    (top-5 cada 15 min, longtail cada 4h) -- pedido explícito de Jovan
+    para ver qué categoría va corriendo y el tiempo real de cada una."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    _now_cls = _time.time()
+
+    def _live(name: str) -> dict:
+        p = _conf_columns_progress[name]
+        running_secs = round(_now_cls - p["started_at"], 1) if p["started_at"] else None
+        return {
+            "current_category": p["current_category"] or None,
+            "running_secs": running_secs,
+            "recent_history": list(reversed(p["history"])),  # más reciente primero
+        }
+
     return JSONResponse({
         "halted": bool(_bm_category_loop_halt_reason),
         "reason": _bm_category_loop_halt_reason,
         "empty_streaks": dict(_bm_top_category_empty_streak),
+        "top_loop": _live("top"),
+        "longtail_loop": _live("longtail"),
     })
 
 
