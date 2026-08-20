@@ -5758,6 +5758,16 @@ def _refresh_bm_avail_live(ctx: dict) -> None:
             entry = _bm_stock_cache.get(normalize_to_bm_sku(sku))
             if not entry:
                 continue
+            # FIX 2026-08-19 (bug real confirmado por Jovan: SNHP000121 y otros
+            # mostraban "BM Disponible: 0" en pantalla mientras la sugerencia IA
+            # seguia con un valor positivo -- la entrada de _bm_stock_cache tenia
+            # avail_total=0 pero _v=False, es decir un intento de verificacion en
+            # vivo que FALLO (bm_live devolvio error), no un 0 confirmado por BM.
+            # Este bloque solo debe AJUSTAR A LA BAJA con datos realmente
+            # verificados -- confiar en un 0 sin verificar oculta stock real y
+            # bloquea reactivaciones validas.
+            if not entry[1].get("_v"):
+                continue
             live_raw = entry[1].get("avail_total")
             if live_raw is None or p.get("_bm_avail_raw") == live_raw:
                 continue
@@ -18667,6 +18677,35 @@ async def diag_bm_stock_snapshot(token: str = ""):
         "last_updated_ts": last_ts,
         "last_updated_age_min": round((_time.time() - last_ts) / 60, 1) if last_ts else None,
     }
+
+
+@app.get("/api/diag/order-resolution-lookup")
+async def diag_order_resolution_lookup(token: str = "", order_id: str = ""):
+    """DIAGNÓSTICO PUNTUAL 2026-08-19: Jovan reportó que una orden con
+    sustituto agregado no aparece ni en Pendientes de Envío ni en Historial.
+    Muestra TODAS las filas de stock_alert_resolutions Y realtime_stock_alerts
+    para un order_id, sin filtrar por ninguna de las 2 vistas -- para ver
+    en qué estado quedó de verdad."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not order_id:
+        return JSONResponse({"error": "order_id requerido"}, status_code=400)
+    import aiosqlite as _aio_orl
+    async with _aio_orl.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = _aio_orl.Row
+        res_rows = await (await db.execute(
+            "SELECT * FROM stock_alert_resolutions WHERE order_id = ? ORDER BY ts DESC",
+            (order_id,),
+        )).fetchall()
+        alert_rows = await (await db.execute(
+            "SELECT * FROM realtime_stock_alerts WHERE order_id = ?",
+            (order_id,),
+        )).fetchall()
+    return JSONResponse({
+        "order_id": order_id,
+        "stock_alert_resolutions": [dict(r) for r in res_rows],
+        "realtime_stock_alerts": [dict(r) for r in alert_rows],
+    })
 
 
 @app.get("/api/diag/bm-sku-master-lookup")
