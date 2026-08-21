@@ -44,6 +44,14 @@ vendible/necesita proceso). 149 SKUs de TV con PNP en total, 700 unidades
 encontradas fuera de MTY (anomalía real — Jovan la va a cuestionar
 directo con producción).
 
+**Actualización:** Jovan buscó la columna en "Velocidad de Ventas — ML +
+Amazon por SKU" (bloque distinto de "Cobertura de Stock & Orden de
+Separación", donde se implementó primero) y confirmó que tiene sentido
+agregarla también ahí. Mismo helper (`get_pnp_data_for_skus`, sin
+llamadas a BM), ahora también en `/api/planning/velocity`. Verificado en
+producción: SNTV001764 (22.43 uds/día ML+Amazon, el #1 en su lista) muestra
+1 disponible / 145 no vendible.
+
 ---
 
 ## 2026-08-21 — FIX CRÍTICO: "Error al calcular stock" (UnboundLocalError, no timeout real)
