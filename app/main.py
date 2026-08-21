@@ -20744,6 +20744,29 @@ async def diag_bm_category_loop_status(token: str = ""):
     })
 
 
+@app.post("/api/diag/bm-force-relogin")
+async def diag_bm_force_relogin(token: str = ""):
+    """FIX CRÍTICO 2026-08-21 (incidente real: las 5 categorías top-5
+    empezaron a fallar SIMULTÁNEAMENTE a las 20:03 con respuestas vacías
+    en ~0.2-0.3s -- muy rápido para ser BM procesando de verdad, y
+    coincidiendo en TODAS las categorías al mismo tiempo señala una
+    sesión rota, no un problema de datos de BM. get_shared_bm() solo
+    reloguea si `_shared_bm._logged_in` es False -- pero si BM invalida
+    la sesión del lado del servidor sin que nuestro cliente lo detecte
+    (respuesta 200 con lista vacía, no una redirección/401 clara que
+    dispare _session_expired()), el flag se queda en True para siempre y
+    el cliente compartido sigue reusando una sesión muerta indefinidamente.
+    Esto forzó un re-login real -- resetea el cliente compartido para que
+    la siguiente llamada haga login desde cero."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import binmanager_client as _bmc
+    _bmc._shared_bm = None
+    from app.services.binmanager_client import get_shared_bm as _gsb_relogin
+    bm_cli = await _gsb_relogin()
+    return JSONResponse({"ok": True, "relogged_in": bm_cli._logged_in})
+
+
 @app.post("/api/diag/bm-category-loop-resume")
 async def diag_bm_category_loop_resume(token: str = ""):
     """Limpia el auto-halt manualmente -- usar SOLO después de confirmar
