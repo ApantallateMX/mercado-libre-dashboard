@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — OPERACION: nuevo trigger manual para refrescar alertas "Sin Publicar" sin esperar al cron de 3am
+
+Jovan pidió actualizar las alertas que ven los usuarios tras los fixes de
+`bm_sku_master` del mismo día (ver 3 entradas de abajo). El scan de gaps
+("Sin Publicar" ML + Amazon) que alimenta esas alertas solo corre 1x/día
+(3am México) — sin un trigger, los usuarios seguirían viendo datos
+calculados con la lógica VIEJA (filtrada por "SKU conocido") hasta la
+próxima madrugada.
+
+Nuevo `POST /api/diag/trigger-gap-scan-all` (`main.py`) — dispara
+`_run_gap_scan` (ML, todas las cuentas) + `_run_amz_gap_scan` (Amazon,
+cada cuenta) en background, respetando los mismos locks que los botones
+reales (`/api/lanzar/scan-all`, `/api/amazon/lanzar/scan`) — no duplica
+lógica, solo evita necesitar sesión admin para dispararlo remotamente.
+
+Verificado local: ML scan completo sin errores (1955 SKUs con stock,
+category/upc enriquecido para 1832 SKUs). Amazon dio 400 de OAuth local
+(token de Amazon no funciona fuera de Railway, limitación conocida del
+entorno local) — maneja el error con gracia ("benefit of doubt", no
+marca falsos gaps), se dispara igual en producción donde el auth sí
+funciona.
+
+---
+
 ## 2026-08-20 — FEAT: catálogo diario de BM ahora completa category/upc/image_url para TODO SKU (con o sin stock)
 
 Cierre del punto #1 pendiente de la revisión de "todo debe apuntar a

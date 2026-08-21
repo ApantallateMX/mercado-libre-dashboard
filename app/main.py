@@ -18684,6 +18684,35 @@ async def diag_trigger_catalog_sync(token: str = ""):
     return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
 
 
+@app.post("/api/diag/trigger-gap-scan-all")
+async def diag_trigger_gap_scan_all(token: str = ""):
+    """Dispara el scan de gaps 'Sin Publicar' (ML todas las cuentas + Amazon
+    todas las cuentas) sin necesitar sesión admin y sin esperar al cron de
+    3am -- pedido por Jovan 2026-08-20 para que las alertas que ve el
+    usuario reflejen de inmediato el fix del mismo día (bm_sku_master ya
+    no filtra por SKU conocido, ver DEVLOG). Mismo mecanismo que los
+    botones reales (/api/lanzar/scan-all, /api/amazon/lanzar/scan) --
+    respeta los mismos locks, no duplica lógica de scan."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.api.lanzar import _run_gap_scan, _scan_lock
+    from app.api.amazon_lanzar import _run_amz_gap_scan, _amz_scan_locks
+    started = {"ml": False, "amazon": []}
+    if not _scan_lock.locked():
+        asyncio.create_task(_run_gap_scan(user_id=None))
+        started["ml"] = True
+    amz_accounts = await token_store.get_all_amazon_accounts()
+    for acc in amz_accounts:
+        sid = acc.get("seller_id")
+        if not sid:
+            continue
+        if sid in _amz_scan_locks and _amz_scan_locks[sid].locked():
+            continue
+        asyncio.create_task(_run_amz_gap_scan(sid))
+        started["amazon"].append(sid)
+    return JSONResponse({"ok": True, "started": started})
+
+
 @app.post("/api/diag/fix-buyer-message-subjects")
 async def diag_fix_buyer_message_subjects(token: str = ""):
     """Normaliza subjects ya guardados con \\r\\n de header plegado sin
