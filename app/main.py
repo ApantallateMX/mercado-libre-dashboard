@@ -18386,6 +18386,47 @@ async def diag_amazon_orders_list(token: str = "", seller_id: str = "", days: in
     })
 
 
+@app.get("/api/diag/amazon-listing-live-qty")
+async def diag_amazon_listing_live_qty(token: str = "", seller_id: str = "", sku: str = ""):
+    """DIAGNÓSTICO temporal (2026-08-21) -- valida en vivo la hipótesis de que
+    la Listings API (fulfillmentAvailability) sí refleja el stock real de
+    Seller Flex/Onsite, a diferencia de la FBA Inventory API
+    (/fba/inventory/v1/summaries, fulfillableQuantity) que usa
+    _sync_qty_only_account para catálogos >1000 SKUs y que reporta 0 para
+    SKUs Onsite (el stock nunca entra a un centro de Amazon). Solo lectura,
+    no escribe nada. Candidato a borrarse una vez resuelto el caso VECKTOR."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not sku:
+        return JSONResponse({"error": "seller_id y sku requeridos"}, status_code=400)
+    from app.services.amazon_client import get_amazon_client
+    client = await get_amazon_client(seller_id)
+    if not client:
+        return JSONResponse({"error": f"sin client para seller_id={seller_id}"}, status_code=404)
+    try:
+        result = await client._request(
+            "GET",
+            f"/listings/2021-08-01/items/{client.seller_id}/{sku}",
+            params=[
+                ("marketplaceIds", client.marketplace_id),
+                ("includedData", "summaries,fulfillmentAvailability"),
+            ],
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    fa = result.get("fulfillmentAvailability") or []
+    try:
+        fba_inv = await client.get_fba_inventory_all()
+        fba_match = next((f for f in fba_inv if f.get("sellerSku") == sku), None)
+    except Exception as e:
+        fba_match = {"error": str(e)}
+    return {
+        "sku": sku,
+        "listings_api_fulfillmentAvailability": fa,
+        "fba_inventory_api_match": fba_match,
+    }
+
+
 @app.get("/api/diag/amazon-stock-reconcile")
 async def diag_amazon_stock_reconcile(token: str = "", days: int = 3, debug: bool = False):
     """Dispara YA una pasada de _run_amazon_stock_reconcile_pass (normalmente
