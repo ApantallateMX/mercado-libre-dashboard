@@ -7831,206 +7831,6 @@ async def _prewarm_caches(user_id: str = None):
             asyncio.create_task(_prewarm_caches(user_id=_queued_uid))
 
 
-async def _fetch_tv_wh_breakdown():
-    """Background task: fetch ALL-condition per-location bulks para desglose MTY/CDMX de TVs (SNTV*).
-
-    Diseño:
-    - Corre 180s DESPUÉS del prewarm — cuando _do_bulk_miss_retry (~50s) y _fetch_activate_wh (~60s)
-      ya terminaron y el semáforo _BM_GLOBAL_SEM está quieto.
-    - NO bloquea el prewarm. Lanzado con asyncio.create_task().
-    - Solo actualiza entradas SNTV* en _bm_stock_cache (mutación in-place → result_map también se actualiza).
-    - Flag _bm_tv_loc_running previene instancias concurrentes.
-    """
-    global _bm_tv_loc_running, _bm_bulk_loc47_all_cache, _bm_bulk_loc68_all_cache, _bm_bulk_loctj_all_cache
-    import logging as _tvl
-    _tvlog = _tvl.getLogger(__name__)
-
-    if _bm_tv_loc_running:
-        _tvlog.info("[BM-TV-WH] Task ya corriendo — skip")
-        return
-    _bm_tv_loc_running = True
-    try:
-        await asyncio.sleep(180)  # ceder espacio a bulk-miss retry + fetch_activate_wh
-
-        from app.services.binmanager_client import get_shared_bm as _gsbm
-        _tv_bm = await _gsbm()
-        _TV_COND = "GRA,GRB,GRC,ICB,ICC,NEW"
-        _ttl = _BM_BULK_TTL
-        _now = _time.time()
-
-        # ── LOC47 ALL ───────────────────────────────────────────────────────
-        _r47 = None
-        if _bm_bulk_loc47_all_cache and (_now - _bm_bulk_loc47_all_cache[0]) < _ttl:
-            _r47 = _bm_bulk_loc47_all_cache[1]
-            _tvlog.info(f"[BM-TV-WH] LOC47-ALL cache ({len(_r47)} rows)")
-        else:
-            try:
-                _f47 = await asyncio.wait_for(
-                    _tv_bm.get_bulk_stock(conditions=_TV_COND, location_id="47"), timeout=60.0)
-                if _f47:
-                    _bm_bulk_loc47_all_cache = (_time.time(), _slim_bulk_rows(_f47))
-                    _r47 = _f47
-                    _tvlog.info(f"[BM-TV-WH] LOC47-ALL fetch OK: {len(_f47)} filas")
-                elif _bm_bulk_loc47_all_cache:
-                    _r47 = _bm_bulk_loc47_all_cache[1]
-            except Exception as _e47:
-                _tvlog.warning(f"[BM-TV-WH] LOC47-ALL error: {_e47}")
-                if _bm_bulk_loc47_all_cache:
-                    _r47 = _bm_bulk_loc47_all_cache[1]
-
-        # ── LOC68 ALL ───────────────────────────────────────────────────────
-        _r68 = None
-        if _bm_bulk_loc68_all_cache and (_now - _bm_bulk_loc68_all_cache[0]) < _ttl:
-            _r68 = _bm_bulk_loc68_all_cache[1]
-            _tvlog.info(f"[BM-TV-WH] LOC68-ALL cache ({len(_r68)} rows)")
-        else:
-            try:
-                _f68 = await asyncio.wait_for(
-                    _tv_bm.get_bulk_stock(conditions=_TV_COND, location_id="68"), timeout=60.0)
-                if _f68:
-                    _bm_bulk_loc68_all_cache = (_time.time(), _slim_bulk_rows(_f68))
-                    _r68 = _f68
-                    _tvlog.info(f"[BM-TV-WH] LOC68-ALL fetch OK: {len(_f68)} filas")
-                elif _bm_bulk_loc68_all_cache:
-                    _r68 = _bm_bulk_loc68_all_cache[1]
-            except Exception as _e68:
-                _tvlog.warning(f"[BM-TV-WH] LOC68-ALL error: {_e68}")
-                if _bm_bulk_loc68_all_cache:
-                    _r68 = _bm_bulk_loc68_all_cache[1]
-
-        # ── LOC-TJ ALL (45,69,43,42) — agregado 2026-07-23, antes tj quedaba en 0 ──
-        _rtj = None
-        if _bm_bulk_loctj_all_cache and (_now - _bm_bulk_loctj_all_cache[0]) < _ttl:
-            _rtj = _bm_bulk_loctj_all_cache[1]
-            _tvlog.info(f"[BM-TV-WH] LOC-TJ-ALL cache ({len(_rtj)} rows)")
-        else:
-            try:
-                _ftj = await asyncio.wait_for(
-                    _tv_bm.get_bulk_stock(conditions=_TV_COND, location_id="45,69,43,42"), timeout=60.0)
-                if _ftj:
-                    _bm_bulk_loctj_all_cache = (_time.time(), _slim_bulk_rows(_ftj))
-                    _rtj = _ftj
-                    _tvlog.info(f"[BM-TV-WH] LOC-TJ-ALL fetch OK: {len(_ftj)} filas")
-                elif _bm_bulk_loctj_all_cache:
-                    _rtj = _bm_bulk_loctj_all_cache[1]
-            except Exception as _etj:
-                _tvlog.warning(f"[BM-TV-WH] LOC-TJ-ALL error: {_etj}")
-                if _bm_bulk_loctj_all_cache:
-                    _rtj = _bm_bulk_loctj_all_cache[1]
-
-        if not _r47 and not _r68 and not _rtj:
-            _tvlog.warning("[BM-TV-WH] Los 3 bulks fallaron — sin actualización TV")
-            return
-
-        # Construir lookups
-        def _tv_lkp_build(rows):
-            ex, by = {}, {}
-            for _row in (rows or []):
-                _sk = (_row.get("SKU") or "").upper().strip()
-                if _sk:
-                    ex[_sk] = _row
-                    by.setdefault(_extract_base_sku(_sk), []).append(_row)
-            return ex, by
-
-        def _tv_lkp(ex, by, key):
-            _rr = [ex[key]] if key in ex else by.get(key, [])
-            if not _rr:
-                return 0
-            _av = sum(int(v.get("AvailableQTY") or 0) for v in _rr)
-            if _av == 0 and all(v.get("AvailableQTY") is None for v in _rr):
-                _av = sum(int(v.get("TotalQty") or 0) for v in _rr)
-            return _av
-
-        _ex47, _by47 = _tv_lkp_build(_r47 or [])
-        _ex68, _by68 = _tv_lkp_build(_r68 or [])
-        _extj, _bytj = _tv_lkp_build(_rtj or [])
-
-        _tv_n = 0
-        for _ck, (_cts, _cd) in list(_bm_stock_cache.items()):
-            if not _ck.upper().startswith("SNTV") or _cts == 0.0:
-                continue  # solo SNTV* verificadas
-            _cdmx = _tv_lkp(_ex47, _by47, _ck.upper())
-            _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
-            _tj   = _tv_lkp(_extj, _bytj, _ck.upper())
-            # FIX DEFINITIVO 2026-08-07 (no parche): avail_total YA NO se toca aquí.
-            # El ciclo principal de prewarm (líneas ~7043-7170) ya fija avail_total para
-            # TODO SKU, incluidos SNTV*, desde _bm_bulk_all_cache — la misma fuente única
-            # y confiable que usa cualquier otro SKU (con su propio TTL, cap de staleness
-            # y retry per-SKU). Esta tarea (T+180s) hace un fetch INDEPENDIENTE y REDUNDANTE
-            # (loc47_all_cache/loc68_all_cache/loctj_all_cache) solo para poder repartir el
-            # desglose CDMX/MTY/TJ — nunca debió ser la fuente de verdad del total.
-            #
-            # Bug real (recurrente, ej. SNTV007472 caché=10/18 vs BM real=2/1): si este
-            # fetch independiente fallaba, sus ramas de except/elif reusaban el cache
-            # anterior SIN checar su edad (podía tener horas), y aun así el bloque de abajo
-            # re-timestampeaba _bm_stock_cache[_ck] como "recién verificado" — una entrada
-            # con apariencia fresca pero avail_total calculado con datos viejos. Como esto
-            # corría en un fetch propio separado del prewarm principal, cualquier SKU que
-            # dependiera de esta ruta podía quedar mal sin que el resto del sistema (que sí
-            # usa la fuente única) se viera afectado — de ahí que "si falla 1 fallan todos
-            # los TV" pero no los demás SKUs.
-            #
-            # Solución: una sola fuente de verdad para avail_total en TODOS los SKU types
-            # (bulk combinado). El desglose por ubicación se PRORRATEA contra ese total ya
-            # confiable — el mismo patrón que ya usan los SKUs no-SNTV en la segunda pasada
-            # del prewarm principal (líneas ~7216-7222). TJ excluida del total desde
-            # 2026-08-05 (project_bm_tijuana_exclusion.md); _tj se guarda solo para
-            # desglose/Transferencias Sugeridas.
-            _avail_total = _cd.get("avail_total", 0) or 0
-            _loc_sum = _cdmx + _mty + _tj
-            if _loc_sum > _avail_total and _avail_total > 0:
-                _scale = _avail_total / _loc_sum
-                _mty  = round(_mty  * _scale)
-                _cdmx = round(_cdmx * _scale)
-                _tj   = _avail_total - _mty - _cdmx
-            _cd["cdmx"] = _cdmx
-            _cd["mty"]  = _mty
-            _cd["tj"]   = _tj
-            _cd["_wh_fetched"] = True
-            # NO se reasigna _bm_stock_cache[_ck] con timestamp nuevo: _cd es el mismo dict
-            # (mutación in-place → result_map también se actualiza), y esta tarea ya no
-            # verifica avail_total, así que no debe fingir que lo hizo.
-            _tv_n += 1
-
-        _tvlog.info(f"[BM-TV-WH] Desglose MTY/CDMX actualizado para {_tv_n} TVs (SNTV*) — avail_total intacto, fuente única = bulk combinado")
-
-        # Persistir entradas SNTV* al DB con mty/cdmx ya actualizados.
-        # El DB save del prewarm ocurre a T+0 (antes de este task a T+180s), así que
-        # el DB queda con mty=0/_wh_fetched=False. Sin este save, cada restart/deploy
-        # arranca con MTY="—" para todos los TVs durante 3 minutos.
-        try:
-            _tv_entries = [
-                (_ck, _bm_stock_cache[_ck][1], _bm_stock_cache[_ck][0])
-                for _ck in _bm_stock_cache
-                if _ck.upper().startswith("SNTV")
-                and _bm_stock_cache[_ck][0] > 0
-                and (_bm_stock_cache[_ck][1].get("avail_total", 0) > 0
-                     or _bm_stock_cache[_ck][1].get("_wh_fetched"))
-            ]
-            if _tv_entries:
-                await token_store.upsert_bm_stock_batch(_tv_entries)
-                _tvlog.info(f"[BM-TV-WH] {len(_tv_entries)} entradas SNTV* persistidas en DB")
-        except Exception as _tv_db_err:
-            _tvlog.warning(f"[BM-TV-WH] Error persistiendo en DB: {_tv_db_err}")
-
-        # Invalidar _stock_issues_cache: fue construido en prewarm (T+0) antes de que
-        # mty/cdmx/tj de SNTV* tuvieran desglose (avail_total ya era correcto desde T+0,
-        # ver fix 2026-08-07 arriba). Forzar reconstrucción en el próximo request del
-        # Stock tab para que el desglose por almacén también quede al día.
-        _stock_issues_cache.clear()
-        _tvlog.info("[BM-TV-WH] _stock_issues_cache limpiado — próximo request reconstruye con desglose actualizado")
-        # Disparar prewarm para reconstruir stock_issues_cache en background sin esperar al usuario.
-        if not _prewarm_running:
-            asyncio.create_task(_prewarm_caches())
-            _tvlog.info("[BM-TV-WH] Prewarm de reconstrucción disparado")
-
-    except Exception as _tv_err:
-        import logging as _tvl2
-        _tvl2.getLogger(__name__).error(f"[BM-TV-WH] Error inesperado: {_tv_err}")
-    finally:
-        _bm_tv_loc_running = False
-
-
 async def _bm_map_from_master(products: list, sku_key: str = "sku") -> dict:
     """Construye el mismo shape que _get_bm_stock_cached (bm_map, para
     _apply_bm_stock) pero leyendo bm_sku_master -- lectura local pura,
@@ -20045,6 +19845,11 @@ async def diag_globalstock_category_test(token: str = "", category_id: str = "He
     categoría" que ya logramos hoy."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): pregunta ya respondida
+    # y adoptada en producción (_update_bm_master_for_category usa
+    # exactamente get_bulk_stock(category_id=...) desde el 2026-08-19).
+    return JSONResponse({"error": "endpoint desactivado -- pregunta ya respondida y adoptada"}, status_code=410)
     from app.services.binmanager_client import get_shared_bm as _gsb_gct
     bm = await _gsb_gct()
     _t0 = _time.time()
@@ -20080,6 +19885,11 @@ async def diag_confcolumns_bintype_test(
     sumar el filtro de BinType explícito a todo el pipeline."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): pregunta ya respondida
+    # (InventoryType no tiene efecto -- CONCEPTID=1 ya excluye no-vendibles
+    # por sí solo, adoptado en producción).
+    return JSONResponse({"error": "endpoint desactivado -- pregunta ya respondida y adoptada"}, status_code=410)
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_bt
     bm = await _gsb_bt()
     if not bm._logged_in:
@@ -20169,6 +19979,10 @@ async def diag_globalstock_bintype_test(token: str = "", test_sku: str = "SNSB00
     endpoint) hacia 0, ese es el mecanismo real a usar."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): pregunta ya respondida
+    # y adoptada en producción.
+    return JSONResponse({"error": "endpoint desactivado -- pregunta ya respondida y adoptada"}, status_code=410)
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_gst
     bm = await _gsb_gst()
     if not bm._logged_in:
@@ -20976,7 +20790,11 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not sku:
         return JSONResponse({"error": "sku requerido"}, status_code=400)
-
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): herramienta genérica de
+    # inspección -- usar /api/diag/sku (lee bm_sku_master) para lo mismo
+    # sin llamar a BM.
+    return JSONResponse({"error": "endpoint desactivado -- usar /api/diag/sku (bm_sku_master)"}, status_code=410)
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, _GS_BASE_PAYLOAD, get_shared_bm as _gsb
     bm = await _gsb()
     if not bm._logged_in:
@@ -21134,6 +20952,10 @@ async def diag_bm_bulk_test(token: str = "", page_size: int = 10, search: str = 
     """
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): herramienta genérica de
+    # prueba de payload -- ya no aplica, el bulk vive en bm_sku_master.
+    return JSONResponse({"error": "endpoint desactivado -- ver bm_sku_master"}, status_code=410)
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_bt
     bm = await _gsb_bt()
     if not bm._logged_in:
@@ -21244,6 +21066,11 @@ async def diag_bm_web_payload(token: str = "", sku: str = "SNHT000293"):
     """
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): el HTTP 500 que esto
+    # investigaba ya se resolvió (Alberto ajustó el filtro de condiciones
+    # del lado de BM, confirmado hoy mismo con bm-master-update-category).
+    return JSONResponse({"error": "endpoint desactivado -- HTTP 500 ya resuelto del lado de BM"}, status_code=410)
     from datetime import date, timedelta
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_wp
     bm = await _gsb_wp()
@@ -21334,6 +21161,11 @@ async def diag_bm_category_bulk_probe(token: str = "", category_id: str = ""):
     prueba el caso puntual que ya compartió el programador."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): "DIAGNÓSTICO TEMPORAL"
+    # ya cerrado -- se decidió NO usar ConfColumns para el sync principal
+    # (mezclaba TRANSITO como vendible), se adoptó Get_GlobalStock_InventoryBySKU.
+    return JSONResponse({"error": "endpoint desactivado -- decisión ya tomada, no se usa ConfColumns"}, status_code=410)
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_catprobe
     bm = await _gsb_catprobe()
     if not bm._logged_in:
@@ -26592,7 +26424,6 @@ async def bm_launch_opportunities(
       refresh   — forzar re-fetch de BM aunque el caché sea válido
     """
     global _bm_unlaunched_cache
-    from app.services.binmanager_client import get_shared_bm
     from app.services.sku_utils import extract_item_sku
 
     # 1. Recolectar todos los SKUs de ML (activos + pausados) de todas las cuentas
@@ -26627,12 +26458,15 @@ async def bm_launch_opportunities(
             if isinstance(_s, set):
                 ml_bm_skus.update(_s)
 
-    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68 — TJ excluida — + CONDITION vendible + CONCEPTID=1)
-    #    get_bulk_stock() usa los mismos filtros que el resto de la app — stock vendible real.
+    # 2. bm_sku_master (FIX 2026-08-20, directiva de Jovan: "todo debe apuntar
+    #    a nuestro maestro, nada a BM por el momento") -- antes get_bulk_stock()
+    #    en vivo, catálogo completo, cada vez que el caché de 15 min vencía.
+    #    bm_sku_master ya cubre TODO SKU vendible (el loop de categorías ya no
+    #    filtra por "conocido") -- min_qty=0 porque este endpoint hace su
+    #    propio filtro de min_qty más abajo.
     now = _time.time()
     if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL:
-        bm_client = await get_shared_bm()
-        bm_raw = await bm_client.get_bulk_stock()
+        bm_raw = await token_store.get_bm_master_all_as_bulk_rows(min_qty=0)
         # Deduplicar por BM base SKU + armar lista de oportunidades
         seen_bm: set[str] = set()
         all_items: list[dict] = []

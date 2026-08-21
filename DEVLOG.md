@@ -7,6 +7,59 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FEAT + DECISION: revisión completa de lo que quedaba llamando a BM en vivo (2da vuelta)
+
+Jovan pidió explícitamente revisar TODO lo que faltaba tras la 1ra vuelta
+(ver entrada de abajo, mismo día). Mapeo exhaustivo de cada `get_shared_bm`/
+`bm_post`/`bm._post` que quedaba en `main.py`.
+
+### Migrado a `bm_sku_master`
+- `/api/bm/launch-opportunities` (feature "Sin Lanzar" invertido: BM con
+  stock → qué falta publicar en ML) — antes `get_bulk_stock()` en vivo,
+  catálogo completo, cada vez que el caché de 15 min vencía. Verificado
+  local con sesión real: 200 OK, 1.8s, 189 oportunidades reales sobre
+  11,797 SKUs de BM vs 5,670 ya publicados en ML.
+
+### Código muerto eliminado
+- `_fetch_tv_wh_breakdown()` (~200 líneas) — cero callers confirmado (solo
+  se programaba desde el bloque inalcanzable que se borró en la 1ra
+  vuelta de hoy).
+
+### 7 endpoints de diagnóstico más desactivados (410, no borrados)
+Todos experimentos empíricos de una sola vez (2026-08-19/2026-08-20) sobre
+parámetros de BM (`InventoryType`, `BinTypeID`, payload exacto del
+browser) — preguntas ya respondidas y decisiones ya adoptadas en
+producción: `globalstock-category-test`, `confcolumns-bintype-test`,
+`globalstock-bintype-test`, `bm-sku-probe`, `bm-bulk-test`,
+`bm-web-payload`, `bm-category-bulk-probe`.
+
+### 3 casos con recomendación, pendientes de decisión de Jovan (NO tocados)
+1. **`_sync_bm_product_catalog`** — sync diario (3am, 1 sola llamada
+   ConfColumns para TODO el catálogo) que alimenta title/brand/model/
+   retail_ph/cost_usd/size — ahora parcialmente redundante con lo que el
+   loop de categorías ya captura por su cuenta, pero cubre SKUs con 0
+   stock (que el loop de categorías nunca ve) y trae `NEEDSALES`. Mismo
+   patrón de riesgo identificado el 2026-08-19 (1 llamada gigante puede
+   degradar bm_sku_master mientras corre), mitigado hoy solo por correr a
+   las 3am con poco tráfico concurrente.
+2. **`_check_bm_health`/`_bm_health_loop`** — ping real a BM cada 2 min
+   (`GET /User/Index`, sin datos, muy liviano). Migrar a "frescura de
+   bm_sku_master" (como ya se hizo con el circuit breaker de Sync Stock y
+   system_health.py) daría una señal PEOR en el escenario exacto de hoy
+   (BM alcanzable pero un endpoint específico con bug HTTP 500 — el ping
+   lo hubiera reportado "BM ok" correctamente; la frescura del maestro
+   hubiera dicho "caído" incorrectamente). También alimenta un panel
+   real en Sync Stock con latencia en vivo que perdería sentido.
+3. **`/api/planning/production-kpis`** — KPIs de Operaciones de BM
+   (FFT/Sorting/Recycle/Shipped) — dominio distinto a `bm_sku_master`
+   (stock/catálogo por SKU); no existe maestro equivalente para migrar.
+
+**Verificado antes de push:** compile OK, servidor local, endpoint
+desactivado confirmado (410), `/api/bm/launch-opportunities` con sesión
+real (200, datos correctos).
+
+---
+
 ## 2026-08-20 — DECISION + FEAT: bm_sku_master pasa a ser espejo COMPLETO del catálogo BM; ~15 vías más migradas de "llamar a BM en vivo" a leer el maestro
 
 **Directiva textual de Jovan** (continuación del incidente de bloqueo de BM
