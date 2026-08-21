@@ -169,9 +169,6 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 f"nickname={client.nickname}"
             )
 
-            from app.services.binmanager_client import get_shared_bm
-            bm_cli = await get_shared_bm()
-
             # Construir set de base-SKUs conocidos en Amazon
             amazon_base_skus: set[str] = set()
             amazon_active = 0
@@ -295,8 +292,16 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 f"[AMZ Gap Scan] amazon_base_skus tras augmentar cache: {len(amazon_base_skus)} entradas"
             )
 
-            # Fetch BM stock (BM es rápido por caché)
-            bm_items = await bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC")
+            # FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+            # maestro, nada a BM por el momento"): ya NO llama a BM en vivo --
+            # bm_sku_master ahora es un espejo completo del catálogo vendible
+            # (el loop de categorías deja de filtrar por "SKU ya conocido",
+            # ver _update_bm_master_for_category en main.py), así que esta
+            # lectura local ve exactamente lo mismo que antes traía la
+            # llamada en vivo, incluyendo SKUs nunca publicados en ninguna
+            # plataforma (el caso que este gap scan existe para encontrar).
+            from app.services import token_store
+            bm_items = await token_store.get_bm_master_all_as_bulk_rows()
 
             FX = 18.0  # FX fijo USD → MXN
             now_iso = datetime.utcnow().isoformat()

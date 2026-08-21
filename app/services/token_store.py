@@ -1222,6 +1222,12 @@ async def init_db():
             # sku}] ordenada por qty desc, mismo shape que ya devolvía
             # _bm_bulk_real_conditions() del bulk viejo, para reemplazo directo.
             ("conditions_json", "TEXT NOT NULL DEFAULT ''"),
+            # FEATURE 2026-08-20 (directiva de Jovan: consolidación total --
+            # nada fuera del loop de categorías debe llamar a BM, ni siquiera
+            # el gap scan de Amazon/ML ni "/products/sin-bm"). Esos consumos
+            # necesitaban ImageURL, que el bulk YA trae (NEEDFILE=True) pero
+            # nunca se guardaba aquí.
+            ("image_url", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
@@ -2089,9 +2095,12 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
     el JOIN listings-vs-maestro en vez del merge en vivo que usa el pipeline
     viejo. Retorna {sku: {available_qty, reserve_qty, total_qty, mty_qty,
     cdmx_qty, tj_qty, no_vendible_qty, verified, stock_updated_at, retail_ph,
-    cost_usd}}. retail_ph/cost_usd agregados 2026-08-20 (directiva de Jovan
-    de consolidar TODO lo que hoy llama a BM fuera del loop de categorías --
-    ver _fetch_base en amazon_products.py)."""
+    cost_usd, title, brand, model, category, upc, image_url}}. retail_ph/
+    cost_usd agregados 2026-08-20 (directiva de Jovan de consolidar TODO lo
+    que hoy llama a BM fuera del loop de categorías -- ver _fetch_base en
+    amazon_products.py). title/brand/model/category/upc/image_url agregados
+    el mismo día (2da vuelta) para que el gap scan de Amazon también pueda
+    leer de aquí sin llamar a BM."""
     if not skus:
         return {}
     out = {}
@@ -2103,12 +2112,66 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
             placeholders = ",".join("?" * len(chunk))
             cur = await db.execute(
                 f"""SELECT sku, available_qty, reserve_qty, total_qty, mty_qty, cdmx_qty,
-                           tj_qty, no_vendible_qty, verified, stock_updated_at, retail_ph, cost_usd
+                           tj_qty, no_vendible_qty, verified, stock_updated_at, retail_ph, cost_usd,
+                           title, brand, model, category, upc, image_url
                     FROM bm_sku_master WHERE sku IN ({placeholders})""",
                 chunk,
             )
             for r in await cur.fetchall():
                 out[r["sku"]] = dict(r)
+    return out
+
+
+async def get_bm_master_all_as_bulk_rows(min_qty: int = 1) -> list[dict]:
+    """FEATURE 2026-08-20 (directiva de Jovan: 'todo debe apuntar a nuestro
+    maestro, nada a BM por el momento') -- reemplaza cualquier llamada en
+    vivo a bm_cli.get_bulk_stock() SIN category_id (catálogo completo) por
+    una lectura pura de bm_sku_master, ya mantenido fresco por el loop de
+    categorías (_update_bm_master_for_category, main.py).
+
+    Devuelve las filas con las MISMAS claves que el BM bulk viejo (SKU,
+    AvailableQTY, Reserve, TotalQty, Title, Brand, Model, CategoryName,
+    ImageURL, UPC, LastRetailPricePurchaseHistory) para que los consumidores
+    existentes (amazon_lanzar.py gap scan, amazon_products.py /sin-bm,
+    stock_sync_multi._fetch_bm_avail) no necesiten reescribir su lógica de
+    parseo, solo cambiar de dónde viene la lista.
+
+    Usa best_condition_sku como 'SKU' (con sufijo de condición real) cuando
+    existe -- igual que antes, para que la inyección de sustitutos en BM
+    siga teniendo un ProductSKU válido; si no hay condición identificada
+    (SKU agregado sin sufijo), usa el SKU base tal cual.
+
+    min_qty: solo SKUs con available_qty >= este valor (default 1 -- mismo
+    criterio 'avail_qty <= 0: continuar' que ya aplicaban los consumidores)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT sku, best_condition_sku, available_qty, reserve_qty, total_qty,
+                      title, brand, model, category, upc, image_url, retail_ph,
+                      cost_usd, size
+               FROM bm_sku_master WHERE available_qty >= ?""",
+            (min_qty,),
+        )
+        rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "SKU": r["best_condition_sku"] or r["sku"],
+            "AvailableQTY": r["available_qty"],
+            "Reserve": r["reserve_qty"],
+            "TotalQty": r["total_qty"],
+            "Title": r["title"],
+            "Description": r["title"],
+            "Brand": r["brand"],
+            "Model": r["model"],
+            "CategoryName": r["category"],
+            "ImageURL": r["image_url"],
+            "UPC": r["upc"],
+            "LastRetailPricePurchaseHistory": r["retail_ph"],
+            "RetailPrice": r["retail_ph"],
+            "AvgCostQTY": r["cost_usd"],
+            "Size": r["size"],
+        })
     return out
 
 

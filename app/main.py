@@ -5806,9 +5806,12 @@ async def items_grid_partial(
 
 @app.get("/api/items/{item_id}/bm-cost")
 async def get_item_bm_cost(item_id: str):
-    """Devuelve costo BM de un item on-demand (para modal de deals desde inventario)."""
-    import httpx
-    BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+    """Devuelve costo BM de un item on-demand (para modal de deals desde inventario).
+
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes llamaba a BM en vivo. Ahora
+    lee bm_sku_master.cost_usd/retail_ph (mantenido fresco por el loop de
+    categorías)."""
     client = await get_meli_client()
     if not client:
         return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0, "error": "No autenticado"})
@@ -5818,25 +5821,13 @@ async def get_item_bm_cost(item_id: str):
         if not sku:
             return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0})
         base = normalize_to_bm_sku(sku)
-        from app.services.binmanager_client import bm_post as _bm_post_cost
-        resp = await _bm_post_cost(BM_INV_URL, {
-            "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
-            "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-        }, timeout=30.0)
-        if resp and resp.status_code == 200:
-            items = resp.json()
-            if items and isinstance(items, list):
-                for it in items:
-                    if it.get("SKU", "").upper() == base:
-                        return JSONResponse({
-                            "avg_cost_usd": it.get("AvgCostQTY", 0) or 0,
-                            "retail_price_usd": it.get("RetailPrice", 0) or 0,
-                        })
-                if items:
-                    return JSONResponse({
-                        "avg_cost_usd": items[0].get("AvgCostQTY", 0) or 0,
-                        "retail_price_usd": items[0].get("RetailPrice", 0) or 0,
-                    })
+        rows = await token_store.get_bm_master_rows_for_skus([base])
+        row = rows.get(base)
+        if row:
+            return JSONResponse({
+                "avg_cost_usd": row.get("cost_usd", 0) or 0,
+                "retail_price_usd": row.get("retail_ph", 0) or 0,
+            })
         return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0})
     finally:
         await client.close()
@@ -7156,56 +7147,6 @@ async def _conf_columns_longtail_loop():
         await asyncio.sleep(_CONF_COLUMNS_LONGTAIL_INTERVAL_S)
 
 
-async def _bm_verify_sku_direct(bm_cli, sku: str) -> dict | None:
-    """Verifica un SKU directo contra BM (1 request, CONCEPTID=1 LOC47+62+68) y
-    actualiza _bm_stock_cache. Devuelve el dict de datos actualizado, o None si
-    el SKU no tiene base BM válida.
-
-    FIX 2026-08-07: extraído de la lógica de `_wh_phase` (closure interna de
-    `_get_bm_stock_cached`, no accesible desde otras funciones) para que
-    `_fetch_activate_wh` pueda verificar per-SKU sin depender de una función
-    fuera de su alcance -- antes esa llamada lanzaba NameError en cada
-    iteración, atrapado en silencio por un try/except genérico, así que la
-    verificación de "Activar" nunca corría de verdad. A diferencia de
-    `_wh_phase` (que siempre pone mty/cdmx/tj en 0 porque no consulta el
-    endpoint de warehouse), esta versión preserva el desglose mty/cdmx/tj
-    existente -- aquí solo nos interesa refrescar avail_total.
-    """
-    base = normalize_to_bm_sku(sku)
-    if not base:
-        return None
-    try:
-        stock = await asyncio.wait_for(
-            bm_cli.get_stock_with_reserve(base, conditions=_bm_conditions_for_sku(sku)),
-            timeout=8.0,
-        )
-        avail_ok = stock is not None
-        avail_direct = stock[0] if avail_ok else 0
-        reserve_direct = stock[1] if avail_ok else 0
-    except Exception:
-        avail_ok = False
-        avail_direct = 0
-        reserve_direct = 0
-    avail_total = int(avail_direct or 0)
-    reserved_total = int(reserve_direct or 0)
-    verified = avail_ok or avail_total > 0 or reserved_total > 0
-    existing = _bm_stock_cache.get(base)
-    # Fix A (mismo patrón que _store_wh): si BM falló y todo quedó en 0, no
-    # pisar una entrada previa ya verificada con stock real.
-    if not verified and avail_total == 0 and existing and existing[1].get("_v") and existing[1].get("avail_total", 0) > 0:
-        return existing[1]
-    prev = existing[1] if existing else {}
-    inv = {
-        "mty": prev.get("mty", 0), "cdmx": prev.get("cdmx", 0), "tj": prev.get("tj", 0),
-        "total": prev.get("total", 0),
-        "avail_total": avail_total, "reserved_total": reserved_total,
-        "no_vendible": prev.get("no_vendible", 0), "_v": verified,
-        "_wh_fetched": prev.get("_wh_fetched", False),
-    }
-    _bm_stock_cache[base] = (_time.time(), inv)
-    return inv
-
-
 async def _prewarm_caches(user_id: str = None):
     """Pre-carga products + orders + BM stock + stock issues en background.
     Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
@@ -8278,814 +8219,6 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             _stale = _bm_stock_cache.get(_bk)
             if _stale:
                 result_map[_sku] = _stale[1]
-    return result_map
-
-    _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0, "no_vendible": 0}
-
-    def _parse_wh_rows(rows):
-        """Suma QtyTotal por almacen. Retorna (mty, cdmx, tj)."""
-        mty = cdmx = tj = 0
-        for row in (rows or []):
-            qty = row.get("QtyTotal", 0) or 0
-            wname = (row.get("WarehouseName") or "").lower()
-            if "monterrey" in wname or "maxx" in wname:
-                mty += qty
-            elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-                cdmx += qty
-            else:
-                tj += qty
-        return mty, cdmx, tj
-
-    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, no_vendible_direct=0, avail_ok=True, wh_responded=True):
-        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
-
-        avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68 (MTY+CDMX+Cuautitlán, único vendible online — TJ excluida desde 2026-08-05)
-        reserve_direct: Reserve del mismo endpoint — unidades reservadas para órdenes pendientes.
-        avail_ok:       True si get_stock_with_reserve respondió (tuple); False si fue excepción/timeout.
-        wh_responded:   True si el WH endpoint devolvió JSON válido (aunque vacío []).
-                        False si devolvió HTML (sesión expirada) — JSON parse falló.
-                        [] vacío con wh_responded=True ES dato verificado (SKU sin stock en esas ubicaciones).
-                        [] vacío con wh_responded=False significa que NO sabemos el estado real.
-
-        Casos verificados:
-          SNTV001764: TotalQty=215, Reserve=2, AvailableQTY=213 ✓
-          SNAC000029: AvailableQTY=2467, Reserve directo de BM ✓
-          SNTV006485: física=1, reservada=1 → AvailableQTY=0 ✓
-        """
-        mty, cdmx, tj = _parse_wh_rows(rows_wh)
-        warehouse_total = mty + cdmx
-        avail_total     = int(avail_direct or 0)
-        reserved_total  = int(reserve_direct or 0)
-        no_vendible     = int(no_vendible_direct or 0)
-        # Fallback avail: si avail=0 con stock físico real, usar warehouse_total.
-        # Dos casos que justifican el fallback:
-        #   1) avail_ok=False: get_stock_with_reserve lanzó excepción/timeout — dato desconocido
-        #   2) avail_ok=True pero reserve=0: CONCEPTID=1 devolvió (0,0) sin encontrar el SKU.
-        #      Si TotalQty=67 y Reserve=0, AvailableQTY debería ser 67 — el (0,0) es un fallo silencioso.
-        #      Genuinamente reservado tendría reserve > 0 (ej: SNTV006485: total=1, reserve=1 → avail=0 correcto).
-        if avail_total == 0 and warehouse_total > 0 and (not avail_ok or reserved_total == 0):
-            avail_total = warehouse_total
-        # _v=True: BM respondió con datos reales (incluyendo 0 genuino) o ya hay stock.
-        # avail_ok=True: get_stock_with_reserve retornó tuple — respuesta verificada aunque sea (0,0).
-        # avail_ok=False: retornó None (timeout/sesión) — no sabemos el estado real.
-        verified = avail_ok or avail_total > 0 or reserved_total > 0
-
-        # Fix A: si BM falló (verified=False, todo en cero), NO sobreescribir entrada válida.
-        # Causa: bajo carga del prewarm, sesión BM expira → get_stock_with_reserve retorna None
-        # → avail_ok=False, avail=0 → verified=False → sin esta guarda sobreescribiría la entrada
-        # previa con datos buenos (ej: avail_total=2146) → falso oversell_risk hasta TTL.
-        if not verified and avail_total == 0 and warehouse_total == 0:
-            existing = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-            if existing:
-                _ex_ts, _ex_data = existing
-                if _ex_data.get("_v") and _ex_data.get("avail_total", 0) > 0:
-                    return  # Preservar datos previos verificados — no clobber con session-failure zeros
-
-        inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
-               "avail_total": avail_total, "reserved_total": reserved_total,
-               "no_vendible": no_vendible, "_v": verified,
-               "_wh_fetched": wh_responded}  # True = per-SKU WH endpoint fue llamado → MTY/CDMX/TJ son reales
-        # Guardar bajo clave normalizada (base BM SKU, 10 chars) para que todas las variantes
-        # del mismo producto (SNTV007270-GRA, SNTV007270 NEW, etc.) compartan una sola entrada.
-        _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), inv)
-        # Agregar a result_map con el SKU original de MeLi para que _apply_bm_stock lo encuentre.
-        # Incluir también entradas verificadas con stock=0: BM confirmó genuinamente 0 unidades.
-        # Si no se incluyen aquí, _apply_bm_stock no puede distinguir "BM dijo 0" de "BM no consultado"
-        # y el filtro oversell_risk usa (None or 0)==0 generando falsos positivos.
-        if inv["total"] > 0 or avail_total > 0 or verified:
-            result_map[sku] = inv
-        return inv["total"] > 0 or avail_total > 0
-
-    def _store_empty(sku):
-        # FIX 2026-08-07: mismo guard "Fix A" que ya tiene _store_wh — sin esto,
-        # una excepción tardía en _wh_phase (sesión BM caída a medio ciclo, etc.)
-        # pisaba una entrada previa ya verificada con stock real con ceros,
-        # generando un falso oversell_risk/restock hasta el próximo TTL.
-        _bk = normalize_to_bm_sku(sku)
-        _existing = _bm_stock_cache.get(_bk)
-        if _existing and _existing[1].get("_v") and _existing[1].get("avail_total", 0) > 0:
-            return
-        _bm_stock_cache[_bk] = (_time.time(), _EMPTY_BM)
-
-    # Semaphore(1) = estrictamente secuencial — esperar respuesta antes de lanzar el siguiente.
-    # Evita rate-limiting de BM. ~600 SKUs × ~0.5s = ~5 min por ciclo de prewarm (15 min).
-    wh_sem = asyncio.Semaphore(1)
-
-    async def _wh_phase(sku, http=None, _track_progress=True):
-        """Consulta Get_GlobalStock_InventoryBySKU CONCEPTID=1 — fuente única de stock vendible.
-        1 solo request HTTP por SKU (WH breakdown eliminado para reducir concurrencia BM).
-
-        Con sem=12 + 1 request = 12 simultáneos máx → bien bajo el límite de 20 de httpx.
-        MTY/CDMX/TJ breakdown = 0 (no disponible sin endpoint WH — solo avail total).
-        """
-        # normalize_to_bm_sku: split en primer espacio/guión → siempre 10 chars BM correctos.
-        # _clean_sku_for_bm + _extract_base_sku NO manejan "(cantidad:2)" porque \(\d+\)
-        # no matchea texto con letras/dos-puntos, dejando "SNHG000038 cantidad:2" → BM retorna 0.
-        base = normalize_to_bm_sku(sku)
-        if not base:
-            _store_empty(sku)
-            return
-        async with wh_sem:
-            try:
-                # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68 (MTY+CDMX+Cuautitlán, TJ excluida) — fuente única correcta.
-                # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
-                # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
-                # timeout=20s: FIX 2026-08-10 — get_stock_with_reserve()/_query_bm_stock() hace
-                # hasta 2 intentos internos de timeout=7s c/u, con hard-timeout real de _post()
-                # de 7+5=12s POR INTENTO (hasta 24s en el peor caso con reintento por sesión
-                # expirada). El valor anterior (8s) era MÁS CORTO que ese presupuesto interno,
-                # así que esta red de seguridad externa cancelaba la llamada casi siempre antes
-                # de que su propio mecanismo de reintento pudiera correr — confirmado en logs de
-                # producción: 101 fallas consecutivas con mensaje vacío (asyncio.TimeoutError)
-                # durante un solo ciclo de prewarm, mientras BM respondía con normalidad (Jovan
-                # verificó BM directamente). No usar 25s+ (valor histórico previo a este fix):
-                # con BM lento por mantenimiento, 2 rondas de 25s sumaban 50s y disparaban el
-                # timeout de 90s del tab en vivo — 20s da margen real sobre el presupuesto
-                # interno sin reintroducir ese problema.
-                _stock = await asyncio.wait_for(
-                    bm_cli.get_stock_with_reserve(base, conditions=_bm_conditions_for_sku(sku)),
-                    timeout=20.0,
-                )
-                # _avail_ok=True: BM respondió (tuple) — dato verificado aunque sea (0,0) genuino.
-                # _avail_ok=False: retornó None (timeout/sesión) — no sabemos el stock real.
-                _avail_ok = _stock is not None
-                avail_direct = _stock[0] if _avail_ok else 0
-                reserve_direct = _stock[1] if _avail_ok else 0
-                _store_wh(sku, [], avail_direct=avail_direct, reserve_direct=reserve_direct,
-                          avail_ok=_avail_ok, wh_responded=False)
-                if _track_progress:
-                    _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
-                return
-            except Exception as _exc:
-                import logging as _log
-                _log.getLogger(__name__).warning(f"[BM-CACHE] Error para {sku}: {_exc}")
-        _store_empty(sku)
-        if _track_progress:
-            _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
-
-    # Fast-fail: si BM está caído (2+ fallos consecutivos), servir cache stale en lugar de
-    # bloquear 600 × 25s = 10+ min esperando timeouts. El health loop detecta la caída.
-    if _bm_health.get("consecutive_failures", 0) >= 2:
-        logger.warning(f"[BM-CACHE] BM DOWN — skip fetch de {len(to_fetch)} SKUs, usando cache stale")
-        _ff_now = _time.time()
-        _ff_max_age = _BM_CACHE_TTL * 2  # 14 min — mismo TTL efectivo que _cache_is_valid usa cuando BM está caído
-        for p in products:
-            sku = p.get(sku_key, "")
-            if not sku or sku in result_map:
-                continue
-            cached = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-            # ts=0.0 = cargado de DB sin verificar en este proceso → NO servir.
-            # Entrada expirada (>14 min) = dato demasiado viejo para confiar → NO servir.
-            # Mejor sin dato que con dato incorrecto (ej: avail=549 real=0).
-            if cached and cached[0] > 0 and (_ff_now - cached[0]) < _ff_max_age:
-                result_map[sku] = cached[1]
-        return result_map
-
-    from app.services.binmanager_client import get_shared_bm
-    bm_cli = await get_shared_bm()
-
-    _bulk_miss_set: set = set()  # inicializar aquí — accesible en post-fetch pass aunque to_fetch<=30
-
-    if len(to_fetch) > 30:
-        # BULK FETCH DUAL: dos caches separados por condición.
-        # _bm_bulk_gr_cache  → GRA,GRB,GRC,NEW  — para todo SKU no-SNTV
-        # _bm_bulk_all_cache → GRA,GRB,GRC,ICB,ICC,NEW — para SNTV* (cualquier TV puede ser ICB/ICC)
-        # BM filtra server-side por CONDITION → no hace falta post-filtrar por campo.
-        _BM_COND_GR  = "GRA,GRB,GRC,NEW"
-        _BM_COND_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"
-        _used_bulk = False
-        global _bm_bulk_gr_cache, _bm_bulk_all_cache
-
-        _need_all = any(_bm_conditions_for_sku(s) == _BM_COND_ALL for s in to_fetch)
-
-        # ── GR bulk (10 min TTL normal; ilimitado cuando BM está caído) ────────
-        _bm_is_down_now = _bm_health.get("consecutive_failures", 0) >= 2
-        _bulk_returned_empty = False  # True si BM respondió OK pero devolvió lista vacía
-        _bulk_gr_rows = None
-        # FIX 2026-08-12 (incidente real: 0/1552 SKUs colgado 7+ min): si el
-        # intento FRESCO de GR ya falló/tardó su timeout completo, BM está
-        # con problemas ahora mismo -- no tiene sentido intentar 3 fetches
-        # frescos más (LOC47/68/TJ, 90-150s c/u) que muy probablemente
-        # también van a fallar. Circuit breaker simple: solo se activa
-        # cuando SÍ hubo un intento fresco real (no cuando se reusó cache
-        # válida o se saltó el reintento por "falló hace <3min").
-        _gr_fresh_attempt_failed = False
-        if _bm_bulk_gr_cache:
-            _age_gr = _time.time() - _bm_bulk_gr_cache[0]
-            # Servir cache si: fresco (<10 min) O BM marcado caído Y no excede 2h.
-            # Cap de 2h: aunque BM esté "caído" según health check, forzar re-intento
-            # si el bulk tiene >2h — el health check puede estar equivocado (endpoint
-            # individual falla pero bulk funciona). El except abajo tiene fallback a stale.
-            _use_cache = _age_gr < _BM_BULK_TTL or (_bm_is_down_now and _age_gr < 7200)
-            if _use_cache:
-                _bulk_gr_rows = _bm_bulk_gr_cache[1]
-                _age_label = f"{round(_age_gr)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_gr >= _BM_BULK_TTL else "")
-                logger.info(f"[BM-CACHE] Reutilizando GR bulk cache ({_age_label})")
-        if _bulk_gr_rows is None and _bm_bulk_recently_failed("gr") and _bm_bulk_gr_cache:
-            _bulk_gr_rows = _bm_bulk_gr_cache[1]
-            logger.info("[BM-CACHE] GR bulk fallo hace <3min -- usando stale sin reintentar")
-        elif _bulk_gr_rows is None:
-            _gr_t0 = _time.time()
-            try:
-                # FIX 2026-08-18 (incidente real: GR timing out de forma
-                # silenciosa por 25h+ seguidas, cascadeando el skip de LOC47/
-                # 68/TJ/ALL cada ciclo). Primero se subió este wrapper externo
-                # 90s->150s, pero el log real mostró que el timeout de verdad
-                # está DENTRO de get_bulk_stock() -- 60s por página, sin
-                # relación con este wrapper -- y BM está tardando >60s en
-                # responder la página 1 sola. Se subió ese interno a 100s
-                # (binmanager_client.py); este externo sube a 250s para que
-                # alcance 2 intentos de 100s + margen para más páginas.
-                _fresh_gr = await asyncio.wait_for(
-                    bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
-                    timeout=250.0,
-                )
-                _gr_elapsed = _time.time() - _gr_t0
-                if _fresh_gr:
-                    global _bm_bulk_raw_sample
-                    if _fresh_gr and _bm_bulk_raw_sample is None:
-                        _bm_bulk_raw_sample = {k: (type(v).__name__ if not isinstance(v, (str, int, float, bool, type(None))) else v) for k, v in _fresh_gr[0].items()}
-                    _bm_bulk_gr_cache = (_time.time(), _slim_bulk_rows(_fresh_gr))
-                    _bm_health["ok"] = True
-                    _bm_health["last_ok_ts"] = _time.time()
-                    _bm_health["consecutive_failures"] = 0
-                    _bulk_gr_rows = _fresh_gr
-                    _bm_bulk_mark_ok("gr")
-                    asyncio.create_task(token_store.save_bm_bulk_cache("gr", _bm_bulk_gr_cache[0], _bm_bulk_gr_cache[1]))
-                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("gr", "success", rows_count=len(_fresh_gr), elapsed_s=_gr_elapsed))
-                    logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas ({round(_gr_elapsed)}s)")
-                else:
-                    # Fix B1: BM respondió sin excepción pero devolvió vacío/None — tratar como fallo.
-                    # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
-                    logger.warning("[BM-CACHE] GR bulk fetch devolvió vacío — fallback a stale cache")
-                    _bulk_returned_empty = True  # señal para evitar retries individuales
-                    _gr_fresh_attempt_failed = True
-                    _bm_bulk_mark_failed("gr")
-                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("gr", "empty", elapsed_s=_gr_elapsed))
-                    if _bm_bulk_gr_cache:
-                        _bulk_gr_rows = _bm_bulk_gr_cache[1]
-                        logger.warning(f"[BM-CACHE] GR usando stale ({len(_bulk_gr_rows)} rows) tras bulk vacío")
-                    _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
-            except Exception as _bulk_err:
-                _gr_elapsed = _time.time() - _gr_t0
-                # FIX 2026-08-18: str(asyncio.TimeoutError()) es '' -- el log
-                # quedaba mudo ("GR bulk fetch error:  — usando stale") sin
-                # decir qué pasó de verdad. Se agrega el tipo de excepción.
-                _gr_err_label = f"{type(_bulk_err).__name__}: {_bulk_err}" if str(_bulk_err) else type(_bulk_err).__name__
-                logger.warning(f"[BM-CACHE] GR bulk fetch error ({round(_gr_elapsed)}s): {_gr_err_label} — usando stale")
-                _gr_fresh_attempt_failed = True
-                _bm_bulk_mark_failed("gr")
-                asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("gr", "error", elapsed_s=_gr_elapsed, error_message=_gr_err_label))
-                # Si falla el fetch, intentar usar cache aunque sea antiguo
-                if _bm_bulk_gr_cache:
-                    _bulk_gr_rows = _bm_bulk_gr_cache[1]
-                    logger.warning(f"[BM-CACHE] GR fallback a cache stale tras error fetch")
-
-        # ── Bulk por ubicación: LOC47=CDMX, LOC68=MTY, LOC45+69+43+42=Tijuana
-        # (para desglose MTY/CDMX/TJ). Solo cuando el GR bulk fue fresco (mismo
-        # ciclo) — evitar fetches extra si ya hay cache. TJ agregado 2026-07-23
-        # (antes _bm_tj quedaba siempre en 0 — ver DEVLOG, "zonas de almacén").
-        global _bm_bulk_loc47_cache, _bm_bulk_loc68_cache, _bm_bulk_loctj_cache
-        _bulk_loc47_rows = None  # CDMX (LOC 47)
-        _bulk_loc68_rows = None  # MTY  (LOC 68)
-        _bulk_loctj_rows = None  # Tijuana (LOC 45,69,43,42)
-        if _bulk_gr_rows is not None and not _bm_is_down_now and not _gr_fresh_attempt_failed:
-            # Reutilizar si la cache de ubicación es tan fresca como el GR bulk
-            _loc_ttl = _BM_BULK_TTL  # mismo TTL que GR bulk
-            if _bm_bulk_loc47_cache and (_time.time() - _bm_bulk_loc47_cache[0]) < _loc_ttl:
-                _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
-                logger.info(f"[BM-CACHE] Reutilizando LOC47 (CDMX) cache ({len(_bulk_loc47_rows)} rows)")
-            elif _bm_bulk_recently_failed("loc47") and _bm_bulk_loc47_cache:
-                _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
-                logger.info("[BM-CACHE] LOC47 fallo hace <3min -- usando stale sin reintentar")
-            else:
-                _l47_t0 = _time.time()
-                try:
-                    _fresh_l47 = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="47"),
-                        timeout=90.0,
-                    )
-                    _l47_elapsed = _time.time() - _l47_t0
-                    if _fresh_l47:
-                        _bm_bulk_loc47_cache = (_time.time(), _slim_bulk_rows(_fresh_l47))
-                        _bulk_loc47_rows = _fresh_l47
-                        _bm_bulk_mark_ok("loc47")
-                        asyncio.create_task(token_store.save_bm_bulk_cache("loc47", _bm_bulk_loc47_cache[0], _bm_bulk_loc47_cache[1]))
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc47", "success", rows_count=len(_fresh_l47), elapsed_s=_l47_elapsed))
-                        logger.info(f"[BM-CACHE] LOC47 (CDMX) bulk OK: {len(_fresh_l47)} filas")
-                    else:
-                        _bm_bulk_mark_failed("loc47")
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc47", "empty", elapsed_s=_l47_elapsed))
-                        if _bm_bulk_loc47_cache:
-                            _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
-                except Exception as _le47:
-                    _l47_elapsed = _time.time() - _l47_t0
-                    _l47_err_label = f"{type(_le47).__name__}: {_le47}" if str(_le47) else type(_le47).__name__
-                    logger.warning(f"[BM-CACHE] LOC47 bulk error: {_l47_err_label}")
-                    _bm_bulk_mark_failed("loc47")
-                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc47", "error", elapsed_s=_l47_elapsed, error_message=_l47_err_label))
-                    if _bm_bulk_loc47_cache:
-                        _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
-            if _bm_bulk_loc68_cache and (_time.time() - _bm_bulk_loc68_cache[0]) < _loc_ttl:
-                _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
-                logger.info(f"[BM-CACHE] Reutilizando LOC68 (MTY) cache ({len(_bulk_loc68_rows)} rows)")
-            elif _bm_bulk_recently_failed("loc68") and _bm_bulk_loc68_cache:
-                _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
-                logger.info("[BM-CACHE] LOC68 fallo hace <3min -- usando stale sin reintentar")
-            else:
-                _l68_t0 = _time.time()
-                try:
-                    _fresh_l68 = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="68"),
-                        timeout=90.0,
-                    )
-                    _l68_elapsed = _time.time() - _l68_t0
-                    if _fresh_l68:
-                        _bm_bulk_loc68_cache = (_time.time(), _slim_bulk_rows(_fresh_l68))
-                        _bulk_loc68_rows = _fresh_l68
-                        _bm_bulk_mark_ok("loc68")
-                        asyncio.create_task(token_store.save_bm_bulk_cache("loc68", _bm_bulk_loc68_cache[0], _bm_bulk_loc68_cache[1]))
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc68", "success", rows_count=len(_fresh_l68), elapsed_s=_l68_elapsed))
-                        logger.info(f"[BM-CACHE] LOC68 (MTY) bulk OK: {len(_fresh_l68)} filas")
-                    else:
-                        _bm_bulk_mark_failed("loc68")
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc68", "empty", elapsed_s=_l68_elapsed))
-                        if _bm_bulk_loc68_cache:
-                            _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
-                except Exception as _le68:
-                    _l68_elapsed = _time.time() - _l68_t0
-                    _l68_err_label = f"{type(_le68).__name__}: {_le68}" if str(_le68) else type(_le68).__name__
-                    logger.warning(f"[BM-CACHE] LOC68 bulk error: {_l68_err_label}")
-                    _bm_bulk_mark_failed("loc68")
-                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loc68", "error", elapsed_s=_l68_elapsed, error_message=_l68_err_label))
-                    if _bm_bulk_loc68_cache:
-                        _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
-            if _bm_bulk_loctj_cache and (_time.time() - _bm_bulk_loctj_cache[0]) < _loc_ttl:
-                _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
-                logger.info(f"[BM-CACHE] Reutilizando LOC-TJ (45,69,43,42) cache ({len(_bulk_loctj_rows)} rows)")
-            elif _bm_bulk_recently_failed("loctj") and _bm_bulk_loctj_cache:
-                _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
-                logger.info("[BM-CACHE] LOC-TJ fallo hace <3min -- usando stale sin reintentar")
-            else:
-                _ltj_t0 = _time.time()
-                try:
-                    # timeout=150s (no 90s como GR/LOC47/LOC68): FIX 2026-08-10 —
-                    # LOC-TJ se pide DESPUÉS de GR+LOC47+LOC68 en la misma cadena
-                    # secuencial (mismo semáforo global), y el inventario real de
-                    # Tijuana es más grande (ahí vive el stock físico real, ver
-                    # project_bm_tijuana_exclusion.md) — más páginas de bulk que
-                    # paginar bajo la misma cola. Confirmado en logs de producción:
-                    # "[BM-CACHE] LOC-TJ bulk error: " (mensaje vacío = timeout) dos
-                    # veces mientras GR/LOC47/LOC68 sí completaban con el mismo límite.
-                    _fresh_ltj = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="45,69,43,42"),
-                        timeout=150.0,
-                    )
-                    _ltj_elapsed = _time.time() - _ltj_t0
-                    if _fresh_ltj:
-                        _bm_bulk_loctj_cache = (_time.time(), _slim_bulk_rows(_fresh_ltj))
-                        _bulk_loctj_rows = _fresh_ltj
-                        _bm_bulk_mark_ok("loctj")
-                        asyncio.create_task(token_store.save_bm_bulk_cache("loctj", _bm_bulk_loctj_cache[0], _bm_bulk_loctj_cache[1]))
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loctj", "success", rows_count=len(_fresh_ltj), elapsed_s=_ltj_elapsed))
-                        logger.info(f"[BM-CACHE] LOC-TJ bulk OK: {len(_fresh_ltj)} filas")
-                    else:
-                        _bm_bulk_mark_failed("loctj")
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loctj", "empty", elapsed_s=_ltj_elapsed))
-                        if _bm_bulk_loctj_cache:
-                            _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
-                except Exception as _letj:
-                    _ltj_elapsed = _time.time() - _ltj_t0
-                    _ltj_err_label = f"{type(_letj).__name__}: {_letj}" if str(_letj) else type(_letj).__name__
-                    logger.warning(f"[BM-CACHE] LOC-TJ bulk error: {_ltj_err_label}")
-                    _bm_bulk_mark_failed("loctj")
-                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("loctj", "error", elapsed_s=_ltj_elapsed, error_message=_ltj_err_label))
-                    if _bm_bulk_loctj_cache:
-                        _bulk_loctj_rows = _bm_bulk_loctj_cache[1]
-
-        # ── ALL bulk (solo si hay SKUs SNTV-ICB/ICC/bundle) ──────────────────
-        _bulk_all_rows = None
-        if _need_all:
-            if _bm_bulk_all_cache:
-                _age_all = _time.time() - _bm_bulk_all_cache[0]
-                _use_cache_all = _age_all < _BM_BULK_TTL or (_bm_is_down_now and _age_all < 7200)
-                if _use_cache_all:
-                    _bulk_all_rows = _bm_bulk_all_cache[1]
-                    _age_label_all = f"{round(_age_all)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_all >= _BM_BULK_TTL else "")
-                    logger.info(f"[BM-CACHE] Reutilizando ALL bulk cache ({_age_label_all})")
-            if _bulk_all_rows is None and _bm_bulk_recently_failed("all") and _bm_bulk_all_cache:
-                _bulk_all_rows = _bm_bulk_all_cache[1]
-                logger.info("[BM-CACHE] ALL bulk fallo hace <3min -- usando stale sin reintentar")
-            elif _bulk_all_rows is None and _gr_fresh_attempt_failed:
-                # FIX 2026-08-12: mismo circuit breaker que LOC47/68/TJ arriba —
-                # ALL es el último de 5 fetches secuenciales (90+90+90+150+150s
-                # peor caso, ver incidente real) — si GR ya falló fresco este
-                # ciclo, no tiene sentido quemar otros 150s en algo que muy
-                # probablemente también va a fallar. Usar stale si hay.
-                if _bm_bulk_all_cache:
-                    _bulk_all_rows = _bm_bulk_all_cache[1]
-                    logger.info("[BM-CACHE] ALL bulk saltado (GR ya falló este ciclo) -- usando stale")
-            elif _bulk_all_rows is None:
-                _all_t0 = _time.time()
-                try:
-                    # timeout=150s: FIX 2026-08-10 — mismo motivo que LOC-TJ arriba,
-                    # ALL se pide al final de la cadena secuencial (después de GR,
-                    # LOC47, LOC68 y LOC-TJ), acumulando espera de cola del semáforo
-                    # global antes de siquiera empezar su propia consulta.
-                    _fresh_all = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
-                        timeout=150.0,
-                    )
-                    _all_elapsed = _time.time() - _all_t0
-                    if _fresh_all:
-                        _slimmed_all = _slim_bulk_rows(_fresh_all)
-                        _bm_bulk_all_cache = (_time.time(), _slimmed_all)
-                        _bulk_all_rows = _slimmed_all
-                        _bm_bulk_mark_ok("all")
-                        asyncio.create_task(token_store.save_bm_bulk_cache("all", _bm_bulk_all_cache[0], _bm_bulk_all_cache[1]))
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("all", "success", rows_count=len(_fresh_all), elapsed_s=_all_elapsed))
-                        logger.info(f"[BM-CACHE] ALL bulk fetch OK: {len(_fresh_all)} filas")
-                    else:
-                        # Fix B2: mismo caso que GR — bulk vacío sin excepción → stale fallback
-                        logger.warning("[BM-CACHE] ALL bulk fetch devolvió vacío — fallback a stale cache")
-                        _bm_bulk_mark_failed("all")
-                        asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("all", "empty", elapsed_s=_all_elapsed))
-                        if _bm_bulk_all_cache:
-                            _bulk_all_rows = _bm_bulk_all_cache[1]
-                except Exception as _bulk_err:
-                    _all_elapsed = _time.time() - _all_t0
-                    _all_err_label = f"{type(_bulk_err).__name__}: {_bulk_err}" if str(_bulk_err) else type(_bulk_err).__name__
-                    logger.warning(f"[BM-CACHE] ALL bulk fetch error: {_all_err_label} — usando stale")
-                    _bm_bulk_mark_failed("all")
-                    asyncio.create_task(token_store.log_bm_bulk_fetch_attempt("all", "error", elapsed_s=_all_elapsed, error_message=_all_err_label))
-                    if _bm_bulk_all_cache:
-                        _bulk_all_rows = _bm_bulk_all_cache[1]
-
-        if _bulk_gr_rows is not None or _bulk_all_rows is not None:
-            def _build_lookup(rows):
-                exact, by_base = {}, {}
-                for _brow in (rows or []):
-                    _sk = ((_brow.get("SKU") or "")).upper().strip()
-                    if not _sk:
-                        continue
-                    exact[_sk] = _brow
-                    by_base.setdefault(_extract_base_sku(_sk), []).append(_brow)
-                return exact, by_base
-
-            _exact_gr,  _by_base_gr  = _build_lookup(_bulk_gr_rows)  if _bulk_gr_rows  else ({}, {})
-            _exact_all, _by_base_all = _build_lookup(_bulk_all_rows) if _bulk_all_rows else ({}, {})
-
-            def _lookup(exact, by_base, fbase):
-                row = exact.get(fbase)
-                rows_to_sum = [row] if row is not None else by_base.get(fbase, [])
-                if not rows_to_sum:
-                    return 0, 0
-                avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
-                reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
-                # Fallback a TotalQty SOLO si BM no envió AvailableQTY (campo null).
-                # No activar cuando AvailableQTY llegó como 0 genuino — asumir avail=total
-                # genera sobreventa si hay unidades reservadas no reportadas.
-                if avail == 0 and reserve == 0:
-                    _all_avail_null = all(v.get("AvailableQTY") is None for v in rows_to_sum)
-                    if _all_avail_null:
-                        total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
-                        if total > 0:
-                            avail = total  # AvailableQTY no vino → estimar desde TotalQty
-                return avail, reserve
-
-            _diag_found = 0           # SKUs con avail > 0
-            _diag_zero_in_bulk  = 0   # encontrados en bulk con avail=0 (BM confirmó 0)
-            _diag_not_in_bulk   = 0   # no encontrados en bulk → retry per-SKU
-            _diag_zero_in_bulk_skus: list = []
-            _diag_not_in_bulk_skus:  list = []
-            _diag_fallback = 0        # SKUs donde se usó TotalQty fallback
-            _bulk_miss_set: set = set()  # SKUs no en bulk → avail_ok=False → _v=False → retry
-
-            # Wrapper de _lookup con diagnóstico integrado
-            def _lookup_diag(exact, by_base, fbase, fsku):
-                nonlocal _diag_found, _diag_zero_in_bulk, _diag_not_in_bulk, _diag_fallback
-                row = exact.get(fbase)
-                rows_to_sum = [row] if row is not None else by_base.get(fbase, [])
-                if not rows_to_sum:
-                    # SKU no está en bulk — el bulk no lo incluyó, NO significa 0 stock.
-                    # Marcarlo como miss: avail_ok=False → _v=False → stale retry hace per-SKU.
-                    _diag_not_in_bulk += 1
-                    if len(_diag_not_in_bulk_skus) < 50:
-                        _diag_not_in_bulk_skus.append(fsku)
-                    _bulk_miss_set.add(fsku)
-                    return 0, 0, 0
-                avail       = sum(int(v.get("AvailableQTY")   or 0) for v in rows_to_sum)
-                reserve     = sum(int(v.get("Reserve")         or 0) for v in rows_to_sum)
-                no_vendible = sum(int(v.get("NoVendibleQty")   or 0) for v in rows_to_sum)
-                # Fallback a TotalQty SOLO si BM no envió AvailableQTY (campo null).
-                # No activar cuando AvailableQTY llegó como 0 genuino — ahí reserve puede
-                # ser > 0 aunque no se vea, y asumir avail=total genera sobreventa.
-                if avail == 0 and reserve == 0:
-                    _all_avail_null = all(v.get("AvailableQTY") is None for v in rows_to_sum)
-                    if _all_avail_null:
-                        total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
-                        if total > 0:
-                            avail = total
-                            _diag_fallback += 1
-                if avail > 0:
-                    _diag_found += 1
-                else:
-                    # BM confirmó explícitamente 0 (SKU en bulk, AvailableQTY=0)
-                    _diag_zero_in_bulk += 1
-                    if len(_diag_zero_in_bulk_skus) < 30:
-                        _diag_zero_in_bulk_skus.append(fsku)
-                return avail, reserve, no_vendible
-
-            for _fsku in to_fetch:
-                _fbase = normalize_to_bm_sku(_fsku)
-                if not _fbase:
-                    _store_empty(_fsku)
-                    _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
-                    continue
-                # Usar el bulk correcto según las condiciones del SKU
-                if _bm_conditions_for_sku(_fsku) == _BM_COND_ALL:
-                    _avail, _res, _nvq = _lookup_diag(_exact_all, _by_base_all, _fbase, _fsku)
-                else:
-                    _avail, _res, _nvq = _lookup_diag(_exact_gr, _by_base_gr, _fbase, _fsku)
-                # Bulk miss: NO llamar _store_wh — Fix A en _store_wh preservaría el valor
-                # stale de DB (ej: 549 de era LOC62) porque la entrada vieja tiene _v=True.
-                # Se retried per-SKU en _do_bulk_miss_retry() abajo.
-                # BM no incluye SKUs con 0 stock en bulk → "no en bulk" ≠ "no en BM".
-                if _fsku in _bulk_miss_set:
-                    _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
-                    continue
-                # Encontrado en bulk: BM confirmó el valor (sea 0 o >0).
-                _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
-                          no_vendible_direct=_nvq,
-                          avail_ok=True, wh_responded=False)
-                _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
-
-            # Guardar estadísticas de cobertura para diagnóstico en Sync Stock
-            global _bm_bulk_stats
-            _diag_zero = _diag_zero_in_bulk + _diag_not_in_bulk  # total para compat UI
-            _bm_bulk_stats = {
-                "bulk_gr_rows":       len(_bulk_gr_rows)  if _bulk_gr_rows  else 0,
-                "bulk_all_rows":      len(_bulk_all_rows) if _bulk_all_rows else 0,
-                "skus_total":         len(to_fetch),
-                "found":              _diag_found,
-                "zero":               _diag_zero,
-                "zero_in_bulk":       _diag_zero_in_bulk,
-                "not_in_bulk":        _diag_not_in_bulk,
-                "fallback_used":      _diag_fallback,
-                "zero_skus":          _diag_not_in_bulk_skus,    # los que serán retried per-SKU
-                "zero_in_bulk_skus":  _diag_zero_in_bulk_skus,   # BM confirmó 0 (no retried)
-                "ts":                 _time.time(),
-            }
-            logger.info(f"[BM-BULK] Cobertura: {_diag_found}/{len(to_fetch)} con stock, "
-                        f"{_diag_zero_in_bulk} BM confirmó 0, {_diag_not_in_bulk} no en bulk (retry per-SKU), "
-                        f"{_diag_fallback} via TotalQty fallback")
-            _used_bulk = True
-
-            # ── Segunda pasada: MTY/CDMX/TJ desde bulks por ubicación ─────────
-            # LOC47=CDMX, LOC68=MTY, LOC45+69+43+42=Tijuana. Usa GR per-location
-            # para todos los SKUs. TJ agregado 2026-07-23 — antes quedaba en 0
-            # siempre (dato vestigial, ver DEVLOG "zonas de almacén").
-            if _bulk_loc47_rows is not None or _bulk_loc68_rows is not None or _bulk_loctj_rows is not None:
-                _loc_exact47, _loc_base47 = _build_lookup(_bulk_loc47_rows or [])
-                _loc_exact68, _loc_base68 = _build_lookup(_bulk_loc68_rows or [])
-                _loc_exacttj, _loc_basetj = _build_lookup(_bulk_loctj_rows or [])
-                _wh_updated = 0
-                for _wh_sku in to_fetch:
-                    _wh_bk = normalize_to_bm_sku(_wh_sku)
-                    if _wh_bk.upper().startswith("SNTV"):
-                        continue  # TV WH breakdown maneja SNTV* a T+180s con ICB/ICC conditions
-                    _existing = _bm_stock_cache.get(_wh_bk)
-                    if not _existing or not _existing[1].get("_v"):
-                        continue  # solo actualizar entradas verificadas
-                    _cdmx_avail, _ = _lookup(_loc_exact47, _loc_base47, _wh_bk)
-                    _mty_avail,  _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
-                    _tj_avail,   _ = _lookup(_loc_exacttj, _loc_basetj, _wh_bk)
-                    _wh_ts, _wh_data = _existing
-                    # Mutar _wh_data IN PLACE para que result_map (mismo objeto) también se actualice.
-                    # Si se crea dict nuevo, result_map queda desactualizado y el template muestra "—".
-                    _avail_total = _wh_data.get("avail_total", 0) or 0
-                    _loc_sum = _mty_avail + _cdmx_avail + _tj_avail
-                    if _loc_sum > _avail_total and _avail_total > 0:
-                        _scale = _avail_total / _loc_sum
-                        _mty_avail  = round(_mty_avail  * _scale)
-                        _cdmx_avail = round(_cdmx_avail * _scale)
-                        _tj_avail   = _avail_total - _mty_avail - _cdmx_avail
-                    _wh_data["cdmx"] = _cdmx_avail
-                    _wh_data["mty"]  = _mty_avail
-                    _wh_data["tj"]   = _tj_avail
-                    _wh_data["_wh_fetched"] = True
-                    # No se necesita re-asignar _bm_stock_cache — _wh_data ya es el objeto referenciado.
-                    _wh_updated += 1
-                logger.info(f"[BM-WH] Desglose MTY/CDMX/TJ actualizado para {_wh_updated} SKUs desde LOC47/LOC68/LOC-TJ")
-
-            # ── Reconciliación bulk-a-bulk: SKUs que desaparecieron del ciclo anterior ────────────
-            # Compara el bulk actual vs el anterior para detectar SKUs que tenían stock y ya no
-            # aparecen. Esos se agregan a _bulk_miss_set para que el retry per-SKU los verifique
-            # y los actualice a 0 (nunca se borran del sistema — solo cambia la cantidad).
-            global _bm_prev_bulk_sku_set
-            _this_bulk_sku_set: set = set()
-            for _recon_row in (_bulk_gr_rows or []) + (_bulk_all_rows or []):
-                _recon_sk = normalize_to_bm_sku((_recon_row.get("SKU") or "").upper().strip())
-                if _recon_sk:
-                    _this_bulk_sku_set.add(_recon_sk)
-
-            if _bm_prev_bulk_sku_set and _this_bulk_sku_set:
-                _bm_key_to_ml_sku = {normalize_to_bm_sku(s): s for s in to_fetch if s}
-                _miss_bm_keys     = {normalize_to_bm_sku(s) for s in _bulk_miss_set if s}
-                _disappeared_bm   = (
-                    _bm_prev_bulk_sku_set            # estaba en el bulk anterior
-                    & set(_bm_key_to_ml_sku.keys())  # relevante para nuestros listings ML
-                    - _this_bulk_sku_set             # ya no en el bulk actual
-                    - _miss_bm_keys                  # no ya en la cola de misses
-                )
-                # Solo los que tenían stock previo (>0) — son los más urgentes de verificar.
-                _extra_recon = [
-                    _bm_key_to_ml_sku[_nk]
-                    for _nk in _disappeared_bm
-                    if (_bm_stock_cache.get(_nk, (0.0, {}))[1].get("avail_total") or 0) > 0
-                    and _nk in _bm_key_to_ml_sku
-                ][:30]
-                if _extra_recon:
-                    logger.info(f"[BM-RECON] {len(_extra_recon)} SKUs desaparecieron del bulk "
-                                f"con stock previo — agregando al retry per-SKU para verificar")
-                    for _rml in _extra_recon:
-                        _bulk_miss_set.add(_rml)
-                logger.info(f"[BM-RECON] Bulk diff: prev={len(_bm_prev_bulk_sku_set)}, "
-                            f"actual={len(_this_bulk_sku_set)}, desaparecieron={len(_disappeared_bm)}")
-
-            _bm_prev_bulk_sku_set = _this_bulk_sku_set
-
-            # Retry per-SKU para bulk misses CON ts=0.0 (nunca verificados) O CON stale
-            # avail_total>0 (tenían stock antes pero ya no están en el bulk → probablemente 0).
-            # BM omite SKUs con stock=0 del bulk, así que "no en bulk" + "stale>0" = sospechoso.
-            if retry_stale and _bulk_miss_set and not _bulk_returned_empty:
-                _miss_list = [
-                    s for s in _bulk_miss_set
-                    if not normalize_to_bm_sku(s).upper().startswith("SNTV")  # TVs → _fetch_tv_wh_breakdown los maneja
-                    and (
-                        (_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[0]) == 0.0
-                        or ((_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[1].get("avail_total") or 0) > 0)
-                    )
-                ][:50]
-                if _miss_list:
-                    async def _do_bulk_miss_retry(miss_skus=_miss_list):
-                        global _bulk_miss_retry_running
-                        import logging as _log_miss
-                        _mlog = _log_miss.getLogger(__name__)
-                        await asyncio.sleep(5)
-                        # FIX 2026-08-10: sin este guard, cada una de las 4 cuentas del loop
-                        # de _startup_prewarm disparaba su propia instancia fire-and-forget
-                        # de este retry (hasta 50 SKUs c/u) sin revisar si otra cuenta ya
-                        # estaba corriendo el mismo retry -- confirmado por auditoria como
-                        # causa real de los 26+ min de "actualizando en background".
-                        if _bulk_miss_retry_running:
-                            _mlog.info("[BM-BULK] Ya hay un bulk-miss-retry corriendo (otra cuenta) — se salta para no encolar duplicados")
-                            return
-                        _bulk_miss_retry_running = True
-                        try:
-                            # FIX 2026-08-11 (pedido por Jovan): para SKUs NO-TV, confiar
-                            # directamente en "no aparece en el bulk vendible = 0 stock"
-                            # SIN verificar 1-por-1 contra BM. Las condiciones ICB/ICC que
-                            # justifican una verificación aparte SOLO aplican a TVs (SNTV*),
-                            # que ya se manejan aparte en _fetch_tv_wh_breakdown -- este
-                            # _miss_list ya las excluye (línea de arriba). Verificar cada
-                            # SKU individualmente aquí (await _wh_phase, hasta 50 × ~20s)
-                            # es lo que generó la cola de decenas de minutos y dejó las
-                            # alertas caídas para las 4 cuentas el 2026-08-11 cuando BM
-                            # respondía lento (14-19s/llamada) -- sin aportar más certeza
-                            # real que la que ya da la ausencia en el bulk.
-                            _db_updates = []
-                            for _msku in miss_skus:
-                                _bk = normalize_to_bm_sku(_msku)
-                                _existing = _bm_stock_cache.get(_bk)
-                                # Mismo guard que _store_wh/_store_empty: si ya había un
-                                # valor verificado>0, no lo pisamos con el 0 inferido.
-                                if _existing and _existing[1].get("_v") and _existing[1].get("avail_total", 0) > 0:
-                                    continue
-                                _inv = {
-                                    "mty": 0, "cdmx": 0, "tj": 0, "total": 0,
-                                    "avail_total": 0, "reserved_total": 0, "no_vendible": 0,
-                                    "_v": True,  # confiamos en la ausencia del bulk como fuente
-                                    "_wh_fetched": False,
-                                }
-                                _bm_stock_cache[_bk] = (_time.time(), _inv)
-                                _db_updates.append((_bk, _inv, _time.time()))
-                            if _db_updates:
-                                try:
-                                    await token_store.upsert_bm_stock_batch(_db_updates)
-                                    _mlog.info(f"[BM-BULK] Bulk-miss: {len(_db_updates)} SKUs marcados en 0 por ausencia de bulk (sin verificación individual)")
-                                except Exception as _e_db:
-                                    _mlog.warning(f"[BM-BULK] Error upsert DB: {_e_db}")
-                            _mlog.info(f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs")
-                        finally:
-                            _bulk_miss_retry_running = False
-                    asyncio.create_task(_do_bulk_miss_retry())
-
-            # Lanzar desglose MTY/CDMX para TVs (SNTV*) como background task desacoplado.
-            # Corre 180s después para no competir con _do_bulk_miss_retry y _fetch_activate_wh.
-            # Solo si hay SKUs TV en este batch y no hay ya una instancia corriendo.
-            if _need_all and not _bm_tv_loc_running:
-                asyncio.create_task(_fetch_tv_wh_breakdown())
-                logger.info("[BM-TV-WH] Task MTY/CDMX TVs lanzado (corre en 180s)")
-
-        if not _used_bulk:
-            # Fix B3: último recurso — servir desde _bm_stock_cache per-SKU aunque esté expirado.
-            # Cuando ambos bulk fallan (stale también ausente), mejor datos viejos que result_map vacío.
-            # result_map vacío → _apply_bm_stock no puede set _bm_avail → KPIs todos en 0.
-            logger.warning(f"[BM-CACHE] Bulk falló — sirviendo _bm_stock_cache stale per-SKU para {len(to_fetch)} SKUs. Retry en próximo ciclo.")
-            for _fsku in to_fetch:
-                _fbase = normalize_to_bm_sku(_fsku)
-                _stale_cached = _bm_stock_cache.get(_fbase)
-                if _stale_cached:
-                    result_map[_fsku] = _stale_cached[1]
-    else:
-        # Lote pequeño (≤30 SKUs): per-SKU directo sigue siendo eficiente
-        await asyncio.gather(*[_wh_phase(s) for s in to_fetch], return_exceptions=True)
-
-    # Fix C: retry serial para SKUs STALE — fire-and-forget para no bloquear prewarm ni Stock tab.
-    # Solo en prewarm (retry_stale=True) Y solo cuando el bulk NO fue usado (fallback per-SKU).
-    # Cuando el bulk corrió OK, SKUs no encontrados = genuinamente no en BM → sin retry necesario.
-    # NUNCA cuando _bulk_returned_empty: si BM respondió pero devolvió vacío, las queries
-    # individuales también van a fallar → evitar el ciclo de 200+ segundos de hits a BM.
-    if retry_stale and not _used_bulk and not _bulk_returned_empty:
-        _stale_after_prewarm = [
-            s for s in to_fetch
-            if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
-        ]
-        _stale_to_retry = _stale_after_prewarm[:100]
-        if _stale_to_retry:
-            async def _do_stale_retry(_skus=_stale_to_retry):
-                import logging as _log_retry
-                _log_retry.getLogger(__name__).info(
-                    f"[BM-CACHE] Retry serial BG: {len(_skus)} SKUs STALE — esperando 10s para sesión BM"
-                )
-                # Esperar 10s: deja que la sesión BM se estabilice tras el parallel prewarm
-                # y que el prewarm de la próxima cuenta no compita con estos retries.
-                await asyncio.sleep(10)
-                for _retry_sku in _skus:
-                    await _wh_phase(_retry_sku, _track_progress=False)
-                    # 2s entre retries: breathing room para BM — evita saturar la sesión
-                    await asyncio.sleep(2)
-                _log_retry.getLogger(__name__).info(
-                    f"[BM-CACHE] Retry serial BG completado: {len(_skus)} SKUs procesados"
-                )
-            asyncio.create_task(_do_stale_retry())
-
-    # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
-    # _seen_bm_keys pero result_map nunca se pobló). Ahora el cache sí tiene el dato.
-    # Ejemplo: "SNTV007270-GRA" fue el SKU fetcheado; "SNTV007270 NEW" del mismo prewarm
-    # fue omitido de to_fetch (misma bm_key) → aquí se sirve del cache.
-    # IMPORTANTE: excluir bulk-miss SKUs — el post-fetch pass NO debe agregar datos stale
-    # de SKUs que el bulk no encontró (ej: SHIL000026 con 545 stale). El retry per-SKU
-    # los corregirá. Sin esta exclusión, el dato stale reaparece en result_map aunque
-    # el bulk confirmó que no están en LOC47+68.
-    _pf_miss_filtered = 0
-    for p in products:
-        sku = p.get(sku_key, "")
-        if not sku or sku in result_map:
-            continue
-        if sku in _bulk_miss_set:
-            _pf_miss_filtered += 1
-            continue  # bulk miss: esperar al retry per-SKU, no agregar stale data
-        bm_key = normalize_to_bm_sku(sku)
-        cached = _bm_stock_cache.get(bm_key)
-        if cached and _cache_is_valid(cached):
-            result_map[sku] = cached[1]
-    if _pf_miss_filtered:
-        logger.info(f"[BM-POSTFETCH] {_pf_miss_filtered} bulk-miss SKUs filtrados (stale guard activo)")
-    # Lo mismo para variaciones
-    for p in products:
-        if not p.get("has_variations"):
-            continue
-        for v in p.get("variations", []):
-            v_sku = v.get("sku", "")
-            if not v_sku or v_sku in result_map:
-                continue
-            if v_sku in _bulk_miss_set:
-                continue
-            v_bm_key = normalize_to_bm_sku(v_sku)
-            cached = _bm_stock_cache.get(v_bm_key)
-            if cached and _cache_is_valid(cached):
-                result_map[v_sku] = cached[1]
-
-    # Persistir nuevas entradas BM a DB (fire-and-forget — no bloquea la respuesta)
-    if to_fetch:
-        now_ts = _time.time()
-        entries_to_persist = []
-        for _sku in to_fetch:
-            _bm_key = normalize_to_bm_sku(_sku)
-            cached = _bm_stock_cache.get(_bm_key)
-            if cached:
-                entries_to_persist.append((_sku, cached[1], cached[0]))
-        if entries_to_persist:
-            async def _persist_bm():
-                try:
-                    await token_store.upsert_bm_stock_batch(entries_to_persist)
-                except Exception as _e:
-                    import logging as _log
-                    _log.getLogger(__name__).debug(f"[BM-DB] persist error: {_e}")
-            asyncio.create_task(_persist_bm())
-
     return result_map
 
 
@@ -12253,8 +11386,6 @@ async def item_edit_partial(request: Request, item_id: str):
 @app.get("/partials/item-deal/{item_id}", response_class=HTMLResponse)
 async def item_deal_partial(request: Request, item_id: str):
     """Deal management partial: loads inside edit-modal for a single item."""
-    import httpx
-    BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -12280,22 +11411,16 @@ async def item_deal_partial(request: Request, item_id: str):
         bm_cost_usd = 0
         bm_retail_usd = 0
         async def _get_bm():
+            # FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+            # nuestro maestro, nada a BM por el momento"): antes llamaba a
+            # BM en vivo. Ahora lee bm_sku_master.cost_usd/retail_ph.
             if not sku:
                 return 0, 0
-            from app.services.binmanager_client import bm_post as _bm_post_deal_modal
             base = _extract_base_sku(sku).upper()
-            resp = await _bm_post_deal_modal(BM_INV_URL, {
-                "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
-                "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-            }, timeout=30.0)
-            if resp and resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list):
-                    for it in data:
-                        if it.get("SKU", "").upper() == base:
-                            return it.get("AvgCostQTY", 0) or 0, it.get("RetailPrice", 0) or 0
-                    if data:
-                        return data[0].get("AvgCostQTY", 0) or 0, data[0].get("RetailPrice", 0) or 0
+            rows = await token_store.get_bm_master_rows_for_skus([base])
+            row = rows.get(base)
+            if row:
+                return row.get("cost_usd", 0) or 0, row.get("retail_ph", 0) or 0
             return 0, 0
 
         (bm_cost_usd, bm_retail_usd), usd_to_mxn = await asyncio.gather(
@@ -14371,57 +13496,43 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     result["bm_total"] = wh["total"]
                 return result
 
-            # --- Fallback: HTTP a BM (si caché vacío o no encontrado) ---
-            # Fix 1: pasar conditions por SKU — sin esto, SKUs SNTV con stock ICB/ICC
-            # reciben conditions=GRA,GRB,GRC,NEW y BM devuelve 0 (no encuentra GR stock).
-            async def _query_bm_avail(sku: str, conds: str = "GRA,GRB,GRC,NEW") -> int:
-                from app.services.binmanager_client import get_shared_bm
-                try:
-                    bm = await get_shared_bm()
-                    return await bm.get_available_qty(sku, conditions=conds)
-                except Exception:
-                    return -1
-
+            # --- Fallback: bm_sku_master (si caché en memoria vacío/no encontrado) ---
+            # FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+            # maestro, nada a BM por el momento"): antes esto llamaba a BM en
+            # vivo (get_available_qty por componente + un fetch de warehouse
+            # aparte) cada vez que "Sync Var." no encontraba el SKU en caché.
+            # Ahora lee bm_sku_master directamente -- sin llamadas nuevas a BM.
+            # mty_qty/cdmx_qty de bm_sku_master pueden estar desactualizados
+            # (ese desglose está despriorizado desde el 2026-08-20, ver
+            # project_bm_tijuana_exclusion) -- bm_avail (lo que de verdad
+            # importa para no sobrevender) siempre viene fresco del loop de
+            # categorías.
             try:
-                # Usar el SKU completo de la variación para determinar condiciones
-                # (ej: "SNTV003807 / SNWM000001" → ALL, no solo primary_sku → GR)
-                from app.services.binmanager_client import bm_post as _bm_post_var
-                conditions_primary = _bm_conditions_for_sku(v_sku)
-                r_wh = await _bm_post_var(BM_WH_URL, {
-                    "COMPANYID": 1, "SKU": primary_sku, "WarehouseID": None,
-                    "LocationID": "47,62,68", "BINID": None,
-                    "Condition": conditions_primary, "ForInventory": 0, "SUPPLIERS": None,
-                }, timeout=15.0)
+                _master_rows_var = await token_store.get_bm_master_rows_for_skus(
+                    [normalize_to_bm_sku(_sp) for _sp in sku_parts]
+                )
                 avail_results = []
                 for _sp in sku_parts:
-                    avail_results.append(await _query_bm_avail(_sp, conds=conditions_primary))
-                if r_wh and r_wh.status_code == 200:
-                    rows = r_wh.json()
-                    if isinstance(rows, dict): rows = [rows]
-                    if not isinstance(rows, list): rows = []
-                    mty = cdmx = 0
-                    for row in rows:
-                        qty = row.get("QtyTotal", 0) or 0
-                        wname = (row.get("WarehouseName") or "").lower()
-                        if "monterrey" in wname or "maxx" in wname:
-                            mty += qty
-                        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-                            cdmx += qty
-                    result["bm_mty"] = mty
-                    result["bm_cdmx"] = cdmx
-                    result["bm_total"] = mty + cdmx
+                    _row = _master_rows_var.get(normalize_to_bm_sku(_sp))
+                    avail_results.append(int(_row["available_qty"]) if _row else -1)
+                _primary_row = _master_rows_var.get(normalize_to_bm_sku(primary_sku))
+                if _primary_row:
+                    result["bm_mty"] = _primary_row.get("mty_qty", 0) or 0
+                    result["bm_cdmx"] = _primary_row.get("cdmx_qty", 0) or 0
+                    result["bm_total"] = _primary_row.get("total_qty", 0) or 0
                 valid_avails = [a for a in avail_results if isinstance(a, int) and a >= 0]
-                # Fix 3: si algún componente del bundle falló (-1), no podemos saber
-                # su stock real. Usar 0 (seguro) en lugar de min(válidos) que ignoraría
-                # el componente fallido y daría stock incorrecto al bundle.
+                # Fix 3: si algún componente del bundle no está en el maestro, no
+                # podemos saber su stock real. Usar 0 (seguro) en lugar de
+                # min(válidos) que ignoraría el componente faltante y daría
+                # stock incorrecto al bundle.
                 _has_errors = any(isinstance(a, int) and a == -1 for a in avail_results)
                 if _has_errors:
                     result["bm_avail"] = 0
-                    result["error"] = "BM no respondió para uno de los componentes"
+                    result["error"] = "SKU de un componente no está en bm_sku_master"
                 elif valid_avails:
                     result["bm_avail"] = min(valid_avails)
             except Exception as ex:
-                result["error"] = f"BM error: {ex}"
+                result["error"] = f"bm_sku_master error: {ex}"
             return result
 
         # Secuencial — 1 request BM a la vez para evitar rate-limiting
@@ -18823,12 +17934,21 @@ async def diag_bm_alter_sku_delete_exact(
 
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
-    """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
+    """Diagnóstico externo: caché en memoria + bm_sku_master para un SKU.
     No requiere sesión de dashboard — usa token DIAG_TOKEN.
-    Devuelve: cache (avail, reserve, edad, verificado, expirado),
-              bm_live (avail, reserve directo de BM),
-              bulk_cache (si el SKU aparece en el último bulk fetch),
-              discrepancy (True si cache=0 pero BM tiene stock).
+
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): ya NO hace una llamada en vivo a
+    BM ("bm_live") -- ese campo ahora refleja bm_sku_master (la única
+    fuente real). La sección "bulk_cache" leía _bm_bulk_gr_cache/
+    _bm_bulk_all_cache, que quedaron INALCANZABLES desde el fix de hoy que
+    desactivó ese bloque (nunca se repoblaban desde entonces) -- también
+    reemplazada por bm_sku_master.
+
+    Devuelve: cache (avail, reserve, edad, verificado, expirado -- espejo
+              en memoria _bm_stock_cache, el cual ya se alimenta de
+              bm_sku_master), master (fila cruda de bm_sku_master),
+              discrepancy (True si cache=0 pero el maestro tiene stock).
     """
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
@@ -18859,76 +17979,39 @@ async def diag_sku(sku: str = "", token: str = ""):
     else:
         cache_info = {"found": False}
 
-    # ── 2. Bulk cache (GR y ALL) ──────────────────────────────────────────────
-    def _diag_bulk_info(cache):
-        if not cache:
-            return {"found": False}
-        bulk_ts, bulk_rows = cache
-        bulk_age = round(now - bulk_ts)
-        match = next((r for r in (bulk_rows or []) if (r.get("SKU") or "").upper().strip() == bm_key.upper()), None)
-        if match:
-            return {
-                "found": True,
-                "avail": int(match.get("AvailableQTY") or 0),
-                "reserve": int(match.get("Reserve") or 0),
-                "total": int(match.get("TotalQty") or 0),
-                "bulk_age_s": bulk_age,
-            }
-        # Also check base-sku variants in the bulk
-        base_matches = [r for r in (bulk_rows or [])
-                        if _extract_base_sku((r.get("SKU") or "").upper().strip()) == bm_key.upper()]
-        if base_matches:
-            return {
-                "found": True,
-                "avail": sum(int(r.get("AvailableQTY") or 0) for r in base_matches),
-                "reserve": sum(int(r.get("Reserve") or 0) for r in base_matches),
-                "variants": [(r.get("SKU") or "").upper().strip() for r in base_matches],
-                "bulk_age_s": bulk_age,
-            }
-        return {"found": False, "bulk_age_s": bulk_age, "bulk_total_rows": len(bulk_rows or [])}
+    # ── 2. bm_sku_master (fuente única, sin llamadas a BM) ────────────────────
+    _master_rows = await token_store.get_bm_master_rows_for_skus([bm_key])
+    _master_row = _master_rows.get(bm_key)
+    if _master_row:
+        master_info = {
+            "found": True,
+            "avail": int(_master_row.get("available_qty") or 0),
+            "reserve": int(_master_row.get("reserve_qty") or 0),
+            "total": int(_master_row.get("total_qty") or 0),
+            "verified": bool(_master_row.get("verified")),
+            "stock_age_s": round(now - (_master_row.get("stock_updated_at") or 0)),
+        }
+    else:
+        master_info = {"found": False}
 
-    bulk_info_gr  = _diag_bulk_info(_bm_bulk_gr_cache)
-    bulk_info_all = _diag_bulk_info(_bm_bulk_all_cache)
-    # Para compatibilidad con código que usa bulk_info.avail: usar el cache relevante
-    bulk_info = bulk_info_all if (_bm_conditions_for_sku(bm_key) == "GRA,GRB,GRC,ICB,ICC,NEW") else bulk_info_gr
-
-    # ── 3. BM en vivo ─────────────────────────────────────────────────────────
+    # ── 3. Discrepancia ───────────────────────────────────────────────────────
     _conditions_used = _bm_conditions_for_sku(bm_key)
-    try:
-        from app.services.binmanager_client import get_shared_bm as _get_diag_bm
-        _bm = await _get_diag_bm()
-        _live = await asyncio.wait_for(
-            _bm.get_stock_with_reserve(bm_key, conditions=_conditions_used),
-            timeout=10.0,
-        )
-        bm_live = {"avail": _live[0], "reserve": _live[1]} if _live is not None else {"error": "BM no respondió (None)"}
-    except Exception as _e:
-        bm_live = {"error": str(_e)[:120]}
-
-    # ── 4. Discrepancia ───────────────────────────────────────────────────────
-    cache_avail = cache_info.get("avail_total", 0) if cache_info.get("found") else None
-    live_avail  = bm_live.get("avail") if "avail" in bm_live else None
-    bulk_avail  = bulk_info.get("avail") if bulk_info.get("found") else None
+    cache_avail  = cache_info.get("avail_total", 0) if cache_info.get("found") else None
+    master_avail = master_info.get("avail") if master_info.get("found") else None
     discrepancy = bool(
-        cache_avail == 0 and (
-            (live_avail is not None and live_avail > 0) or
-            (bulk_avail is not None and bulk_avail > 0)
-        )
+        cache_avail == 0 and master_avail is not None and master_avail > 0
     )
 
     return JSONResponse({
         "sku": bm_key,
         "conditions_used": _conditions_used,
         "cache": cache_info,
-        "bulk_cache_gr":  bulk_info_gr,
-        "bulk_cache_all": bulk_info_all,
-        "bulk_cache": bulk_info,  # el relevante según conditions_used (compatibilidad)
-        "bm_live": bm_live,
+        "master": master_info,
         "discrepancy": discrepancy,
         "summary": (
-            f"DISCREPANCIA: caché={cache_avail} pero BM_live={live_avail}, bulk={bulk_avail}"
+            f"DISCREPANCIA: caché={cache_avail} pero maestro={master_avail}"
             if discrepancy else
-            f"OK: caché={cache_avail}, BM_live={live_avail}, bulk={bulk_avail}"
+            f"OK: caché={cache_avail}, maestro={master_avail}"
         ),
         "catalog": {
             "retail_ph_usd": round(_bm_retail_ph_cache[bm_key][1], 2) if bm_key in _bm_retail_ph_cache else None,
@@ -20759,6 +19842,17 @@ async def diag_confcolumns_location_check(token: str = "", category_id: str = "T
     distinguir)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): esta herramienta era
+    # para decidir el cutover a ConfColumns_Conditions_Excel, decisión ya
+    # tomada y superada (se usa Get_GlobalStock_InventoryBySKU). Además
+    # dependía de _bm_bulk_loc47_cache/_bm_bulk_loc68_cache/_bm_bulk_loctj_cache,
+    # que quedaron inalcanzables (nunca se repueblan) desde el fix de hoy
+    # que desactivó ese bloque -- no se borra por si hace falta revertir.
+    return JSONResponse({
+        "error": "endpoint desactivado -- ConfColumns ya no es la fuente activa, "
+                 "ver _update_bm_master_for_category (Get_GlobalStock_InventoryBySKU)",
+    }, status_code=410)
     from app.services.binmanager_client import get_shared_bm as _gsb_loc
     bm_cli = await _gsb_loc()
     rows = await bm_cli.get_conf_columns_catalog(category_id=category_id)
@@ -20840,6 +19934,11 @@ async def diag_confcolumns_location_param_test(
     Si el número no cambia, el parámetro no tiene efecto -- BM lo ignora."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): prueba puntual de una
+    # sola vez (2026-08-19), pregunta ya respondida -- no se borra por si
+    # hace falta revisar la conclusión histórica.
+    return JSONResponse({"error": "endpoint desactivado -- investigación puntual ya cerrada"}, status_code=410)
     from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_lp
     bm = await _gsb_lp()
     if not bm._logged_in:
@@ -20904,6 +20003,10 @@ async def diag_warehouse_endpoint_raw_test(token: str = "", test_sku: str = "SNH
     eso podríamos restar TRANSITO nosotros mismos, sin esperar a BM)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): prueba puntual de una
+    # sola vez (2026-08-19) -- no se borra por si hace falta revisar.
+    return JSONResponse({"error": "endpoint desactivado -- investigación puntual ya cerrada"}, status_code=410)
     from app.services.binmanager_client import bm_post as _bm_post_whtest
     BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
     conditions = _bm_conditions_for_sku(test_sku)
@@ -21126,6 +20229,14 @@ async def diag_bm_master_confcolumns_compare(token: str = "", sample_n: int = 30
     neto) -- decisión de Jovan 2026-08-19, no es un bug de este diag."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+    # nuestro maestro, nada a BM por el momento"): la evaluación que este
+    # endpoint hacía ya se resolvió (se quedó con Get_GlobalStock_InventoryBySKU,
+    # no ConfColumns) -- no se borra por si hace falta revertir.
+    return JSONResponse({
+        "error": "endpoint desactivado -- decisión ya tomada, ver "
+                 "_update_bm_master_for_category (Get_GlobalStock_InventoryBySKU)",
+    }, status_code=410)
 
     from app.services.binmanager_client import get_shared_bm as _gsb_cc
     bm_cli = await _gsb_cc()
@@ -21240,7 +20351,8 @@ def _bulk_stock_rows_to_master_fields(base: str, rows: list[dict]) -> dict:
     condición en vivo antes de escribir (_resolve_bm_condition_sku)."""
     conditions = []
     avail_total = reserve_total = total_total = 0
-    category = upc = ""
+    category = upc = title = brand = model = image_url = ""
+    retail_ph = 0.0
     for row in rows:
         row_sku = (row.get("SKU") or "").upper().strip()
         cond = row_sku[len(base):].lstrip("-") if row_sku.startswith(base) else ""
@@ -21250,6 +20362,18 @@ def _bulk_stock_rows_to_master_fields(base: str, rows: list[dict]) -> dict:
         total_total += int(row.get("TotalQty") or 0)
         category = category or (row.get("CategoryName") or "")
         upc = upc or (row.get("UPC") or row.get("Upc") or "")
+        # FEATURE 2026-08-20 (directiva de Jovan: maestro completo, nada mas
+        # llama a BM en vivo -- ver get_bm_master_all_as_bulk_rows) -- estos
+        # 4 campos ya venian en cada fila de este endpoint, solo no se
+        # guardaban porque antes nada fuera del catalogo semanal los leia.
+        title = title or (row.get("Title") or row.get("Description") or "")
+        brand = brand or (row.get("Brand") or "")
+        model = model or (row.get("Model") or "")
+        image_url = image_url or (row.get("ImageURL") or "")
+        if not retail_ph:
+            _rph = float(row.get("LastRetailPricePurchaseHistory") or 0)
+            if 0 < _rph < 9000:  # centinela "sin costo" -- ver AvgCostQTY>=9000
+                retail_ph = _rph
         if cond and qty > 0:
             conditions.append({"condition": cond, "qty": qty, "sku": f"{base}-{cond}"})
     conditions.sort(key=lambda x: -x["qty"])
@@ -21261,6 +20385,11 @@ def _bulk_stock_rows_to_master_fields(base: str, rows: list[dict]) -> dict:
         "total_qty": total_total,
         "category": category,
         "upc": upc,
+        "title": title,
+        "brand": brand,
+        "model": model,
+        "image_url": image_url,
+        "retail_ph": retail_ph,
         "best_condition_sku": f"{base}-{best_cond}" if best_cond else "",
         "best_condition_qty": best_qty,
         "conditions": conditions,
@@ -21269,25 +20398,40 @@ def _bulk_stock_rows_to_master_fields(base: str, rows: list[dict]) -> dict:
 
 
 async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
-    """PASO 3 (2026-08-19, pedido explícito de Jovan): trae 1 categoría vía
-    Get_GlobalStock_InventoryBySKU (CONCEPTID=1 -- YA excluye bins no
-    vendibles por sí solo, ver _bulk_stock_rows_to_master_fields) y
-    actualiza bm_sku_master SOLO para los SKUs conocidos
-    (get_all_known_base_skus) que ya pertenecen a esa categoría o que
-    aparecen en esta respuesta. Reemplaza el paso anterior con
-    ConfColumns_Conditions_Excel (mismo día) -- ConfColumns mezclaba stock
-    de bins TRANSITO como si fuera vendible, confirmado con datos reales.
+    """PASO 3 (2026-08-19, pedido explícito de Jovan) + AMPLIACIÓN 2026-08-20
+    ("todo debe apuntar a nuestro maestro, nada a BM por el momento"): trae 1
+    categoría vía Get_GlobalStock_InventoryBySKU (CONCEPTID=1 -- YA excluye
+    bins no vendibles por sí solo, ver _bulk_stock_rows_to_master_fields) y
+    actualiza bm_sku_master para TODO SKU que aparezca en la respuesta --
+    YA NO se descarta lo que no esté en get_all_known_base_skus(). Antes
+    bm_sku_master solo cubría SKUs ya publicados en ML/Amazon, lo cual
+    hacía IMPOSIBLE usarlo para detectar gaps reales (productos con stock
+    en BM que nunca se han publicado en ninguna plataforma -- por
+    definición nunca están en "conocidos"). Con el loop cubriendo TODAS
+    las categorías (top-5 + longtail = universo completo), bm_sku_master
+    se vuelve un espejo completo del catálogo vendible de BM, y CUALQUIER
+    consumidor (gap scan ML/Amazon, /products/sin-bm, sync stock, alertas)
+    puede leer de aquí sin llamar a BM nunca. Reemplaza el paso anterior
+    con ConfColumns_Conditions_Excel (2026-08-19) -- ConfColumns mezclaba
+    stock de bins TRANSITO como si fuera vendible, confirmado con datos
+    reales.
 
-    Escritura SEGURA -- respeta las 2 reglas ya aprendidas hoy a la fuerza
-    (2 bugs reales del mismo tipo encontrados hoy mismo en otras partes):
-    1. Si el fetch FALLA (None), no toca nada -- devuelve ok=False, no
-       borra ni pone en 0 lo que ya había.
-    2. Si el fetch tiene éxito, un SKU YA conocido de esta misma categoría
-       que no aparece en la respuesta se pone en available_qty=0 (mismo
-       criterio "ausencia en bulk = 0" ya usado en el resto del sistema) --
-       pero SOLO si su bm_sku_master.category actual coincide con esta
-       categoría (para no zerear un SKU que en realidad es de otra
-       categoría por un match de nombre casual).
+    Escritura SEGURA -- respeta las reglas ya aprendidas a la fuerza:
+    1. Si el fetch FALLA (None) o viene vacío (0 filas), no toca nada --
+       devuelve ok=False, no borra ni pone en 0 lo que ya había (0 filas
+       para una categoría que ya tenía datos es síntoma de fallo de BM,
+       nunca "confirmado sin stock").
+    2. Si el fetch tiene éxito, un SKU YA EN bm_sku_master de esta misma
+       categoría que no aparece en la respuesta se pone en available_qty=0
+       (mismo criterio "ausencia en bulk = 0" ya usado en el resto del
+       sistema) -- pero SOLO si su bm_sku_master.category actual coincide
+       con esta categoría (para no zerear un SKU que en realidad es de
+       otra categoría por un match de nombre casual).
+    3. UPSERT (INSERT .. ON CONFLICT DO UPDATE): un SKU nunca visto antes
+       se inserta con fila nueva; texto (title/brand/model/category/upc/
+       image_url/retail_ph) solo se sobreescribe si el valor nuevo NO viene
+       vacío/cero -- protege datos ya buenos del sync semanal de catálogo
+       si por lo que sea esta fila viene parcial.
 
     Usado tanto por el diag manual (bm-master-update-category) como por
     los loops automáticos (_conf_columns_top_categories_loop/_longtail_loop)
@@ -21320,21 +20464,18 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                      "tratado como fallo/bloqueo de BM, no se tocó bm_sku_master",
         }
 
-    known_skus = set(await token_store.get_all_known_base_skus())
     _by_base: dict[str, list] = {}
     for row in rows:
         row_sku = (row.get("SKU") or "").upper().strip()
         if not row_sku:
             continue
         base = _extract_base_sku(row_sku)
-        if base not in known_skus:
-            continue
         _by_base.setdefault(base, []).append(row)
 
     updates = []
-    seen_known_skus_in_response = set()
+    seen_skus_in_response = set()
     for base, base_rows in _by_base.items():
-        seen_known_skus_in_response.add(base)
+        seen_skus_in_response.add(base)
         updates.append(_bulk_stock_rows_to_master_fields(base, base_rows))
 
     import aiosqlite as _aio_updcat
@@ -21344,13 +20485,33 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         for u in updates:
             _conds_json = _json_updcat.dumps(u["conditions"])
             await db.execute(
-                """UPDATE bm_sku_master
-                   SET available_qty=:available_qty, reserve_qty=:reserve_qty,
-                       total_qty=:total_qty, category=:category, upc=:upc,
-                       best_condition_sku=:best_condition_sku, best_condition_qty=:best_condition_qty,
-                       conditions_json=:conditions_json,
-                       verified=:verified, stock_updated_at=:stock_updated_at
-                   WHERE sku=:sku""",
+                """INSERT INTO bm_sku_master (
+                       sku, available_qty, reserve_qty, total_qty, category, upc,
+                       title, brand, model, image_url, retail_ph,
+                       best_condition_sku, best_condition_qty, conditions_json,
+                       verified, stock_updated_at
+                   ) VALUES (
+                       :sku, :available_qty, :reserve_qty, :total_qty, :category, :upc,
+                       :title, :brand, :model, :image_url, :retail_ph,
+                       :best_condition_sku, :best_condition_qty, :conditions_json,
+                       :verified, :stock_updated_at
+                   )
+                   ON CONFLICT(sku) DO UPDATE SET
+                       available_qty=excluded.available_qty,
+                       reserve_qty=excluded.reserve_qty,
+                       total_qty=excluded.total_qty,
+                       category=COALESCE(NULLIF(excluded.category, ''), bm_sku_master.category),
+                       upc=COALESCE(NULLIF(excluded.upc, ''), bm_sku_master.upc),
+                       title=COALESCE(NULLIF(excluded.title, ''), bm_sku_master.title),
+                       brand=COALESCE(NULLIF(excluded.brand, ''), bm_sku_master.brand),
+                       model=COALESCE(NULLIF(excluded.model, ''), bm_sku_master.model),
+                       image_url=COALESCE(NULLIF(excluded.image_url, ''), bm_sku_master.image_url),
+                       retail_ph=CASE WHEN excluded.retail_ph > 0 THEN excluded.retail_ph ELSE bm_sku_master.retail_ph END,
+                       best_condition_sku=excluded.best_condition_sku,
+                       best_condition_qty=excluded.best_condition_qty,
+                       conditions_json=excluded.conditions_json,
+                       verified=excluded.verified,
+                       stock_updated_at=excluded.stock_updated_at""",
                 {**{k: v for k, v in u.items() if k != "conditions"},
                  "conditions_json": _conds_json, "stock_updated_at": _now_ts},
             )
@@ -21363,15 +20524,15 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                 "best_condition_sku": u["best_condition_sku"], "conditions": u["conditions"],
                 "verified": True, "stock_updated_at": _now_ts,
             }
-        # SKUs conocidos de ESTA categoría que no aparecieron -- ausencia
-        # real confirmada (el fetch sí tuvo éxito) = 0, mismo criterio ya
-        # usado en el resto del sistema. Acotado a category=? para no
-        # zerear SKUs de otras categorías.
+        # SKUs YA en bm_sku_master de ESTA categoría que no aparecieron --
+        # ausencia real confirmada (el fetch sí tuvo éxito) = 0, mismo
+        # criterio ya usado en el resto del sistema. Acotado a category=?
+        # para no zerear SKUs de otras categorías.
         cur = await db.execute(
             "SELECT sku FROM bm_sku_master WHERE category = ?", (category_id,)
         )
         _existing_in_category = {r[0] for r in await cur.fetchall()}
-        _now_zero = _existing_in_category - seen_known_skus_in_response
+        _now_zero = _existing_in_category - seen_skus_in_response
         for _z in _now_zero:
             await db.execute(
                 "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, best_condition_sku='', "
@@ -21389,8 +20550,8 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         "category_id": category_id,
         "elapsed_s": _elapsed,
         "conf_columns_rows": len(rows),
-        "known_skus_updated": len(updates),
-        "known_skus_confirmed_zero": len(_now_zero),
+        "skus_updated": len(updates),  # antes "known_skus_updated" -- ya no filtra por conocido
+        "skus_confirmed_zero": len(_now_zero),
     }
 
 

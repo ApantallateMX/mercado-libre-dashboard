@@ -142,10 +142,15 @@ class SkuBatchRequest(BaseModel):
 async def retail_ph_batch(body: SkuBatchRequest):
     """
     RetailPrice PH para una lista de SKUs.
-    Usa caché de 30 min. Usa el cliente BM compartido (serializado via _BM_GLOBAL_SEM).
+
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes llamaba a BM en vivo por
+    cada SKU no cacheado. Ahora lee bm_sku_master.retail_ph (mantenido
+    fresco por el loop de categorías) -- cero llamadas nuevas a BM.
     Respuesta: {sku: price_usd | null}
     """
-    bm_client = await get_shared_bm()
+    from app.services import token_store
+    from app.services.sku_utils import base_sku as _base_sku_bm
 
     now = time.time()
     result = {}
@@ -159,14 +164,13 @@ async def retail_ph_batch(body: SkuBatchRequest):
         else:
             to_fetch.append(sku_up)
 
-    async def fetch_one(sku):
-        price = await bm_client.get_retail_price_ph(sku)
-        _ph_batch_cache[sku] = (now, price)
-        return sku, price
-
     if to_fetch:
-        fetched = await asyncio.gather(*[fetch_one(s) for s in to_fetch])
-        for sku, price in fetched:
+        bases = {sku: _base_sku_bm(sku) for sku in to_fetch}
+        rows = await token_store.get_bm_master_rows_for_skus(list(set(bases.values())))
+        for sku in to_fetch:
+            row = rows.get(bases[sku])
+            price = float(row["retail_ph"]) if row and row.get("retail_ph") else None
+            _ph_batch_cache[sku] = (now, price)
             result[sku] = price
 
     return {"prices": result, "cached": len(body.skus) - len(to_fetch)}

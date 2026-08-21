@@ -4426,12 +4426,16 @@ async def amazon_products_sin_bm(
 
     if not sin_bm_all:
         try:
-            from app.services.binmanager_client import get_shared_bm
-            bm_cli = await get_shared_bm()
+            # FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+            # maestro, nada a BM por el momento"): esto verifica EXISTENCIA
+            # (no stock), así que min_qty=0 -- un SKU real de BM con 0
+            # disponible sigue siendo "existe en BM", no debe aparecer aquí
+            # como huérfano.
+            from app.services import token_store
 
             listings, bm_rows = await asyncio.gather(
                 _get_listings_cached(client),
-                bm_cli.get_bulk_stock(),
+                token_store.get_bm_master_all_as_bulk_rows(min_qty=0),
                 return_exceptions=True,
             )
             if isinstance(listings, Exception):

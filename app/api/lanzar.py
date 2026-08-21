@@ -93,61 +93,24 @@ async def _bm_login() -> bool:
 
 
 async def _bm_fetch_all_skus_with_stock() -> list[dict]:
-    """Fetch all SKUs from BinManager using ConfColumns_Conditions_Excel (single call).
-    Returns list of product dicts with TotalQty > 0.
-    """
-    from app.services.binmanager_client import bm_post as _bm_post_conf
+    """Todos los SKUs de bm_sku_master con available_qty > 0 -- fuente única.
+
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes hacía una llamada en vivo a
+    ConfColumns_Conditions_Excel SIN category_id (catálogo completo, hasta
+    120s) -- exactamente el patrón que el 2026-08-19 degradó bm_sku_master
+    mientras corría (ver project_bm_confcolumns_transito_bug_and_master_cutover).
+    Ahora que _update_bm_master_for_category ya no filtra por "SKU
+    conocido" (mismo día, 2da vuelta), bm_sku_master es un espejo completo
+    del catálogo vendible -- exactamente lo que este gap scan necesita
+    (encontrar SKUs con stock que nunca se han publicado)."""
+    from app.services import token_store
     try:
-        r = await _bm_post_conf(
-            f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
-            {
-                "COMPANYID": _BM_COMPANY,
-                "NEEDRETAILPRICEPH": True,
-                "NEEDRETAILPRICE": True,
-                "NEEDAVGCOST": True,
-                "NEEDSALES": False,
-            },
-            timeout=120.0,
-        )
-        if r is None:
-            logger.error("ConfColumns: bm_post retornó None (sesión/red)")
-            return []
-        if r.status_code != 200:
-            logger.error(f"ConfColumns HTTP {r.status_code}")
-            return []
-        data = r.json()
-        if not data or not isinstance(data, list):
-            return []
-        results = []
-        for row in data:
-            qty = int(row.get("TotalQty") or 0)
-            if qty <= 0:
-                continue
-            results.append({
-                "SKU": (row.get("SKU") or "").upper().strip(),
-                "TotalQty": qty,
-                # FIX 2026-08-07: capturar AvailableQTY/Reserve del row crudo de BM
-                # si el endpoint los trae -- antes se descartaban aquí y _bm_qty()
-                # nunca los veía, así que el Lanzador siempre usaba TotalQty
-                # (bruto, incluye reservado) para gaps/priority_score/precio
-                # sugerido, sobre-estimando el stock vendible real.
-                "AvailableQTY": row.get("AvailableQTY"),
-                "Reserve": row.get("Reserve"),
-                "Brand": row.get("Brand") or "",
-                "Model": row.get("Model") or "",
-                "Title": row.get("Title") or "",
-                "CategoryName": row.get("CategoryName") or row.get("Category") or "",
-                "ImageURL": row.get("ImageURL") or row.get("ImageUrl") or "",
-                "UPC": row.get("UPC") or row.get("Upc") or "",
-                "Size": row.get("Size") or row.get("ScreenSize") or "",
-                "RetailPrice": float(row.get("RetailPrice") or 0),
-                "AvgCostQTY": float(row.get("AvgCostQTY") or 0),
-                "LastRetailPricePurchaseHistory": float(row.get("LastRetailPricePurchaseHistory") or 0),
-            })
-        logger.info(f"ConfColumns: {len(data)} SKUs total, {len(results)} con TotalQty>0")
+        results = await token_store.get_bm_master_all_as_bulk_rows(min_qty=1)
+        logger.info(f"bm_sku_master: {len(results)} SKUs con available_qty>0")
         return results
     except Exception as e:
-        logger.error(f"ConfColumns fetch error: {e}")
+        logger.error(f"bm_sku_master fetch error: {e}")
         return []
 
 

@@ -74,84 +74,55 @@ def _wh_name_to_zone(wname: str) -> str:
 
 
 async def _fetch_sellable_stock(sku: str) -> dict:
-    """Consulta stock vendible en BinManager via Warehouse + Condition endpoints.
+    """Stock vendible desde bm_sku_master (fuente única, sin llamadas a BM).
 
-    - Warehouse: totales reales por almacen (MTY/CDMX/TJ)
-    - get_available_qty: AvailableQTY neto (Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68)
-    - Condition: desglose GR vs IC por condicion
-    InventoryBySKUAndCondicion_Quantity esta ROTO server-side (SQL binid error).
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes hacía 3 llamadas HTTP en
+    vivo por SKU (Warehouse + get_available_qty + Condition), llamado
+    dentro de un batch con Semaphore(10) desde /api/sku-inventory/compare
+    -- hasta 30 requests concurrentes a BM por comparación. Ahora lee
+    bm_sku_master (mantenido fresco por el loop de categorías), que ya
+    trae available_qty/total_qty y el desglose GR/IC en conditions_json.
+
+    mty/cdmx: bm_sku_master.mty_qty/cdmx_qty pueden estar desactualizados
+    (ese desglose está despriorizado desde 2026-08-20, ver
+    project_bm_tijuana_exclusion) -- se usan igual como mejor esfuerzo,
+    igual que en el resto de la app hoy.
+
     Retorna {stock_gr, stock_ic, stock_other, total_stock, avail_total}
     """
-    import json as _json
-    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_ss
+    from app.services import token_store
     base = _bm_base_sku(sku)
-    conditions = _bm_conditions_for_sku(sku)
 
-    wh_payload = {
-        "COMPANYID": BINMANAGER_COMPANY_ID,
-        "SKU": base,
-        "WarehouseID": None,
-        "LocationID": BM_LOCATION_IDS,
-        "BINID": None,
-        "Condition": conditions,
-        "ForInventory": 0,
-        "SUPPLIERS": None,
-    }
-    cond_payload = {
-        "COMPANYID": BINMANAGER_COMPANY_ID,
-        "SKU": base,
-        "WAREHOUSEID": None,
-        "LOCATIONID": BM_LOCATION_IDS,
-        "BINID": None,
-        "CONDITION": conditions,
-        "FORINVENTORY": 0,
-        "SUPPLIERS": None,
-    }
+    rows = await token_store.get_bm_master_rows_for_skus([base])
+    row = rows.get(base)
+    if not row:
+        empty = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
+        return {"stock_gr": empty, "stock_ic": dict(empty), "stock_other": 0,
+                "total_stock": 0, "avail_total": 0}
 
-    bm_cli = await get_shared_bm()
-    wh_resp = await _bm_post_ss(BINMANAGER_WAREHOUSE_URL, wh_payload, timeout=15.0)
-    avail_direct = await bm_cli.get_available_qty(base)
-    cond_resp = await _bm_post_ss(BINMANAGER_CONDITION_URL, cond_payload, timeout=15.0)
+    total_mty = int(row.get("mty_qty") or 0)
+    total_cdmx = int(row.get("cdmx_qty") or 0)
+    grand_total = int(row.get("total_qty") or 0)
+    avail_total = int(row.get("available_qty") or 0)
 
-    # --- Totales por almacen (fisico) ---
-    total_mty = total_cdmx = total_tj = 0
-    if wh_resp and wh_resp.status_code == 200:
-        for row in (wh_resp.json() or []):
-            qty = row.get("QtyTotal", 0) or 0
-            zone = _wh_name_to_zone(row.get("WarehouseName") or "")
-            if zone == "mty":
-                total_mty += qty
-            elif zone == "cdmx":
-                total_cdmx += qty
-            else:
-                total_tj += qty
-
-    grand_total = total_mty + total_cdmx  # TJ excluido
-
-    # --- Stock disponible neto (excluye reservados para ordenes pendientes) ---
-    avail_total = int(avail_direct) if avail_direct is not None else 0
-    avail_total = avail_total or grand_total  # fallback a total fisico si falla
-
-    # --- Desglose GR vs IC por condicion ---
+    # --- Desglose GR vs IC por condicion (ya calculado por el loop de categorías) ---
     gr_qty = ic_qty = 0
-    if cond_resp and cond_resp.status_code == 200:
-        cond_data = cond_resp.json() or {}
-        conditions_raw = cond_data.get("Conditions_JSON") or "[]"
-        try:
-            cond_list = _json.loads(conditions_raw) if isinstance(conditions_raw, str) else conditions_raw
-            for c in cond_list:
-                cond = (c.get("Condition") or "").upper()
-                qty = c.get("TotalQty", 0) or 0
-                if cond in ("GRA", "GRB", "GRC", "NEW"):
-                    gr_qty += qty
-                elif cond in ("ICB", "ICC"):
-                    ic_qty += qty
-        except Exception:
-            gr_qty = grand_total
-    else:
-        gr_qty = grand_total
+    try:
+        cond_list = json.loads(row.get("conditions_json") or "[]")
+    except Exception:
+        cond_list = []
+    for c in cond_list:
+        cond = (c.get("condition") or "").upper()
+        qty = c.get("qty", 0) or 0
+        if cond in ("GRA", "GRB", "GRC", "NEW"):
+            gr_qty += qty
+        elif cond in ("ICB", "ICC"):
+            ic_qty += qty
+    if not cond_list:
+        gr_qty = grand_total  # sin desglose de condición -- todo a GR (mismo fallback de antes)
 
-    # Distribuir MTY/CDMX proporcionalmente entre GR/IC (aproximacion)
+    # Distribuir MTY/CDMX proporcionalmente entre GR/IC (aproximacion, igual que antes)
     total_cond = gr_qty + ic_qty or 1
     gr_ratio = gr_qty / total_cond
     gr = {
@@ -177,38 +148,33 @@ async def _fetch_sellable_stock(sku: str) -> dict:
 
 
 async def _fetch_binmanager_product_info(sku: str) -> dict:
-    """Fetch product info (Brand, Model, Title) from BinManager InventoryReport."""
-    from app.services.binmanager_client import bm_post as _bm_post_pi
+    """Product info (Brand, Model, Title) desde bm_sku_master.
+
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes llamaba a BM en vivo
+    (Get_GlobalStock_InventoryBySKU con SEARCH=sku). "weight"/"description"/
+    "color" no existen en bm_sku_master -- se devuelven vacíos/0 (no los
+    usa research_product de forma crítica, son campos de relleno)."""
+    from app.services import token_store
     try:
-        payload = {
-            "COMPANYID": BINMANAGER_COMPANY_ID,
-            "SEARCH": sku,
-            "CONCEPTID": BINMANAGER_CONCEPT_ID,
-            "NUMBERPAGE": 1,
-            "RECORDSPAGE": 10
+        base = _bm_base_sku(sku)
+        rows = await token_store.get_bm_master_rows_for_skus([base])
+        row = rows.get(base)
+        if not row:
+            return {}
+        return {
+            "brand": row.get("brand", "") or "",
+            "model": row.get("model", "") or "",
+            "title": row.get("title", "") or "",
+            "upc": row.get("upc", "") or "",
+            "category": row.get("category", "") or "",
+            "retail_price": row.get("retail_ph", 0) or 0,
+            "avg_cost": row.get("cost_usd", 0) or 0,
+            "description": "",
+            "weight": 0,
+            "image_url": row.get("image_url", "") or "",
+            "color": "",
         }
-        resp = await _bm_post_pi(BINMANAGER_INVENTORY_URL, payload, timeout=15.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data and isinstance(data, list) and len(data) > 0:
-                row = data[0]
-                for item in data:
-                    if item.get("SKU", "").upper() == sku.upper():
-                        row = item
-                        break
-                return {
-                    "brand": row.get("Brand", "") or "",
-                    "model": row.get("Model", "") or "",
-                    "title": row.get("Title", "") or "",
-                    "upc": row.get("UPC", "") or "",
-                    "category": row.get("CategoryName", "") or "",
-                    "retail_price": row.get("RetailPrice", 0) or 0,
-                    "avg_cost": row.get("AvgCostQTY", 0) or 0,
-                    "description": row.get("Description", "") or "",
-                    "weight": row.get("Weight", 0) or 0,
-                    "image_url": row.get("ImageURL", "") or "",
-                    "color": row.get("Color", "") or "",
-                }
     except Exception:
         pass
     return {}

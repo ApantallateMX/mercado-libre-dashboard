@@ -22,42 +22,32 @@ from app.services.health_ai import (
     parse_claim_analysis,
 )
 
-_BM_INVENTORY_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-_BM_COMPANY_ID = 1
-_BM_CONCEPT_ID = 8
-
-
 async def _fetch_bm_product(sku: str) -> dict:
-    """Fetch Brand, Model, Title, Description from BinManager for a given SKU.
-    Returns empty dict on failure or missing SKU.
-    """
+    """Brand, Model, Title, Description desde bm_sku_master (sin llamadas a BM).
+
+    FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes llamaba a BM en vivo por
+    cada pregunta/reclamo al generar una respuesta IA. "description" no
+    existe en bm_sku_master -- se devuelve vacío (no crítico para el
+    prompt de la IA)."""
     if not sku:
         return {}
-    from app.services.binmanager_client import bm_post as _bm_post_hai
+    from app.services import token_store
+    from app.services.sku_utils import base_sku as _base_sku_hai
     try:
-        resp = await _bm_post_hai(_BM_INVENTORY_URL, {
-            "COMPANYID": _BM_COMPANY_ID,
-            "SEARCH": sku,
-            "CONCEPTID": _BM_CONCEPT_ID,
-            "NUMBERPAGE": 1,
-            "RECORDSPAGE": 10,
-        }, timeout=10.0)
-        if resp and resp.status_code == 200:
-            data = resp.json()
-            if data and isinstance(data, list):
-                row = data[0]
-                for item in data:
-                    if item.get("SKU", "").upper() == sku.upper():
-                        row = item
-                        break
-                return {
-                    "brand": row.get("Brand", "") or "",
-                    "model": row.get("Model", "") or "",
-                    "title": row.get("Title", "") or "",
-                    "description": row.get("Description", "") or "",
-                    "upc": row.get("UPC", "") or "",
-                    "category": row.get("CategoryName", "") or "",
-                }
+        base = _base_sku_hai(sku)
+        rows = await token_store.get_bm_master_rows_for_skus([base])
+        row = rows.get(base)
+        if not row:
+            return {}
+        return {
+            "brand": row.get("brand", "") or "",
+            "model": row.get("model", "") or "",
+            "title": row.get("title", "") or "",
+            "description": "",
+            "upc": row.get("upc", "") or "",
+            "category": row.get("category", "") or "",
+        }
     except Exception:
         pass
     return {}

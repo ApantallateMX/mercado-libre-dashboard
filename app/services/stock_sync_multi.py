@@ -43,6 +43,11 @@ _BM_AVAIL_URL = (
     "/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 )
 _COND_SUFFIXES   = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
+# FIX 2026-08-20: umbral del circuit breaker de bm_sku_master (ver
+# run_multi_stock_sync/_run_single_account_sync) -- el loop top de
+# categorías refresca cada 15 min; 3 ciclos perdidos (45 min) es señal
+# real de que BM está fallando repetido, no solo jitter normal.
+_BM_MASTER_STALE_THRESHOLD_S = 45 * 60
 
 
 def _listing_key(sku: str) -> str:
@@ -167,20 +172,22 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
     if not sku_cond_map:
         return result
 
-    from app.services.binmanager_client import get_shared_bm
-    bm_cli = await get_shared_bm()
-
-    # BULK FETCH: 1 request → todos los SKUs (~5-10s vs N×1-2s per-SKU)
-    bulk_rows = await bm_cli.get_bulk_stock()
+    # FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    # maestro, nada a BM por el momento"): lectura local de bm_sku_master
+    # (mantenido fresco por el loop de categorías) en vez de llamada en vivo.
+    # min_qty=0 -- necesitamos el universo completo (incluye ceros reales
+    # confirmados), no solo SKUs con stock.
+    from app.services import token_store
+    bulk_rows = await token_store.get_bm_master_all_as_bulk_rows(min_qty=0)
     if not bulk_rows:
-        # BM devolvió lista vacía — puede ser caída total o mantenimiento.
-        # NUNCA hacer fallback per-SKU: get_available_qty retorna 0 tanto para
-        # stock genuino 0 como para errores de BM, y llenaría bm_stock con ceros
-        # falsos → sync pondría TODOS los listings en qty=0 en ML y Amazon.
-        # Retornar dict vacío: el caller ve "base not in bm_stock" → skip seguro.
+        # bm_sku_master vacío -- nunca corrió el loop de categorías todavía
+        # (o la tabla se vació). NUNCA hacer fallback per-SKU: llenaría
+        # bm_stock con ceros falsos → sync pondría TODOS los listings en
+        # qty=0 en ML y Amazon. Retornar dict vacío: el caller ve "base not
+        # in bm_stock" → skip seguro.
         logger.error(
-            "[MULTI-SYNC-BM] get_bulk_stock devolvió lista vacía — "
-            "BM posiblemente caído. Retornando vacío para proteger stock ML/Amazon."
+            "[MULTI-SYNC-BM] bm_sku_master vacío -- el loop de categorías "
+            "no ha corrido todavía. Retornando vacío para proteger stock ML/Amazon."
         )
         return result  # {} vacío → loop principal salta todos los SKUs
 
@@ -696,23 +703,24 @@ async def run_multi_stock_sync() -> dict:
         from app.services.meli_client import get_meli_client
         from app.services.amazon_client import get_amazon_client
 
-        # ── Circuit breaker: verificar BM antes de tocar stock ────────────────
-        # Si BM está caído, _fetch_bm_avail cae en fallback per-SKU donde todos
-        # los avail retornan 0 (error silencioso) → sync pondría TODOS los
-        # listings en qty=0. Probar con get_stock_with_reserve: retorna tuple
-        # si BM responde (incluso (0,0) genuino), None si hay error/sesión rota.
+        # ── Circuit breaker: verificar bm_sku_master antes de tocar stock ─────
+        # FIX 2026-08-20 (directiva de Jovan: "nada debe llamar a BM por el
+        # momento"): antes probaba BM en vivo con un SKU canario
+        # (SNTV001764). Ahora que _fetch_bm_avail lee bm_sku_master en vez de
+        # llamar a BM, la señal equivalente es "¿el loop de categorías sigue
+        # actualizando la tabla?" -- si _update_bm_master_for_category lleva
+        # fallando repetido (BM caído/degradado), stock_updated_at deja de
+        # avanzar (el fix de "0 filas = no tocar nada" ya garantiza esto).
         try:
-            from app.services.binmanager_client import get_shared_bm as _get_shared_bm_cb
-            _cb_cli = await _get_shared_bm_cb()
-            _cb_probe = await asyncio.wait_for(
-                _cb_cli.get_stock_with_reserve("SNTV001764"),
-                timeout=20.0,
-            )
-            if _cb_probe is None:
-                raise RuntimeError("BM respondió pero con sesión inválida")
+            _cb_meta = await token_store.get_bm_master_sync_meta()
+            _cb_age_s = _time.time() - (_cb_meta.get("last_sync_ts") or 0)
+            if not _cb_meta.get("total_skus"):
+                raise RuntimeError("bm_sku_master vacío -- el loop de categorías no ha corrido todavía")
+            if _cb_age_s > _BM_MASTER_STALE_THRESHOLD_S:
+                raise RuntimeError(f"bm_sku_master desactualizado hace {_cb_age_s:.0f}s (>{_BM_MASTER_STALE_THRESHOLD_S:.0f}s)")
         except Exception as _cb_exc:
             logger.warning(
-                f"[MULTI-SYNC] BM no responde ({_cb_exc.__class__.__name__}: {_cb_exc}) "
+                f"[MULTI-SYNC] bm_sku_master no confiable ({_cb_exc.__class__.__name__}: {_cb_exc}) "
                 f"— sync ABORTADO para proteger stock en ML/Amazon"
             )
             summary["status"] = "bm_down"
@@ -953,19 +961,17 @@ async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
         from app.services.meli_client import get_meli_client
         from app.services.amazon_client import get_amazon_client
 
-        # ── Circuit breaker ───────────────────────────────────────────────────
+        # ── Circuit breaker (bm_sku_master, ver run_multi_stock_sync) ─────────
         try:
-            from app.services.binmanager_client import get_shared_bm as _get_shared_bm_cb
-            _cb_cli = await _get_shared_bm_cb()
-            _cb_probe = await asyncio.wait_for(
-                _cb_cli.get_stock_with_reserve("SNTV001764"),
-                timeout=20.0,
-            )
-            if _cb_probe is None:
-                raise RuntimeError("BM respondió pero con sesión inválida")
+            _cb_meta = await token_store.get_bm_master_sync_meta()
+            _cb_age_s = _time.time() - (_cb_meta.get("last_sync_ts") or 0)
+            if not _cb_meta.get("total_skus"):
+                raise RuntimeError("bm_sku_master vacío -- el loop de categorías no ha corrido todavía")
+            if _cb_age_s > _BM_MASTER_STALE_THRESHOLD_S:
+                raise RuntimeError(f"bm_sku_master desactualizado hace {_cb_age_s:.0f}s (>{_BM_MASTER_STALE_THRESHOLD_S:.0f}s)")
         except Exception as _cb_exc:
             logger.warning(
-                f"[SINGLE-SYNC] BM no responde ({_cb_exc.__class__.__name__}: {_cb_exc}) "
+                f"[SINGLE-SYNC] bm_sku_master no confiable ({_cb_exc.__class__.__name__}: {_cb_exc}) "
                 f"— sync ABORTADO para {platform}/{account_id}"
             )
             summary["status"] = "bm_down"

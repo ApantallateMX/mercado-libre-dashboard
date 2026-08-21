@@ -7,6 +7,109 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — DECISION + FEAT: bm_sku_master pasa a ser espejo COMPLETO del catálogo BM; ~15 vías más migradas de "llamar a BM en vivo" a leer el maestro
+
+**Directiva textual de Jovan** (continuación del incidente de bloqueo de BM
+del mismo día, ver [[project_bm_call_consolidation_2026-08-20]]): "todo debe
+apuntar a nuestro maestro, nada a BM por el momento" — sin excepción, ni
+siquiera herramientas de diagnóstico de un solo SKU.
+
+### Cambio de fondo: `bm_sku_master` ya no filtra por "SKU conocido"
+
+`_update_bm_master_for_category` (`app/main.py`) filtraba cada fila de BM
+contra `get_all_known_base_skus()` (SKUs ya publicados en ML o Amazon)
+antes de guardarla — esto hacía **estructuralmente imposible** usar
+`bm_sku_master` para detectar gaps reales (productos con stock en BM que
+NUNCA se han publicado en ninguna plataforma, por definición ausentes de
+"conocidos"). Se quitó el filtro: ahora se hace UPSERT de TODA fila que
+BM devuelva para la categoría (`INSERT ... ON CONFLICT(sku) DO UPDATE`,
+con `COALESCE(NULLIF(...))` para no pisar título/marca/categoría/etc. con
+vacíos si una fila viene parcial). Con el loop cubriendo TODAS las
+categorías conocidas (top-5 cada 15 min + longtail cada 4h),
+`bm_sku_master` se vuelve un espejo real y completo del catálogo vendible
+de BM en unas horas.
+
+Se agregó columna `image_url` (BM ya la traía vía `NEEDFILE=True`, nunca
+se guardaba) y `_bulk_stock_rows_to_master_fields` ahora también captura
+`title`/`brand`/`model`/`retail_ph` de cada fila (antes solo `category`/
+`upc`) — completa lo que antes solo llegaba 1x/semana vía el sync de
+catálogo aparte.
+
+Nueva función `token_store.get_bm_master_all_as_bulk_rows(min_qty)`:
+adapta filas de `bm_sku_master` al mismo shape que devolvía el bulk viejo
+de BM (`SKU`/`AvailableQTY`/`Reserve`/`TotalQty`/`Title`/`Brand`/`Model`/
+`CategoryName`/`ImageURL`/`UPC`/`LastRetailPricePurchaseHistory`/
+`RetailPrice`/`AvgCostQTY`/`Size`) — los consumidores existentes no
+necesitaron reescribir su lógica de parseo, solo cambiar de dónde viene
+la lista.
+
+### Vías migradas (ya no llaman a BM en ningún caso)
+
+**Automatizadas/background (las que de verdad generaban carga):**
+- `amazon_lanzar.py` — gap scan nocturno Amazon (antes `get_bulk_stock()`
+  sin `category_id`, catálogo completo).
+- `lanzar.py` (`_bm_fetch_all_skus_with_stock`) — gap scan ML, mismo
+  patrón (antes ConfColumns_Conditions_Excel completo, hasta 120s).
+- `amazon_products.py` (`/products/sin-bm`) — refrescaba cada 15 min con
+  catálogo completo en vivo.
+- `stock_sync_multi.py` (`_fetch_bm_avail`) — usado por "Sync Stock"
+  manual, catálogo completo en vivo + 2 "canarios" que probaban BM con un
+  SKU fijo (`SNTV001764`) — reemplazados por un circuit breaker que mide
+  frescura de `bm_sku_master` (`get_bm_master_sync_meta`, umbral 45 min =
+  3 ciclos perdidos del loop top).
+- `system_health.py` (`_check_binmanager`, corría cada 10 min
+  automáticamente) — mismo cambio: ping en vivo → frescura del maestro.
+
+**On-demand (1 SKU, gatillado por una acción humana) — migradas también
+porque la directiva no hizo excepción:**
+- `main.py` — "Sync Var." de variaciones/bundles (lectura y la del botón
+  real `sync-variation-stocks`), `/api/items/{id}/bm-cost`,
+  `/partials/item-deal/{id}` (modal de deals).
+- `sku_inventory.py` — `/api/sku-inventory/compare` (batch, hasta 30
+  llamadas concurrentes con Semaphore(10) — ahora 1 sola consulta SQL) y
+  `/api/sku-inventory/research`.
+- `health_ai.py` — contexto de producto para respuestas IA de reclamos/
+  preguntas.
+- `binmanager.py` — `/api/bm/retail-ph-batch`.
+- `items.py` (`get_inventory`) — el último-recurso "buscar en cualquier
+  almacén" quedó desactivado (no hay maestro equivalente que cubra bins
+  no-vendibles/Tijuana; se documenta como limitación temporal).
+
+**Herramientas de diagnóstico obsoletas, desactivadas (no borradas)** con
+`return ... status_code=410` antes del código viejo: 2 comparativas
+ConfColumns ya superadas (`confcolumns-location-check`,
+`bm-master-confcolumns-compare`) y 2 pruebas puntuales de una sola vez
+del 2026-08-19 (`confcolumns-location-param-test`,
+`warehouse-endpoint-raw-test`).
+
+**Limpieza de código muerto:** ~808 líneas inalcanzables dentro de
+`_get_bm_stock_cached` (el bloque completo después del `return` que el
+fix de hoy más temprano ya había insertado) + `_bm_verify_sku_direct`
+(cero callers desde el mismo fix) — eliminadas por completo, no solo
+comentadas.
+
+### Pendiente/decisión abierta
+
+Quedan ~15-20 endpoints `/api/diag/*` históricos (experimentos de una
+sola sesión pasada, ej. `bm-web-payload`, `bm-bulk-test`,
+`globalstock-category-test`) que técnicamente aún podrían llamar a BM en
+vivo si alguien los invoca manualmente con el token — nunca se ejecutan
+solos (no hay loop ni UI que los llame), así que no contribuyen a
+tráfico/carga real. No se tocaron por costo/beneficio (bajo riesgo,
+herramientas de investigación que podrían servir en el futuro) — Jovan
+puede pedir que se desactiven también si prefiere cero excepciones
+literales.
+
+**Verificado antes de push:** compilación de los 11 archivos, servidor
+local levantado, `POST /api/diag/bm-master-update-category?category_id=Televisions`
+contra BM real vía el nuevo UPSERT (`ok:true`, 455/455 filas actualizadas
+-- antes 402/455 por el filtro de "conocido" ya quitado), `/api/diag/sku`
+con la sección `master` nueva mostrando title/brand/model reales, y
+`get_bm_master_all_as_bulk_rows()` ejercitado directo contra la DB local
+(1,955 SKUs con stock de 8,989 totales).
+
+---
+
 ## 2026-08-20 — FIX CRÍTICO: loop infinito de redirects (ERR_TOO_MANY_REDIRECTS) para usuarios con permisos huérfanos
 
 **Archivos:** `app/services/user_store.py`, `app/main.py`.

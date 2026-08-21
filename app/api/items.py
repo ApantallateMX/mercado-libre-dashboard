@@ -470,37 +470,16 @@ async def get_inventory(web_sku: str):
         # FIX 2026-08-10: los caches en memoria (vendible + bulk Tijuana) solo
         # cubren los almacenes de las reglas de negocio de "vendible" — un SKU
         # con stock real en cualquier OTRO almacén de BM (hay ~20 activos) caía
-        # aquí como falso "no encontrado". Jovan lo verificó directamente en la
-        # UI de BM. Este panel es puramente informativo (no decide cuánto
-        # publicar en ML), así que como último recurso hacemos UNA consulta en
-        # vivo sin restricción de ubicación/condición — ver
-        # get_existence_anywhere() en binmanager_client.py. Es on-demand (un
-        # click), nunca se usa en los paths bulk (get_inventory_bulk/
-        # get_inventory_sku_sales) para no meter llamadas HTTP en loops.
-        from app.services.binmanager_client import get_shared_bm
-        _base, _ = _get_base_and_type(web_sku)
-        bm_cli = await get_shared_bm()
-        anywhere = await bm_cli.get_existence_anywhere(_base or web_sku)
-        if anywhere and anywhere.get("found_anywhere"):
-            return {
-                "WebSKU": web_sku, "ProductSKU": _base or web_sku,
-                "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0, "AvailTotal": 0,
-                "found_elsewhere": True,
-                "total_qty_elsewhere": anywhere.get("total_qty", 0),
-                "by_condition": anywhere.get("by_condition", []),
-                "locations": anywhere.get("locations", []),
-                "warning": (
-                    f"Existe en BinManager con {anywhere.get('total_qty', 0)} uds, pero en "
-                    "almacenes fuera de las reglas de venta en línea (no vendible/no Tijuana) "
-                    "— 0 unidades vendibles."
-                ),
-            }
-        # anywhere puede ser None (fallo de red, dato desconocido) o
-        # found_anywhere=False (BM no valida contra su maestro de catálogo en
-        # este endpoint — no se puede distinguir "existe con 0 stock en todo
-        # lado" de "SKU nunca registrado", ver get_existence_anywhere()).
-        return {"error": "Sin stock registrado en BinManager en ningún almacén ahora mismo "
-                          "(no se puede confirmar si el SKU está o no dado de alta en BM)",
+        # aquí como falso "no encontrado". Antes, como último recurso, se
+        # hacía una consulta en vivo sin restricción (get_existence_anywhere).
+        # DESACTIVADO 2026-08-20 (directiva de Jovan: "todo debe apuntar a
+        # nuestro maestro, nada a BM por el momento") -- ya no se llama a BM
+        # aquí, ni siquiera on-demand. No se borra el código de
+        # get_existence_anywhere() en binmanager_client.py por si se
+        # reactiva más adelante.
+        return {"error": "Sin stock vendible en caché (bm_sku_master) ahora mismo. "
+                          "La verificación en vivo fuera de almacenes vendibles está "
+                          "desactivada temporalmente.",
                 "WebSKU": web_sku, "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")

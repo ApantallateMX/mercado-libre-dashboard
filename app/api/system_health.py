@@ -47,6 +47,10 @@ router = APIRouter(prefix="/api/system-health", tags=["system-health"])
 # ─── Estado global en memoria ────────────────────────────────────────────────
 _INTERVAL = 10 * 60   # 10 minutos
 _TIMEOUT  = 10.0      # segundos por check
+# Umbral de frescura de bm_sku_master para _check_binmanager -- mismo valor
+# que _BM_MASTER_STALE_THRESHOLD_S en stock_sync_multi.py (loop top de
+# categorías refresca cada 15 min; 3 ciclos perdidos = señal real de falla).
+_BM_MASTER_STALE_THRESHOLD_S = 45 * 60
 
 _state: dict = {
     "last_run":  None,
@@ -135,26 +139,26 @@ async def _check_meli_tokens() -> dict:
 
 
 async def _check_binmanager() -> dict:
+    """FIX 2026-08-20 (directiva de Jovan: "todo debe apuntar a nuestro
+    maestro, nada a BM por el momento"): antes este check corría cada 10
+    min (_health_loop) haciendo un ping en vivo a BM -- automatizado,
+    exactamente lo que la directiva prohíbe. Ahora mide la frescura real
+    de bm_sku_master (si el loop de categorías sigue actualizando la
+    tabla, BM es accesible; si no, no lo es) -- señal más útil para este
+    dashboard que un ping aislado, y cero llamadas nuevas a BM."""
     t0 = time.monotonic()
-    BM_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
-    from app.services.binmanager_client import bm_post as _bm_post_health
+    from app.services import token_store
     try:
-        # Usamos un SKU conocido (liviano — solo ping al API)
-        r = await _bm_post_health(BM_URL, {
-            "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-            "LOCATIONID": "47,68", "BINID": None,
-            "PRODUCTSKU": "PING_TEST", "CONDITION": "GRA",
-            "SUPPLIERS": None, "LCN": None, "SEARCH": "PING_TEST"
-        }, timeout=_TIMEOUT)
+        meta = await token_store.get_bm_master_sync_meta()
         ms = _elapsed_ms(t0)
-        # BM devuelve [] para SKU desconocido (200 OK) — eso es suficiente para confirmar acceso
-        if r and r.status_code in (200, 204):
-            return _ok(f"BinManager accesible ({ms}ms)", ms)
-        return _warn(f"BinManager respondió {r.status_code if r else 'None'}", ms)
-    except httpx.TimeoutException:
-        return _warn(f"BinManager timeout (>{_TIMEOUT}s)", _elapsed_ms(t0))
+        if not meta.get("total_skus"):
+            return _warn("bm_sku_master vacío -- el loop de categorías no ha corrido todavía", ms)
+        age_s = time.time() - (meta.get("last_sync_ts") or 0)
+        if age_s > _BM_MASTER_STALE_THRESHOLD_S:
+            return _warn(f"bm_sku_master desactualizado hace {int(age_s)}s -- posible falla del loop de categorías", ms)
+        return _ok(f"bm_sku_master fresco (hace {int(age_s)}s, {meta['total_skus']} SKUs)", ms)
     except Exception as e:
-        return _err(f"BinManager error: {str(e)[:80]}", _elapsed_ms(t0))
+        return _err(f"bm_sku_master error: {str(e)[:80]}", _elapsed_ms(t0))
 
 
 async def _check_stock_sync() -> dict:
