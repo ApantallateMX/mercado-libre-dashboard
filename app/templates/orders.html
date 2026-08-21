@@ -1340,8 +1340,15 @@ function alertasLoadData() {
                 var availNum = (row.available_qty_at_check === null || row.available_qty_at_check === undefined)
                     ? '<span class="text-gray-400">sin dato</span>'
                     : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
+                // FEATURE 2026-08-21 (pedido de Jovan): BM reserva la unidad al
+                // entrar una orden y baja Disponible a 0 -- eso NO es "sin stock
+                // real" si hay reserva. Mostrar el número crudo, sin decidir por
+                // el usuario si la alerta/sugerencia sigue aplicando o no.
+                var reserveLabel = (row.reserve_qty || 0) > 0
+                    ? '<div class="text-amber-600 whitespace-nowrap" style="font-size:10px" title="BM reservó esta cantidad -- el 0 disponible puede ser por esta reserva, no por falta de stock real">reservado ' + row.reserve_qty + '</div>'
+                    : '';
                 var origPriceLabel = row.retail_ph ? ('$' + Math.round(row.retail_ph) + ' USD') : '';
-                var avail = availNum + (origPriceLabel ? '<div class="text-gray-400 whitespace-nowrap" style="font-size:10px">' + origPriceLabel + '</div>' : '');
+                var avail = availNum + reserveLabel + (origPriceLabel ? '<div class="text-gray-400 whitespace-nowrap" style="font-size:10px">' + origPriceLabel + '</div>' : '');
                 var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
                 var detectedLabel = detectedAgo < 1 ? 'hace unos segundos' : ('hace ' + detectedAgo + ' min');
                 var sugerencias = row.sugerencias || [];

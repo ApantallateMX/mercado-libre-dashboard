@@ -2656,7 +2656,19 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
     cualquier orden con una sustitución activa (aplicándose o ya aplicada
     y pendiente de envío/completada) -- vuelve a aparecer aquí solo si se
     "reabre" explícitamente (sustituto sin stock) o si la inyección a BM
-    falló de verdad (necesita una decisión nueva)."""
+    falló de verdad (necesita una decisión nueva).
+
+    FEATURE 2026-08-21 (pedido explícito de Jovan): agrega reserve_qty
+    (actual, de bm_sku_master -- no el snapshot congelado de
+    available_qty_at_check) junto al disponible. Cuando BM recibe una
+    orden reserva la unidad y available_qty baja a 0 para no sobrevender
+    -- eso es correcto del lado de BM, pero esta vista lo marcaba igual
+    que "sin stock real" y ofrecía sustituto sin distinguir "0 porque no
+    hay nada" de "0 porque ya está reservado". Mostrar reserve_qty le da
+    a quien revisa la alerta el contexto real antes de sustituir -- no se
+    cambia la lógica de sugerencia/alerta automáticamente, solo se expone
+    el número (mismo criterio que "Solo en Tijuana"/PNP: mostrar el dato
+    crudo, la persona decide)."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
@@ -2667,6 +2679,7 @@ async def get_realtime_stock_alerts(limit: int = 100) -> list[dict]:
                 COALESCE(bsm.model, '') AS model,
                 COALESCE(bsm.retail_ph, 0) AS retail_ph,
                 COALESCE(bsm.size, 0) AS size,
+                COALESCE(bsm.reserve_qty, 0) AS reserve_qty,
                 rsa.quantity, rsa.available_qty_at_check, rsa.order_date, rsa.detected_at
             FROM realtime_stock_alerts rsa
             LEFT JOIN bm_sku_master bsm ON bsm.sku = rsa.sku
