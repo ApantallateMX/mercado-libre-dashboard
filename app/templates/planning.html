@@ -411,11 +411,21 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
         ? '<button onclick="openHistorialModal(\'' + p.sku.replace(/'/g,"\\'") + '\',\'' + p.title.replace(/'/g,"\\'").substring(0,40) + '\')" ' +
           'class="text-indigo-500 hover:text-indigo-700 text-base leading-none" title="Ver historial de ventas">📈</button>'
         : '';
+    // PNP (2026-08-21, pedido de Jovan -- también en Velocidad de Ventas):
+    // solo se procesa en MTY, mismos términos que BM usa en su UI.
+    var pnpMty = (p.pnp_mty_available || 0) + (p.pnp_mty_novendible || 0);
+    var pnpVelHtml = pnpMty > 0
+        ? '<span class="text-gray-700">' + p.pnp_mty_available + '</span><span class="text-gray-300"> / </span>' +
+          '<span class="' + (p.pnp_mty_novendible > 0 ? 'text-amber-700 font-semibold' : 'text-gray-700') + '" title="No vendible (necesita proceso en MTY)">' + p.pnp_mty_novendible + '</span>'
+        : '<span class="text-gray-300">—</span>';
+    var pnpVelOtherBadge = (p.pnp_other_locations_qty || 0) > 0
+        ? '<span class="px-1 py-0.5 text-[8px] bg-red-50 text-red-600 rounded border border-red-200 font-semibold" title="PNP encontrado fuera de MTY (CDMX/Tijuana) -- no debería estar ahí">⚠ PNP fuera MTY: ' + p.pnp_other_locations_qty + '</span>'
+        : '';
     return '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition">' +
         '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (globalIdx+1) + '</td>' +
         '<td class="py-2 pr-3 max-w-xs">' +
             '<p class="font-medium text-gray-800 truncate text-xs" title="' + p.title + '">' + p.title + '</p>' +
-            '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips + listingsChip + amzAcctChips + '</div>' +
+            '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips + listingsChip + amzAcctChips + pnpVelOtherBadge + '</div>' +
         '</td>' +
         '<td class="py-2 pr-3 text-right font-bold text-gray-700">' + p.daily_rate + '</td>' +
         (hasAmz ? '<td class="py-2 pr-3 text-right text-orange-500 font-semibold">' + ((p.amz_daily_rate||0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
@@ -429,6 +439,7 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
             var cls = d <= 7 ? 'bg-red-100 text-red-700' : (d <= 14 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700');
             return '<td class="py-2 pr-3 text-right"><span class="inline-block px-1.5 py-0.5 rounded text-xs font-semibold ' + cls + '">' + d + 'd</span></td>';
         })() +
+        '<td class="py-2 pr-3 text-right" title="PNP en MTY: Disponible / No vendible (necesita proceso) -- solo Televisions">' + pnpVelHtml + '</td>' +
         '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
             '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
         '<td class="py-2 pl-2 text-center">' + histBtn + '</td>' +
@@ -468,6 +479,7 @@ function _renderVelPage() {
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Días de inventario BM al ritmo actual">Días inv.</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Solo Televisions -- PNP procesado únicamente en MTY. Disponible / No vendible (necesita proceso)">PNP (MTY)</th>' +
             '<th class="pb-2 pr-3">Proporción</th>' +
             '<th class="pb-2 pl-2 w-6"></th>' +
             '</tr></thead><tbody>';

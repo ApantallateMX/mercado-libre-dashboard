@@ -25589,6 +25589,18 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
             if _tdr > 0:
                 _ri["dias_inventario"] = round(_ri["bm_avail"] / _tdr)
 
+    # FEATURE 2026-08-21 (pedido explícito de Jovan: también en Velocidad de
+    # Ventas, no solo en Cobertura -- misma fuente, mismo helper). PNP solo
+    # tiene datos reales para Televisions, 0 para el resto.
+    _vel_pnp_skus = [normalize_to_bm_sku(x["sku"]) for x in result_items if x.get("sku")]
+    _vel_pnp_data = await token_store.get_pnp_data_for_skus(_vel_pnp_skus)
+    for _ri in result_items:
+        _bk2 = normalize_to_bm_sku(_ri.get("sku", "")) if _ri.get("sku") else None
+        _pnp2 = _vel_pnp_data.get(_bk2) if _bk2 else None
+        _ri["pnp_mty_available"] = _pnp2["pnp_mty_available"] if _pnp2 else 0
+        _ri["pnp_mty_novendible"] = _pnp2["pnp_mty_novendible"] if _pnp2 else 0
+        _ri["pnp_other_locations_qty"] = _pnp2["pnp_other_locations_qty"] if _pnp2 else 0
+
     return {
         "items": result_items[:100],
         "total_items": len(result_items),
