@@ -18731,7 +18731,10 @@ async def diag_raw_category_rows(token: str = "", category_id: str = "", sku: st
         return JSONResponse({"error": "category_id requerido"}, status_code=400)
     from app.services.binmanager_client import get_shared_bm as _gsb_rawcat
     bm_cli = await _gsb_rawcat()
-    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW" if category_id.strip() == "Televisions" else "GRA,GRB,GRC,NEW"
+    # FIX 2026-08-20 (Jovan, caso real Fan Heater/SNFH000004): ICB/ICC ya NO
+    # se restringen a "Televisions" -- hay productos de otras categorías con
+    # stock vendible real solo en esas condiciones. Pedir siempre las 6.
+    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW"
     _t0 = _time.time()
     rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions=_conditions_str)
     _elapsed = round(_time.time() - _t0, 1)
@@ -20318,9 +20321,20 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
 
     Usado tanto por el diag manual (bm-master-update-category) como por
     los loops automáticos (_conf_columns_top_categories_loop/_longtail_loop)
-    -- una sola implementación, sin duplicar la lógica de escritura."""
+    -- una sola implementación, sin duplicar la lógica de escritura.
+
+    FIX 2026-08-20 (Jovan, caso real Fan Heater/SNFH000004): ICB/ICC ya NO
+    se restringen a category_id=="Televisions". Antes, un SKU con su único
+    stock vendible bajo ICB en una categoría no-TV nunca aparecía en la
+    respuesta (pedíamos solo GRA/GRB/GRC/NEW) -- eso hacía que la categoría
+    completa se viera como "0 filas" y se confundiera con un fallo/bloqueo
+    de BM, cuando en realidad el SKU sí existe y sí tiene stock, solo que
+    bajo una condición que nunca preguntábamos. Pedir siempre las 6
+    condiciones es más seguro: nunca deja de encontrar un SKU con stock
+    real en ICB/ICC, sea TV o no, y no trae nada de más si el producto no
+    usa esas condiciones."""
     _t0 = _time.time()
-    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW" if category_id.strip() == "Televisions" else "GRA,GRB,GRC,NEW"
+    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW"
     rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions=_conditions_str)
     _elapsed = round(_time.time() - _t0, 1)
     if rows is None:

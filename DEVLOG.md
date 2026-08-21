@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FIX: ICB/ICC ya no se restringen a categoría "Televisions"
+
+Jovan encontró el caso real: SNFH000004 (Fan Heater) tiene su única unidad
+vendible en condición **ICB** — como el loop de categorías solo pedía
+GRA/GRB/GRC/NEW para categorías que no son "Televisions", nunca se
+encontraba, y la categoría completa "Fan Heater" se veía como "0 filas"
+(indistinguible de un bloqueo/fallo de BM). Verificado contra BM real
+(filtro vendible de Jovan en la UI de BM: Available=1, Reserve=0, Not
+Sellable=1 — coincide exacto).
+
+`_update_bm_master_for_category` y `/api/diag/raw-category-rows`
+(`main.py`) ahora piden siempre las 6 condiciones (GRA,GRB,GRC,ICB,ICC,NEW)
+para TODAS las categorías, no solo Televisions. Verificado local: "Fan
+Heater" pasó de 0 filas a 1 fila (`AvailableQTY:1, Reserve:0,
+NoVendibleQty:1`), coincide exacto con BM.
+
+**Lección de la sesión (correcta observación de Jovan):** "0 resultados
+bajo un criterio angosto" y "BM bloqueado/con problema" son 2 cosas
+distintas — no hay que asumir bloqueo solo porque una consulta con
+condiciones incompletas no encuentra nada. El SKU existía y tenía stock
+real todo este tiempo, solo preguntábamos la condición equivocada.
+
+---
+
 ## 2026-08-20 — FEAT: botón "Reducir Todos" para Desbalance Peligroso
 
 Jovan notó que "Desbalance Peligroso" era la única sección con acción
