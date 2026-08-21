@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — FIX CRÍTICO: "Error al calcular stock" (UnboundLocalError, no timeout real)
+
+Jovan reportó con captura real de producción: cuenta BLOWTECHNOLOGIES,
+Productos > Inventario > Stock, "Error al calcular stock" con traceback
+mostrando `_prewarm_caches` (main.py:7746) → `asyncio.wait_for(timeout=600.0)`
+— parecía un timeout real de 600s.
+
+**Causa real (NO era timeout):** el commit `9be175a` de hoy mismo
+(rediseño de Transferencias Sugeridas, ~01:37am) eliminó el bloque que
+definía y poblaba `transfer_suggestions` dentro de `_do_prewarm()`, pero
+dejó 2 referencias colgantes a esa variable al construir `_sic_data`
+(líneas 7637-7638). Como ya no se asignaba en ningún punto,
+**cada corrida de `_do_prewarm()` (las 4 cuentas ML) lanzaba
+`UnboundLocalError`** de inmediato — no relacionado con demora real
+(BM ya no hace ninguna llamada en vivo en este flujo desde el
+2026-08-20). Solo se hizo visible en BLOWTECHNOLOGIES porque esa cuenta
+no tenía snapshot cacheado al que la UI pudiera hacer fallback
+silencioso — las otras 3 cuentas seguían mostrando datos viejos sin
+exponer el error de fondo. El `UnboundLocalError` no es
+`asyncio.TimeoutError`, así que no lo capturaba el `except` específico
+de timeout — se propagaba hasta el `except Exception` externo, y el
+traceback (cortado en la captura) engañaba a simple vista.
+
+Fix: eliminadas las 2 líneas colgantes (`"transfer_suggestions"` /
+`"transfer_suggestions_count"`) de `_sic_data` (commit `1b281a1`).
+Verificado local (force-prewarm sin error) y en producción específicamente
+para BLOWTECHNOLOGIES: `/api/stock/prewarm-status` → `ready:true,
+error:""`, y `/partials/products-stock-issues` renderiza contenido real
+("Activar Todos (2)"), cero "Error al calcular stock".
+
+**Nota de proceso:** bug introducido por mí mismo ~50 min antes, en el
+mismo commit del rediseño de Transferencias — quedó sin detectar porque
+la verificación de esa feature se centró en el endpoint nuevo
+(`/api/planning/tj-only-transfer`) y no se re-probó el flujo completo de
+`_do_prewarm()` para las 4 cuentas tras remover código relacionado.
+
+---
+
 ## 2026-08-21 — FEAT: rediseño completo de Transferencias Sugeridas — prioridad de ventas, filtros, paginación
 
 Jovan vio la primera versión (333 filas sin paginar) y dio feedback directo:
