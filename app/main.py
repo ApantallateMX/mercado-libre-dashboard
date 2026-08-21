@@ -7634,8 +7634,6 @@ async def _prewarm_caches(user_id: str = None):
                     "active_seasonal_events": _active_seasonal_events,
                     "drift_alerts": _drift_alerts,
                     "drift_alerts_count": len(_drift_alerts),
-                    "transfer_suggestions": transfer_suggestions,
-                    "transfer_suggestions_count": len(transfer_suggestions),
                 }
 
                 # Guard: si el bulk de BM de esta corrida no verificó NINGÚN SKU de los
