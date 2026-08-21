@@ -854,6 +854,18 @@ function _buildCovRow(p, hasAmzCov) {
         recHtml = '<span class="text-gray-300">—</span>';
     }
 
+    // PNP (2026-08-21, pedido de Jovan): solo se procesa en MTY -- misma
+    // terminología que BM usa en su propia UI (Disponible/No Vendible),
+    // sin inventar un score propio. Solo tiene datos reales en Televisions.
+    var pnpMty = (p.pnp_mty_available || 0) + (p.pnp_mty_novendible || 0);
+    var pnpHtml = pnpMty > 0
+        ? '<span class="text-gray-700">' + p.pnp_mty_available + '</span><span class="text-gray-300"> / </span>' +
+          '<span class="' + (p.pnp_mty_novendible > 0 ? 'text-amber-700 font-semibold' : 'text-gray-700') + '" title="No vendible (necesita proceso en MTY)">' + p.pnp_mty_novendible + '</span>'
+        : '<span class="text-gray-300">—</span>';
+    var pnpOtherBadge = (p.pnp_other_locations_qty || 0) > 0
+        ? '<span class="px-1 text-[8px] bg-red-50 text-red-600 rounded border border-red-200 font-semibold" title="PNP encontrado fuera de MTY (CDMX/Tijuana) -- no debería estar ahí">⚠ PNP fuera MTY: ' + p.pnp_other_locations_qty + '</span>'
+        : '';
+
     return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
         '<td class="py-2.5 pr-3">' +
             '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
@@ -861,7 +873,7 @@ function _buildCovRow(p, hasAmzCov) {
             abcBadge +
             (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
             (p.brand ? '<span class="text-[9px] text-gray-400">' + (p.brand || '') + (p.size ? ' ' + p.size + '"' : '') + '</span>' : '') +
-            covAccts + covItemIds +
+            covAccts + covItemIds + pnpOtherBadge +
             '</div>' +
         '</td>' +
         (hasAmzCov ? '<td class="py-2.5 pr-3 text-right text-gray-600">' + (p.daily_rate || 0) + '</td>' +
@@ -870,6 +882,7 @@ function _buildCovRow(p, hasAmzCov) {
         '<td class="py-2.5 pr-3 text-center">' + trendHtml + '</td>' +
         '<td class="py-2.5 pr-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-700') + '">' + p.stock_bm + '</td>' +
         '<td class="py-2.5 pr-3 text-right ' + (p.coverage_days != null && p.coverage_days < 7 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + covText + '</td>' +
+        '<td class="py-2.5 pr-3 text-right" title="PNP en MTY: Disponible / No vendible (necesita proceso)">' + pnpHtml + '</td>' +
         '<td class="py-2.5 pr-3 text-right">' + reqText + '</td>' +
         '<td class="py-2.5 pr-3 text-right">' + recHtml + '</td>' +
         '<td class="py-2.5 pr-3"><span class="px-1.5 py-0.5 text-[10px] rounded border font-semibold ' + cfg.cls + '">' + cfg.label + '</span></td>' +
@@ -903,6 +916,7 @@ function _renderCovPage(el) {
         '<th class="pb-2 pr-3 text-center">Tend.</th>' +
         '<th class="pb-2 pr-3 text-right">Stock BM</th>' +
         '<th class="pb-2 pr-3 text-right">Cobertura</th>' +
+        '<th class="pb-2 pr-3 text-right" title="Solo Televisions -- PNP procesado únicamente en MTY. Disponible / No vendible (necesita proceso)">PNP (MTY)</th>' +
         '<th class="pb-2 pr-3 text-right">A solicitar</th>' +
         '<th class="pb-2 pr-3 text-right" title="Precio promedio de venta ML vs precio de referencia retail BM">vs Ref.</th>' +
         '<th class="pb-2 pr-3">Estado</th>' +

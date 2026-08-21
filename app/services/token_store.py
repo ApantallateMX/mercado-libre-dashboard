@@ -1228,6 +1228,19 @@ async def init_db():
             # necesitaban ImageURL, que el bulk YA trae (NEEDFILE=True) pero
             # nunca se guardaba aquí.
             ("image_url", "TEXT NOT NULL DEFAULT ''"),
+            # FEATURE 2026-08-21 (pedido explícito de Jovan): PNP ("Plug and
+            # Play") solo se procesa en MTY -- pnp_mty_available/pnp_mty_novendible
+            # son los mismos AvailableQTY/NoVendibleQty que BM muestra en su
+            # propia UI (confirmado con captura real de Jovan: SNTV008001
+            # Disponible=4, No Vendible=379), consulta CONDITION=PNP,
+            # LOCATIONID=68. pnp_other_locations_qty es la suma de PNP
+            # encontrado en CDMX/Tijuana -- anomalía real (TJ solo reabastece
+            # con producto YA terminado, PNP no debería aparecer ahí). Solo
+            # se llena para category="Televisions" (único caso con volumen
+            # confirmado hoy) -- 0 en cualquier otra categoría.
+            ("pnp_mty_available", "INTEGER NOT NULL DEFAULT 0"),
+            ("pnp_mty_novendible", "INTEGER NOT NULL DEFAULT 0"),
+            ("pnp_other_locations_qty", "INTEGER NOT NULL DEFAULT 0"),
         ):
             try:
                 await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
@@ -2191,6 +2204,37 @@ async def get_bm_master_all_as_bulk_rows(min_qty: int = 1) -> list[dict]:
             "Size": r["size"],
         })
     return out
+
+
+async def get_pnp_data_for_skus(skus: list[str]) -> dict[str, dict]:
+    """FEATURE 2026-08-21 (pedido explícito de Jovan): datos PNP ("Plug and
+    Play", solo procesado en MTY) para la tabla de Cobertura -- SELECT puro
+    sobre bm_sku_master, sin llamar a BM. Solo tiene datos reales para
+    category="Televisions" (único caso confirmado hoy); para el resto de
+    categorías estas columnas quedan en 0.
+
+    Retorna {sku: {pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty}}
+    -- los mismos AvailableQTY/NoVendibleQty que BM muestra en su propia UI
+    (confirmado con captura real de Jovan)."""
+    if not skus:
+        return {}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" * len(skus))
+        cur = await db.execute(
+            f"""SELECT sku, pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty
+                FROM bm_sku_master WHERE sku IN ({placeholders})""",
+            skus,
+        )
+        rows = await cur.fetchall()
+    return {
+        r["sku"]: {
+            "pnp_mty_available": r["pnp_mty_available"],
+            "pnp_mty_novendible": r["pnp_mty_novendible"],
+            "pnp_other_locations_qty": r["pnp_other_locations_qty"],
+        }
+        for r in rows
+    }
 
 
 async def get_tj_only_transfer_candidates() -> list[dict]:

@@ -20414,6 +20414,49 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     for u in updates:
         u["tj_qty"] = _tj_by_base.pop(u["sku"], 0)
 
+    # FEATURE 2026-08-21 #2 (aclaración real de Jovan): PNP ("Plug and Play"
+    # -- unidades que esperan prueba de encendido antes de grado final GRA/
+    # GRB/GRC) SOLO se procesa en MTY -- la prioridad de "qué meter a la
+    # línea de proceso" se basa únicamente en lo que hay ahí. Si aparece PNP
+    # en CDMX/Tijuana es una anomalía real (TJ solo reabastece con producto
+    # YA terminado, nunca debería tener PNP) -- se captura aparte como
+    # alerta, sin mezclarlo con la cantidad de MTY. Solo para "Televisions"
+    # -- volumen real confirmado ahí (729 uds en la muestra de BinManager),
+    # no se generalizó a otras categorías. Números tal cual los muestra BM
+    # en su propia UI (Jovan confirmó con captura real: SNTV008001
+    # Disponible=4, No Vendible=379, Total=383) -- sin inventar una
+    # interpretación/score propio, solo AvailableQTY/NoVendibleQty crudos.
+    _pnp_mty_by_base: dict[str, dict] = {}
+    _pnp_other_by_base: dict[str, int] = {}
+    if category_id.strip() == "Televisions":
+        def _pnp_rows_to_qty(rows: list) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            for row in rows or []:
+                row_sku = (row.get("SKU") or "").upper().strip()
+                if not row_sku:
+                    continue
+                base = _extract_base_sku(row_sku)
+                entry = out.setdefault(base, {"available": 0, "reserve": 0, "no_vendible": 0})
+                entry["available"] += int(row.get("AvailableQTY") or 0)
+                entry["reserve"] += int(row.get("Reserve") or 0)
+                entry["no_vendible"] += int(row.get("NoVendibleQty") or 0)
+            return out
+
+        _pnp_mty_rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions="PNP", location_id="68")
+        _pnp_mty_by_base = _pnp_rows_to_qty(_pnp_mty_rows)
+
+        _pnp_other_rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions="PNP", location_id="47,62,45,69,43,42")
+        _pnp_other_qty = _pnp_rows_to_qty(_pnp_other_rows)
+        _pnp_other_by_base = {
+            b: (v["available"] + v["reserve"] + v["no_vendible"]) for b, v in _pnp_other_qty.items()
+        }
+
+    for u in updates:
+        _pnp_u = _pnp_mty_by_base.pop(u["sku"], None)
+        u["pnp_mty_available"] = _pnp_u["available"] if _pnp_u else 0
+        u["pnp_mty_novendible"] = _pnp_u["no_vendible"] if _pnp_u else 0
+        u["pnp_other_locations_qty"] = _pnp_other_by_base.pop(u["sku"], 0)
+
     import aiosqlite as _aio_updcat
     import json as _json_updcat
     _now_ts = _time.time()
@@ -20422,12 +20465,16 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
             _conds_json = _json_updcat.dumps(u["conditions"])
             await db.execute(
                 """INSERT INTO bm_sku_master (
-                       sku, available_qty, reserve_qty, total_qty, tj_qty, category, upc,
+                       sku, available_qty, reserve_qty, total_qty, tj_qty,
+                       pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty,
+                       category, upc,
                        title, brand, model, image_url, retail_ph,
                        best_condition_sku, best_condition_qty, conditions_json,
                        verified, stock_updated_at
                    ) VALUES (
-                       :sku, :available_qty, :reserve_qty, :total_qty, :tj_qty, :category, :upc,
+                       :sku, :available_qty, :reserve_qty, :total_qty, :tj_qty,
+                       :pnp_mty_available, :pnp_mty_novendible, :pnp_other_locations_qty,
+                       :category, :upc,
                        :title, :brand, :model, :image_url, :retail_ph,
                        :best_condition_sku, :best_condition_qty, :conditions_json,
                        :verified, :stock_updated_at
@@ -20437,6 +20484,9 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        reserve_qty=excluded.reserve_qty,
                        total_qty=excluded.total_qty,
                        tj_qty=excluded.tj_qty,
+                       pnp_mty_available=excluded.pnp_mty_available,
+                       pnp_mty_novendible=excluded.pnp_mty_novendible,
+                       pnp_other_locations_qty=excluded.pnp_other_locations_qty,
                        category=COALESCE(NULLIF(excluded.category, ''), bm_sku_master.category),
                        upc=COALESCE(NULLIF(excluded.upc, ''), bm_sku_master.upc),
                        title=COALESCE(NULLIF(excluded.title, ''), bm_sku_master.title),
@@ -20493,6 +20543,37 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        tj_qty=excluded.tj_qty,
                        category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
                 {"sku": _tj_sku, "tj_qty": _tj_qty, "category": category_id, "stock_updated_at": _now_ts},
+            )
+        # PNP (MTY) para SKUs con stock PNP que NO aparecieron en la respuesta
+        # vendible de esta categoría -- mismo criterio que el bloque de tj_qty
+        # arriba, solo toca las columnas pnp_*, nunca available_qty/category.
+        for _pnp_sku, _pnp_u in _pnp_mty_by_base.items():
+            await db.execute(
+                """INSERT INTO bm_sku_master (
+                       sku, pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty,
+                       category, stock_updated_at
+                   ) VALUES (:sku, :available, :no_vendible, :other, :category, :stock_updated_at)
+                   ON CONFLICT(sku) DO UPDATE SET
+                       pnp_mty_available=excluded.pnp_mty_available,
+                       pnp_mty_novendible=excluded.pnp_mty_novendible,
+                       pnp_other_locations_qty=excluded.pnp_other_locations_qty,
+                       category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
+                {
+                    "sku": _pnp_sku, "available": _pnp_u["available"], "no_vendible": _pnp_u["no_vendible"],
+                    "other": _pnp_other_by_base.pop(_pnp_sku, 0), "category": category_id, "stock_updated_at": _now_ts,
+                },
+            )
+        # Cualquier SKU restante que SOLO tenga PNP fuera de MTY (ninguna
+        # coincidencia en updates ni en _pnp_mty_by_base) -- anomalía pura,
+        # igual se registra para que la alerta lo muestre.
+        for _po_sku, _po_qty in _pnp_other_by_base.items():
+            await db.execute(
+                """INSERT INTO bm_sku_master (sku, pnp_other_locations_qty, category, stock_updated_at)
+                   VALUES (:sku, :other, :category, :stock_updated_at)
+                   ON CONFLICT(sku) DO UPDATE SET
+                       pnp_other_locations_qty=excluded.pnp_other_locations_qty,
+                       category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
+                {"sku": _po_sku, "other": _po_qty, "category": category_id, "stock_updated_at": _now_ts},
             )
         await db.commit()
 
@@ -26194,6 +26275,12 @@ async def planning_coverage(
     bm_map = await _get_bm_stock_cached(items_with_sku)
     _apply_bm_stock(items_with_sku, bm_map)
 
+    # FEATURE 2026-08-21 (pedido explícito de Jovan): PNP (solo procesado en
+    # MTY) -- SELECT puro sobre bm_sku_master, sin llamar a BM. Solo trae
+    # datos reales para SKUs de Televisions, 0 para el resto.
+    _pnp_skus = [normalize_to_bm_sku(x["sku"]) for x in items_with_sku if x.get("sku")]
+    _pnp_data = await token_store.get_pnp_data_for_skus(_pnp_skus)
+
     # ── FX rate: manual override → ML API → fallback 20 ──────────────────────
     usd_to_mxn: float = _manual_fx_rate if _manual_fx_rate > 0 else 0.0
     if usd_to_mxn == 0:
@@ -26271,6 +26358,8 @@ async def planning_coverage(
         retail_ref_mxn = round(retail_ph_usd * usd_to_mxn) if retail_ph_usd > 0 else 0
         recovery_pct   = round(avg_price_mxn / retail_ref_mxn * 100) if retail_ref_mxn > 0 else None
 
+        _pnp = _pnp_data.get(_bm_base) if _bm_base else None
+
         result.append({
             **item,
             "stock_bm": stock,
@@ -26284,6 +26373,9 @@ async def planning_coverage(
             "retail_ph_usd": retail_ph_usd,
             "avg_price_mxn": avg_price_mxn,
             "recovery_pct": recovery_pct,
+            "pnp_mty_available": _pnp["pnp_mty_available"] if _pnp else 0,
+            "pnp_mty_novendible": _pnp["pnp_mty_novendible"] if _pnp else 0,
+            "pnp_other_locations_qty": _pnp["pnp_other_locations_qty"] if _pnp else 0,
         })
 
     order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
