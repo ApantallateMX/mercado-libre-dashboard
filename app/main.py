@@ -20430,6 +20430,31 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         seen_skus_in_response.add(base)
         updates.append(_bulk_stock_rows_to_master_fields(base, base_rows))
 
+    # FEATURE 2026-08-21 (pedido explícito de Jovan: "Transferencias
+    # Sugeridas Entre Almacenes" -- indicador "tiene en Tijuana, no tiene
+    # vendible en CDMX/MTY", para disparar requerimiento a almacén). Segunda
+    # llamada, misma categoría/condiciones, SOLO Tijuana (LOCATIONID=
+    # 45,69,43,42, ver get_bulk_stock). Duplica el tiempo por categoría --
+    # aceptado explícitamente: prioridad es tener el dato, no la velocidad
+    # del ciclo. tj_qty NUNCA se usa para decidir venta/activación -- solo
+    # alimenta ese indicador informativo.
+    tj_rows = await bm_cli.get_bulk_stock(
+        category_id=category_id, conditions=_conditions_str, location_id="45,69,43,42"
+    )
+    _tj_by_base: dict[str, int] = {}
+    if tj_rows:
+        _tj_rows_by_base: dict[str, list] = {}
+        for row in tj_rows:
+            row_sku = (row.get("SKU") or "").upper().strip()
+            if not row_sku:
+                continue
+            base = _extract_base_sku(row_sku)
+            _tj_rows_by_base.setdefault(base, []).append(row)
+        for base, base_rows in _tj_rows_by_base.items():
+            _tj_by_base[base] = _bulk_stock_rows_to_master_fields(base, base_rows)["available_qty"]
+    for u in updates:
+        u["tj_qty"] = _tj_by_base.pop(u["sku"], 0)
+
     import aiosqlite as _aio_updcat
     import json as _json_updcat
     _now_ts = _time.time()
@@ -20438,12 +20463,12 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
             _conds_json = _json_updcat.dumps(u["conditions"])
             await db.execute(
                 """INSERT INTO bm_sku_master (
-                       sku, available_qty, reserve_qty, total_qty, category, upc,
+                       sku, available_qty, reserve_qty, total_qty, tj_qty, category, upc,
                        title, brand, model, image_url, retail_ph,
                        best_condition_sku, best_condition_qty, conditions_json,
                        verified, stock_updated_at
                    ) VALUES (
-                       :sku, :available_qty, :reserve_qty, :total_qty, :category, :upc,
+                       :sku, :available_qty, :reserve_qty, :total_qty, :tj_qty, :category, :upc,
                        :title, :brand, :model, :image_url, :retail_ph,
                        :best_condition_sku, :best_condition_qty, :conditions_json,
                        :verified, :stock_updated_at
@@ -20452,6 +20477,7 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        available_qty=excluded.available_qty,
                        reserve_qty=excluded.reserve_qty,
                        total_qty=excluded.total_qty,
+                       tj_qty=excluded.tj_qty,
                        category=COALESCE(NULLIF(excluded.category, ''), bm_sku_master.category),
                        upc=COALESCE(NULLIF(excluded.upc, ''), bm_sku_master.upc),
                        title=COALESCE(NULLIF(excluded.title, ''), bm_sku_master.title),
@@ -20495,6 +20521,20 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                 "available_qty": 0, "reserve_qty": 0, "best_condition_sku": "",
                 "conditions": [], "verified": True, "stock_updated_at": _now_ts,
             }
+        # tj_qty para SKUs con stock en Tijuana que NO aparecieron en la
+        # respuesta vendible de esta categoría (ni en `updates` ni en
+        # `_now_zero`, típicamente porque nunca se habían visto en esta
+        # categoría) -- solo toca tj_qty, nunca available_qty/category de
+        # un SKU que ya pertenece a otra categoría real.
+        for _tj_sku, _tj_qty in _tj_by_base.items():
+            await db.execute(
+                """INSERT INTO bm_sku_master (sku, tj_qty, category, stock_updated_at)
+                   VALUES (:sku, :tj_qty, :category, :stock_updated_at)
+                   ON CONFLICT(sku) DO UPDATE SET
+                       tj_qty=excluded.tj_qty,
+                       category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
+                {"sku": _tj_sku, "tj_qty": _tj_qty, "category": category_id, "stock_updated_at": _now_ts},
+            )
         await db.commit()
 
     return {
@@ -20502,6 +20542,7 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         "category_id": category_id,
         "elapsed_s": _elapsed,
         "conf_columns_rows": len(rows),
+        "tj_rows": len(tj_rows or []),
         "skus_updated": len(updates),  # antes "known_skus_updated" -- ya no filtra por conocido
         "skus_confirmed_zero": len(_now_zero),
     }
@@ -25210,6 +25251,18 @@ async def planning_transfer_suggestions():
         }
     finally:
         await client.close()
+
+
+@app.get("/api/planning/tj-only-transfer")
+async def planning_tj_only_transfer():
+    """FEATURE 2026-08-21 (pedido explícito de Jovan): productos con stock
+    en Tijuana y CERO stock vendible en CDMX/MTY -- el indicador "actúa ya"
+    para requerimiento de envío a almacén. A diferencia de
+    /api/planning/transfer-suggestions (arriba), esto es una lectura pura
+    de bm_sku_master -- no depende del prewarm por cuenta ML, siempre
+    responde con datos actuales al instante."""
+    items = await token_store.get_tj_only_transfer_candidates()
+    return {"items": items, "count": len(items)}
 
 
 async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) -> list:

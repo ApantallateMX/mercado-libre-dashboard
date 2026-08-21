@@ -2193,6 +2193,40 @@ async def get_bm_master_all_as_bulk_rows(min_qty: int = 1) -> list[dict]:
     return out
 
 
+async def get_tj_only_transfer_candidates() -> list[dict]:
+    """FEATURE 2026-08-21 (pedido explícito de Jovan: "Transferencias
+    Sugeridas Entre Almacenes" debe mostrar un indicador claro de qué
+    productos tienen stock en Tijuana y CERO stock vendible en CDMX/MTY --
+    para disparar un requerimiento de envío a almacén lo antes posible).
+
+    tj_qty se alimenta desde 2026-08-21 en _update_bm_master_for_category
+    (main.py) -- segunda llamada por categoría a Get_GlobalStock_InventoryBySKU
+    con LOCATIONID=45,69,43,42 (Tijuana). available_qty ya es CDMX+Cuautitlán+MTY
+    combinado (el vendible real, LOCATIONID=47,62,68) -- por eso "sin stock
+    vendible" es simplemente available_qty=0, sin necesitar desglose MTY vs
+    CDMX (Apantallate decide el almacén destino, no BM).
+
+    SELECT puro sobre bm_sku_master, sin llamar a BM -- instantáneo, no
+    depende del prewarm por cuenta ML/Amazon."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT sku, title, brand, model, category, tj_qty, retail_ph
+               FROM bm_sku_master
+               WHERE tj_qty > 0 AND available_qty = 0
+               ORDER BY tj_qty DESC"""
+        )
+        rows = await cur.fetchall()
+    return [
+        {
+            "sku": r["sku"], "title": r["title"], "brand": r["brand"],
+            "model": r["model"], "category": r["category"],
+            "tj_qty": r["tj_qty"], "retail_ph": r["retail_ph"],
+        }
+        for r in rows
+    ]
+
+
 async def get_categories_ordered_by_sales(days: int = 90) -> list[dict]:
     """FEATURE 2026-08-19 (pedido por Jovan, plan de migración a
     ConfColumns_Conditions_Excel por categoría): ordena las categorías BM
