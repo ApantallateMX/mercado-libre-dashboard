@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — FEAT: rediseño completo de Transferencias Sugeridas — prioridad de ventas, filtros, paginación
+
+Jovan vio la primera versión (333 filas sin paginar) y dio feedback directo:
+"entre bodegas de MTY y CDMX no debemos mover nada, solo es de TJ" +
+"ponme las ventas para saber a qué le damos prioridad" + "filtrar por
+categorías" + "usa a los expertos siempre... y sobre todo el diseñador de
+la página" (crítica explícita por no haber pasado la feature por
+`uxui-designer` antes de mostrarla).
+
+Se invocaron 2 especialistas en paralelo:
+- `uxui-designer` — diseñó tabla en escritorio + tarjetas en móvil (mismo
+  patrón responsive de `products_listings.html`), búsqueda por SKU/título,
+  filtros de categoría/prioridad, 3 modos de orden, paginación de
+  10/página. Prototipo navegable verificado antes de implementar.
+- `planning-specialist` — recomendó ventana de **12 meses** (no 90d/
+  lifetime) para medir ventas: estos SKUs llevan tiempo en 0 vendible, una
+  ventana corta subestimaría demanda real (censura por el propio quiebre).
+  Badges: alta ≥50 uds/12m, media 10-49, baja 1-9, sin_historial 0. Orden:
+  badge → units_12m desc → (tj_qty×retail_ph) desc como desempate de valor.
+
+Cambios:
+- Eliminado por completo `_suggest_transfer`, `get_zone_demand_by_sku` y
+  `/api/planning/transfer-suggestions` (el rebalanceo MTY↔CDMX) — ya no
+  aplica, "Solo en Tijuana" es el único indicador.
+- `get_tj_only_transfer_candidates()` (`token_store.py`) ahora hace JOIN
+  con `order_history` (365 días) y devuelve `units_12m`, `sales_badge`,
+  `last_sale_date` por SKU.
+- `planning.html` reescrito: tabla/tarjetas responsive, búsqueda, filtros,
+  orden, paginación, "Copiar lista" respeta el filtro activo.
+
+Verificado en producción con los 333 SKUs reales: distribución de badges
+3 alta / 23 media / 66 baja / 241 sin historial. El #1 en prioridad
+(RMTC008308, control remoto TV) tiene 6,776 uds en Tijuana **y** 103
+ventas reales en 12 meses — exactamente el tipo de priorización que Jovan
+pidió. Página `/planning` responde 200 OK post-deploy.
+
+Ver `.claude/memory/feedback_usar_agentes_especializados.md` (quinta
+reincidencia registrada) y `.claude/memory/reference_sales_priority_window_transfers.md`.
+
+---
+
 ## 2026-08-21 — FEAT: indicador "Solo en Tijuana" en Transferencias Sugeridas — tj_qty revivido
 
 Jovan pidió pulir "Transferencias Sugeridas Entre Almacenes" (Planeación)
