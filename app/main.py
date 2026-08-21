@@ -7595,45 +7595,6 @@ async def _prewarm_caches(user_id: str = None):
                 # probable error de configuración BM, no problema de venta real.
                 _drift_alerts = await token_store.get_drift_alerts(str(client.user_id), "imbalanced", min_hours=24.0)
 
-                # Transferencia sugerida entre almacenes físicos — cruza demanda por
-                # zona (de órdenes ML con ship_zone ya resuelto, ver backfill gradual)
-                # contra dónde está el stock físico (mty/cdmx/tj, ya reales con el bulk
-                # de Tijuana agregado arriba). Heurística v1: solo sugiere si el
-                # desbalance demanda-vs-stock por zona es grande (>=30 puntos
-                # porcentuales) y hay suficiente historial de demanda (>=5 unidades) —
-                # deliberadamente conservador para no sugerir con datos ruidosos/escasos.
-                _zone_demand_by_sku = await token_store.get_zone_demand_by_sku(str(client.user_id), "ml", days=60)
-
-                def _suggest_transfer(_mty, _cdmx, _tj, _demand):
-                    _stock = {"MTY": _mty, "CDMX": _cdmx, "TJ": _tj}
-                    _total_stock = _mty + _cdmx + _tj
-                    _total_demand = sum(_demand.values())
-                    if _total_stock <= 0 or _total_demand < 5:
-                        return None
-                    _gaps = {z: (_demand.get(z, 0) / _total_demand) - (_stock[z] / _total_stock) for z in _stock}
-                    _target = max(_gaps, key=_gaps.get)
-                    _source = min(_gaps, key=_gaps.get)
-                    if _target == _source or (_gaps[_target] - _gaps[_source]) < 0.30 or _stock[_source] < 2:
-                        return None
-                    _qty = min(_stock[_source], max(1, round(_stock[_source] * 0.3)))
-                    return {"from_zone": _source, "to_zone": _target, "qty": _qty}
-
-                transfer_suggestions = []
-                for _tp in bm_candidates:
-                    _t_mty = _tp.get("_bm_mty", 0) or 0
-                    _t_cdmx = _tp.get("_bm_cdmx", 0) or 0
-                    _t_tj = _tp.get("_bm_tj", 0) or 0
-                    if not (_t_mty or _t_cdmx or _t_tj):
-                        continue
-                    _t_demand = _zone_demand_by_sku.get(_tp.get("sku", ""), {})
-                    _sugg = _suggest_transfer(_t_mty, _t_cdmx, _t_tj, _t_demand)
-                    if _sugg:
-                        transfer_suggestions.append({
-                            "sku": _tp.get("sku", ""), "product_title": _tp.get("title", ""),
-                            "mty": _t_mty, "cdmx": _t_cdmx, "tj": _t_tj,
-                            "demand_by_zone": _t_demand, **_sugg,
-                        })
-
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
                 _sic_ts   = _time.time()
@@ -25227,41 +25188,25 @@ async def planning_page(request: Request):
     return templates.TemplateResponse(request, "planning.html", {**ctx, "user": user, "active": "planning"})
 
 
-@app.get("/api/planning/transfer-suggestions")
-async def planning_transfer_suggestions():
-    """Transferencias sugeridas entre almacenes (MTY/CDMX/Tijuana) -- movido
-    de Productos > Stock a Planeación (pedido explícito de Jovan 2026-08-06:
-    es una decisión de logística/distribución, no de catálogo). Reusa el
-    mismo cache que ya calcula el prewarm de Productos (_stock_issues_cache)
-    en vez de recalcular -- el cruce demanda-por-zona vs stock físico ya es
-    caro de por sí."""
-    client = await get_meli_client()
-    if not client:
-        return JSONResponse({"error": "No autenticado"}, status_code=401)
-    try:
-        key = f"stock_issues:{client.user_id}:t10"
-        entry = _stock_issues_cache.get(key)
-        if not entry:
-            return {"transfer_suggestions": [], "count": 0, "ready": False}
-        data = entry[1]
-        return {
-            "transfer_suggestions": data.get("transfer_suggestions", []),
-            "count": data.get("transfer_suggestions_count", 0),
-            "ready": True,
-        }
-    finally:
-        await client.close()
-
-
 @app.get("/api/planning/tj-only-transfer")
-async def planning_tj_only_transfer():
+async def planning_tj_only_transfer(category: str = ""):
     """FEATURE 2026-08-21 (pedido explícito de Jovan): productos con stock
     en Tijuana y CERO stock vendible en CDMX/MTY -- el indicador "actúa ya"
-    para requerimiento de envío a almacén. A diferencia de
-    /api/planning/transfer-suggestions (arriba), esto es una lectura pura
-    de bm_sku_master -- no depende del prewarm por cuenta ML, siempre
-    responde con datos actuales al instante."""
+    para requerimiento de envío a almacén. Lectura pura de bm_sku_master +
+    ventas 12 meses (order_history) -- no depende del prewarm por cuenta
+    ML, siempre responde con datos actuales al instante.
+
+    AMPLIACIÓN 2026-08-21 #2 (feedback directo de Jovan: "no debemos mover
+    nada entre MTY y CDMX, solo es de TJ" + "ponme las ventas para saber a
+    qué le damos prioridad" + "filtrar por categorías"): se eliminó por
+    completo el bloque viejo de rebalanceo por demanda MTY↔CDMX
+    (/api/planning/transfer-suggestions, _suggest_transfer,
+    get_zone_demand_by_sku) -- ya no aplica, este es el único indicador de
+    transferencias que debe existir. category filtra en memoria sobre el
+    mismo resultado (universo pequeño, no vale la pena una query aparte)."""
     items = await token_store.get_tj_only_transfer_candidates()
+    if category:
+        items = [i for i in items if i.get("category") == category]
     return {"items": items, "count": len(items)}
 
 

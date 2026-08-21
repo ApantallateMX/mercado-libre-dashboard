@@ -128,10 +128,10 @@
     <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
          onclick="toggleSection('plan-transfers')">
         <svg class="w-4 h-4 text-teal-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
         </svg>
         <h2 class="text-sm font-bold text-gray-700">Transferencias Sugeridas Entre Almacenes</h2>
-        <span class="text-xs text-gray-400">— Tijuana / CDMX / MTY</span>
+        <span class="text-xs text-gray-400">— solo Tijuana &rarr; CDMX / MTY</span>
         <span id="transfers-count-badge" class="text-xs font-bold bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full border border-teal-200"></span>
         <button onclick="event.stopPropagation(); loadTransfers()" id="btn-load-transfers"
                 class="ml-auto bg-teal-600 text-white text-xs px-3 py-1.5 rounded hover:bg-teal-700 font-semibold">
@@ -526,105 +526,235 @@ window.loadCoverage = function() {
 };
 
 // ============================================================
-// TRANSFERENCIAS SUGERIDAS ENTRE ALMACENES
-// (movido de Productos > Stock — reusa el mismo cache, no recalcula)
+// TRANSFERENCIAS SUGERIDAS ENTRE ALMACENES — "Solo en Tijuana"
 //
-// FEATURE 2026-08-21 (pedido explícito de Jovan): 2 bloques separados --
-// 1) "Solo en Tijuana" (urgente, sin stock vendible en CDMX/MTY, lectura
-//    directa de bm_sku_master, siempre al instante) y 2) el rebalanceo por
-//    demanda que ya existía (secundario, depende del prewarm por cuenta).
+// FEATURE 2026-08-21 (pedido explícito de Jovan, diseño de uxui-designer +
+// prioridad de planning-specialist): único indicador de transferencias --
+// productos con stock en Tijuana y 0 vendible en CDMX/MTY. El rebalanceo
+// MTY↔CDMX que existía antes se eliminó por completo ("no debemos mover
+// nada entre MTY y CDMX, solo es de TJ"). Tabla en escritorio, tarjetas en
+// móvil (mismo patrón responsive de products_listings.html), con búsqueda,
+// filtro de categoría/prioridad, orden y paginación de 10/página
+// (_renderPaginated, mismo helper que ya usa esa página).
 // ============================================================
-window._tjOnlyItems = [];
+var _TJ_PAGE_SIZE = 10;
+var _tjAllItems = [], _tjFiltered = [];
 
-function _renderTjOnlyBlock(items) {
-    if (!items.length) {
-        return '<div class="mb-4"><p class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">🔴 Solo en Tijuana — sin stock vendible</p>' +
-            '<p class="text-xs text-gray-400 py-3">Ningún producto en este estado ahora mismo.</p></div>';
-    }
-    var html = '<div class="mb-5">' +
-        '<div class="flex items-center justify-between mb-2">' +
-        '<p class="text-xs font-bold text-red-700 uppercase tracking-wide">🔴 Solo en Tijuana — sin stock vendible (' + items.length + ')</p>' +
-        '<button onclick="copyTjOnlyList()" id="btn-copy-tj-list" class="text-xs px-2.5 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium">Copiar lista</button>' +
-        '</div>' +
-        '<div class="bg-red-50 border border-red-200 rounded-lg px-4 py-2 mb-3 text-xs text-red-800">' +
-        'Tienen stock físico en Tijuana pero 0 unidades vendibles en CDMX/MTY — no se pueden vender en línea hasta transferirse. Nosotros decidimos el almacén destino.' +
-        '</div><div class="space-y-2">';
-    items.forEach(function(t) {
-        html += '<div class="bg-white rounded-lg shadow p-3 border-l-4 border-red-400 flex items-center justify-between gap-2 flex-wrap">' +
-            '<div>' +
-            '<p class="text-xs font-medium text-gray-800">' + (t.title || '(sin título)').substring(0, 70) + '</p>' +
-            '<p class="font-mono text-[11px] text-gray-400">' + t.sku + (t.category ? ' &middot; ' + t.category : '') + '</p>' +
-            '</div>' +
-            '<div class="text-xs font-semibold text-red-700 bg-red-100 px-3 py-1.5 rounded-full whitespace-nowrap">' +
-            t.tj_qty + ' uds en Tijuana' +
-            '</div></div>';
-    });
-    html += '</div></div>';
-    return html;
+function _tjEscHtml(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function _tjFmtDate(iso) {
+    if (!iso) return null;
+    return new Date(iso + 'T00:00:00').toLocaleDateString('es-MX', {day:'2-digit', month:'short'});
 }
 
+var TJ_PRIORITY_CFG = {
+    alta:          { label: 'Alta demanda',   cls: 'bg-red-100 text-red-700 border-red-200',       border: 'border-red-400' },
+    media:         { label: 'Demanda media',  cls: 'bg-amber-100 text-amber-700 border-amber-200', border: 'border-amber-400' },
+    baja:          { label: 'Demanda baja',   cls: 'bg-blue-100 text-blue-700 border-blue-200',    border: 'border-blue-400' },
+    sin_historial: { label: 'Sin ventas',     cls: 'bg-gray-100 text-gray-500 border-gray-200',    border: 'border-gray-300' },
+};
+var _TJ_PRIORITY_RANK = {alta: 0, media: 1, baja: 2, sin_historial: 3};
+
+function _tjBadgeHtml(t) {
+    var cfg = TJ_PRIORITY_CFG[t.sales_badge] || TJ_PRIORITY_CFG.sin_historial;
+    return '<span class="inline-flex items-center text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ' + cfg.cls + '">' + cfg.label + '</span>';
+}
+function _tjSalesLine(t) {
+    if (t.sales_badge === 'sin_historial') return '';
+    var last = _tjFmtDate(t.last_sale_date);
+    return '<p class="text-[11px] text-gray-400 mt-1">' + t.units_12m + ' uds/12m' + (last ? ' &middot; últ. ' + last : '') + '</p>';
+}
+
+function _tjRowHtml(t) {
+    return '<tr class="hover:bg-gray-50">' +
+        '<td class="py-3 px-4 max-w-[320px]">' +
+            '<p class="text-xs font-medium text-gray-800 truncate">' + _tjEscHtml(t.title || '(sin título)').slice(0, 70) + '</p>' +
+            '<p class="font-mono text-[11px] text-gray-400">' + t.sku + '</p>' +
+        '</td>' +
+        '<td class="py-3 px-3 text-xs text-gray-500">' + _tjEscHtml(t.category || '—') + '</td>' +
+        '<td class="py-3 px-3">' + _tjBadgeHtml(t) + _tjSalesLine(t) + '</td>' +
+        '<td class="py-3 px-3 text-right"><span class="text-sm font-bold text-gray-800">' + t.tj_qty + '</span> <span class="text-[11px] text-gray-400">uds</span></td>' +
+        '<td class="py-3 px-3 text-right text-xs text-gray-500">' + (t.retail_ph ? '$' + Number(t.retail_ph).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' USD' : '—') + '</td>' +
+    '</tr>';
+}
+function _tjCardHtml(t) {
+    var cfg = TJ_PRIORITY_CFG[t.sales_badge] || TJ_PRIORITY_CFG.sin_historial;
+    return '<div class="bg-white rounded-lg shadow p-3 border-l-4 ' + cfg.border + '">' +
+        '<div class="flex items-start justify-between gap-2">' +
+            '<div class="min-w-0">' +
+                '<p class="text-xs font-medium text-gray-800 truncate">' + _tjEscHtml(t.title || '(sin título)').slice(0, 70) + '</p>' +
+                '<p class="font-mono text-[11px] text-gray-400">' + t.sku + ' &middot; ' + _tjEscHtml(t.category || '—') + '</p>' +
+            '</div>' +
+            '<span class="shrink-0 text-sm font-bold text-gray-800 bg-gray-100 px-2 py-1 rounded whitespace-nowrap">' + t.tj_qty + ' uds</span>' +
+        '</div>' +
+        '<div class="flex items-center justify-between mt-2">' + _tjBadgeHtml(t) +
+            '<span class="text-[11px] text-gray-400">' + (t.sales_badge !== 'sin_historial' ? t.units_12m + ' uds/12m' : '') + '</span>' +
+        '</div></div>';
+}
+
+function _tjPopulateCategoryFilter() {
+    var sel = document.getElementById('tj-cat');
+    if (!sel) return;
+    var current = sel.value;
+    var cats = Array.from(new Set(_tjAllItems.map(function(t){ return t.category; }).filter(Boolean))).sort();
+    sel.innerHTML = '<option value="">Todas las categorías</option>' +
+        cats.map(function(c){ return '<option value="' + _tjEscHtml(c) + '">' + _tjEscHtml(c) + '</option>'; }).join('');
+    if (current && cats.indexOf(current) >= 0) sel.value = current;
+}
+
+function _tjRenderPage(page) {
+    var rows = _tjFiltered.map(_tjRowHtml);
+    var cards = _tjFiltered.map(_tjCardHtml);
+    if (!rows.length) {
+        document.getElementById('tj-tbody').innerHTML = '<tr><td colspan="5" class="text-center text-gray-400 text-sm py-8">Ningún producto coincide con estos filtros.</td></tr>';
+        document.getElementById('tj-cards').innerHTML = '<p class="text-center text-gray-400 text-sm py-8">Ningún producto coincide con estos filtros.</p>';
+        document.getElementById('tj-pag').innerHTML = '';
+        return;
+    }
+    var total = rows.length, totalPages = Math.max(1, Math.ceil(total / _TJ_PAGE_SIZE));
+    var p = Math.min(Math.max(1, page), totalPages);
+    var start = (p - 1) * _TJ_PAGE_SIZE, end = Math.min(start + _TJ_PAGE_SIZE, total);
+    document.getElementById('tj-tbody').innerHTML = rows.slice(start, end).join('');
+    document.getElementById('tj-cards').innerHTML = cards.slice(start, end).join('');
+    var pag = document.getElementById('tj-pag');
+    if (total <= _TJ_PAGE_SIZE) { pag.innerHTML = ''; return; }
+    pag.innerHTML =
+        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">' +
+        '<span class="text-xs text-gray-400">' + (start + 1) + '–' + end + ' de ' + total + '</span>' +
+        '<div class="flex items-center gap-1">' +
+        '<button onclick="_tjGoPage(' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+        '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
+        '<button onclick="_tjGoPage(' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+        '</div></div>';
+}
+window._tjGoPage = function(p) { _tjRenderPage(p); };
+
+window._tjFilter = function() {
+    var q = (document.getElementById('tj-search').value || '').toLowerCase().trim();
+    var cat = document.getElementById('tj-cat').value;
+    var pri = document.getElementById('tj-priority').value;
+    var sort = document.getElementById('tj-sort').value;
+
+    var items = _tjAllItems.filter(function(t) {
+        if (cat && t.category !== cat) return false;
+        if (pri && t.sales_badge !== pri) return false;
+        if (q && t.sku.toLowerCase().indexOf(q) < 0 && (t.title || '').toLowerCase().indexOf(q) < 0) return false;
+        return true;
+    });
+
+    items.sort(function(a, b) {
+        if (sort === 'tj_desc') return b.tj_qty - a.tj_qty;
+        if (sort === 'sales_desc') return b.units_12m - a.units_12m;
+        if (sort === 'name_asc') return (a.title || '').localeCompare(b.title || '');
+        var rd = _TJ_PRIORITY_RANK[a.sales_badge] - _TJ_PRIORITY_RANK[b.sales_badge];
+        if (rd !== 0) return rd;
+        var sd = b.units_12m - a.units_12m;
+        if (sd !== 0) return sd;
+        return (b.tj_qty * (b.retail_ph || 0)) - (a.tj_qty * (a.retail_ph || 0));
+    });
+
+    _tjFiltered = items;
+    var countEl = document.getElementById('tj-result-count');
+    if (countEl) countEl.textContent = items.length + ' de ' + _tjAllItems.length + ' productos';
+    _tjRenderPage(1);
+};
+
+var _tjDebounceTimer = null;
+window._tjDebouncedFilter = function() {
+    clearTimeout(_tjDebounceTimer);
+    _tjDebounceTimer = setTimeout(window._tjFilter, 180);
+};
+
+window._tjResetFilters = function() {
+    document.getElementById('tj-search').value = '';
+    document.getElementById('tj-cat').value = '';
+    document.getElementById('tj-priority').value = '';
+    document.getElementById('tj-sort').value = 'priority';
+    window._tjFilter();
+};
+
 window.copyTjOnlyList = function() {
-    var items = window._tjOnlyItems || [];
+    var items = _tjFiltered.length ? _tjFiltered : _tjAllItems;
     if (!items.length) return;
-    var lines = ['Requerimiento de transferencia -- solo en Tijuana, sin stock vendible', ''];
+    var lines = ['Requerimiento de transferencia -- Tijuana -> CDMX/MTY (sin stock vendible)', ''];
+    lines.push(['SKU', 'Uds. TJ', 'Ventas 12m', 'Categoría', 'Producto'].join('\t'));
     items.forEach(function(t) {
-        lines.push(t.sku + '\t' + t.tj_qty + ' uds\t' + (t.title || ''));
+        lines.push([t.sku, t.tj_qty + ' uds', t.units_12m, (t.category || ''), (t.title || '')].join('\t'));
     });
     var text = lines.join('\n');
     var btn = document.getElementById('btn-copy-tj-list');
     navigator.clipboard.writeText(text).then(function() {
-        if (btn) { var _orig = btn.textContent; btn.textContent = '¡Copiado!'; setTimeout(function(){ btn.textContent = _orig; }, 1500); }
+        if (btn) { var orig = btn.textContent; btn.textContent = '¡Copiado! (' + items.length + ')'; setTimeout(function(){ btn.textContent = orig; }, 1500); }
     }).catch(function() {
         if (btn) btn.textContent = 'Error al copiar';
     });
 };
 
-function _renderDemandTransferBlock(d) {
-    var items = d.transfer_suggestions || [];
-    if (!d.ready) {
-        return '<div><p class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">🔵 Rebalanceo sugerido por demanda</p>' +
-            '<p class="text-center text-gray-400 text-sm py-4">Los datos todavía se están calculando (corre junto con Productos &gt; Stock) — vuelve a intentar en unos minutos.</p></div>';
-    }
-    if (!items.length) {
-        return '<div><p class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">🔵 Rebalanceo sugerido por demanda</p>' +
-            '<p class="text-center text-gray-400 text-sm py-4">No hay transferencias sugeridas por ahora — requiere suficiente historial de envíos con zona resuelta.</p></div>';
-    }
-    var html = '<div><p class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">🔵 Rebalanceo sugerido por demanda (' + items.length + ')</p>' +
-        '<div class="bg-teal-50 border border-teal-200 rounded-lg px-4 py-2 mb-3 text-xs text-teal-800">' +
-        'Cruza dónde se vende más (envíos recientes por zona) contra dónde está el stock físico. Solo lectura — el movimiento real se hace en BinManager.' +
-        '</div><div class="space-y-2">';
-    items.forEach(function(t) {
-        html += '<div class="bg-white rounded-lg shadow p-3 border-l-4 border-teal-400 flex items-center justify-between gap-2 flex-wrap">' +
-            '<div>' +
-            '<p class="text-xs font-medium text-gray-800">' + (t.product_title || '').substring(0, 70) + '</p>' +
-            '<p class="font-mono text-[11px] text-gray-400">' + t.sku + '</p>' +
-            '<p class="text-[11px] text-gray-500 mt-0.5">Stock: MTY ' + t.mty + ' &middot; CDMX ' + t.cdmx + ' &middot; Tijuana ' + t.tj + '</p>' +
-            '</div>' +
-            '<div class="text-xs font-semibold text-teal-700 bg-teal-100 px-3 py-1.5 rounded-full whitespace-nowrap">' +
-            'Mover ' + t.qty + ' de ' + t.from_zone + ' → ' + t.to_zone +
-            '</div></div>';
-    });
-    html += '</div></div>';
-    return html;
-}
+var TJ_SECTION_HTML =
+    '<div class="mb-4 flex items-start justify-between gap-3 flex-wrap">' +
+        '<div class="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-800 flex-1 min-w-[320px]">' +
+        'Tienen stock físico en Tijuana pero <strong>0 unidades vendibles</strong> en CDMX/MTY — invisibles para venta en línea ' +
+        'hasta transferirse. Solo Tijuana &rarr; CDMX/MTY. Ordenado por prioridad de venta (últimos 12 meses).' +
+        '</div>' +
+        '<button onclick="copyTjOnlyList()" id="btn-copy-tj-list" ' +
+        'class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 font-semibold whitespace-nowrap">Copiar lista</button>' +
+    '</div>' +
+    '<div class="flex flex-wrap items-center gap-2 mb-4">' +
+        '<input id="tj-search" type="text" placeholder="Buscar SKU o producto..." ' +
+        'class="text-xs border border-gray-200 rounded-lg px-3 py-1.5 w-52 focus:outline-none focus:border-teal-400" oninput="_tjDebouncedFilter()">' +
+        '<select id="tj-cat" onchange="_tjFilter()" class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-teal-400 max-w-[200px]">' +
+        '<option value="">Todas las categorías</option></select>' +
+        '<select id="tj-priority" onchange="_tjFilter()" class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-teal-400">' +
+        '<option value="">Toda prioridad</option>' +
+        '<option value="alta">Alta demanda</option>' +
+        '<option value="media">Demanda media</option>' +
+        '<option value="baja">Demanda baja</option>' +
+        '<option value="sin_historial">Sin ventas</option>' +
+        '</select>' +
+        '<select id="tj-sort" onchange="_tjFilter()" class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-teal-400">' +
+        '<option value="priority">Ordenar: prioridad (recomendado)</option>' +
+        '<option value="tj_desc">Unidades en TJ &darr;</option>' +
+        '<option value="sales_desc">Ventas 12m &darr;</option>' +
+        '<option value="name_asc">Producto A&rarr;Z</option>' +
+        '</select>' +
+        '<button onclick="_tjResetFilters()" class="text-xs text-gray-400 hover:text-gray-600 underline">Limpiar filtros</button>' +
+        '<span id="tj-result-count" class="text-xs text-gray-400 ml-auto"></span>' +
+    '</div>' +
+    '<div id="tj-cards" class="md:hidden space-y-2"></div>' +
+    '<div class="hidden md:block overflow-x-auto">' +
+        '<table class="w-full text-sm"><thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
+        '<th class="py-3 px-4 font-semibold w-[34%]">Producto</th>' +
+        '<th class="py-3 px-3 font-semibold">Categoría</th>' +
+        '<th class="py-3 px-3 font-semibold">Ventas / Prioridad</th>' +
+        '<th class="py-3 px-3 text-right font-semibold">Uds. en TJ</th>' +
+        '<th class="py-3 px-3 text-right font-semibold">Costo ref.</th>' +
+        '</tr></thead><tbody id="tj-tbody" class="divide-y divide-gray-50"></tbody></table>' +
+    '</div>' +
+    '<div id="tj-pag"></div>';
 
 window.loadTransfers = function() {
     _openSection('plan-transfers');
     var el = document.getElementById('plan-transfers-content');
     el.innerHTML = _spinner('Cargando transferencias sugeridas...');
 
-    Promise.all([
-        fetch('/api/planning/tj-only-transfer').then(function(r){ return r.json(); }).catch(function(){ return {items: []}; }),
-        fetch('/api/planning/transfer-suggestions').then(function(r){ return r.json(); }).catch(function(){ return {ready: false, transfer_suggestions: []}; }),
-    ]).then(function(results) {
-        var tjData = results[0], demandData = results[1];
-        window._tjOnlyItems = tjData.items || [];
-        var badge = document.getElementById('transfers-count-badge');
-        if (badge) badge.textContent = window._tjOnlyItems.length ? window._tjOnlyItems.length : '';
-        el.innerHTML = _renderTjOnlyBlock(window._tjOnlyItems) + _renderDemandTransferBlock(demandData);
-    }).catch(function(e){
-        el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
-    });
+    fetch('/api/planning/tj-only-transfer')
+        .then(function(r){ return r.json(); })
+        .then(function(data) {
+            _tjAllItems = data.items || [];
+            var badge = document.getElementById('transfers-count-badge');
+            if (badge) badge.textContent = _tjAllItems.length ? _tjAllItems.length : '';
+            if (!_tjAllItems.length) {
+                el.innerHTML = '<p class="text-center text-gray-400 text-sm py-6">Ningún producto en este estado ahora mismo.</p>';
+                return;
+            }
+            el.innerHTML = TJ_SECTION_HTML;
+            _tjPopulateCategoryFilter();
+            window._tjFilter();
+        })
+        .catch(function(e){
+            el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
 };
 
 var STATUS_CFG = {

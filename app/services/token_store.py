@@ -2206,25 +2206,61 @@ async def get_tj_only_transfer_candidates() -> list[dict]:
     vendible" es simplemente available_qty=0, sin necesitar desglose MTY vs
     CDMX (Apantallate decide el almacén destino, no BM).
 
-    SELECT puro sobre bm_sku_master, sin llamar a BM -- instantáneo, no
-    depende del prewarm por cuenta ML/Amazon."""
+    AMPLIACIÓN 2026-08-21 #2 (Jovan: "ponme las ventas para saber a qué le
+    damos prioridad" -- recomendación de planning-specialist aplicada tal
+    cual): agrega units_12m (ventas reales de los últimos 365 días,
+    ML+Amazon combinado vía order_history) y un badge de prioridad. Ventana
+    de 12 meses (no 90d/lifetime) porque estos SKUs llevan tiempo en 0
+    vendible -- una ventana corta mediría "cuánto stock tuvimos", no
+    demanda real, y penalizaría injustamente a un SKU que vendía bien antes
+    de quedarse sin stock. Orden: badge (alta→media→baja→sin historial),
+    dentro de cada badge por units_12m descendente, empate por
+    tj_qty*retail_ph descendente (valor total desbloqueado)."""
+    from datetime import datetime as _dt_tj, timedelta as _td_tj
+    _cutoff = (_dt_tj.utcnow() - _td_tj(days=365)).strftime("%Y-%m-%d")
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            """SELECT sku, title, brand, model, category, tj_qty, retail_ph
-               FROM bm_sku_master
-               WHERE tj_qty > 0 AND available_qty = 0
-               ORDER BY tj_qty DESC"""
+            """SELECT bsm.sku, bsm.title, bsm.brand, bsm.model, bsm.category,
+                      bsm.tj_qty, bsm.retail_ph, COALESCE(s.units_12m, 0) AS units_12m,
+                      s.last_sale_date
+               FROM bm_sku_master bsm
+               LEFT JOIN (
+                   SELECT sku, SUM(quantity) AS units_12m, MAX(order_date) AS last_sale_date
+                   FROM order_history
+                   WHERE order_date >= ?
+                     AND LOWER(status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
+                   GROUP BY sku
+               ) s ON s.sku = bsm.sku
+               WHERE bsm.tj_qty > 0 AND bsm.available_qty = 0""",
+            (_cutoff,),
         )
         rows = await cur.fetchall()
-    return [
+
+    def _badge(units: int) -> str:
+        if units >= 50:
+            return "alta"
+        if units >= 10:
+            return "media"
+        if units >= 1:
+            return "baja"
+        return "sin_historial"
+
+    _badge_rank = {"alta": 0, "media": 1, "baja": 2, "sin_historial": 3}
+    items = [
         {
             "sku": r["sku"], "title": r["title"], "brand": r["brand"],
             "model": r["model"], "category": r["category"],
             "tj_qty": r["tj_qty"], "retail_ph": r["retail_ph"],
+            "units_12m": r["units_12m"], "sales_badge": _badge(r["units_12m"]),
+            "last_sale_date": r["last_sale_date"],
         }
         for r in rows
     ]
+    items.sort(key=lambda i: (
+        _badge_rank[i["sales_badge"]], -i["units_12m"], -(i["tj_qty"] * (i["retail_ph"] or 0)),
+    ))
+    return items
 
 
 async def get_categories_ordered_by_sales(days: int = 90) -> list[dict]:
@@ -5732,24 +5768,6 @@ async def get_zone_demand(account_id: str, platform: str = "ml", days: int = 60)
             (account_id, platform, cutoff),
         )).fetchall()
     return {r[0]: r[1] for r in rows if r[0]}
-
-
-async def get_zone_demand_by_sku(account_id: str, platform: str = "ml", days: int = 60) -> dict:
-    """Retorna {sku: {zone: units}} — para decidir, SKU por SKU, en qué zona
-    se vende más rápido (insumo de la sugerencia de transferencia)."""
-    from datetime import datetime as _dt, timedelta as _td
-    cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        rows = await (await db.execute(
-            """SELECT sku, ship_zone, SUM(quantity) FROM order_history
-               WHERE account_id = ? AND platform = ? AND ship_zone != '' AND sku != '' AND order_date >= ?
-               GROUP BY sku, ship_zone""",
-            (account_id, platform, cutoff),
-        )).fetchall()
-    result: dict = {}
-    for sku, zone, units in rows:
-        result.setdefault(sku, {})[zone] = units
-    return result
 
 
 # Statuses de cancelación que disparan reversa de supplier_debt_ledger.
