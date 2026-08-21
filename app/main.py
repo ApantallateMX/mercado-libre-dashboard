@@ -18755,10 +18755,14 @@ async def diag_raw_category_rows(token: str = "", category_id: str = "", sku: st
         return JSONResponse({"error": "category_id requerido"}, status_code=400)
     from app.services.binmanager_client import get_shared_bm as _gsb_rawcat
     bm_cli = await _gsb_rawcat()
-    # FIX 2026-08-20 (Jovan, caso real Fan Heater/SNFH000004): ICB/ICC ya NO
-    # se restringen a "Televisions" -- hay productos de otras categorías con
-    # stock vendible real solo en esas condiciones. Pedir siempre las 6.
-    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW"
+    # REVERTIDO 2026-08-21 (ver _update_bm_master_for_category -- mismo caso
+    # real SNFN000095/"FAN REPAIR"): ICB/ICC vuelven a restringirse a
+    # "Televisions" únicamente. Este diag debe reflejar EXACTAMENTE las
+    # condiciones que el loop real usa, no una versión distinta.
+    _conditions_str = (
+        "GRA,GRB,GRC,ICB,ICC,NEW" if category_id.strip() == "Televisions"
+        else "GRA,GRB,GRC,NEW"
+    )
     _t0 = _time.time()
     rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions=_conditions_str)
     _elapsed = round(_time.time() - _t0, 1)
@@ -20347,18 +20351,26 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     los loops automáticos (_conf_columns_top_categories_loop/_longtail_loop)
     -- una sola implementación, sin duplicar la lógica de escritura.
 
-    FIX 2026-08-20 (Jovan, caso real Fan Heater/SNFH000004): ICB/ICC ya NO
-    se restringen a category_id=="Televisions". Antes, un SKU con su único
-    stock vendible bajo ICB en una categoría no-TV nunca aparecía en la
-    respuesta (pedíamos solo GRA/GRB/GRC/NEW) -- eso hacía que la categoría
-    completa se viera como "0 filas" y se confundiera con un fallo/bloqueo
-    de BM, cuando en realidad el SKU sí existe y sí tiene stock, solo que
-    bajo una condición que nunca preguntábamos. Pedir siempre las 6
-    condiciones es más seguro: nunca deja de encontrar un SKU con stock
-    real en ICB/ICC, sea TV o no, y no trae nada de más si el producto no
-    usa esas condiciones."""
+    REVERTIDO 2026-08-21 (Jovan, caso real SNFN000095 "Ventilador de Torre
+    Vornado"): el FIX 2026-08-20 de abajo (pedir siempre las 6 condiciones,
+    ICB/ICC incluidas, para toda categoría) fue un error real -- para esta
+    categoría ("Fans") esas 332 unidades traídas por ICB/ICC estaban
+    etiquetadas "FAN REPAIR" en BM (unidades en reparación, NO vendibles),
+    e igual se contaron como AvailableQTY, inflando la recomendación de
+    "Activar" a niveles falsos. La regla de negocio real (HARD RULE en
+    CLAUDE.md, nunca debió tocarse sin dato que la contradijera de verdad):
+    ICB/ICC representan grados de reventa válidos SOLO para televisores;
+    para todo lo demás son condiciones de reparación/incompleto que no son
+    stock vendible. El caso Fan Heater/SNFH000004 que motivó el fix de
+    ayer se queda sin ICB/ICC de nuevo -- si su categoría vuelve a dar
+    "0 filas", el mecanismo de racha de confirmación (_bm_category_zero_confirm_streak)
+    ya lo acepta como 0 real tras 2 lecturas vacías seguidas, en vez de
+    tratarlo como bloqueo."""
     _t0 = _time.time()
-    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW"
+    _conditions_str = (
+        "GRA,GRB,GRC,ICB,ICC,NEW" if category_id.strip() == "Televisions"
+        else "GRA,GRB,GRC,NEW"
+    )
     rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions=_conditions_str)
     _elapsed = round(_time.time() - _t0, 1)
     if rows is None:
