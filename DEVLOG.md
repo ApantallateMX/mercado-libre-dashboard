@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — FEAT: indicador PNP (MTY) en Cobertura de Stock — solo Televisions
+
+Jovan pidió priorizar qué productos con alta demanda meter primero a la
+línea de proceso cuando tienen stock en condición PNP ("Plug and Play" —
+unidades que esperan prueba de encendido antes de su grado final GRA/GRB/
+GRC). Aclaró: PNP solo se procesa en MTY (Tijuana solo reabastece con
+producto YA terminado, nunca debería tener PNP).
+
+Investigación previa con `binmanager-specialist` encontró una discrepancia
+real entre 2 fuentes de datos PNP para el mismo SKU (91 vs 4 uds) y ningún
+endpoint HTTP confirmado detrás de la herramienta MCP "workcenter" usada
+para investigar. Jovan mismo resolvió el bloqueo: capturó con DevTools la
+llamada real de la UI de BM buscando SNTV008001 con `CONDITION=PNP` y
+encontró que es el **mismo endpoint que ya usamos** (`Get_GlobalStock_
+InventoryBySKU`, el de `tj_qty`) — trae `AvailableQTY` (4) y `NoVendibleQty`
+(379, el "Not Sellable" que BM muestra en su UI), sin necesitar ningún
+endpoint nuevo ni preguntarle a Alberto.
+
+Implementado:
+- `_update_bm_master_for_category`: 2 llamadas extra SOLO para
+  category="Televisions" — `CONDITION=PNP LOCATIONID=68` (MTY, la
+  cantidad real para priorizar proceso) y `CONDITION=PNP
+  LOCATIONID=47,62,45,69,43,42` (CDMX+Tijuana combinado, para detectar la
+  anomalía real de PNP fuera de MTY).
+- 3 columnas nuevas en `bm_sku_master`: `pnp_mty_available`,
+  `pnp_mty_novendible`, `pnp_other_locations_qty` — 0 para cualquier
+  categoría que no sea Televisions.
+- `/api/planning/coverage` agrega estos 3 campos por SKU.
+- `planning.html`: columna "PNP (MTY)" en Cobertura (mismos términos que
+  BM: Disponible / No Vendible) + badge "⚠ PNP fuera MTY" cuando aplica.
+
+Verificado en producción con datos reales: 13/50 productos del top de
+demanda tienen PNP real en MTY (ej. SNTV001764: 1 disponible, 145 no
+vendible/necesita proceso). 149 SKUs de TV con PNP en total, 700 unidades
+encontradas fuera de MTY (anomalía real — Jovan la va a cuestionar
+directo con producción).
+
+---
+
 ## 2026-08-21 — FIX CRÍTICO: "Error al calcular stock" (UnboundLocalError, no timeout real)
 
 Jovan reportó con captura real de producción: cuenta BLOWTECHNOLOGIES,
