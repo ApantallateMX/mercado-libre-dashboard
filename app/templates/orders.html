@@ -392,7 +392,7 @@
               <th class="px-3 py-3 text-left">Título</th>
               <th class="px-3 py-3 text-left whitespace-nowrap">Cuenta</th>
               <th class="px-3 py-3 text-right whitespace-nowrap">Cant.</th>
-              <th class="px-3 py-3 text-right whitespace-nowrap">Disp. BM / Precio</th>
+              <th class="px-3 py-3 text-right whitespace-nowrap" title="Disponible BM / Reservado / Precio de referencia">Disp. BM / Res / Precio</th>
               <th class="px-3 py-3 text-left">Sugerencia</th>
               <th class="px-3 py-3 text-center whitespace-nowrap">Acciones</th>
             </tr>
@@ -1342,11 +1342,11 @@ function alertasLoadData() {
                     : '<span class="' + (row.available_qty_at_check <= 0 ? 'text-red-600 font-semibold' : '') + '">' + row.available_qty_at_check + '</span>';
                 // FEATURE 2026-08-21 (pedido de Jovan): BM reserva la unidad al
                 // entrar una orden y baja Disponible a 0 -- eso NO es "sin stock
-                // real" si hay reserva. Mostrar el número crudo, sin decidir por
-                // el usuario si la alerta/sugerencia sigue aplicando o no.
-                var reserveLabel = (row.reserve_qty || 0) > 0
-                    ? '<div class="text-amber-600 whitespace-nowrap" style="font-size:10px" title="BM reservó esta cantidad -- el 0 disponible puede ser por esta reserva, no por falta de stock real">reservado ' + row.reserve_qty + '</div>'
-                    : '';
+                // real" si hay reserva. Mostrar el número crudo SIEMPRE (aunque
+                // sea 0) -- ocultarlo solo cuando es 0 generaba confusión ("¿no
+                // existe el dato o de verdad es 0?"), mismo criterio que
+                // Tijuana/PNP: el número real siempre visible, la persona decide.
+                var reserveLabel = '<div class="' + ((row.reserve_qty || 0) > 0 ? 'text-amber-600' : 'text-gray-400') + ' whitespace-nowrap" style="font-size:10px" title="BM reservó esta cantidad -- el 0 disponible puede ser por esta reserva, no por falta de stock real">Res: ' + (row.reserve_qty || 0) + '</div>';
                 var origPriceLabel = row.retail_ph ? ('$' + Math.round(row.retail_ph) + ' USD') : '';
                 var avail = availNum + reserveLabel + (origPriceLabel ? '<div class="text-gray-400 whitespace-nowrap" style="font-size:10px">' + origPriceLabel + '</div>' : '');
                 var detectedAgo = Math.round((Date.now() / 1000 - row.detected_at) / 60);
