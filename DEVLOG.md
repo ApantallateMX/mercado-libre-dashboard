@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — DECISION: loop longtail de categorías bajado de 4h a 2h de rezago máximo
+
+Continuación de la entrada de arriba (investigación de "BM Disponible"
+inflado por staleness, no bug de cálculo). Jovan decidió bajar el
+margen de rezago máximo de categorías de cola larga de 4h a 2h
+(`_CONF_COLUMNS_LONGTAIL_INTERVAL_S`, `main.py`) para reducir la ventana
+en la que un cambio real de reserva en BM puede quedar desactualizado en
+`bm_sku_master`. Las top-5 categorías (15 min) no cambian.
+
+Full-resync manual de las 59 categorías corrido en producción antes de
+este cambio (mismo día) para corregir de inmediato todo lo que estaba
+desactualizado, sin esperar al primer ciclo con el nuevo intervalo.
+
+---
+
 ## 2026-08-20 — INVESTIGACIÓN: "BM Disponible" inflado en Activar (SNWM000001: 3899 vs 3383 real) — NO es bug de agregación, es staleness normal de categorías longtail
 
 Jovan reportó con capturas (dashboard vs BM UI real) que "Activar" mostraba

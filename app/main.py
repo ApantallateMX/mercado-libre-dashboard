@@ -7036,7 +7036,7 @@ async def _bm_master_sync_loop():
 # ya no hace falta. Bajada a 0.
 _CONF_COLUMNS_TOP_N = 5
 _CONF_COLUMNS_TOP_INTERVAL_S = 900       # 15 min
-_CONF_COLUMNS_LONGTAIL_INTERVAL_S = 4 * 3600  # 4 horas
+_CONF_COLUMNS_LONGTAIL_INTERVAL_S = 2 * 3600  # 2 horas (bajado de 4h 2026-08-20 -- Jovan: "teniamos errores con la reserva" por rezago de hasta 4h en categorías de cola larga)
 _CONF_COLUMNS_DELAY_BETWEEN_S = 0
 
 # FIX 2026-08-20 (directiva explícita de Jovan tras el incidente de datos
@@ -20570,7 +20570,7 @@ async def diag_bm_category_loop_status(token: str = ""):
     ver _bm_top_category_empty_streak / _bm_category_loop_halt_reason.
     También expone progreso EN VIVO (categoría corriendo ahora + cuánto
     lleva) e historial reciente con tiempo por categoría de ambos loops
-    (top-5 cada 15 min, longtail cada 4h) -- pedido explícito de Jovan
+    (top-5 cada 15 min, longtail cada 2h) -- pedido explícito de Jovan
     para ver qué categoría va corriendo y el tiempo real de cada una."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
