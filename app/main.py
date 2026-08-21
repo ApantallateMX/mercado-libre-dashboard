@@ -20361,6 +20361,31 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     # categoría = 0" de más abajo zeree TODOS los SKUs conocidos de esta
     # categoría, correctamente.
     if not rows:
+        # FIX CRÍTICO 2026-08-21 (incidente real: sesión BM compartida se
+        # invalidó del lado del servidor a las 20:03 sin que get_shared_bm()
+        # lo detectara -- HTTP 200 con lista vacía, no un 401/redirect que
+        # dispare _session_expired(). Las 5 categorías top-5 fallaron
+        # SIMULTÁNEAMENTE en ~0.2-0.3s (vs 3-7s de una consulta real
+        # procesada) durante 2 ciclos seguidos, y la racha de confirmación
+        # -- diseñada para bloqueos reales de BM -- confirmó en falso el 0
+        # para ~2,590 SKUs reales (SHIL000522: 1,201 uds reales vs 0
+        # confirmado; SNTV007241: 59 disp/54 reservado reales vs 0/0
+        # confirmado, verificado por Jovan contra la UI real de BM).
+        # Una respuesta vacía en <1.5s es la firma de esta falla -- una
+        # categoría real (cientos de SKUs) siempre tarda varios segundos
+        # en procesarse de verdad. Si se detecta, se fuerza un re-login
+        # del cliente compartido y NO cuenta hacia la racha -- evita que
+        # el mismo problema de sesión se confirme como "0 real" de nuevo.
+        if _elapsed < 1.5:
+            from app.services import binmanager_client as _bmc_relogin
+            if _bmc_relogin._shared_bm is not None:
+                _bmc_relogin._shared_bm._logged_in = False
+            return {
+                "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
+                "error": f"Get_GlobalStock_InventoryBySKU devolvió 0 filas en {_elapsed}s -- "
+                         f"demasiado rápido para ser una consulta real, sesión BM forzada a re-login, "
+                         f"no cuenta hacia la racha de confirmación",
+            }
         _streak = _bm_category_zero_confirm_streak.get(category_id, 0) + 1
         _bm_category_zero_confirm_streak[category_id] = _streak
         if _streak < _BM_CATEGORY_ZERO_CONFIRM_LIMIT:
