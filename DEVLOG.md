@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — FIX: badge "Sync Stock" (794m) crecía sin parar — fuente muerta
+
+Jovan reportó el nav tab "Sync Stock" con badge rojo "794m" (minutos).
+Causa raíz: ese badge (`bm-cache-age`, `base.html:136`) viene de
+`bulk_age_s` en `/api/stock/prewarm-status`, calculado antes a partir de
+`_bm_bulk_gr_cache`/`_bm_bulk_all_cache`. Esos 2 caches dejaron de
+repoblarse en vivo desde el fix del 2026-08-20 ("todo debe apuntar a
+nuestro maestro, nada a BM") — quedaron congelados desde el warm-start de
+disco al arrancar el proceso, así que su edad solo podía crecer para
+siempre. El mismo `bulk_age_s` alimenta también la alerta crítica global
+("Datos de inventario BM sin actualizar... contacta al administrador"),
+así que era un falso positivo permanente, no solo un número feo en el nav.
+
+Fix: `bulk_age_s` ahora se calcula desde la frescura real de
+`bm_sku_master` (`token_store.get_bm_master_sync_meta()`), la fuente que
+sí se sigue actualizando (loop de categorías top-5 cada 15 min). Verificado
+local (2500s, bounded) y en producción post-deploy (501s ≈ 8 min,
+coherente con el ciclo real del loop). Ver
+`.claude/memory/project_bm_call_consolidation_2026-08-20.md` para el
+contexto completo de por qué el cache viejo quedó muerto.
+
+Archivo: `app/main.py` — endpoint `prewarm_status()`, ~línea 16038-16058.
+
+---
+
 ## 2026-08-20 — FIX CRÍTICO: "Activar" seguía recomendando SNMP000002 (75 uds) cuando BM real es 0
 
 Jovan reportó que, después de confirmar con el filtro vendible real de BM
