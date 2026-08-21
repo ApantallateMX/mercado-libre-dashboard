@@ -16039,15 +16039,25 @@ async def prewarm_status():
     # seguidas SIN que "last_updated_s" (stock_issues_cache, derivado) lo
     # reflejara -- ese caché se sigue "actualizando" cada ciclo aunque por
     # debajo use bulk viejo, así que el badge del navbar se veía verde
-    # mintiendo frescura). bulk_age_s es la edad REAL del bulk que BM
-    # devolvió la última vez que SÍ respondió -- la señal que de verdad
-    # importa para saber si hay que confiar en los datos de stock.
-    _bulk_ages = []
-    if _bm_bulk_gr_cache:
-        _bulk_ages.append(_time.time() - _bm_bulk_gr_cache[0])
-    if _bm_bulk_all_cache:
-        _bulk_ages.append(_time.time() - _bm_bulk_all_cache[0])
-    bulk_age_s = round(max(_bulk_ages)) if _bulk_ages else None
+    # mintiendo frescura). bulk_age_s es la señal real de si hay que confiar
+    # en los datos de stock.
+    #
+    # FIX 2026-08-21 (bug real encontrado hoy: badge del nav "Sync Stock"
+    # mostraba 794m y subiendo sin parar, disparando la alerta crítica
+    # global de forma permanente). _bm_bulk_gr_cache/_bm_bulk_all_cache ya
+    # NO se repueblan en vivo desde el fix del 2026-08-20 ("todo debe
+    # apuntar a nuestro maestro") -- quedaron congelados desde el warm-start
+    # de disco al arrancar el proceso, así que su edad solo podía crecer
+    # para siempre. bm_sku_master (vía el loop de categorías, top-5 cada
+    # 15 min) es hoy la fuente que de verdad se sigue actualizando.
+    try:
+        _master_meta = await token_store.get_bm_master_sync_meta()
+        bulk_age_s = (
+            round(_time.time() - _master_meta["last_sync_ts"])
+            if _master_meta.get("last_sync_ts") else None
+        )
+    except Exception:
+        bulk_age_s = None
 
     return JSONResponse({
         "running": _prewarm_running,
