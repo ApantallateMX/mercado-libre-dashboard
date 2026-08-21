@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — FIX CRÍTICO: ICB/ICC revertido a solo Televisions — inflaba stock en reparación
+
+Jovan reportó (captura) que "Activar" recomendaba SNFN000095 (Ventilador
+de Torre Vornado, categoría "Fans") con 332 unidades "BM Disponible". El
+fix del 2026-08-20 (pedir siempre GRA,GRB,GRC,ICB,ICC,NEW para toda
+categoría, motivado por el caso Fan Heater/SNFH000004) violó la HARD RULE
+ya documentada en CLAUDE.md ("ICB/ICC solo para SNTV*/Televisions") y
+causó daño real: esas 332 unidades vienen 100% de condiciones ICB/ICC, y
+la fila cruda de BM trae el tag `"FAN REPAIR"` — son unidades en
+reparación, no stock vendible.
+
+Fix: `_update_bm_master_for_category` y `/api/diag/raw-category-rows`
+(`app/main.py`) vuelven a usar `GRA,GRB,GRC,ICB,ICC,NEW` solo cuando
+`category_id == "Televisions"`, y `GRA,GRB,GRC,NEW` para todo lo demás.
+Verificado local: Fans/SNFN000095 → 0 filas reales (confirma que las 332
+eran puro ICB/ICC de reparación). Televisions → sigue trayendo sus ~455
+filas con ICB/ICC intacto. Deploy Railway SUCCESS (commit `c1765a4`). Se
+disparó un full-resync de las 59 categorías en producción para corregir
+los valores de `bm_sku_master` ya inflados durante el día que el bug
+estuvo activo (afecta potencialmente cualquier categoría no-TV con stock
+etiquetado como reparación/incompleto).
+
+Ver `.claude/memory/project_bm_icb_icc_category_rule_revert_2026-08-21.md`
+y `.claude/memory/feedback_no_generalizar_regla_desde_un_solo_caso.md`
+(lección: no generalizar una regla de negocio documentada a partir de un
+solo caso confirmado sin preguntar explícitamente).
+
+---
+
 ## 2026-08-21 — FIX: badge "Sync Stock" (794m) crecía sin parar — fuente muerta
 
 Jovan reportó el nav tab "Sync Stock" con badge rojo "794m" (minutos).
