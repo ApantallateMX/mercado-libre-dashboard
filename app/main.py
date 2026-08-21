@@ -7050,6 +7050,20 @@ _bm_top_category_empty_streak: dict[str, int] = {}
 _bm_category_loop_halt_reason: str = ""  # "" = sin pausa
 _BM_CATEGORY_EMPTY_STREAK_LIMIT = 3
 
+# FIX 2026-08-20 (Jovan: "0 resultados bajo un criterio" y "BM bloqueado"
+# son 2 cosas distintas -- caso real SNMP000002/Microphones-JLab, confirmado
+# por Jovan contra el filtro vendible real de BM que la categoría SÍ está
+# en 0 genuino). "0 filas = no tocar nada" nos protegía de un bloqueo real
+# de BM, pero también nos dejaba PARA SIEMPRE atorados con un valor viejo
+# (75) cuando el 0 era real -- nunca había forma de confirmarlo. Ahora: si
+# una categoría devuelve 0 filas 2 VECES SEGUIDAS (en llamadas distintas,
+# separadas en el tiempo por el ritmo normal de los loops/triggers
+# manuales), se acepta como 0 real y SÍ se actualiza bm_sku_master --
+# mismo criterio de racha que el auto-halt de arriba, aplicado a TODAS las
+# categorías (no solo top-5), para confirmar en vez de solo bloquear.
+_bm_category_zero_confirm_streak: dict[str, int] = {}
+_BM_CATEGORY_ZERO_CONFIRM_LIMIT = 2
+
 # FIX 2026-08-20 (pedido por Jovan: ver qué categoría va corriendo y el
 # tiempo real de cada una, no solo el resultado agregado). Progreso EN
 # VIVO de los 2 loops recurrentes -- separado de _full_resync_progress
@@ -20352,14 +20366,33 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     # y el código de abajo lo interpretó como "categoría confirmada sin stock"
     # y puso en 0 el available_qty real de TVs con decenas de unidades reales
     # en ML. 0 filas para una categoría que ya tenía datos casi siempre es
-    # síntoma de bloqueo/fallo silencioso de BM, NUNCA "confirmado sin stock"
-    # -- tratar igual que rows is None: no tocar nada.
+    # síntoma de bloqueo/fallo silencioso de BM -- por default no tocar nada.
+    #
+    # AMPLIACIÓN 2026-08-20 #2 (Jovan: caso real SNMP000002/Microphones-JLab,
+    # confirmado por Jovan contra el filtro vendible real de BM que esa
+    # categoría SÍ está en 0 genuino): "0 filas" y "bloqueo de BM" son 2
+    # cosas distintas. Tratar SIEMPRE 0 filas como "no confiar" nos dejaba
+    # atorados para siempre con un valor viejo (75) sin forma de confirmar
+    # un 0 real. Ahora: 0 filas UNA vez sigue sin tocar nada (protege contra
+    # un fallo puntual de BM); 0 filas 2 VECES SEGUIDAS (llamadas distintas,
+    # separadas en el tiempo) se acepta como confirmado real y SÍ continúa
+    # al flujo normal -- con rows=[] eso hace que el bloque de "ausencia en
+    # categoría = 0" de más abajo zeree TODOS los SKUs conocidos de esta
+    # categoría, correctamente.
     if not rows:
-        return {
-            "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
-            "error": "Get_GlobalStock_InventoryBySKU devolvió 0 filas (HTTP 200 vacío) -- "
-                     "tratado como fallo/bloqueo de BM, no se tocó bm_sku_master",
-        }
+        _streak = _bm_category_zero_confirm_streak.get(category_id, 0) + 1
+        _bm_category_zero_confirm_streak[category_id] = _streak
+        if _streak < _BM_CATEGORY_ZERO_CONFIRM_LIMIT:
+            return {
+                "ok": False, "category_id": category_id, "elapsed_s": _elapsed,
+                "error": f"Get_GlobalStock_InventoryBySKU devolvió 0 filas (HTTP 200 vacío) -- "
+                         f"racha {_streak}/{_BM_CATEGORY_ZERO_CONFIRM_LIMIT}, aún sin confirmar, no se tocó bm_sku_master",
+            }
+        # Racha confirmada -- 0 real, no bloqueo. Sigue al flujo normal con
+        # rows=[] (nunca se vuelve a leer rows más abajo salvo para contar).
+        _bm_category_zero_confirm_streak[category_id] = 0
+    else:
+        _bm_category_zero_confirm_streak[category_id] = 0
 
     _by_base: dict[str, list] = {}
     for row in rows:

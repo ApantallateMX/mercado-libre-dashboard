@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FIX CRÍTICO: "Activar" seguía recomendando SNMP000002 (75 uds) cuando BM real es 0
+
+Jovan reportó que, después de confirmar con el filtro vendible real de BM
+que "Microphones-JLab" está genuinamente en 0, la alerta "Activar" seguía
+mostrando SNMP000002 con "75 disponibles" — dato viejo (>24h) que nunca
+se pudo corregir porque la regla "0 filas = no tocar nada" (protección
+contra el incidente de bloqueo de BM) NO distinguía "0 real confirmado"
+de "posible fallo" — así que un 0 genuino nunca se aceptaba, dejando el
+valor viejo atorado para siempre.
+
+Nuevo criterio en `_update_bm_master_for_category` (`main.py`):
+`_bm_category_zero_confirm_streak` — 0 filas UNA vez sigue sin tocar nada
+(protege contra un fallo puntual real de BM); 0 filas **2 veces
+seguidas** (llamadas separadas en el tiempo) se acepta como confirmado
+real y SÍ actualiza `bm_sku_master` a 0 para todos los SKUs conocidos de
+esa categoría.
+
+Verificado local: 1ra llamada a "Microphones-JLab" → `racha 1/2, sin
+confirmar`; 2da llamada → `ok:true, skus_confirmed_zero:7`. SNMP000002
+quedó en `avail=0, reserve=0, total=0` — coincide exacto con BM.
+
+---
+
 ## 2026-08-20 — FIX: ICB/ICC ya no se restringen a categoría "Televisions"
 
 Jovan encontró el caso real: SNFH000004 (Fan Heater) tiene su única unidad
