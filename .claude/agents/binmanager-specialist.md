@@ -1676,7 +1676,7 @@ Códigos usados en `WorkPlanInspection_ByClassification` y detalles de inspecci�
 | -DML | Damage L | No sellable |
 | -BOX | Box Only | No sellable (solo empaque) |
 | -FRM | For Recycle/Materials | Reciclaje |
-| -PNP | Pass/No Pass | Clasificación Sorting |
+| -PNP | Plug and Play (ClassificationID=30) | No sellable como producto terminado -- espera prueba de encendido antes de grado final GRA/GRB/GRC. CORREGIDO 2026-08-21: esta fila decía "Pass/No Pass" -- verificado con `list_conditions` real que el nombre correcto es "Plug and Play". Solo se procesa en MTY (confirmado por Jovan) -- Tijuana/CDMX no deberían tener PNP; si aparece ahí es anomalía real a investigar. AvailableQTY y NoVendibleQty (el "Not Sellable" de la UI de BM) para esta condición se leen igual que cualquier otra vía `Get_GlobalStock_InventoryBySKU` con `CONDITION=PNP` -- confirmado con captura real de Jovan (SNTV008001: LOCATIONID=68, Disponible=4, No Vendible=379). El KPI "TotalPNP" del Operations Dashboard (`GetDashboardKPIs`, ver tabla de Sorting arriba) es un conteo AGREGADO distinto -- no verificado si mide lo mismo o es un metric name que coincide por acrónimo; no asumir que son la misma cosa sin comprobarlo.
 | -RCY | Recycle | Reciclaje |
 
 ---
