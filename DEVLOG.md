@@ -7,7 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
-## 2026-08-21 — FIX CRÍTICO: ICB/ICC revertido a solo Televisions — inflaba stock en reparación
+## 2026-08-21 — FEAT: indicador "Solo en Tijuana" en Transferencias Sugeridas — tj_qty revivido
+
+Jovan pidió pulir "Transferencias Sugeridas Entre Almacenes" (Planeación)
+con un indicador claro: productos con stock real en Tijuana y CERO stock
+vendible en CDMX/MTY, para disparar un requerimiento de envío a almacén
+lo antes posible ("nosotros definimos el destino").
+
+Hallazgo antes de tocar código: `bm_sku_master.tj_qty` (la columna que
+alimenta justo este dato) estaba **congelada desde el 2026-08-19** — el
+mecanismo que la llenaba (`_bm_master_sync_loop`) se pausó ese día a
+propósito porque en ese momento "no era prioridad", y su fuente
+(`_bm_bulk_loc47/68/loctj_cache`) además quedó muerta con la consolidación
+del 2026-08-20 (mismo patrón del bug del badge "794m").
+
+Fix/feature:
+- `_update_bm_master_for_category` (`app/main.py`) ahora hace una segunda
+  llamada por categoría, SOLO Tijuana (`get_bulk_stock(location_id="45,69,43,42")`
+  — el parámetro ya existía, documentado para este uso exacto), y guarda
+  `tj_qty` en el UPSERT existente. Duplica el tiempo por categoría
+  (aceptado explícitamente: prioridad es el dato, no la velocidad).
+- `token_store.get_tj_only_transfer_candidates()`: SELECT puro
+  (`tj_qty > 0 AND available_qty = 0`), sin llamar a BM — instantáneo.
+- Nuevo endpoint `GET /api/planning/tj-only-transfer`.
+- `planning.html`: sección dividida en 2 bloques — 🔴 "Solo en Tijuana"
+  (urgente, con botón "Copiar lista" para mandar el requerimiento a
+  almacén) y 🔵 el rebalanceo por demanda que ya existía, ahora secundario.
+
+Verificado local y en producción: categoría "Air Fryers" — 3 SKUs con
+stock real en Tijuana (42/9/1 uds) y 0 vendible, refrescados correctamente
+tras el deploy. Full-resync de las 59 categorías completado en producción
+(sin interrupciones, sin más pushes de por medio hasta terminar).
+
+**Resultado real del resync:** 333 SKUs, 39,062 unidades totales en
+Tijuana sin ningún stock vendible en CDMX/MTY — concentrado sobre todo en
+"Remote Control - TV" y "Cables - Power" (controles remotos/cables de
+repuesto con miles de unidades cada uno, ej. RMTC008308 con 6,776 uds).
+Hallazgo de negocio real, no solo técnico: buena parte del inventario de
+refacciones vive hoy invisible para venta en línea.
 
 Jovan reportó (captura) que "Activar" recomendaba SNFN000095 (Ventilador
 de Torre Vornado, categoría "Fans") con 332 unidades "BM Disponible". El
