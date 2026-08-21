@@ -18713,6 +18713,37 @@ async def diag_trigger_gap_scan_all(token: str = ""):
     return JSONResponse({"ok": True, "started": started})
 
 
+@app.get("/api/diag/raw-category-rows")
+async def diag_raw_category_rows(token: str = "", category_id: str = "", sku: str = ""):
+    """Diagnóstico 2026-08-20 (bug real reportado por Jovan: 'BM Disponible'
+    en Activar mostraba avail+reserve sumados -- SNWM000001 mostraba 3899
+    cuando BM real es Available=3383/Reserve=516/NotSellable=8621, ver
+    project memory). Llama el MISMO endpoint que usa el loop de categorías
+    (get_bulk_stock -- Get_GlobalStock_InventoryBySKU, CONCEPTID=1, el
+    "correcto" que sí excluye tránsito, confirmado antes) para UNA
+    categoría puntual, y devuelve las filas CRUDAS (sin agregar) que BM
+    responde para el/los SKU(s) pedidos -- para ver exactamente qué trae
+    AvailableQTY/Reserve/TotalQty por fila antes de que
+    _bulk_stock_rows_to_master_fields las sume."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not category_id:
+        return JSONResponse({"error": "category_id requerido"}, status_code=400)
+    from app.services.binmanager_client import get_shared_bm as _gsb_rawcat
+    bm_cli = await _gsb_rawcat()
+    _conditions_str = "GRA,GRB,GRC,ICB,ICC,NEW" if category_id.strip() == "Televisions" else "GRA,GRB,GRC,NEW"
+    _t0 = _time.time()
+    rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions=_conditions_str)
+    _elapsed = round(_time.time() - _t0, 1)
+    if sku:
+        sku_up = sku.upper().strip()
+        rows = [r for r in rows if sku_up in (r.get("SKU") or "").upper()]
+    return JSONResponse({
+        "category_id": category_id, "conditions": _conditions_str,
+        "elapsed_s": _elapsed, "rows_count": len(rows), "rows": rows[:50],
+    })
+
+
 @app.post("/api/diag/fix-buyer-message-subjects")
 async def diag_fix_buyer_message_subjects(token: str = ""):
     """Normaliza subjects ya guardados con \\r\\n de header plegado sin

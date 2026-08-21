@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — INVESTIGACIÓN: "BM Disponible" inflado en Activar (SNWM000001: 3899 vs 3383 real) — NO es bug de agregación, es staleness normal de categorías longtail
+
+Jovan reportó con capturas (dashboard vs BM UI real) que "Activar" mostraba
+`BM Disponible: 3899` para SNWM000001 mientras BM mostraba
+`Available: 3383 / Reserve: 516 / Not Sellable: 8621` — 3899 = 3383+516,
+como si estuviéramos sumando available+reserve.
+
+Nuevo `GET /api/diag/raw-category-rows` (category_id + sku opcional) —
+llama el MISMO endpoint que usa el loop de categorías
+(`get_bulk_stock`/`Get_GlobalStock_InventoryBySKU`, CONCEPTID=1, "el
+correcto" que confirmado antes SÍ excluye tránsito) y devuelve la fila
+CRUDA sin agregar, para comparar contra lo guardado.
+
+**Resultado: la fila cruda que BM devuelve ya trae `AvailableQTY:3383,
+Reserve:516, NoVendibleQty:8621` — exactos.** `_bulk_stock_rows_to_master_fields`
+suma correctamente (`avail_total += AvailableQTY`, no
+`AvailableQTY+Reserve`) — no hay bug de agregación, ni hoy ni en el
+código que ya existía antes de los cambios de hoy. Al forzar
+`bm-master-update-category` para "Wall Mounts" (fuera del ciclo de 4h del
+loop longtail), `bm_sku_master` quedó en `available_qty=3383,
+reserve_qty=516` -- correcto de inmediato.
+
+**Causa real: staleness normal.** "Wall Mounts" es categoría longtail
+(no top-5 por ventas), se refresca cada 4h -- el dato que Jovan vio venía
+de un ciclo anterior a que BM registrara la reserva de 516 unidades (algo
+cambió en BM entre ese ciclo y el momento de la captura). No es que el
+número esté mal calculado, es que llegó tarde.
+
+**Mitigación aplicada:** correr `/api/diag/bm-master-full-resync` en
+producción para refrescar TODAS las categorías de inmediato en vez de
+esperar hasta 4h por categoría.
+
+**Pendiente de decisión de Jovan:** si el margen de hasta 4h de rezago en
+categorías longtail es aceptable (tradeoff ya conocido, ver
+project_bm_call_consolidation_2026-08-20) o si se debe bajar ese
+intervalo para SKUs con mucha rotación de reservas.
+
+---
+
 ## 2026-08-20 — OPERACION: nuevo trigger manual para refrescar alertas "Sin Publicar" sin esperar al cron de 3am
 
 Jovan pidió actualizar las alertas que ven los usuarios tras los fixes de
