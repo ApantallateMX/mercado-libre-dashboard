@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FEAT: catálogo diario de BM ahora completa category/upc/image_url para TODO SKU (con o sin stock)
+
+Cierre del punto #1 pendiente de la revisión de "todo debe apuntar a
+nuestro maestro" (ver 2 entradas de abajo, mismo día). Jovan explicó el
+diseño correcto: el sync diario (`_sync_bm_product_catalog`, 3am
+Monterrey, `ConfColumns_Conditions_Excel` — el mismo endpoint que
+"cuenta" tránsito, sugerido por Alberto) sirve para bajar el catálogo
+COMPLETO de BM de un jalón; no importa que sus números de stock mezclen
+tránsito porque **nunca se usan** — el stock real siempre viene de
+`bm_sku_master` alimentado por el loop de categorías (que sí excluye
+tránsito). Este catálogo es lo que permite saber "qué existe en BM" para
+definir qué está lanzado y qué no, independientemente de si tiene stock
+hoy.
+
+Confirmado en código: `upsert_bm_catalog_batch` (`token_store.py`) ya
+hacía `INSERT ... ON CONFLICT` sin filtro por SKU conocido — ya cubría
+TODO el catálogo por título/marca/modelo/costo/tamaño. Solo faltaban 3
+campos que antes solo llenaba el loop de categorías (y ese solo toca
+SKUs con stock actual): `category`, `upc`, `image_url`. Agregados con el
+mismo patrón `COALESCE(NULLIF(...))` que ya usa el loop de categorías —
+nunca pisa un valor bueno con uno vacío.
+
+Confirmado que corre 1x/día automático (`_weekly_catalog_sync`, 3am
+Monterrey) + 2 triggers manuales existentes (`/api/diag/trigger-catalog-sync`,
+`/api/health/...`) — no cambia la cadencia, solo qué campos guarda.
+
+**Verificado local:** sync manual disparado contra BM real — 9,266 filas,
+16.8s. `SNWA000002`/`SNWA000003`/`RMTC001968` (0 stock hoy) pasaron de
+`category=''` a tener categoría real ("Window Type Air Conditioner",
+"Remote Control - Sound Bar") — exactamente el hueco que se buscaba
+cerrar. 9,227/9,266 SKUs con categoría después del sync.
+
+---
+
 ## 2026-08-20 — FEAT + DECISION: revisión completa de lo que quedaba llamando a BM en vivo (2da vuelta)
 
 Jovan pidió explícitamente revisar TODO lo que faltaba tras la 1ra vuelta

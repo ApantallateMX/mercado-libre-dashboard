@@ -6098,6 +6098,15 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "model":     _row.get("Model") or "",
                 "title":     _row.get("Title") or "",
                 "size":      _size if 0 < _size <= 200 else 0,
+                # FEATURE 2026-08-20 (pedido por Jovan): completar el catálogo
+                # para TODO SKU de BM, con o sin stock hoy -- category/upc/
+                # image_url antes solo se llenaban vía el loop de categorías,
+                # y ESE solo toca SKUs que aparecen con stock. Da igual que
+                # este endpoint "cuente" tránsito en sus números de stock --
+                # no los usamos aquí, solo identidad/catálogo.
+                "category":  _row.get("CategoryName") or _row.get("Category") or "",
+                "upc":       _row.get("UPC") or _row.get("Upc") or "",
+                "image_url": _row.get("ImageURL") or _row.get("ImageUrl") or "",
             })
 
         # Guardar en DB

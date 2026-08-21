@@ -1814,7 +1814,14 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     en bm_product_catalog, ahora fusionada). Loguea en bm_sku_changes
     cualquier cambio de retail_ph/cost_usd — bajo volumen (sync semanal),
     cada cambio es relevante para alertas de precio.
-    rows: list of {sku, retail_ph, cost_usd, brand, model, title}
+    rows: list of {sku, retail_ph, cost_usd, brand, model, title, size,
+    category, upc, image_url}. category/upc/image_url agregados 2026-08-20
+    (pedido por Jovan): este sync corre 1x/día para TODO el catálogo de BM
+    (con o sin stock) -- antes esos 3 campos solo los llenaba el loop de
+    categorías, que únicamente toca SKUs que aparecen con stock actual.
+    Usa COALESCE(NULLIF(...)) igual que _update_bm_master_for_category para
+    no pisar un valor bueno ya escrito por el loop de categorías con uno
+    vacío si esta fila viniera parcial.
     Retorna cantidad de rows insertadas/actualizadas.
     """
     if not rows:
@@ -1846,14 +1853,25 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
                 changes.append((r["sku"], "cost_usd", old["cost_usd"], new_cost, now, "catalog_sync"))
 
         await db.executemany(
-            """INSERT INTO bm_sku_master (sku, title, brand, model, retail_ph, cost_usd, size, catalog_updated_at)
-               VALUES (:sku, :title, :brand, :model, :retail_ph, :cost_usd, :size, :updated_at)
+            """INSERT INTO bm_sku_master (
+                   sku, title, brand, model, retail_ph, cost_usd, size,
+                   category, upc, image_url, catalog_updated_at
+               )
+               VALUES (
+                   :sku, :title, :brand, :model, :retail_ph, :cost_usd, :size,
+                   :category, :upc, :image_url, :updated_at
+               )
                ON CONFLICT(sku) DO UPDATE SET
                    title = excluded.title, brand = excluded.brand, model = excluded.model,
                    retail_ph = excluded.retail_ph, cost_usd = excluded.cost_usd,
                    size = excluded.size,
+                   category = COALESCE(NULLIF(excluded.category, ''), bm_sku_master.category),
+                   upc = COALESCE(NULLIF(excluded.upc, ''), bm_sku_master.upc),
+                   image_url = COALESCE(NULLIF(excluded.image_url, ''), bm_sku_master.image_url),
                    catalog_updated_at = excluded.catalog_updated_at""",
-            [{**r, "cost_usd": r.get("cost_usd", 0), "size": r.get("size", 0), "updated_at": now} for r in rows],
+            [{**r, "cost_usd": r.get("cost_usd", 0), "size": r.get("size", 0),
+              "category": r.get("category", ""), "upc": r.get("upc", ""),
+              "image_url": r.get("image_url", ""), "updated_at": now} for r in rows],
         )
         if changes:
             await db.executemany(
