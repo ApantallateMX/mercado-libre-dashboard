@@ -7,6 +7,54 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — INCIDENTE CRÍTICO: sesión BM colgada zereó ~2,590 SKUs reales en las 5 categorías top-5
+
+Jovan reportó con 2 casos reales (SHIL000522, SNTV007241) que "Riesgo
+Sobreventa" y "Alertas de Stock" mostraban 0 disponible cuando BM (su
+propia UI) mostraba cientos/miles de unidades reales.
+
+**Causa raíz real (confirmada con logs de producción):** a las 20:03 las
+5 categorías de mayor venta (Televisions, Air Conditioners, Interior
+Lighting, Home Power Tools, Exercise Equipment) empezaron a fallar
+SIMULTÁNEAMENTE con respuestas vacías en ~0.2-0.3s -- demasiado rápido
+para ser BM procesando de verdad (una categoría real tarda 3-7s+). La
+sesión compartida con BM (`_shared_bm`) se invalidó del lado del
+servidor sin que `get_shared_bm()` lo detectara (HTTP 200 con lista
+vacía, no un 401/redirect que dispare `_session_expired()`) -- el flag
+`_logged_in` se quedó en `True` para siempre, reusando una sesión muerta.
+El mecanismo de "2 fallas seguidas = 0 confirmado" (diseñado para
+bloqueos reales de BM, ver incidente SNMP000002 del 2026-08-20) confirmó
+en falso el 0 para las 5 categorías a las 20:18 (~2,590 SKUs) y volvió a
+re-confirmar Interior Lighting a las 20:33.
+
+**Investigación previa descartada correctamente:** antes de encontrar la
+causa real, se investigó (con `binmanager-specialist`, datos MCP reales)
+si era un problema de condiciones/ubicación como el caso PNP -- se
+descartó con evidencia real: SHIL000522 SÍ tiene 1,201 uds vendibles
+reales bajo NEW en MTY (LocationID 68), la misma combinación que ya
+filtrábamos correctamente.
+
+**Fix 1 (commit `8819c72`):** nuevo endpoint `POST /api/diag/bm-force-relogin`
+para resetear el cliente BM compartido a demanda.
+
+**Fix 2 (commit `125f4db`, el importante):** `_update_bm_master_for_category`
+ahora detecta respuestas vacías sospechosamente rápidas (`elapsed_s < 1.5`)
+como firma de sesión rota (no de BM genuinamente vacío) -- fuerza
+re-login del cliente compartido y NO cuenta hacia la racha de
+confirmación, evitando que el mismo problema de sesión vuelva a
+confirmar un 0 falso en el futuro.
+
+**Verificado en producción, ambos casos exactos de Jovan:**
+- SHIL000522: `avail=1201, reserve=1` (antes: 0/0) — coincide con la UI de BM.
+- SNTV007241: `avail=59, reserve=54` (antes: 0/0) — coincide con la UI de BM.
+
+Las 5 categorías afectadas se re-corrieron manualmente y quedaron con
+datos reales (Televisions 455, Air Conditioners 10, Interior Lighting
+466, Home Power Tools 58, Exercise Equipment 21 filas — mismo orden de
+magnitud que antes del incidente, 19:47).
+
+---
+
 ## 2026-08-21 — FEAT: mostrar "reservado" (BM) en Alertas de Stock
 
 Jovan explicó un caso real: cuando entra una orden, BM reserva la unidad
