@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-21 — FEAT: mostrar "reservado" (BM) en Alertas de Stock
+
+Jovan explicó un caso real: cuando entra una orden, BM reserva la unidad
+y pone `AvailableQTY` en 0 para no sobrevender -- correcto del lado de
+BM, pero "Alertas de Stock" (feed en vivo de órdenes sin stock) no
+distinguía eso de "no hay stock real", y ofrecía sustituto/marcaba "sin
+stock" igual en ambos casos.
+
+Fix: `get_realtime_stock_alerts()` (`token_store.py`) agrega
+`reserve_qty` (actual, del mismo JOIN con `bm_sku_master` que ya trae
+title/brand/retail_ph -- sin llamadas nuevas a BM). `orders.html` muestra
+"reservado N" junto a "Disp. BM" cuando aplica (escritorio + tarjeta
+móvil, mismo `var avail` compartido). Solo se expone el número -- no se
+cambia la lógica de sugerencia/alerta automáticamente, la persona decide
+con el dato real enfrente (mismo criterio de "Solo en Tijuana"/PNP).
+
+Verificado en producción: 18 alertas activas revisadas, todas con
+`reserve_qty=0` ahora mismo (cruzado con `/api/diag/sku` para SNTV007447:
+avail=0, reserve=0, total=10 -- coincide) -- es decir, el lote actual son
+quiebres reales, no falsos positivos por reserva. El mecanismo queda
+listo para mostrar el número real la próxima vez que sí aplique.
+
+---
+
 ## 2026-08-21 — FEAT: indicador PNP (MTY) en Cobertura de Stock — solo Televisions
 
 Jovan pidió priorizar qué productos con alta demanda meter primero a la
