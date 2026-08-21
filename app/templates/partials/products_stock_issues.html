@@ -1316,14 +1316,21 @@ window._stockFilter = function(q) {
 <!-- ===== Seccion F: Desbalance Peligroso ===== -->
 {% if imbalanced %}
 <div class="mb-8" id="imbalanced-section">
-    <div class="flex items-center gap-2 mb-3">
-        <div class="w-1 h-6 bg-purple-400 rounded"></div>
-        <h3 class="text-sm md:text-base font-bold text-gray-800">Desbalance Peligroso</h3>
-        <span class="text-xs text-gray-400">(MeLi publica más stock del que hay en BM)</span>
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-purple-400 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">Desbalance Peligroso</h3>
+            <span class="text-xs text-gray-400">(MeLi publica más stock del que hay en BM)</span>
+        </div>
+        <button onclick="bulkReduceImbalanced()" id="bulk-imbalanced-btn"
+                class="px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg hover:bg-purple-700 active:bg-purple-800 transition">
+            Reducir Todos ({{ imbalanced|length }})
+        </button>
     </div>
     <div class="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 mb-3 text-xs text-purple-800">
         MeLi tiene publicada una cantidad mayor al stock vendible en BM. Si se venden todas las unidades de MeLi puede haber sobreventas. Reducir stock en MeLi al nivel BM.
     </div>
+    <span id="bulk-imbalanced-msg" class="text-xs mt-1 mb-2 block"></span>
 
     {% if drift_alerts %}
     <div class="bg-amber-50 border border-amber-300 rounded-lg px-4 py-3 mb-3 text-xs text-amber-800">
@@ -2451,6 +2458,59 @@ function bulkActivateAll() {
   paginateTable('tbody-price-risk', 'pager-price-risk');
   paginateTable('tbody-no-bm-sku',  'pager-no-bm-sku');
 })();
+
+function bulkReduceImbalanced() {
+    // FEATURE 2026-08-20 (pedido por Jovan -- "todas las alertas con acción
+    // uniforme por fila deben tener botón masivo, igual que Activar/Reabastecer/
+    // Stock Crítico"): Desbalance Peligroso ya tenía el botón individual
+    // (syncOneImbalanced) probado, solo le faltaba el equivalente masivo.
+    var allItems = [
+        {% for p in imbalanced %}
+        {id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }} }{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+    // Solo los que siguen visibles en DOM (mismo patrón que bulkActivateAll)
+    var items = allItems.filter(function(x) {
+        return document.getElementById('imbal-d-' + x.id);
+    });
+    if (!items.length) { alert('No hay items pendientes en Desbalance Peligroso.'); return; }
+    if (!confirm('Reducir el stock de MeLi al nivel BM en ' + items.length + ' productos?')) return;
+    var btn = document.getElementById('bulk-imbalanced-btn');
+    var msg = document.getElementById('bulk-imbalanced-msg');
+    btn.disabled = true;
+    btn.textContent = 'Reduciendo...';
+    var done = 0, errors = 0, total = items.length;
+    function updateProgress() {
+        msg.textContent = done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        msg.className = 'text-xs mt-1 mb-2 block ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
+    }
+    items.forEach(function(item) {
+        fetch('/api/items/' + item.id + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: item.bm})
+        })
+        .then(function(r) {
+            if (!r.ok) throw new Error('stock fail');
+            done++;
+            var row = document.getElementById('imbal-d-' + item.id);
+            if (row) row.style.opacity = '0.4';
+            var rowBtn = document.getElementById('imbal-btn-' + item.id);
+            if (rowBtn) rowBtn.textContent = '✓ Reducido';
+        })
+        .catch(function() {
+            done++; errors++;
+        })
+        .then(function() {
+            updateProgress();
+            if (done === total) {
+                btn.textContent = 'Reducir Todos (0)';
+                if (!errors) setTimeout(function() { btn.style.display = 'none'; }, 1500);
+                else btn.disabled = false;
+            }
+        });
+    });
+}
 
 window.syncOneImbalanced = function(itemId, bmQty) {
     var btn = document.getElementById('imbal-btn-' + itemId);

@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-20 — FEAT: botón "Reducir Todos" para Desbalance Peligroso
+
+Jovan notó que "Desbalance Peligroso" era la única sección con acción
+uniforme por fila (reducir stock MeLi al nivel BM, ya implementada y
+probada en `syncOneImbalanced`) que no tenía su botón masivo equivalente
+-- a diferencia de Reabastecer/Riesgo Sobreventa/Stock Crítico/Activar/
+Listings Eliminados, que sí lo tienen. Auditoría de las 10 secciones de
+`products_stock_issues.html` confirmó que es la única inconsistencia
+real: FULL Sin Stock, Inventario Estancado y Margen Real Insuficiente NO
+tienen ninguna acción (ni individual ni masiva) por diseño -- requieren
+juicio humano (qué precio nuevo, cuánto descuento) o no son tocables vía
+API (FULL).
+
+Nuevo `bulkReduceImbalanced()` (`products_stock_issues.html`) -- mismo
+patrón que `bulkActivateAll`: filtra items visibles en DOM, confirm(),
+llama `PUT /api/items/{id}/stock` con `quantity=_bm_avail` por cada uno
+(la misma llamada que ya hacía el botón individual), progreso con
+contador de errores. Cero lógica nueva de negocio, solo repite la acción
+individual ya probada en bucle.
+
+Verificado local: template Jinja válido, botón renderiza "Reducir Todos
+(49)" con el conteo real de la sesión.
+
+---
+
 ## 2026-08-20 — DECISION: loop longtail de categorías bajado de 4h a 2h de rezago máximo
 
 Continuación de la entrada de arriba (investigación de "BM Disponible"
