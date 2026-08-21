@@ -34,6 +34,17 @@ y `.claude/memory/feedback_no_generalizar_regla_desde_un_solo_caso.md`
 (lección: no generalizar una regla de negocio documentada a partir de un
 solo caso confirmado sin preguntar explícitamente).
 
+**Actualización:** el primer full-resync se cortó a medias (24/59) porque
+un push de solo-DEVLOG disparó un redeploy de Railway que reinició el
+proceso y perdió el progreso en memoria (`_full_resync_progress` no
+sobrevive un restart). Se re-disparó desde cero sin más pushes de por
+medio -- 59/59 categorías completadas. Verificado en producción:
+`SNFN000095` → `avail=0` (antes 332, ahora correcto -- las 332 siguen en
+`total` porque son unidades reales, solo que no vendibles), `Televisions`
+sigue trayendo sus 455 filas con ICB/ICC intacto, y otras categorías de
+alto stock (`Interior Lighting`, `Personal Protective Equipment`, `Home
+Power Tools`) confirmadas usando `GRA,GRB,GRC,NEW` sin ICB/ICC.
+
 ---
 
 ## 2026-08-21 — FIX: badge "Sync Stock" (794m) crecía sin parar — fuente muerta
