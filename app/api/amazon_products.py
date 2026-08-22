@@ -2367,7 +2367,7 @@ async def amazon_fulfillment_action(sku: str, body: FulfillmentActionBody, reque
 
 
 @router.get("/products/stock", response_class=HTMLResponse)
-async def amazon_products_stock_alerts(request: Request):
+async def amazon_products_stock_alerts(request: Request, warehouse: str = Query("MTY", description="Almacén para las sugerencias de alta/baja: MTY o CDMX")):
     """
     Alertas de stock Amazon — 7 categorías BM-correlacionadas (igual que ML)
     + 1 categoría informativa/de auditoría:
@@ -2468,10 +2468,30 @@ async def amazon_products_stock_alerts(request: Request):
         ]
         from app.services import token_store as _ts_sf
         _sf_lookup_skus = list(_all_items_skus | set(_onsite_missing_skus))
-        _sf_map = await _ts_sf.get_seller_flex_stock_for_skus(_sf_lookup_skus) if _sf_lookup_skus else {}
+        _sf_map_raw = await _ts_sf.get_seller_flex_stock_for_skus(_sf_lookup_skus) if _sf_lookup_skus else {}
+        # FIX 2026-08-22 (mismo bug de mezcla de cuentas encontrado y corregido
+        # en amazon_products_seller_flex()/adjust-xlsx): el mismo texto de SKU
+        # puede existir como listing separado de VECTOR y AUTOBOT -- filtrar
+        # SIEMPRE por los nodos reales de ESTA cuenta antes de sumar.
+        _my_nodes_alerts = {
+            n for wh in ("MTY", "CDMX", "TJ")
+            if (n := _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, wh)))
+        }
+        _sf_map = {
+            sku: [row for row in rows if row.get("node") in _my_nodes_alerts]
+            for sku, rows in _sf_map_raw.items()
+        }
 
         def _sf_qty(sku: str) -> int:
             return sum(n.get("sellable_qty", 0) for n in _sf_map.get(sku, []))
+
+        def _sf_by_warehouse(sku: str) -> dict:
+            out = {"MTY": 0, "CDMX": 0, "TJ": 0}
+            for n in _sf_map.get(sku, []):
+                wh = n.get("warehouse")
+                if wh in out:
+                    out[wh] += n.get("sellable_qty", 0)
+            return out
 
         for item in all_items:
             if item["fulfillable"] == 0:
@@ -2537,6 +2557,21 @@ async def amazon_products_stock_alerts(request: Request):
         # separarlo en 2 llamadas solo duplicaba el timeout/latencia contra BM
         # sin reducir el trabajo real; BM ya está limitado a 1 sesión a la vez.
         await _enrich_bm_amz(all_items + fbm_items, timeout_s=8.0)
+
+        # FEATURE 2026-08-22 (pedido explícito de Jovan): sugerencias de
+        # alta/baja para el botón "Generar ajuste" -- mismo cálculo que en
+        # amazon_products_seller_flex() (delta real contra seller_flex_stock,
+        # nunca el bruto de BM), para el almacén seleccionado (mismo selector
+        # MTY/CDMX que ya existe en la pestaña Seller Flex).
+        _wh_alerts = (warehouse or "MTY").strip().upper()
+        if _wh_alerts not in ("MTY", "CDMX", "TJ"):
+            _wh_alerts = "MTY"
+        for item in all_items:
+            _sf_wh = _sf_by_warehouse(item["sku"])
+            _bm_wh_alerts = item.get(f"bm_{_wh_alerts.lower()}") or 0
+            _sf_wh_val = _sf_wh.get(_wh_alerts, 0)
+            item["suggest_receive"] = max(0, _bm_wh_alerts - _sf_wh_val)
+            item["suggest_remove"]  = min(_sf_wh_val, max(0, _sf_wh_val - _bm_wh_alerts))
 
         # ── Clasificar en 7 categorías de alerta + 1 informativa ─────────────
         sin_stock         = []
@@ -2650,6 +2685,7 @@ async def amazon_products_stock_alerts(request: Request):
             "discrepancia_count":  len(discrepancia_bm_fba),
             "nickname":            client.nickname,
             "marketplace":         client.marketplace_name,
+            "warehouse":           _wh_alerts,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_stock.html", ctx)
 

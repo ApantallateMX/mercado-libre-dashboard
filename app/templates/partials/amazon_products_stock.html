@@ -19,6 +19,17 @@
 </div>
 {% else %}
 
+<!-- ─── Almacén para sugerencias de alta/baja (2026-08-22) ────────────────────── -->
+<div class="flex items-center gap-1.5 mb-3">
+    <label class="text-xs text-gray-500 font-medium">Almacén para ajustes Onsite:</label>
+    <select id="alerts-warehouse" onchange="window._alertsSetWarehouse(this.value)"
+            class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] bg-white font-semibold">
+        <option value="MTY" {% if warehouse == 'MTY' %}selected{% endif %}>MTY</option>
+        <option value="CDMX" {% if warehouse == 'CDMX' %}selected{% endif %}>CDMX</option>
+    </select>
+    <span class="text-[10px] text-gray-400">Afecta las sugerencias de "Generar alta"/"Generar baja" de las secciones de abajo</span>
+</div>
+
 <!-- ─── KPI CARDS ────────────────────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
 
@@ -96,18 +107,23 @@
         <table class="w-full text-sm">
             <thead class="bg-orange-50/50">
                 <tr class="text-xs text-orange-700 text-left border-b border-orange-100">
+                    <th class="py-2 px-3 w-8"><input type="checkbox" onchange="window._alertsCheckAll(this,'add')" class="rounded accent-orange-500"></th>
                     <th class="py-2 px-4 font-medium">Producto / SKU</th>
                     <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
                     <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
                     <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
                     <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
                     <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Ventas 30d</th>
+                    <th class="py-2 px-3 font-medium text-center" title="Sugerido = BM del almacén seleccionado menos lo que Seller Flex ya tiene">Cant. a recibir</th>
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
             <tbody id="amz-tbody-reabastecer" class="divide-y divide-orange-50">
                 {% for item in reabastecer %}
                 <tr class="hover:bg-orange-50/30 transition">
+                    <td class="py-3 px-3 text-center">
+                        <input type="checkbox" class="alerts-add-check rounded accent-orange-500" data-sku="{{ item.sku | e }}">
+                    </td>
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
                         <div class="flex items-center gap-2 mt-0.5">
@@ -125,6 +141,10 @@
                     <td class="py-3 px-3 text-right hidden md:table-cell">
                         {% if item.units_30d > 0 %}<span class="text-xs font-bold text-orange-600">{{ item.units_30d }}</span>
                         {% else %}<span class="text-xs text-gray-300">Sin datos</span>{% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-center">
+                        <input type="number" min="0" step="1" class="alerts-add-qty w-16 px-1.5 py-1 text-xs border border-gray-200 rounded-lg outline-none focus:border-orange-500 text-center bg-white"
+                               data-sku="{{ item.sku | e }}" value="{{ item.suggest_receive if item.suggest_receive > 0 else '' }}">
                     </td>
                     <td class="py-3 px-3 text-center">
                         <div class="flex items-center justify-center gap-1">
@@ -147,6 +167,12 @@
         </table>
     </div>
     <div id="amz-pager-reabastecer" class="border-t border-orange-100 bg-orange-50/30"></div>
+    <div class="px-4 py-3 border-t border-orange-100 bg-orange-50/30 flex items-center justify-between">
+        <span class="text-xs text-orange-700">Marca los que quieras dar de alta en Onsite ({{ warehouse }})</span>
+        <button onclick="window._alertsGenerateAdd()" class="px-3 py-1.5 text-xs font-semibold bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition">
+            ⬇ Generar alta (CSV)
+        </button>
+    </div>
 </div>
 {% endif %}
 
@@ -579,20 +605,28 @@
         </div>
         <span class="px-3 py-1 bg-sky-400 text-white text-xs font-bold rounded-full">{{ discrepancia_bm_fba|length }} SKUs</span>
     </div>
+    {% set discrepancia_onsite = discrepancia_bm_fba | selectattr('fulfillable_source', 'equalto', 'seller_flex') | selectattr('suggest_remove', 'gt', 0) | list %}
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
             <thead class="bg-sky-50/50">
                 <tr class="text-xs text-sky-700 text-left border-b border-sky-100">
+                    <th class="py-2 px-3 w-8"><input type="checkbox" onchange="window._alertsCheckAll(this,'remove')" class="rounded accent-red-500"></th>
                     <th class="py-2 px-4 font-medium">Producto / SKU</th>
                     <th class="py-2 px-3 font-medium text-right">FBA (físico)</th>
                     <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
                     <th class="py-2 px-3 font-medium text-right">Diferencia</th>
+                    <th class="py-2 px-3 font-medium text-center bg-red-50" title="Solo para SKUs Onsite (SF) reales -- 0 para FBA clásico, ahí la diferencia es normal">Cant. a eliminar</th>
                     <th class="py-2 px-3 font-medium text-center">Ver</th>
                 </tr>
             </thead>
             <tbody id="amz-tbody-discrepancia" class="divide-y divide-sky-50">
                 {% for item in discrepancia_bm_fba %}
                 <tr class="hover:bg-sky-50/30 transition">
+                    <td class="py-3 px-3 text-center">
+                        {% if item.suggest_remove and item.suggest_remove > 0 %}
+                        <input type="checkbox" class="alerts-remove-check rounded accent-red-500" data-sku="{{ item.sku | e }}">
+                        {% endif %}
+                    </td>
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
                         <div class="flex items-center gap-2 mt-0.5">
@@ -604,6 +638,14 @@
                     <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.bm_avail or 0 }}</td>
                     <td class="py-3 px-3 text-right">
                         <span class="px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-bold rounded-full">+{{ item.gap_units or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-center bg-red-50/40">
+                        {% if item.suggest_remove and item.suggest_remove > 0 %}
+                        <input type="number" min="0" step="1" class="alerts-remove-qty w-16 px-1.5 py-1 text-xs border border-red-200 rounded-lg outline-none focus:border-red-500 text-center bg-white"
+                               data-sku="{{ item.sku | e }}" value="{{ item.suggest_remove }}">
+                        {% else %}
+                        <span class="text-gray-300 text-xs">—</span>
+                        {% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
                         <a href="{{ item.sc_url }}" target="_blank"
@@ -617,6 +659,14 @@
         </table>
     </div>
     <div id="amz-pager-discrepancia" class="border-t border-sky-100 bg-sky-50/30"></div>
+    {% if discrepancia_onsite %}
+    <div class="px-4 py-3 border-t border-sky-100 bg-red-50/30 flex items-center justify-between">
+        <span class="text-xs text-red-700">{{ discrepancia_onsite|length }} SKU(s) Onsite con excedente real vs BM ({{ warehouse }}) -- marca los que quieras dar de baja</span>
+        <button onclick="window._alertsGenerateRemove()" class="px-3 py-1.5 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 transition">
+            ⬇ Generar baja (XLSX)
+        </button>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -651,6 +701,99 @@ window._amzSyncBmStock = function(btn) {
         btn.disabled = false;
         btn.textContent = orig;
     });
+};
+
+// ── Ajustes Seller Flex desde Alertas de Stock (2026-08-22) ────────────────
+// Mismo patrón/endpoints que la pestaña Seller Flex: un clic genera el
+// archivo completo con todos los items marcados, listo para subir --
+// nunca escribe directo en Amazon.
+window._alertsSetWarehouse = function(wh) {
+    var url = '/api/amazon/products/stock?warehouse=' + encodeURIComponent(wh);
+    var container = document.getElementById('amz-prod-tab-content');
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) { alert('Error cambiando de almacén: ' + e.message); });
+};
+
+window._alertsCheckAll = function(masterCb, kind) {
+    var sel = kind === 'add' ? '.alerts-add-check' : '.alerts-remove-check';
+    document.querySelectorAll(sel).forEach(function(cb) { cb.checked = masterCb.checked; });
+};
+
+window._alertsGenerateAdd = function() {
+    var checked = document.querySelectorAll('.alerts-add-check:checked');
+    if (checked.length === 0) {
+        alert('Marca al menos un SKU en "Reabastecer FBA" para generar el alta.');
+        return;
+    }
+    var rows = [];
+    checked.forEach(function(cb) {
+        var sku = cb.getAttribute('data-sku');
+        var qtyInp = document.querySelector('.alerts-add-qty[data-sku="' + sku + '"]');
+        var qty = parseInt((qtyInp || {}).value || '0') || 0;
+        if (qty > 0) rows.push({ sku: sku, quantity: qty, bin: 'A1', disposition: 'GOOD' });
+    });
+    if (rows.length === 0) {
+        alert('Los SKUs marcados no tienen cantidad > 0 en "Cant. a recibir".');
+        return;
+    }
+    fetch('/api/amazon/products/seller-flex/csv', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ bin: 'A1', items: rows }),
+    })
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(function(blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'alertas_alta.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    })
+    .catch(function(e) { alert('Error generando archivo de alta: ' + e.message); });
+};
+
+window._alertsGenerateRemove = function() {
+    var checked = document.querySelectorAll('.alerts-remove-check:checked');
+    if (checked.length === 0) {
+        alert('Marca al menos un SKU en "Discrepancia BM vs FBA" para generar la baja.');
+        return;
+    }
+    var rows = [];
+    checked.forEach(function(cb) {
+        var sku = cb.getAttribute('data-sku');
+        var qtyInp = document.querySelector('.alerts-remove-qty[data-sku="' + sku + '"]');
+        var qty = parseInt((qtyInp || {}).value || '0') || 0;
+        if (qty > 0) rows.push({ sku: sku, quantity: qty });
+    });
+    if (rows.length === 0) {
+        alert('Los SKUs marcados no tienen cantidad > 0 en "Cant. a eliminar".');
+        return;
+    }
+    var wh = (document.getElementById('alerts-warehouse') || {}).value || 'MTY';
+    if (!confirm(rows.length + ' SKU(s) se van a preparar para ELIMINAR de Seller Flex (' + wh + ').\n\nEsto genera el archivo -- tú lo revisas y lo subes manualmente en el portal. ¿Continuar?')) return;
+    fetch('/api/amazon/products/seller-flex/adjust-xlsx', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ source_bin: 'A1', warehouse: wh, items: rows }),
+    })
+    .then(function(r) {
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || ('HTTP ' + r.status)); });
+        var skipped = r.headers.get('X-Rows-Skipped') || '0';
+        return r.blob().then(function(blob) { return { blob: blob, skipped: skipped }; });
+    })
+    .then(function(res) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(res.blob);
+        a.download = 'alertas_baja.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        if (res.skipped !== '0') alert(res.skipped + ' fila(s) fueron ajustadas/omitidas por stock real insuficiente al momento de generar.');
+    })
+    .catch(function(e) { alert('Error generando archivo de baja: ' + e.message); });
 };
 
 (function() {
