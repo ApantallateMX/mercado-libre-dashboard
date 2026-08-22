@@ -3124,6 +3124,19 @@ async def amazon_products_seller_flex(
             if _nodes:
                 item["fba_stock"] = item["sf_total"]
                 item["fba_stock_source"] = "seller_flex"
+            elif _flx_cache_valid(client.seller_id):
+                # FEATURE 2026-08-22: fallback automático (reporte oficial
+                # GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA, reactivado con
+                # reintentos -- ver _onsite_periodic_sync_loop) para SKUs sin
+                # snapshot manual todavía. No trae desglose MTY/CDMX (solo
+                # total por cuenta), así que no llena sf_mty/sf_cdmx, solo
+                # corrige el número visible en vez de dejar el de la FBA
+                # Inventory API rota.
+                _auto_avail, _auto_reserved = _flx_cache_read(client.seller_id, item["sku"])
+                if _auto_avail > 0 or _auto_reserved > 0:
+                    item["fba_stock"] = _auto_avail
+                    item["flx_reserved"] = _auto_reserved
+                    item["fba_stock_source"] = "onsite_report_auto"
             _bm_wh = item.get("bm_mty", 0) if _wh == "MTY" else item.get("bm_cdmx", 0)
             _sf_wh = item.get(f"sf_{_wh.lower()}", 0)
             item["suggest_receive"] = max(0, _bm_wh - _sf_wh)
@@ -3514,23 +3527,63 @@ async def generate_seller_flex_adjust_xlsx(request: Request):
 # BACKGROUND PERIODIC SYNC — mantiene el caché Onsite siempre fresco
 # ─────────────────────────────────────────────────────────────────────────────
 
+_ONSITE_AUTOSYNC_INTERVAL_S = 3 * 3600  # 3 horas entre vueltas completas (las 3 cuentas)
+
+
 async def _onsite_periodic_sync_loop() -> None:
     """
-    Loop de sync periódico — actualmente DESACTIVADO.
+    Loop de sync periódico REACTIVADO 2026-08-22 (aprobado por Jovan).
 
-    NOTA: GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA devuelve FATAL para cuentas
-    que usan exclusivamente Seller Flex (Amazon Onsite MX) sin FBA tradicional.
-    El SP-API no expone el inventario de Amazon Onsite a través de ningún
-    endpoint o reporte público disponible.
+    Historia: se creía que GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA devolvía
+    FATAL de forma PERMANENTE para cuentas Seller Flex sin FBA tradicional
+    -- un desarrollador anterior lo probó una vez, le falló, y desactivó
+    este loop para siempre. Verificado en vivo hoy (ver memoria
+    project_seller_flex_portal_and_qty_gap.md, actualización (3)): es
+    INTERMITENTE, no permanente. VECTOR funcionó a la primera con 100% de
+    coincidencia contra el snapshot manual; AUTOBOT fue intermitente.
+    get_onsite_inventory_report() ahora reintenta 2 veces más (3 intentos
+    totales, 45s entre cada uno -- el límite real de creación de reportes)
+    antes de rendirse.
 
-    El inventario FLX se muestra usando el stock BM (BinManager) como proxy,
-    que es la fuente de verdad del inventario en bodega del vendedor.
+    Corre para las 3 cuentas Amazon configuradas, una tras otra (mismo
+    respeto al rate limit), y repite cada _ONSITE_AUTOSYNC_INTERVAL_S.
+    Resultado va a _onsite_stock_cache (mismo caché que ya leen
+    amazon_products_seller_flex, amazon_products_stock_alerts vía
+    _flx_cache_read, y el resto de la página Seller Flex) -- no requiere
+    que nadie tenga una pestaña de Amazon abierta.
 
-    Si en el futuro Amazon expone este dato via SP-API, reactivar este loop.
-    """
-    logger.info("[Onsite AutoSync] Loop DESACTIVADO — GET_FBA_MYI_UNSUPPRESSED devuelve FATAL "
-                "para cuentas Seller Flex sin FBA. Usando datos BM como proxy.")
-    # No hacer nada — el loop se inicia pero inmediatamente termina
+    NO reemplaza el snapshot manual seller_flex_stock (ese trae desglose
+    por almacén MTY/CDMX y bin real -- este reporte solo da el total por
+    cuenta) -- son fuentes complementarias, seller_flex_stock manda cuando
+    existe, este reporte es el nuevo fallback automático en vez de la FBA
+    Inventory API rota."""
+    from app.services import token_store as _ts_onsite_auto
+    from app.services.amazon_client import get_amazon_client as _get_amz_auto
+
+    await asyncio.sleep(60)  # deja terminar el arranque de la app antes del primer ciclo
+    while True:
+        try:
+            accounts = await _ts_onsite_auto.get_all_amazon_accounts()
+        except Exception as e:
+            logger.error(f"[Onsite AutoSync] No se pudo leer cuentas Amazon: {e}")
+            accounts = []
+
+        for acct in accounts:
+            seller_id = acct.get("seller_id", "")
+            if not seller_id:
+                continue
+            try:
+                client = await _get_amz_auto(seller_id)
+                if not client:
+                    continue
+                logger.info(f"[Onsite AutoSync] Sync para {seller_id}…")
+                await _run_onsite_sync(client)
+            except Exception as e:
+                logger.error(f"[Onsite AutoSync] Error con {seller_id}: {type(e).__name__}: {e}")
+            await asyncio.sleep(45)  # respeta el límite de 1 reporte/45s entre cuentas también
+
+        logger.info(f"[Onsite AutoSync] Vuelta completa terminada, durmiendo {_ONSITE_AUTOSYNC_INTERVAL_S}s")
+        await asyncio.sleep(_ONSITE_AUTOSYNC_INTERVAL_S)
 
 
 def start_onsite_background_sync() -> None:

@@ -215,6 +215,9 @@
                                 +{{ item.inbound }} in
                             </span>
                             {% endif %}
+                            {% if item.fba_stock_source == 'onsite_report_auto' %}
+                            <span class="text-[9px] text-teal-500 leading-none" title="Reporte oficial de Amazon (auto), sin desglose por almacén todavía">reporte auto</span>
+                            {% endif %}
                         </div>
                         {% else %}
                         <span class="text-sm font-bold text-red-400" title="Sin stock en Amazon Onsite">—</span>

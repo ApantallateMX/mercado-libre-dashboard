@@ -1028,18 +1028,49 @@ class AmazonClient:
             raw = _gzip.decompress(resp.content) if compressed else resp.content
             return _decode(raw)
 
-    async def get_onsite_inventory_report(self, max_wait_secs: int = 120) -> dict:
+    async def get_onsite_inventory_report(self, max_wait_secs: int = 120, retries: int = 2) -> dict:
         """
-        Genera y descarga el reporte FBA MYI completo.
+        Genera y descarga el reporte FBA MYI completo, CON REINTENTOS.
         Retorna {seller_sku: afn_fulfillable_quantity} para todos los SKUs.
+
+        FIX 2026-08-22: este reporte se creía permanentemente roto para
+        cuentas Seller Flex ("SP-API no expone Onsite... devuelve FATAL",
+        ver _onsite_periodic_sync_loop histórico) -- un desarrollador
+        anterior lo probó UNA vez, le dio FATAL, y desactivó el loop para
+        siempre. Verificado en vivo hoy: es INTERMITENTE, no permanente --
+        VECTOR funcionó a la primera (261 SKUs -FLX, 100% coincidencia
+        contra el snapshot manual de seller_flex_stock), AUTOBOT dio FATAL
+        2 veces seguidas después de un éxito inicial. Con reintentos esto
+        es viable como fuente automática real (ver memoria
+        project_seller_flex_portal_and_qty_gap.md, actualización (3)).
 
         El reporte GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA incluye:
         - Inventario FBA regular (en almacenes Amazon)
         - Inventario Amazon Onsite / Seller Flex (en bodega del vendedor)
         - Campo clave: afn-fulfillable-quantity
 
-        Tiempo típico de generación: 30-90 segundos.
+        Tiempo típico de generación: 30-90 segundos. Con retries=2 (3
+        intentos totales) puede tardar hasta ~3x max_wait_secs en el peor
+        caso -- llamar solo desde background, nunca bloqueando un request.
         """
+        last_exc: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                return await self._get_onsite_inventory_report_once(max_wait_secs)
+            except RuntimeError as e:
+                last_exc = e
+                if attempt < retries:
+                    logger.warning(
+                        f"[Amazon Reports] Intento {attempt+1}/{retries+1} falló ({e}) -- "
+                        f"reintentando en 45s (rate limit de creación de reportes)"
+                    )
+                    await asyncio.sleep(45)  # respeta el límite de 1 reporte/45s
+                else:
+                    logger.error(f"[Amazon Reports] Agotados {retries+1} intentos, último error: {e}")
+        raise last_exc
+
+    async def _get_onsite_inventory_report_once(self, max_wait_secs: int) -> dict:
+        """Un solo intento de get_onsite_inventory_report -- ver ese método para reintentos."""
         import csv, io as _io
 
         logger.info("[Amazon Reports] Creando reporte FBA MYI Inventory…")
