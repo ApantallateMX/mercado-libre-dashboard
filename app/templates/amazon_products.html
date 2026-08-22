@@ -276,6 +276,17 @@ function loadAmzProdTab(tabName, url, btn) {
             if (tabName === 'seller-flex' && document.getElementById('sfx-auto-sync-trigger')) {
                 _sfxStartPollingOnly('');
             }
+            if (tabName === 'stock') {
+                // FIX 2026-08-22 (bug real reportado por Jovan: tablas de cientos
+                // de filas sin paginar, "1 minuto de scroll"): el <script> que
+                // vivía DENTRO de la plantilla partials/amazon_products_stock.html
+                // nunca se ejecutaba -- innerHTML nunca corre <script> insertado
+                // así, en NINGÚN navegador. Afectaba paginación, "Sync stock BM",
+                // y los botones de alta/baja de hoy. Movido aquí (sí se ejecuta,
+                // es parte del documento inicial) y se llama explícitamente tras
+                // cada carga de esta pestaña.
+                window._amzStockAlertsInit();
+            }
             // Listings y Deals: shell estático, el contenido lo llenan las
             // funciones de amazon_dashboard.js (mismas que usaba /amazon?tab=X)
             if (tabName === 'listings') { loadListingsTab(); }
@@ -1550,6 +1561,164 @@ window._sfxGenerateAdjustXLSX = function() {
         }
     })
     .catch(function(e) { alert('Error generando archivo de ajuste: ' + e.message); });
+};
+
+// ── Alertas de Stock: init real (movido de partials/amazon_products_stock.html
+// el 2026-08-22 -- ese <script> vivía dentro de un partial cargado por
+// innerHTML y NUNCA se ejecutaba, en ningún navegador. Ver el comentario en
+// loadAmzProdTab más arriba). Se llama explícitamente cada vez que se
+// (re)carga la pestaña "stock". ─────────────────────────────────────────────
+window._amzSyncBmStock = function(btn) {
+    var sku = btn.dataset.sku;
+    var bm  = parseInt(btn.dataset.bm, 10) || 0;
+    if (!confirm('¿Sincronizar el stock FBM de ' + sku + ' a ' + bm + ' unidad(es) (stock disponible en BM)?\n\nEsto actualiza la cantidad del listing directamente en Amazon Seller Central.')) return;
+    var orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando…';
+    fetch('/api/amazon/products/' + encodeURIComponent(sku) + '/fulfillment-action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'set_qty', quantity: bm})
+    })
+    .then(function(r) {
+        if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
+            throw new Error(d.detail || r.statusText);
+        });
+        return r.json();
+    })
+    .then(function() {
+        btn.textContent = '✓ ' + bm + ' uds';
+        btn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+        btn.classList.add('bg-green-600');
+    })
+    .catch(function(e) {
+        alert('Error al sincronizar stock: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = orig;
+    });
+};
+
+window._alertsSetWarehouse = function(wh) {
+    var url = '/api/amazon/products/stock?warehouse=' + encodeURIComponent(wh);
+    var container = document.getElementById('amz-prod-tab-content');
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) { container.innerHTML = html; window._amzStockAlertsInit(); })
+        .catch(function(e) { alert('Error cambiando de almacén: ' + e.message); });
+};
+
+window._alertsCheckAll = function(masterCb, kind) {
+    var sel = kind === 'add' ? '.alerts-add-check' : '.alerts-remove-check';
+    document.querySelectorAll(sel).forEach(function(cb) { cb.checked = masterCb.checked; });
+};
+
+window._alertsGenerateAdd = function() {
+    var checked = document.querySelectorAll('.alerts-add-check:checked');
+    if (checked.length === 0) {
+        alert('Marca al menos un SKU en "Reabastecer FBA" para generar el alta.');
+        return;
+    }
+    var rows = [];
+    checked.forEach(function(cb) {
+        var sku = cb.getAttribute('data-sku');
+        var qtyInp = document.querySelector('.alerts-add-qty[data-sku="' + sku + '"]');
+        var qty = parseInt((qtyInp || {}).value || '0') || 0;
+        if (qty > 0) rows.push({ sku: sku, quantity: qty, bin: 'A1', disposition: 'GOOD' });
+    });
+    if (rows.length === 0) {
+        alert('Los SKUs marcados no tienen cantidad > 0 en "Cant. a recibir".');
+        return;
+    }
+    fetch('/api/amazon/products/seller-flex/csv', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ bin: 'A1', items: rows }),
+    })
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(function(blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'alertas_alta.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    })
+    .catch(function(e) { alert('Error generando archivo de alta: ' + e.message); });
+};
+
+window._alertsGenerateRemove = function() {
+    var checked = document.querySelectorAll('.alerts-remove-check:checked');
+    if (checked.length === 0) {
+        alert('Marca al menos un SKU en "Discrepancia BM vs FBA" para generar la baja.');
+        return;
+    }
+    var rows = [];
+    checked.forEach(function(cb) {
+        var sku = cb.getAttribute('data-sku');
+        var qtyInp = document.querySelector('.alerts-remove-qty[data-sku="' + sku + '"]');
+        var qty = parseInt((qtyInp || {}).value || '0') || 0;
+        if (qty > 0) rows.push({ sku: sku, quantity: qty });
+    });
+    if (rows.length === 0) {
+        alert('Los SKUs marcados no tienen cantidad > 0 en "Cant. a eliminar".');
+        return;
+    }
+    var wh = (document.getElementById('alerts-warehouse') || {}).value || 'MTY';
+    if (!confirm(rows.length + ' SKU(s) se van a preparar para ELIMINAR de Seller Flex (' + wh + ').\n\nEsto genera el archivo -- tú lo revisas y lo subes manualmente en el portal. ¿Continuar?')) return;
+    fetch('/api/amazon/products/seller-flex/adjust-xlsx', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ source_bin: 'A1', warehouse: wh, items: rows }),
+    })
+    .then(function(r) {
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || ('HTTP ' + r.status)); });
+        var skipped = r.headers.get('X-Rows-Skipped') || '0';
+        return r.blob().then(function(blob) { return { blob: blob, skipped: skipped }; });
+    })
+    .then(function(res) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(res.blob);
+        a.download = 'alertas_baja.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        if (res.skipped !== '0') alert(res.skipped + ' fila(s) fueron ajustadas/omitidas por stock real insuficiente al momento de generar.');
+    })
+    .catch(function(e) { alert('Error generando archivo de baja: ' + e.message); });
+};
+
+window._amzStockAlertsInit = function() {
+    var PER = 10;
+    function amzPaginate(tbodyId, pagerId) {
+        var tbody = document.getElementById(tbodyId);
+        var pager = document.getElementById(pagerId);
+        if (!tbody || !pager) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        pager.innerHTML = '';
+        if (rows.length <= PER) { rows.forEach(function(r){ r.style.display = ''; }); return; }
+        window._amzPgS = function(tId, pId, pg) {
+            var tb = document.getElementById(tId), pgEl = document.getElementById(pId);
+            if (!tb || !pgEl) return;
+            var rs = Array.from(tb.querySelectorAll('tr'));
+            var tot = rs.length, pgs = Math.ceil(tot/PER);
+            rs.forEach(function(r,i){ r.style.display=(i>=(pg-1)*PER && i<pg*PER)?'':'none'; });
+            var from=(pg-1)*PER+1, to=Math.min(pg*PER,tot);
+            var h='<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3 flex-wrap"><span>Mostrando '+from+'–'+to+' de '+tot+'</span><span class="mx-1 text-gray-300">|</span>';
+            if(pg>1) h+='<button onclick="_amzPgS(\''+tId+'\',\''+pId+'\','+(pg-1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
+            for(var p=1;p<=pgs;p++){var c=p===pg?'bg-[#FF9900] text-white font-bold':'bg-gray-100 hover:bg-gray-200';h+='<button onclick="_amzPgS(\''+tId+'\',\''+pId+'\','+p+')" class="px-2 py-0.5 rounded '+c+'">'+p+'</button>';}
+            if(pg<pgs) h+='<button onclick="_amzPgS(\''+tId+'\',\''+pId+'\','+(pg+1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
+            h+='</div>'; pgEl.innerHTML=h;
+        };
+        window._amzPgS(tbodyId, pagerId, 1);
+    }
+    amzPaginate('amz-tbody-reabastecer',  'amz-pager-reabastecer');
+    amzPaginate('amz-tbody-riesgo',       'amz-pager-riesgo');
+    amzPaginate('amz-tbody-stock-bajo',   'amz-pager-stock-bajo');
+    amzPaginate('amz-tbody-restock',      'amz-pager-restock');
+    amzPaginate('amz-tbody-critico',      'amz-pager-critico');
+    amzPaginate('amz-tbody-estancado',    'amz-pager-estancado');
+    amzPaginate('amz-tbody-sin-stock',    'amz-pager-sin-stock');
+    amzPaginate('amz-tbody-discrepancia', 'amz-pager-discrepancia');
 };
 
 // ── Función global para actualizar precio inline ──────────────────────────
