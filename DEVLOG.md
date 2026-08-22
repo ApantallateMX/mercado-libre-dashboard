@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-22 — FIX CRÍTICO: paginación y botones de Alertas de Stock (Amazon) nunca se ejecutaban
+
+Jovan reportó (con captura) la tabla "Riesgo Sobreventa" de Alertas de Stock
+(Amazon) sin paginar, cientos de filas, "1 minuto de scroll" -- y cuestionó
+duramente por qué esto pasa si "cada que usas [agentes] haces o generas algo".
+Investigado directamente (sin delegar a agente, dado el tono y la urgencia).
+
+**Causa raíz:** todo el `<script>` de `partials/amazon_products_stock.html`
+(paginación `amzPaginate`, `_amzSyncBmStock`, `_alertsSetWarehouse`,
+`_alertsCheckAll`, `_alertsGenerateAdd/Remove`) vivía DENTRO de ese partial.
+Ese partial se carga SIEMPRE vía `fetch()` + `container.innerHTML = html`
+desde `loadAmzProdTab()` en `amazon_products.html`. **`innerHTML` nunca
+ejecuta un `<script>` insertado así, en ningún navegador** -- comportamiento
+estándar de la plataforma web, no un bug de Amazon ni de Chrome. Por eso la
+paginación, "Sync stock BM", y los botones de alta/baja de hoy mismo nunca
+funcionaron en uso real, solo en pruebas donde el HTML se cargó de otra
+forma. Confirmado que las pestañas `inventario` y `seller-flex` SÍ tienen un
+hook explícito post-carga en `loadAmzProdTab` -- `stock` era la única sin él.
+
+**Fix:** movido todo ese código a `amazon_products.html` (documento real, su
+`<script>` inline sí se ejecuta) como una función nombrada
+`window._amzStockAlertsInit()`, invocada explícitamente (a) después de cada
+carga de la pestaña "stock" en `loadAmzProdTab`, y (b) después de cada cambio
+de almacén vía `_alertsSetWarehouse` (que también hace `innerHTML` sobre el
+mismo contenedor y tenía el mismo problema). Eliminado el `<script>` muerto
+del partial (174 líneas). Verificado local (uvicorn + JWT cookie, HTTP 200,
+sin `<script>` residual, `amz-tbody-riesgo` presente) y en producción tras
+deploy (HTTP 200, mismo resultado). Commit `5125d7c`, push a `origin` y `mi2`.
+
+**Para revisar después (no confirmado aún):** el mismo patrón
+(`fetch()+innerHTML` de un partial con `<script>` propio, sin hook de
+re-ejecución) puede repetirse en otras pestañas/páginas de este dashboard
+que usan el mismo mecanismo de carga de tabs -- vale la pena una auditoría
+puntual la próxima vez que se toque algo similar, en vez de asumir que es
+un caso aislado.
+
+---
+
 ## 2026-08-22 — FEAT: stock real de Amazon Onsite/Seller Flex (nueva tabla + 2 vistas corregidas)
 
 Jovan preguntó si Amazon había cambiado FBA a "FLX u Onsite". Investigación
