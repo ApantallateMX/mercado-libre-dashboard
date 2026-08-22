@@ -18405,10 +18405,12 @@ async def diag_amazon_onsite_report_probe(token: str = "", seller_id: str = ""):
     except Exception as e:
         return JSONResponse({"error": str(e), "error_type": type(e).__name__}, status_code=502)
     flx = {k: v for k, v in data.items() if "-FLX" in k.upper()}
+    _check_skus = ["SNTV008147-GRB2", "SNMC000415-NEW", "SHIL000523-FLX", "SNTV008016-FLX"]
     return {
         "total_skus": len(data),
         "flx_skus_count": len(flx),
         "flx_sample": dict(list(flx.items())[:15]),
+        "known_sku_check": {s: data.get(s, "NOT_IN_REPORT") for s in _check_skus},
     }
 
 
