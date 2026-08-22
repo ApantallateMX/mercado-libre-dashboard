@@ -2186,6 +2186,38 @@ async def get_seller_flex_stock_for_skus(skus: list[str]) -> dict:
     return out
 
 
+async def get_seller_flex_stock_for_base_skus(base_skus: list[str]) -> dict:
+    """Agrega seller_flex_stock por base_sku (primeros 10 chars del SKU
+    Amazon, mismo formato SKU BM que usa el resto de la app) -- para vistas
+    que trabajan a nivel BM SKU (Cobertura, Riesgo Sobreventa) en vez de SKU
+    Amazon exacto. Retorna {base_sku: {total_sellable, total_bound,
+    by_warehouse: {MTY: n, CDMX: n, TJ: n}}}."""
+    if not base_skus:
+        return {}
+    out: dict = {}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        uniq = list(set(b for b in base_skus if b))
+        for i in range(0, len(uniq), 400):
+            chunk = uniq[i:i + 400]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""SELECT substr(sku, 1, 10) AS base_sku, warehouse,
+                           SUM(sellable_qty) AS sellable, SUM(bound_qty) AS bound
+                    FROM seller_flex_stock
+                    WHERE substr(sku, 1, 10) IN ({placeholders})
+                    GROUP BY substr(sku, 1, 10), warehouse""",
+                chunk,
+            )
+            for r in await cur.fetchall():
+                entry = out.setdefault(r["base_sku"], {"total_sellable": 0, "total_bound": 0, "by_warehouse": {}})
+                entry["total_sellable"] += r["sellable"] or 0
+                entry["total_bound"] += r["bound"] or 0
+                wh = r["warehouse"] or "?"
+                entry["by_warehouse"][wh] = entry["by_warehouse"].get(wh, 0) + (r["sellable"] or 0)
+    return out
+
+
 async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
     """Lee bm_sku_master para un set de SKUs normalizados -- SELECT puro, sin
     llamadas a BM. Usado por el nuevo camino de alertas (Fase C) para hacer

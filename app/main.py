@@ -26437,6 +26437,14 @@ async def planning_coverage(
     _pnp_skus = [normalize_to_bm_sku(x["sku"]) for x in items_with_sku if x.get("sku")]
     _pnp_data = await token_store.get_pnp_data_for_skus(_pnp_skus)
 
+    # FEATURE 2026-08-22 (pedido explícito de Jovan, tras encontrar que la FBA
+    # Inventory API no reporta stock de Onsite/Seller Flex): muestra el stock
+    # real de Onsite por almacén (MTY/CDMX/TJ) junto a la cobertura -- ver
+    # memoria project_seller_flex_portal_and_qty_gap.md. Solo lectura de
+    # seller_flex_stock (snapshot cargado manualmente, no un sync automático
+    # todavía), no cambia ningún cálculo de cobertura existente.
+    _sf_data = await token_store.get_seller_flex_stock_for_base_skus(_pnp_skus)
+
     # ── FX rate: manual override → ML API → fallback 20 ──────────────────────
     usd_to_mxn: float = _manual_fx_rate if _manual_fx_rate > 0 else 0.0
     if usd_to_mxn == 0:
@@ -26515,6 +26523,7 @@ async def planning_coverage(
         recovery_pct   = round(avg_price_mxn / retail_ref_mxn * 100) if retail_ref_mxn > 0 else None
 
         _pnp = _pnp_data.get(_bm_base) if _bm_base else None
+        _sf = _sf_data.get(_bm_base) if _bm_base else None
 
         result.append({
             **item,
@@ -26532,6 +26541,8 @@ async def planning_coverage(
             "pnp_mty_available": _pnp["pnp_mty_available"] if _pnp else 0,
             "pnp_mty_novendible": _pnp["pnp_mty_novendible"] if _pnp else 0,
             "pnp_other_locations_qty": _pnp["pnp_other_locations_qty"] if _pnp else 0,
+            "seller_flex_qty": _sf["total_sellable"] if _sf else 0,
+            "seller_flex_by_warehouse": _sf["by_warehouse"] if _sf else {},
         })
 
     order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
