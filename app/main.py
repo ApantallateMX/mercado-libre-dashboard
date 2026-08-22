@@ -18386,6 +18386,32 @@ async def diag_amazon_orders_list(token: str = "", seller_id: str = "", days: in
     })
 
 
+@app.get("/api/diag/amazon-onsite-report-probe")
+async def diag_amazon_onsite_report_probe(token: str = "", seller_id: str = ""):
+    """DIAGNÓSTICO temporal (2026-08-22): prueba si GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA
+    funciona para una cuenta Amazon específica (para verificar si el "FATAL" documentado
+    en _onsite_periodic_sync_loop -- que causó desactivar el loop para TODAS las cuentas --
+    aplica realmente a esta cuenta o no). Solo lectura, tarda 30-90s (espera del reporte)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id requerido"}, status_code=400)
+    from app.services.amazon_client import get_amazon_client
+    client = await get_amazon_client(seller_id)
+    if not client:
+        return JSONResponse({"error": f"sin client para seller_id={seller_id}"}, status_code=404)
+    try:
+        data = await client.get_onsite_inventory_report(max_wait_secs=150)
+    except Exception as e:
+        return JSONResponse({"error": str(e), "error_type": type(e).__name__}, status_code=502)
+    flx = {k: v for k, v in data.items() if "-FLX" in k.upper()}
+    return {
+        "total_skus": len(data),
+        "flx_skus_count": len(flx),
+        "flx_sample": dict(list(flx.items())[:15]),
+    }
+
+
 @app.get("/api/diag/seller-flex-lookup")
 async def diag_seller_flex_lookup(token: str = "", sku: str = ""):
     """Lee seller_flex_stock para un SKU -- verificación rápida post-ingesta."""
