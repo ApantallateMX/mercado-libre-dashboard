@@ -1681,6 +1681,15 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_seller_flex_stock_sku ON seller_flex_stock(sku)")
+        # Migrate: bin real del contenedor (2026-08-22, pedido de Jovan) --
+        # viene de la query GraphQL GetInventoryViewByBin, no del reporte
+        # oficial (ese no trae bin). NULL/'' si el snapshot se cargó antes
+        # de este cambio o no se pudo determinar.
+        try:
+            await db.execute('ALTER TABLE seller_flex_stock ADD COLUMN bin TEXT DEFAULT ""')
+            await db.commit()
+        except Exception:
+            pass  # ya existe
         # TABLA: amz_launched_listings — productos lanzados via wizard para monitoreo post-publicación
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_launched_listings (
@@ -2150,17 +2159,30 @@ async def upsert_seller_flex_stock(node: str, warehouse: str, seller_id: str, it
         await db.execute("DELETE FROM seller_flex_stock WHERE node = ?", (node,))
         rows = [
             (node, warehouse, seller_id, it["sku"], it.get("asin", ""),
-             int(it.get("sellable", 0)), int(it.get("bound", 0)), synced_at)
+             int(it.get("sellable", 0)), int(it.get("bound", 0)), synced_at, it.get("bin", ""))
             for it in items
         ]
         if rows:
             await db.executemany(
-                """INSERT INTO seller_flex_stock (node, warehouse, seller_id, sku, asin, sellable_qty, bound_qty, synced_at)
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                """INSERT INTO seller_flex_stock (node, warehouse, seller_id, sku, asin, sellable_qty, bound_qty, synced_at, bin)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 rows,
             )
         await db.commit()
         return len(rows)
+
+
+async def get_seller_flex_bins_for_node(node: str) -> list[str]:
+    """Bines realmente en uso para un nodo (derivado del snapshot cargado --
+    Seller Flex no tiene un catálogo fijo de bines, cualquier string es un
+    bin válido; esto es 'los bines que ya usamos', no 'todos los posibles').
+    Usado para poblar el dropdown de bines disponibles al recibir/eliminar."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "SELECT DISTINCT bin FROM seller_flex_stock WHERE node = ? AND bin != '' ORDER BY bin",
+            (node,),
+        )
+        return [r[0] for r in await cur.fetchall()]
 
 
 async def get_seller_flex_stock_for_skus(skus: list[str]) -> dict:
@@ -2177,7 +2199,7 @@ async def get_seller_flex_stock_for_skus(skus: list[str]) -> dict:
             chunk = uniq[i:i + 500]
             placeholders = ",".join("?" * len(chunk))
             cur = await db.execute(
-                f"""SELECT node, warehouse, sku, sellable_qty, bound_qty, synced_at
+                f"""SELECT node, warehouse, sku, sellable_qty, bound_qty, synced_at, bin
                     FROM seller_flex_stock WHERE sku IN ({placeholders})""",
                 chunk,
             )

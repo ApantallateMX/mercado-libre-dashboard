@@ -45,12 +45,16 @@
         </select>
     </div>
 
-    <!-- BIN global -->
+    <!-- BIN global -- datalist con los bines REALES ya usados en este nodo/almacén
+         (Seller Flex no tiene catálogo fijo de bines, "disponibles" = ya usados) -->
     <div class="flex items-center gap-1.5">
         <label class="text-xs text-gray-500 font-medium">BIN por defecto:</label>
-        <input type="text" id="sfx-bin-global" placeholder="Ej. A101"
+        <input type="text" id="sfx-bin-global" placeholder="Ej. A101" list="sfx-bins-list"
                class="w-24 px-2 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] text-center font-mono uppercase bg-white">
     </div>
+    <datalist id="sfx-bins-list">
+        {% for b in available_bins %}<option value="{{ b }}">{% endfor %}
+    </datalist>
 
     <!-- Botón generar CSV (alta) -->
     <button onclick="window._sfxGenerateCSV()"
@@ -243,11 +247,13 @@
                         </span>
                     </td>
 
-                    <!-- BIN (editable por fila) -->
+                    <!-- BIN real (precargado si ya sabemos dónde está recibido; editable) -->
                     <td class="py-2.5 px-3 text-center">
                         <input type="text" class="sfx-bin w-16 px-2 py-1 text-xs border border-gray-200 rounded-lg
                                                   outline-none focus:border-[#FF9900] text-center font-mono uppercase bg-white"
-                               placeholder="A101" data-sku="{{ item.sku | e }}">
+                               placeholder="A101" list="sfx-bins-list" data-sku="{{ item.sku | e }}"
+                               {% if item.sf_bin %}title="Ya recibido en este bin"{% endif %}
+                               value="{{ item.sf_bin }}">
                     </td>
 
                     <!-- Cantidad a recibir -- sugerido = delta real (BM almacén - SF almacén), NUNCA bm_avail bruto -->

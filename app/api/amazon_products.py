@@ -3086,10 +3086,14 @@ async def amazon_products_seller_flex(
             item["sf_tj"]   = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "TJ")
             item["sf_total"] = item["sf_mty"] + item["sf_cdmx"] + item["sf_tj"]
             item["sf_synced_at"] = max((n.get("synced_at", 0) for n in _nodes), default=0)
-            # Fallback: si la FBA Inventory API no reportó nada (fba_stock=0) y
-            # sí hay dato real de Seller Flex, usarlo para el KPI/columna visible
-            # -- mismo criterio que Alertas de Stock y Cobertura.
-            if item["fba_stock"] == 0 and item["sf_total"] > 0:
+            # FIX 2026-08-22 (reportado por Jovan: mostraba 122 cuando lo real
+            # era 20): la FBA Inventory API puede devolver un número viejo NO
+            # CERO (no solo 0 en Onsite) -- confirmado en vivo, ver memoria.
+            # Si YA tenemos un snapshot real de Seller Flex para este SKU
+            # (aunque sea 0), se usa SIEMPRE sobre fba_stock -- es la fuente
+            # verificada, fba_stock es el fallback solo para SKUs que nunca
+            # se han escaneado todavía.
+            if _nodes:
                 item["fba_stock"] = item["sf_total"]
                 item["fba_stock_source"] = "seller_flex"
             _bm_wh = item.get("bm_mty", 0) if _wh == "MTY" else item.get("bm_cdmx", 0)
@@ -3097,6 +3101,26 @@ async def amazon_products_seller_flex(
             item["suggest_receive"] = max(0, _bm_wh - _sf_wh)
             item["suggest_remove"]  = min(_sf_wh, max(0, _sf_wh - _bm_wh))
             item["listing_ok_for_receive"] = item["status"] == "ACTIVE"
+            # Bin real donde está recibido (2026-08-22, pedido de Jovan) --
+            # viene del snapshot GraphQL GetInventoryViewByBin, no existe un
+            # catálogo fijo de bines en Seller Flex (ver memoria).
+            _bin_match = next((n["bin"] for n in _nodes if n.get("warehouse") == _wh and n.get("bin")), "")
+            item["sf_bin"] = _bin_match
+
+        # Bines disponibles para el dropdown (2026-08-22, pedido de Jovan) --
+        # Seller Flex no tiene catálogo fijo de bines, así que "disponibles"
+        # = los que ya se han usado en el snapshot para el nodo de este
+        # almacén/cuenta. Mapeo node<->almacén confirmado en vivo el
+        # 2026-08-22 (ver memoria project_seller_flex_portal_and_qty_gap.md).
+        _NODE_BY_SELLER_WAREHOUSE = {
+            ("A20NFIUQNEYZ1E", "MTY"):  "SYGL",
+            ("A20NFIUQNEYZ1E", "CDMX"): "SYQJ",
+            ("A252KSQ687FNRO", "MTY"):  "SOKA",
+            ("A252KSQ687FNRO", "CDMX"): "SBBQ",
+            ("A252KSQ687FNRO", "TJ"):   "SHDN",
+        }
+        _node_for_wh = _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, _wh), "")
+        available_bins = await _ts_sfx.get_seller_flex_bins_for_node(_node_for_wh) if _node_for_wh else []
 
         # FLX loading state — para mostrar "···" en template si BG activo
         flx_loading = client.seller_id in _flx_stock_refreshing
@@ -3113,6 +3137,7 @@ async def amazon_products_seller_flex(
             "q":           q,
             "flx_loading": flx_loading,
             "warehouse":   _wh,
+            "available_bins": available_bins,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_seller_flex.html", ctx)
 
