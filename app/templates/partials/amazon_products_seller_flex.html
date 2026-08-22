@@ -34,6 +34,17 @@
         </button>
     </div>
 
+    <!-- Almacén (2026-08-22): cada archivo corresponde a UN almacén físico
+         real -- las cantidades sugeridas se calculan contra ese almacén. -->
+    <div class="flex items-center gap-1.5">
+        <label class="text-xs text-gray-500 font-medium">Almacén:</label>
+        <select id="sfx-warehouse" onchange="window._sfxSetWarehouse(this.value)"
+                class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] bg-white font-semibold">
+            <option value="MTY" {% if warehouse == 'MTY' %}selected{% endif %}>MTY</option>
+            <option value="CDMX" {% if warehouse == 'CDMX' %}selected{% endif %}>CDMX</option>
+        </select>
+    </div>
+
     <!-- BIN global -->
     <div class="flex items-center gap-1.5">
         <label class="text-xs text-gray-500 font-medium">BIN por defecto:</label>
@@ -41,10 +52,16 @@
                class="w-24 px-2 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] text-center font-mono uppercase bg-white">
     </div>
 
-    <!-- Botón generar CSV -->
+    <!-- Botón generar CSV (alta) -->
     <button onclick="window._sfxGenerateCSV()"
             class="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[#FF9900] text-white rounded-lg hover:bg-orange-600 transition">
-        ⬇ Generar CSV
+        ⬇ Recibir (alta)
+    </button>
+
+    <!-- Botón generar XLSX (baja) -->
+    <button onclick="window._sfxGenerateAdjustXLSX()"
+            class="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 transition">
+        ⬇ Eliminar (baja)
     </button>
 
     <!-- Indicador de carga FLX -->
@@ -65,9 +82,19 @@
 <div class="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
     <span class="flex-shrink-0">📦</span>
     <span>
-        <strong>Stock Amazon</strong> = unidades disponibles en Amazon Onsite vía FBA API (tiempo real, cada 2 min).
+        <strong>Stock Amazon</strong> = stock real de Seller Flex (la FBA API no reporta Onsite, ver snapshot).
         <strong>Reservado</strong> = órdenes pendientes de envío.
-        <strong>Stock BM</strong> = inventario en tu bodega disponible para reabastecer.
+        <strong>Stock BM</strong> = inventario físico real en bodega.
+        Las cantidades sugeridas de "a recibir" y "a eliminar" son el <strong>delta real</strong> contra el almacén
+        seleccionado ({{ warehouse }}) -- nunca el total bruto de BM, para no sobre-recibir ni pedir eliminar más de lo que existe.
+    </span>
+</div>
+<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+    <span class="flex-shrink-0">⚠️</span>
+    <span>
+        Snapshot manual, no en vivo -- si pasó mucho tiempo desde el último refresh de Seller Flex, pide uno nuevo
+        antes de generar el archivo. Cantidad a eliminar siempre se topa contra el stock real al momento de generar
+        el archivo (no puede pedir eliminar más de lo que Seller Flex reporta).
     </span>
 </div>
 
@@ -123,11 +150,12 @@
                         <span class="block text-[9px] text-gray-400 font-normal normal-case tracking-normal leading-none">(FBA API real)</span>
                     </th>
                     <th class="py-2.5 px-3 font-medium text-right">BM Disp.</th>
-                    <th class="py-2.5 px-3 font-medium text-right hidden sm:table-cell">MTY</th>
-                    <th class="py-2.5 px-3 font-medium text-right hidden sm:table-cell">CDMX</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden sm:table-cell">BM {{ warehouse }}</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden sm:table-cell" title="Stock real de Seller Flex en este almacén (snapshot)">SF {{ warehouse }}</th>
                     <th class="py-2.5 px-3 font-medium text-center">BIN</th>
-                    <th class="py-2.5 px-3 font-medium text-center">Cantidad a recibir</th>
+                    <th class="py-2.5 px-3 font-medium text-center" title="Sugerido = BM {{ warehouse }} menos lo que Seller Flex ya tiene">Cant. a recibir</th>
                     <th class="py-2.5 px-3 font-medium text-center">Tipo</th>
+                    <th class="py-2.5 px-3 font-medium text-center bg-red-50" title="Sugerido = lo que Seller Flex tiene de más vs BM {{ warehouse }} -- nunca mayor a lo real disponible">Cant. a eliminar</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-50" id="sfx-tbody">
@@ -199,17 +227,19 @@
                         </span>
                     </td>
 
-                    <!-- MTY -->
+                    <!-- BM en el almacén seleccionado -->
                     <td class="py-2.5 px-3 text-right whitespace-nowrap hidden sm:table-cell">
-                        <span class="text-xs {% if item.bm_mty > 0 %}text-green-700 font-medium{% else %}text-gray-300{% endif %}">
-                            {{ item.bm_mty }}
+                        {% set bm_wh = item.bm_mty if warehouse == 'MTY' else item.bm_cdmx %}
+                        <span class="text-xs {% if bm_wh > 0 %}text-green-700 font-medium{% else %}text-gray-300{% endif %}">
+                            {{ bm_wh }}
                         </span>
                     </td>
 
-                    <!-- CDMX -->
+                    <!-- Seller Flex real en el almacén seleccionado -->
                     <td class="py-2.5 px-3 text-right whitespace-nowrap hidden sm:table-cell">
-                        <span class="text-xs {% if item.bm_cdmx > 0 %}text-green-700 font-medium{% else %}text-gray-300{% endif %}">
-                            {{ item.bm_cdmx }}
+                        {% set sf_wh = item.sf_mty if warehouse == 'MTY' else item.sf_cdmx %}
+                        <span class="text-xs {% if sf_wh > 0 %}text-blue-700 font-medium{% else %}text-gray-300{% endif %}">
+                            {{ sf_wh }}
                         </span>
                     </td>
 
@@ -220,13 +250,17 @@
                                placeholder="A101" data-sku="{{ item.sku | e }}">
                     </td>
 
-                    <!-- Cantidad a recibir -->
+                    <!-- Cantidad a recibir -- sugerido = delta real (BM almacén - SF almacén), NUNCA bm_avail bruto -->
                     <td class="py-2.5 px-3 text-center">
                         <input type="number" min="0" step="1"
                                class="sfx-qty w-20 px-2 py-1 text-xs border border-gray-200 rounded-lg
                                       outline-none focus:border-[#FF9900] text-center bg-white"
                                placeholder="0" data-sku="{{ item.sku | e }}"
-                               value="{{ item.bm_avail if item.bm_avail > 0 else '' }}">
+                               title="Sugerido: {{ item.suggest_receive }} (delta real contra {{ warehouse }})"
+                               value="{{ item.suggest_receive if item.suggest_receive > 0 else '' }}">
+                        {% if not item.listing_ok_for_receive %}
+                        <p class="text-[9px] text-red-500 mt-0.5" title="Amazon exige listing ACTIVO para poder recibir inventario">⚠ listing no activo</p>
+                        {% endif %}
                     </td>
 
                     <!-- Tipo GOOD/BAD -->
@@ -236,6 +270,16 @@
                             <option value="GOOD">GOOD</option>
                             <option value="BAD">BAD</option>
                         </select>
+                    </td>
+
+                    <!-- Cantidad a eliminar (baja) -- sugerido = SF almacén de más vs BM almacén, topado a SF real -->
+                    <td class="py-2.5 px-3 text-center bg-red-50/40">
+                        <input type="number" min="0" step="1"
+                               class="sfx-remove-qty w-20 px-2 py-1 text-xs border border-red-200 rounded-lg
+                                      outline-none focus:border-red-500 text-center bg-white"
+                               placeholder="0" data-sku="{{ item.sku | e }}"
+                               title="Sugerido: {{ item.suggest_remove }} -- se topa server-side contra el stock real al generar"
+                               value="{{ item.suggest_remove if item.suggest_remove > 0 else '' }}">
                     </td>
                 </tr>
                 {% endfor %}
@@ -263,9 +307,9 @@
 <div id="sfx-csv-banner" class="hidden mt-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-xs text-green-700 flex items-center gap-2">
     <span>✓</span>
     <span id="sfx-csv-msg"></span>
-    <a href="https://onsite.amazon.com/inventory/receive/batch" target="_blank"
+    <a href="https://sellerflex.amazon.com.mx/dashboard" target="_blank"
        class="ml-auto font-semibold underline hover:no-underline text-green-800">
-        Subir al portal Seller Flex ↗
+        Abrir portal Seller Flex ↗
     </a>
 </div>
 

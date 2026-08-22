@@ -2984,8 +2984,9 @@ async def get_historial_acciones(request: Request, seller_id: str = ""):
 @router.get("/products/seller-flex", response_class=HTMLResponse)
 async def amazon_products_seller_flex(
     request: Request,
-    q:     str  = Query("", description="Búsqueda por SKU o título"),
-    force: bool = Query(False, description="Limpia caché antes de cargar"),
+    q:         str  = Query("", description="Búsqueda por SKU o título"),
+    force:     bool = Query(False, description="Limpia caché antes de cargar"),
+    warehouse: str  = Query("MTY", description="Almacén físico del archivo a preparar: MTY o CDMX"),
 ):
     """
     Muestra todos los listings con sufijo -FLX (Seller Flex / Amazon Onsite).
@@ -3064,6 +3065,39 @@ async def amazon_products_seller_flex(
         # Enriquecer con BinManager (reutiliza la función del tab inventario)
         await _enrich_bm_amz(flx_items, timeout_s=8.0)
 
+        # FIX 2026-08-22 (pedido explícito de Jovan, tras confirmar que la FBA
+        # Inventory API NO reporta el stock real de Onsite y que la sugerencia
+        # de "cantidad a recibir" usaba bm_avail COMPLETO -- ignorando lo que
+        # Seller Flex YA tenía registrado, causando sobre-recepción/doble
+        # conteo real). Se reemplaza con el snapshot real de seller_flex_stock
+        # (ver memoria project_seller_flex_portal_and_qty_gap.md) y la
+        # cantidad sugerida ahora es el DELTA real contra ese almacén
+        # específico, nunca el total bruto de BM.
+        from app.services import token_store as _ts_sfx
+        _wh = (warehouse or "MTY").strip().upper()
+        if _wh not in ("MTY", "CDMX", "TJ"):
+            _wh = "MTY"
+        _sfx_skus = [it["sku"] for it in flx_items if it.get("sku")]
+        _sfx_map = await _ts_sfx.get_seller_flex_stock_for_skus(_sfx_skus) if _sfx_skus else {}
+        for item in flx_items:
+            _nodes = _sfx_map.get(item["sku"], [])
+            item["sf_mty"]  = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "MTY")
+            item["sf_cdmx"] = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "CDMX")
+            item["sf_tj"]   = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "TJ")
+            item["sf_total"] = item["sf_mty"] + item["sf_cdmx"] + item["sf_tj"]
+            item["sf_synced_at"] = max((n.get("synced_at", 0) for n in _nodes), default=0)
+            # Fallback: si la FBA Inventory API no reportó nada (fba_stock=0) y
+            # sí hay dato real de Seller Flex, usarlo para el KPI/columna visible
+            # -- mismo criterio que Alertas de Stock y Cobertura.
+            if item["fba_stock"] == 0 and item["sf_total"] > 0:
+                item["fba_stock"] = item["sf_total"]
+                item["fba_stock_source"] = "seller_flex"
+            _bm_wh = item.get("bm_mty", 0) if _wh == "MTY" else item.get("bm_cdmx", 0)
+            _sf_wh = item.get(f"sf_{_wh.lower()}", 0)
+            item["suggest_receive"] = max(0, _bm_wh - _sf_wh)
+            item["suggest_remove"]  = min(_sf_wh, max(0, _sf_wh - _bm_wh))
+            item["listing_ok_for_receive"] = item["status"] == "ACTIVE"
+
         # FLX loading state — para mostrar "···" en template si BG activo
         flx_loading = client.seller_id in _flx_stock_refreshing
 
@@ -3078,6 +3112,7 @@ async def amazon_products_seller_flex(
             "total":       len(flx_items),
             "q":           q,
             "flx_loading": flx_loading,
+            "warehouse":   _wh,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_seller_flex.html", ctx)
 
@@ -3324,6 +3359,90 @@ async def generate_seller_flex_csv(request: Request):
             "Content-Disposition": 'attachment; filename="seller_flex_recibir.csv"'
         },
     )
+
+
+@router.post("/products/seller-flex/adjust-xlsx")
+async def generate_seller_flex_adjust_xlsx(request: Request):
+    """
+    Genera el XLSX de "Ajuste en lote" (Ajustes -> Eliminar) para dar de baja
+    stock que ya no existe -- mismo formato exacto que exige el portal Seller
+    Flex (columnas ASIN/SKU/FNSKU, EXPIRY_DATE, MANUFACTURING_DATE,
+    ADJUSTMENT_TYPE, SOURCE_BIN_ID, DESTINATION_BIN_ID, SOURCE_INVENTORY_TYPE,
+    DESTINATION_INVENTORY_TYPE, QUANTITY -- ver memoria
+    project_seller_flex_receive_adjust_mechanics.md).
+
+    Manual oficial de Amazon (Seller Flex 2023, sección 4.2): "Al eliminar
+    el inventario, elija Eliminar. No seleccione Perdido. Use Perdido solo
+    cuando los artículos no estén dentro del contenedor/almacén." -- por eso
+    ADJUSTMENT_TYPE es siempre "REMOVE " (baja contable), nunca "LOSE".
+
+    FIX central 2026-08-22 (causa raíz real de los errores "Items not found
+    for this disposition and quantity" que bodega ya sufría a diario):
+    la cantidad a eliminar SIEMPRE se topa server-side contra
+    seller_flex_stock (el snapshot real más reciente que tenemos), nunca
+    contra lo que el usuario haya escrito en el formulario -- así el archivo
+    generado nunca puede pedir eliminar más de lo que Seller Flex reporta
+    que existe en este momento.
+
+    Body JSON: {"source_bin": "A1", "items": [{"sku": "...", "quantity": N}]}
+    """
+    import io
+    import openpyxl
+
+    from app.services import token_store as _ts_sfx_adj
+
+    body = await request.json()
+    source_bin = (body.get("source_bin") or "A1").strip()
+    items = body.get("items", [])
+    if not items:
+        raise HTTPException(status_code=400, detail="Sin items para generar el archivo de ajuste")
+
+    skus = [str(it.get("sku", "")).strip() for it in items if it.get("sku")]
+    _sfx_map = await _ts_sfx_adj.get_seller_flex_stock_for_skus(skus) if skus else {}
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append([
+        "ASIN/SKU/FNSKU", "EXPIRY_DATE (dd/mm/yyyy)", "MANUFACTURING_DATE (dd/mm/yyyy)",
+        "ADJUSTMENT_TYPE", "SOURCE_BIN_ID", "DESTINATION_BIN_ID",
+        "SOURCE_INVENTORY_TYPE", "DESTINATION_INVENTORY_TYPE", "QUANTITY",
+    ])
+
+    skipped: list = []
+    rows_written = 0
+    for it in items:
+        sku = str(it.get("sku", "")).strip()
+        requested = int(it.get("quantity") or 0)
+        if not sku or requested <= 0:
+            continue
+        real_available = sum(n.get("sellable_qty", 0) for n in _sfx_map.get(sku, []))
+        capped = min(requested, real_available)
+        if capped <= 0:
+            skipped.append({"sku": sku, "reason": "sin stock real registrado en Seller Flex (0 disponible)"})
+            continue
+        if capped < requested:
+            skipped.append({"sku": sku, "reason": f"pedido {requested}, topado a {capped} (stock real disponible)"})
+        ws.append([sku, None, None, "REMOVE ", source_bin, None, "PRIME", None, capped])
+        rows_written += 1
+
+    if rows_written == 0:
+        raise HTTPException(status_code=400, detail="Ningún item tiene stock real que dar de baja según seller_flex_stock")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    resp = StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="seller_flex_ajustes_eliminar.xlsx"',
+            "X-Rows-Written": str(rows_written),
+            "X-Rows-Skipped": str(len(skipped)),
+        },
+    )
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
