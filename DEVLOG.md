@@ -155,6 +155,23 @@ Ver memoria `project_seller_flex_portal_and_qty_gap.md` (actualización
 
 ---
 
+## 2026-08-22 (3b) — OPERACIÓN: prueba real de ajuste dirigida por Jovan
+
+Jovan pidió una prueba directa (no un archivo para revisar): reducir
+SHIL000165-NEW-V de 50 a 40 unidades en Amazon. Ejecutado en vivo con su
+sesión real vía el formulario "Ajustes → Individual" del portal (Eliminar,
+bin A1, SELLABLE, cantidad 10). Amazon confirmó éxito y se verificó
+inmediatamente con una consulta directa (no caché): PRIME pasó de 25 a 15
+en el nodo MTY -- exactamente lo pedido. Corregido `seller_flex_stock`
+con un UPDATE puntual (nuevo endpoint `seller-flex-update-one`). Total
+final: 40 unidades, confirmado.
+
+Ver memoria `project_seller_flex_receive_adjust_mechanics.md` (actualización
+2026-08-22 (2)) para el detalle completo y la conclusión sobre qué tan
+lejos se puede automatizar esto sin guardar credenciales de Amazon.
+
+---
+
 ## 2026-08-22 (4) — FEAT: sync automático de stock Onsite reactivado (aprobado por Jovan)
 
 Jovan aprobó ("adelante") desarrollar la vía oficial de SP-API encontrada
