@@ -7,6 +7,64 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-22 — FEAT: stock real de Amazon Onsite/Seller Flex (nueva tabla + 2 vistas corregidas)
+
+Jovan preguntó si Amazon había cambiado FBA a "FLX u Onsite". Investigación
+(marketplace-strategist + verificación en vivo) confirmó: "FLX" no es un
+programa real (confusión con "Amazon Flex", reparto de última milla).
+"Onsite"/"Seller Flex" sí es real y ya estaba parcialmente implementado
+(pestaña `amazon_products_seller_flex.html`, feb 2026) pero con datos
+desactualizados.
+
+**Causa raíz de fondo (grave):** ni la Listings API (`fulfillmentAvailability`)
+ni la FBA Inventory API (`fulfillableQuantity`) exponen el stock real de
+Onsite -- confirmado en vivo contra producción con endpoint diag temporal
+(`/api/diag/amazon-listing-live-qty`, commit `ebc36d8`): el SKU simplemente
+no aparece en ninguna de las 2 (el stock nunca entra a un centro de Amazon).
+Afecta a **VECTOR y AUTOBOT por igual** (verificado con nodos reales de
+ambas cuentas).
+
+**Portal real explorado en vivo:** `sellerflex.amazon.com.mx`, 5 nodos
+across 2 perfiles de Chrome distintos (Vector: SYGL=MTY, SYQJ=CDMX ·
+Autobot: SOKA=MTY, SBBQ=CDMX, SHDN=TJ/abandonado). Encontrados 2 riesgos
+operativos reales de huelga por envíos atrasados (SYGL 26.29%, SOKA 13.05%
+vs metas de 0.30-0.70%) -- pasado al equipo de logística, no es un tema de
+código.
+
+**Solución de datos (sin guardar credenciales de Amazon en el servidor):**
+se identificó la query GraphQL interna real del portal
+(`GetInventoryViewBySku`, observación pasiva de la sesión ya autenticada de
+Jovan -- introspección deliberadamente bloqueada por Amazon, no se intentó
+evadir; un intento de POST directo desde la página fue bloqueado por el CSP
+de Amazon, tampoco se evadió). Claude ejecuta la query en la pestaña de
+Jovan vía `javascript_tool`, exporta a archivo (evita límite de tamaño de
+las respuestas de la herramienta), y sube el JSON a un endpoint nuevo desde
+su propia terminal.
+
+**Nuevo:** tabla `seller_flex_stock` (node, warehouse, seller_id, sku, asin,
+sellable_qty, bound_qty, synced_at) + `POST /api/diag/seller-flex-ingest`
+(con CORS) + `GET /api/diag/seller-flex-lookup`. 3,922 filas reales cargadas
+(commits `aa36df3`, `99f6628`, `cd2fe04`). Snapshot manual por ahora --
+Jovan avisa cuándo repetirlo, sin cron todavía.
+
+**Conectado a 2 de 3 vistas:**
+- Alertas de Stock (Amazon): SKUs Onsite eran invisibles en la página (ni
+  "Sin Stock" ni "Reabastecer") -- ahora se completan con el dato real,
+  marca "(SF)" visible (commit `517a267`).
+- Cobertura de Stock: nueva columna "Onsite (SF)" con desglose MTY/CDMX/TJ,
+  informativa (commit `04b7068`).
+- **Riesgo Sobreventa NO se tocó** -- confirmado con Jovan que BM no resta
+  la unidad al registrarla en Onsite (solo con envíos reales a FBA), así
+  que sumar Seller Flex ahí habría contado las unidades dos veces
+  (BM ya las cuenta + Amazon "expuesto") -- exactamente el mismo falso
+  positivo que un fix de agosto ya había eliminado para FBA clásico. La
+  exclusión actual de AMAZON_NA en esa función sigue siendo correcta.
+
+Ver memoria `project_seller_flex_portal_and_qty_gap.md` y
+`project_amazon_onsite_seller_flex_status.md` para el detalle completo.
+
+---
+
 ## 2026-08-21 — INCIDENTE CRÍTICO: sesión BM colgada zereó ~2,590 SKUs reales en las 5 categorías top-5
 
 Jovan reportó con 2 casos reales (SHIL000522, SNTV007241) que "Riesgo
