@@ -18386,6 +18386,19 @@ async def diag_amazon_orders_list(token: str = "", seller_id: str = "", days: in
     })
 
 
+@app.post("/api/diag/seller-flex-update-one")
+async def diag_seller_flex_update_one(token: str = "", node: str = "", sku: str = "", sellable_qty: int = -1):
+    """Corrige UNA sola fila de seller_flex_stock tras confirmar en vivo un
+    ajuste real (ej. una baja hecha en el portal) -- sin re-escanear todo
+    el node. Ver project_seller_flex_receive_adjust_mechanics.md."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not node or not sku or sellable_qty < 0:
+        return JSONResponse({"error": "node, sku y sellable_qty (>=0) son requeridos"}, status_code=400)
+    updated = await token_store.update_seller_flex_stock_row(node, sku, sellable_qty, _time.time())
+    return {"ok": True, "updated": updated}
+
+
 @app.get("/api/diag/amazon-onsite-report-probe")
 async def diag_amazon_onsite_report_probe(token: str = "", seller_id: str = ""):
     """DIAGNÓSTICO temporal (2026-08-22): prueba si GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA

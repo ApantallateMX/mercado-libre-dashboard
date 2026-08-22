@@ -2172,6 +2172,20 @@ async def upsert_seller_flex_stock(node: str, warehouse: str, seller_id: str, it
         return len(rows)
 
 
+async def update_seller_flex_stock_row(node: str, sku: str, sellable_qty: int, synced_at: float) -> bool:
+    """Actualiza UNA sola fila (node, sku) sin tocar el resto del snapshot del
+    node -- para cuando se confirma en vivo que un ajuste puntual sí se
+    aplicó (ver project_seller_flex_receive_adjust_mechanics.md), evita
+    tener que re-escanear los ~800 SKUs del node solo para corregir 1."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "UPDATE seller_flex_stock SET sellable_qty = ?, synced_at = ? WHERE node = ? AND sku = ?",
+            (sellable_qty, synced_at, node, sku),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
 async def get_seller_flex_bins_for_node(node: str) -> list[str]:
     """Bines realmente en uso para un nodo (derivado del snapshot cargado --
     Seller Flex no tiene un catálogo fijo de bines, cualquier string es un
