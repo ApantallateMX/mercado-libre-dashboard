@@ -1661,6 +1661,26 @@ async def init_db():
             await db.commit()
         except Exception:
             pass  # already exists
+        # TABLA: seller_flex_stock — stock real de Amazon Onsite/Seller Flex por
+        # nodo (SYGL/SYQJ/SOKA/etc), fuente = query GetInventoryViewBySku de
+        # sellerflex.amazon.com.mx (SP-API no expone este stock -- ver memoria
+        # project_seller_flex_portal_and_qty_gap.md). Se llena via ingesta manual
+        # disparada por Claude/Jovan desde el navegador (script en la pestaña ya
+        # autenticada -- nunca se guardan credenciales ni cookies de sesión aquí).
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS seller_flex_stock (
+                node         TEXT NOT NULL,
+                warehouse    TEXT NOT NULL DEFAULT '',
+                seller_id    TEXT NOT NULL DEFAULT '',
+                sku          TEXT NOT NULL,
+                asin         TEXT DEFAULT '',
+                sellable_qty INTEGER NOT NULL DEFAULT 0,
+                bound_qty    INTEGER NOT NULL DEFAULT 0,
+                synced_at    REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (node, sku)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_seller_flex_stock_sku ON seller_flex_stock(sku)")
         # TABLA: amz_launched_listings — productos lanzados via wizard para monitoreo post-publicación
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_launched_listings (
@@ -2118,6 +2138,52 @@ async def get_bm_master_sync_meta() -> dict:
         "verified_skus": row["nv"] or 0,
         "last_sync_ts": row["last_ts"] or 0,
     }
+
+
+async def upsert_seller_flex_stock(node: str, warehouse: str, seller_id: str, items: list[dict], synced_at: float) -> int:
+    """Reemplaza el snapshot de un nodo Seller Flex (node=SYGL/SYQJ/SOKA/etc)
+    con los items recibidos [{sku, asin, sellable, bound}]. Borra primero las
+    filas viejas del mismo node para no dejar SKUs fantasma que ya no
+    reportó el último scan (un SKU que salió de la lista significa que ya
+    no tiene stock ni bound -- el ingest solo manda items con stock>0)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute("DELETE FROM seller_flex_stock WHERE node = ?", (node,))
+        rows = [
+            (node, warehouse, seller_id, it["sku"], it.get("asin", ""),
+             int(it.get("sellable", 0)), int(it.get("bound", 0)), synced_at)
+            for it in items
+        ]
+        if rows:
+            await db.executemany(
+                """INSERT INTO seller_flex_stock (node, warehouse, seller_id, sku, asin, sellable_qty, bound_qty, synced_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                rows,
+            )
+        await db.commit()
+        return len(rows)
+
+
+async def get_seller_flex_stock_for_skus(skus: list[str]) -> dict:
+    """Lee seller_flex_stock para un set de SKUs -- SELECT puro. Retorna
+    {sku: [{node, warehouse, sellable_qty, bound_qty, synced_at}, ...]}
+    porque el mismo SKU puede existir en más de un nodo/almacén."""
+    if not skus:
+        return {}
+    out: dict = {}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        uniq = list(set(skus))
+        for i in range(0, len(uniq), 500):
+            chunk = uniq[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""SELECT node, warehouse, sku, sellable_qty, bound_qty, synced_at
+                    FROM seller_flex_stock WHERE sku IN ({placeholders})""",
+                chunk,
+            )
+            for r in await cur.fetchall():
+                out.setdefault(r["sku"], []).append(dict(r))
+    return out
 
 
 async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:

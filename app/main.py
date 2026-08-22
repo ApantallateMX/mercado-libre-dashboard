@@ -18386,6 +18386,35 @@ async def diag_amazon_orders_list(token: str = "", seller_id: str = "", days: in
     })
 
 
+@app.post("/api/diag/seller-flex-ingest")
+async def diag_seller_flex_ingest(request: Request, token: str = ""):
+    """Recibe el snapshot de stock real de un nodo Seller Flex (query
+    GetInventoryViewBySku, extraída en vivo desde el navegador ya
+    autenticado -- NUNCA se guardan credenciales/cookies de Amazon en este
+    servidor, solo el resultado ya calculado: sku/asin/sellable/bound).
+    Body: {"node": "SYGL", "warehouse": "CDMX", "seller_id": "A20...",
+    "items": [{"sku":"...","asin":"...","sellable":N,"bound":N}, ...]}.
+    Reemplaza el snapshot completo de ese node (ver upsert_seller_flex_stock)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "JSON inválido"}, status_code=400)
+    node = (body.get("node") or "").strip()
+    items = body.get("items") or []
+    if not node or not isinstance(items, list):
+        return JSONResponse({"error": "node e items son requeridos"}, status_code=400)
+    n = await token_store.upsert_seller_flex_stock(
+        node=node,
+        warehouse=(body.get("warehouse") or "").strip(),
+        seller_id=(body.get("seller_id") or "").strip(),
+        items=items,
+        synced_at=_time.time(),
+    )
+    return {"ok": True, "node": node, "rows_stored": n}
+
+
 @app.get("/api/diag/amazon-listing-live-qty")
 async def diag_amazon_listing_live_qty(token: str = "", seller_id: str = "", sku: str = ""):
     """DIAGNÓSTICO temporal (2026-08-21) -- valida en vivo la hipótesis de que
