@@ -18412,7 +18412,22 @@ async def diag_seller_flex_ingest(request: Request, token: str = ""):
         items=items,
         synced_at=_time.time(),
     )
-    return {"ok": True, "node": node, "rows_stored": n}
+    resp = JSONResponse({"ok": True, "node": node, "rows_stored": n})
+    resp.headers["Access-Control-Allow-Origin"] = "https://sellerflex.amazon.com.mx"
+    return resp
+
+
+@app.options("/api/diag/seller-flex-ingest")
+async def diag_seller_flex_ingest_options():
+    """Preflight CORS -- el POST real sigue exigiendo _DIAG_TOKEN, esto solo
+    permite que el navegador (parado en sellerflex.amazon.com.mx) intente la
+    llamada real. Sin este OPTIONS el navegador bloquea el POST antes de
+    mandarlo por la política de CORS."""
+    resp = JSONResponse({})
+    resp.headers["Access-Control-Allow-Origin"] = "https://sellerflex.amazon.com.mx"
+    resp.headers["Access-Control-Allow-Methods"] = "POST"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return resp
 
 
 @app.get("/api/diag/amazon-listing-live-qty")
