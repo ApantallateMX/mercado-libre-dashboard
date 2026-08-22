@@ -65,6 +65,53 @@ Ver memoria `project_seller_flex_portal_and_qty_gap.md` y
 
 ---
 
+## 2026-08-22 (2) — FEAT: generador de archivos Recibir/Ajustes Seller Flex (basado en manual oficial de Amazon)
+
+Jovan pidió investigar cómo se agrega/quita inventario en Seller Flex para
+poder automatizarlo -- explícitamente "no confío en los procesos que
+tenemos" (bodega arma el archivo a mano con fórmulas de Excel varias veces
+al día: `FLX (MT).csv` para altas, `FLX (REMOVE-MT).xlsx` para bajas).
+
+**Evidencia real del problema:** reporte de errores real descargado del
+portal (20 ago) -- las 14 fallas eran TODAS "Items not found for this
+disposition and quantity": bodega calcula la baja sin checar cuánto dice
+Seller Flex que hay en ese momento exacto.
+
+**Investigación en documentación oficial** (no en el proceso actual, por
+pedido explícito de Jovan): manual oficial "Seller Flex 2023 — Manual de
+Operaciones" (PDF de Amazon). Hallazgo clave: el tipo de ajuste REMOVE que
+bodega ya usa es el CORRECTO según Amazon ("Al eliminar el inventario,
+elija Eliminar. No seleccione Perdido") -- confirma que el proceso no
+estaba mal elegido, solo los datos.
+
+**Construido (commit `eb8c533`), con aprobación explícita de Jovan tras
+explicarle el riesgo de escritura directa a Amazon:**
+- Selector de almacén (MTY/CDMX) en la pestaña Seller Flex existente
+  (`/api/amazon/products/seller-flex`) -- cada archivo corresponde a un
+  almacén físico real.
+- "Cantidad a recibir" ahora es el delta real (BM del almacén − Seller
+  Flex del almacén), ya no el total bruto de BM (que causaba
+  sobre-recepción/doble conteo).
+- Nueva columna "Cantidad a eliminar" con el excedente real sugerido.
+- Nuevo endpoint `POST /api/amazon/products/seller-flex/adjust-xlsx`:
+  genera el XLSX exacto que exige el portal (9 columnas oficiales,
+  ADJUSTMENT_TYPE="REMOVE "). Topa SIEMPRE server-side contra
+  `seller_flex_stock` real -- nunca puede pedir eliminar más de lo que
+  existe, elimina de raíz la clase de error verificada arriba.
+- **Sin autosubida** -- Jovan pidió inicialmente 100% automático sin
+  revisión, se le explicó que esto sí escribe en inventario real de
+  Amazon (a diferencia de todo lo demás de hoy, que es solo lectura) y
+  aceptó el patrón correcto: generar automático + aprobar con un clic +
+  humano sube manualmente (mismo patrón ya usado para ML).
+- Verificado localmente antes de push: fila de prueba con 11 unidades
+  reales, pedido de 100 → archivo generado con 11 (capado correctamente),
+  formato columna por columna idéntico al oficial.
+
+Ver memoria `project_seller_flex_receive_adjust_mechanics.md` para el
+detalle completo de las reglas oficiales y la decisión de alcance.
+
+---
+
 ## 2026-08-21 — INCIDENTE CRÍTICO: sesión BM colgada zereó ~2,590 SKUs reales en las 5 categorías top-5
 
 Jovan reportó con 2 casos reales (SHIL000522, SNTV007241) que "Riesgo
