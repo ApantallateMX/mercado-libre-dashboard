@@ -172,6 +172,27 @@ lejos se puede automatizar esto sin guardar credenciales de Amazon.
 
 ---
 
+## 2026-08-22 (3c) — FEAT: alta/baja en lote desde Alertas de Stock
+
+Jovan pidió que el flujo de generar archivos (ya construido en Seller
+Flex) también viviera en Alertas de Stock, con la misma lógica de "marca
+varios, un clic genera todo junto" -- lo más automatizado posible dentro
+de lo seguro (sin autosubida directa).
+
+Agregado a `amazon_products_stock_alerts` (Amazon → Alertas de Stock):
+selector MTY/CDMX, checkboxes + cantidad sugerida en "Reabastecer FBA"
+(alta) y en "Discrepancia BM vs FBA" (baja, solo para SKUs Onsite reales
+con excedente, nunca para FBA clásico). Un botón por sección genera el
+archivo completo con todo lo marcado. Reutiliza los mismos endpoints
+`/seller-flex/csv` y `/seller-flex/adjust-xlsx` ya construidos.
+
+Fix de paso: esta función tenía el mismo bug de mezcla de cuentas ya
+encontrado y corregido en las otras 2 vistas -- corregido antes de
+construir encima. Verificado en producción: 22 SKUs reales con
+excedente Onsite detectado en MTY.
+
+---
+
 ## 2026-08-22 (4) — FEAT: sync automático de stock Onsite reactivado (aprobado por Jovan)
 
 Jovan aprobó ("adelante") desarrollar la vía oficial de SP-API encontrada
