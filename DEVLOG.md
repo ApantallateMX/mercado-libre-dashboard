@@ -155,6 +155,28 @@ Ver memoria `project_seller_flex_portal_and_qty_gap.md` (actualización
 
 ---
 
+## 2026-08-22 (4) — FEAT: sync automático de stock Onsite reactivado (aprobado por Jovan)
+
+Jovan aprobó ("adelante") desarrollar la vía oficial de SP-API encontrada
+para automatizar la lectura de Onsite sin depender del navegador.
+
+**Commit `8b93d12`:** `get_onsite_inventory_report()` ahora reintenta 3
+veces (45s entre cada uno) antes de rendirse -- el error FATAL que un
+desarrollador anterior tomó como permanente era en realidad intermitente.
+`_onsite_periodic_sync_loop()` reactivado de verdad (antes un no-op):
+corre para las 3 cuentas Amazon cada 3 horas. La página Seller Flex usa
+este reporte como fallback automático para SKUs sin snapshot manual
+todavía, marcado "reporte auto" para distinguirlo.
+
+**Verificado en producción tras el deploy:** el primer ciclo automático
+corrió solo, sin ninguna intervención, y terminó con 1,427 SKUs para
+VECTOR -- exactamente igual al test manual de hoy más temprano.
+
+No reemplaza el snapshot manual (`seller_flex_stock`, con desglose
+MTY/CDMX + bin real) -- son complementarios.
+
+---
+
 ## 2026-08-21 — INCIDENTE CRÍTICO: sesión BM colgada zereó ~2,590 SKUs reales en las 5 categorías top-5
 
 Jovan reportó con 2 casos reales (SHIL000522, SNTV007241) que "Riesgo
