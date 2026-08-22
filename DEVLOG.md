@@ -112,6 +112,49 @@ detalle completo de las reglas oficiales y la decisión de alcance.
 
 ---
 
+## 2026-08-22 (3) — FIX CRÍTICO: mezcla de cuentas en seller_flex_stock + bin real + hallazgo de API oficial
+
+Jovan reportó 3 cosas sobre la pestaña Seller Flex: mostrar el BIN real
+donde está recibido cada producto, un dropdown de bines disponibles por
+nodo/almacén, y un caso real donde "Stock Amazon" mostraba 122 cuando
+en realidad había 20.
+
+**Causa del 122:** la FBA Inventory API puede devolver un número viejo
+NO CERO para SKUs Onsite (confirmado en vivo: la API responde `null`
+para ese SKU ahora mismo, pero el caché seguía en 122). Fix: si ya
+existe un snapshot de `seller_flex_stock` para el SKU, se usa SIEMPRE
+sobre el valor de la FBA API.
+
+**Bug crítico encontrado al agregar el bin (commit `73af44e`):** el
+mismo texto de SKU existe como listing separado de VECTOR y de AUTOBOT.
+El código que sumaba stock "por almacén" a secas mezclaba las 2 cuentas
+-- violaba "SCOPE DE CUENTA — NUNCA MEZCLAR". Afectaba también el TOPE
+DE SEGURIDAD del generador de bajas (permitía inflar el tope con stock
+de otra cuenta). Corregido filtrando siempre por el nodo real de
+cuenta+almacén. Verificado con datos de prueba antes de subir.
+
+**Bin real:** agregado vía query GraphQL `GetInventoryViewByBin`
+(distinta de la usada para cantidades). Reejecutado el snapshot de
+SYGL/SYQJ (VECTOR) con bin incluido -- 820 y 644 filas respectivamente,
+todo en bin "A1" por ahora.
+
+**Hallazgo grande, pendiente de decisión:** existe un reporte OFICIAL
+de SP-API (`GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA`) que sí trae stock
+de Onsite -- ya estaba construido en el código pero completamente
+desactivado por un intento anterior que dio error FATAL una vez. Se
+volvió a probar hoy: para VECTOR funcionó perfecto (261 SKUs -FLX,
+100% coincidencia contra el snapshot manual). Para AUTOBOT fue
+intermitente (1 éxito, 2 FATAL seguidos) -- parece un problema de
+confiabilidad de Amazon, no un límite permanente. Con reintentos esto
+podría automatizar la lectura de Onsite 100% desde el servidor, sin
+depender de que Jovan tenga una pestaña abierta -- no implementado
+todavía, pendiente de decidir con Jovan.
+
+Ver memoria `project_seller_flex_portal_and_qty_gap.md` (actualización
+2026-08-22 (3)) para el detalle completo.
+
+---
+
 ## 2026-08-21 — INCIDENTE CRÍTICO: sesión BM colgada zereó ~2,590 SKUs reales en las 5 categorías top-5
 
 Jovan reportó con 2 casos reales (SHIL000522, SNTV007241) que "Riesgo
