@@ -18386,6 +18386,17 @@ async def diag_amazon_orders_list(token: str = "", seller_id: str = "", days: in
     })
 
 
+@app.get("/api/diag/seller-flex-lookup")
+async def diag_seller_flex_lookup(token: str = "", sku: str = ""):
+    """Lee seller_flex_stock para un SKU -- verificación rápida post-ingesta."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    data = await token_store.get_seller_flex_stock_for_skus([sku.strip().upper()])
+    return {"sku": sku, "nodes": data.get(sku.strip().upper(), [])}
+
+
 @app.post("/api/diag/seller-flex-ingest")
 async def diag_seller_flex_ingest(request: Request, token: str = ""):
     """Recibe el snapshot de stock real de un nodo Seller Flex (query
