@@ -1526,7 +1526,7 @@ window._sfxGenerateAdjustXLSX = function() {
     fetch('/api/amazon/products/seller-flex/adjust-xlsx', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ source_bin: sourceBin, items: rows }),
+        body: JSON.stringify({ source_bin: sourceBin, warehouse: (document.getElementById('sfx-warehouse') || {}).value || 'MTY', items: rows }),
     })
     .then(function(r) {
         if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || ('HTTP ' + r.status)); });

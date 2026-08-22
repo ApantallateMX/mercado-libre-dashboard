@@ -155,6 +155,20 @@ _BM_AMZ_TTL   = 900   # 15 min
 _bm_all_refreshing:   set   = set()  # "bm_all" cuando BG pre-fetch activo
 _bm_all_last_refresh: float = 0.0    # timestamp del último BG refresh completo
 
+# ─── Seller Flex: nodo real por (seller_id, almacén) ─────────────────────────
+# Confirmado en vivo el 2026-08-22 explorando el portal sellerflex.amazon.com.mx
+# con Jovan (ver memoria project_seller_flex_portal_and_qty_gap.md). Necesario
+# para filtrar seller_flex_stock por CUENTA -- el mismo texto de SKU puede
+# existir como listing separado de VECKTOR y de AUTOBOT (regla del proyecto:
+# "SCOPE DE CUENTA — NUNCA MEZCLAR").
+_NODE_BY_SELLER_WAREHOUSE = {
+    ("A20NFIUQNEYZ1E", "MTY"):  "SYGL",
+    ("A20NFIUQNEYZ1E", "CDMX"): "SYQJ",
+    ("A252KSQ687FNRO", "MTY"):  "SOKA",
+    ("A252KSQ687FNRO", "CDMX"): "SBBQ",
+    ("A252KSQ687FNRO", "TJ"):   "SHDN",
+}
+
 # ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
 # El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
 _flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: data})}
@@ -3077,13 +3091,27 @@ async def amazon_products_seller_flex(
         _wh = (warehouse or "MTY").strip().upper()
         if _wh not in ("MTY", "CDMX", "TJ"):
             _wh = "MTY"
+        # FIX 2026-08-22 (bug real encontrado al agregar bin: SKUs con el
+        # MISMO texto exacto existen como listings separados de VECTOR y
+        # AUTOBOT en sus propios nodos -- sumar por "warehouse" a secas
+        # mezclaba el stock de las 2 cuentas. Regla del proyecto: "SCOPE DE
+        # CUENTA — NUNCA MEZCLAR". Se filtra SIEMPRE por los nodos reales de
+        # ESTE seller_id, nunca por nombre de almacén a secas.
+        _my_node_mty  = _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, "MTY"), "")
+        _my_node_cdmx = _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, "CDMX"), "")
+        _my_node_tj   = _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, "TJ"), "")
         _sfx_skus = [it["sku"] for it in flx_items if it.get("sku")]
-        _sfx_map = await _ts_sfx.get_seller_flex_stock_for_skus(_sfx_skus) if _sfx_skus else {}
+        _sfx_map_raw = await _ts_sfx.get_seller_flex_stock_for_skus(_sfx_skus) if _sfx_skus else {}
+        _my_nodes_set = {n for n in (_my_node_mty, _my_node_cdmx, _my_node_tj) if n}
+        _sfx_map = {
+            sku: [row for row in rows if row.get("node") in _my_nodes_set]
+            for sku, rows in _sfx_map_raw.items()
+        }
         for item in flx_items:
             _nodes = _sfx_map.get(item["sku"], [])
-            item["sf_mty"]  = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "MTY")
-            item["sf_cdmx"] = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "CDMX")
-            item["sf_tj"]   = sum(n["sellable_qty"] for n in _nodes if n.get("warehouse") == "TJ")
+            item["sf_mty"]  = sum(n["sellable_qty"] for n in _nodes if n.get("node") == _my_node_mty)
+            item["sf_cdmx"] = sum(n["sellable_qty"] for n in _nodes if n.get("node") == _my_node_cdmx)
+            item["sf_tj"]   = sum(n["sellable_qty"] for n in _nodes if n.get("node") == _my_node_tj)
             item["sf_total"] = item["sf_mty"] + item["sf_cdmx"] + item["sf_tj"]
             item["sf_synced_at"] = max((n.get("synced_at", 0) for n in _nodes), default=0)
             # FIX 2026-08-22 (reportado por Jovan: mostraba 122 cuando lo real
@@ -3112,13 +3140,6 @@ async def amazon_products_seller_flex(
         # = los que ya se han usado en el snapshot para el nodo de este
         # almacén/cuenta. Mapeo node<->almacén confirmado en vivo el
         # 2026-08-22 (ver memoria project_seller_flex_portal_and_qty_gap.md).
-        _NODE_BY_SELLER_WAREHOUSE = {
-            ("A20NFIUQNEYZ1E", "MTY"):  "SYGL",
-            ("A20NFIUQNEYZ1E", "CDMX"): "SYQJ",
-            ("A252KSQ687FNRO", "MTY"):  "SOKA",
-            ("A252KSQ687FNRO", "CDMX"): "SBBQ",
-            ("A252KSQ687FNRO", "TJ"):   "SHDN",
-        }
         _node_for_wh = _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, _wh), "")
         available_bins = await _ts_sfx.get_seller_flex_bins_for_node(_node_for_wh) if _node_for_wh else []
 
@@ -3409,7 +3430,14 @@ async def generate_seller_flex_adjust_xlsx(request: Request):
     generado nunca puede pedir eliminar más de lo que Seller Flex reporta
     que existe en este momento.
 
-    Body JSON: {"source_bin": "A1", "items": [{"sku": "...", "quantity": N}]}
+    FIX 2026-08-22 (b): el tope SIEMPRE se calcula solo contra el nodo real
+    de ESTA cuenta+almacén -- el mismo texto de SKU puede existir como
+    listing separado de VECKTOR y de AUTOBOT (ver
+    _NODE_BY_SELLER_WAREHOUSE), sumar sin filtrar por cuenta permitiría un
+    tope inflado con stock de OTRA cuenta (violaría "SCOPE DE CUENTA —
+    NUNCA MEZCLAR" y volvería a generar el mismo error de cantidad).
+
+    Body JSON: {"source_bin": "A1", "warehouse": "MTY", "items": [{"sku": "...", "quantity": N}]}
     """
     import io
     import openpyxl
@@ -3422,8 +3450,20 @@ async def generate_seller_flex_adjust_xlsx(request: Request):
     if not items:
         raise HTTPException(status_code=400, detail="Sin items para generar el archivo de ajuste")
 
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="Sin cuenta Amazon conectada")
+    _wh = (body.get("warehouse") or "MTY").strip().upper()
+    if _wh not in ("MTY", "CDMX", "TJ"):
+        _wh = "MTY"
+    _my_node = _NODE_BY_SELLER_WAREHOUSE.get((client.seller_id, _wh), "")
+
     skus = [str(it.get("sku", "")).strip() for it in items if it.get("sku")]
-    _sfx_map = await _ts_sfx_adj.get_seller_flex_stock_for_skus(skus) if skus else {}
+    _sfx_map_raw = await _ts_sfx_adj.get_seller_flex_stock_for_skus(skus) if skus else {}
+    _sfx_map = {
+        sku: [row for row in rows if row.get("node") == _my_node]
+        for sku, rows in _sfx_map_raw.items()
+    }
 
     wb = openpyxl.Workbook()
     ws = wb.active
