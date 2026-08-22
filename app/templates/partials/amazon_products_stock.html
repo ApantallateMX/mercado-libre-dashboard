@@ -262,6 +262,7 @@
                     </td>
                     <td class="py-3 px-3 text-right">
                         <span class="text-sm font-bold text-orange-600">{{ item.fulfillable }}</span>
+                        {% if item.fulfillable_source == 'seller_flex' %}<p class="text-[10px] text-blue-500">Seller Flex</p>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-right">
                         {% if item.bm_avail %}<span class="text-xs font-medium text-green-600">{{ item.bm_avail }}</span>
@@ -340,6 +341,7 @@
                     </td>
                     <td class="py-3 px-3 text-right">
                         <span class="text-sm font-bold text-gray-700">{{ item.fulfillable }}</span>
+                        {% if item.fulfillable_source == 'seller_flex' %}<p class="text-[10px] text-blue-500">Seller Flex</p>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-right">
                         {% if item.bm_avail %}<span class="text-xs font-medium text-green-600">{{ item.bm_avail }}</span>
@@ -422,7 +424,7 @@
                             {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
                         </div>
                     </td>
-                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}</td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}{% if item.fulfillable_source == 'seller_flex' %} <span class="text-blue-500">(SF)</span>{% endif %}</td>
                     <td class="py-3 px-3 text-right">
                         <span class="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">{{ item.bm_avail or 0 }}</span>
                     </td>
@@ -484,7 +486,7 @@
                             {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
                         </div>
                     </td>
-                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}</td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}{% if item.fulfillable_source == 'seller_flex' %} <span class="text-blue-500">(SF)</span>{% endif %}</td>
                     <td class="py-3 px-3 text-right">
                         <span class="text-sm font-bold text-slate-600">{{ item.bm_avail or 0 }}</span>
                     </td>
@@ -598,7 +600,7 @@
                             {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
                         </div>
                     </td>
-                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}</td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}{% if item.fulfillable_source == 'seller_flex' %} <span class="text-blue-500">(SF)</span>{% endif %}</td>
                     <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.bm_avail or 0 }}</td>
                     <td class="py-3 px-3 text-right">
                         <span class="px-2 py-0.5 bg-sky-100 text-sky-700 text-xs font-bold rounded-full">+{{ item.gap_units or 0 }}</span>

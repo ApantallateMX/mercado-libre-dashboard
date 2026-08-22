@@ -2437,6 +2437,56 @@ async def amazon_products_stock_alerts(request: Request):
                 "channel":    listing.get("channel", "FBA"),
             })
 
+        # ── FIX 2026-08-22 (Onsite/Seller Flex): la FBA Inventory API NO conoce
+        # el stock de Onsite (nunca entra a un centro de Amazon) -- confirmado
+        # en vivo, ver memoria project_seller_flex_portal_and_qty_gap.md. Un SKU
+        # Onsite con stock real simplemente NO aparece en fba_summaries (no es
+        # que salga en 0), así que quedaba invisible en esta página -- ni
+        # "Sin Stock" ni "Reabastecer", solo ausente. Se completa con el
+        # snapshot real de seller_flex_stock (extraído del portal Seller Flex,
+        # única fuente real para este stock) para los SKUs AMAZON_NA que
+        # fba_summaries no reportó, y se usa como fallback si algún SKU sí
+        # aparece mal en 0.
+        _all_items_skus = {it["sku"] for it in all_items}
+        _onsite_missing_skus = [
+            _sku for _sku, _l in listings_idx.items()
+            if _l.get("channel") == "FBA" and _sku not in _all_items_skus
+        ]
+        from app.services import token_store as _ts_sf
+        _sf_lookup_skus = list(_all_items_skus | set(_onsite_missing_skus))
+        _sf_map = await _ts_sf.get_seller_flex_stock_for_skus(_sf_lookup_skus) if _sf_lookup_skus else {}
+
+        def _sf_qty(sku: str) -> int:
+            return sum(n.get("sellable_qty", 0) for n in _sf_map.get(sku, []))
+
+        for item in all_items:
+            if item["fulfillable"] == 0:
+                _sfq = _sf_qty(item["sku"])
+                if _sfq > 0:
+                    item["fulfillable"] = _sfq
+                    item["fulfillable_source"] = "seller_flex"
+
+        for _sku in _onsite_missing_skus:
+            _sfq = _sf_qty(_sku)
+            if _sfq == 0:
+                continue  # sin dato real disponible -- no inventar, se omite (mismo criterio que antes: invisible en vez de falso)
+            _l = listings_idx[_sku]
+            _sales = sku_sales.get(_sku, {"units": 0, "revenue": 0.0})
+            _units_30d = _sales["units"]
+            _vel_dia = _units_30d / 30.0
+            _asin = _l.get("asin") or ""
+            _sc_url = (
+                f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={_asin}"
+                if _asin else "https://sellercentral.amazon.com.mx/inventory"
+            )
+            all_items.append({
+                "sku": _sku, "asin": _asin, "title": _l.get("title") or _sku,
+                "fulfillable": _sfq, "fulfillable_source": "seller_flex",
+                "inbound": 0, "units_30d": _units_30d,
+                "vel_dia": round(_vel_dia, 2) if _vel_dia > 0 else None,
+                "sc_url": _sc_url, "price": _l.get("price", 0.0), "channel": "FBA",
+            })
+
         # ── Lista aparte para Riesgo Sobreventa real (FBM) ───────────────────
         # Los SKU FBM normalmente NO aparecen en fba_summaries (no tienen stock
         # físico en un FC de Amazon), así que sin este bloque quedan totalmente
