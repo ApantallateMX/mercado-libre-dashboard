@@ -7,6 +7,61 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-22 — FEAT: Lote 2 de la auditoría de alertas de stock (unificar Acción Req., Reactivar Amazon, ROP real, Quiebre Inminente, margen Amazon, Sobrestock)
+
+Jovan aprobó ("dale a todo, confío en ti") seguir con el lote 2 (más
+diseño/riesgo que el lote 1). Investigado a fondo con un fork antes de
+tocar código, para no inventar fórmulas/umbrales sin dato real de
+respaldo. Commit `3005211`:
+
+1. **"⚡ Acción Req." unificado** (`main.py`) — recalculaba risk_ids/
+   restock_ids/critical_ids con su propia lógica, sin los guardias que sí
+   tiene "Alertas de Stock" (`_synced_ids`, `_uid_suppress`,
+   `_bm_avail_verified_zero`, `_bm_bulk_ok`). Ahora lee las mismas listas
+   ya vetadas de `_stock_issues_cache`, con fallback al cálculo local si
+   el caché está frío (nunca deja la vista vacía).
+2. **Amazon "Reactivar"** — `fbm_items` ya incluía listings en 0 con
+   stock BM real disponible, nadie los mostraba. Nueva sección
+   reutilizando el botón "Sync stock BM" (`set_qty`) ya existente — cero
+   mecanismo de escritura nuevo, solo se expone un caso que ya estaba
+   soportado.
+3. **`target_coverage_days_for_sku()` centralizada** (`sku_utils.py`,
+   antes duplicada solo en `main.py`) — 30 días TVs / 14 días resto, dato
+   real ya validado y en uso en `_rec_qty`. Amazon "Restock Urgente" ya
+   no usa 14 días fijos ni siquiera para TVs — ahora usa el lead time
+   real por SKU.
+4. **Nueva alerta ML "Quiebre Inminente"** — el gap más peligroso de la
+   auditoría: un SKU con 200 unidades vendiendo 40/día (5 días de
+   cobertura real) no disparaba nada en "Stock Crítico" porque ese solo
+   mira unidades absolutas (≤10). Nueva alerta: `_bm_avail>10` AND
+   `_days_supply < target_coverage_days_for_sku(sku)`. Verificado en
+   aislado con el ejemplo exacto del reporte (200u/40d-TV → dispara).
+5. **Amazon "Margen Real Insuficiente"** — reusa la fórmula YA VALIDADA
+   de `amazon_orders.py` (comisión de socio 7% + fee estimado 10% + meta
+   de recuperación 80% TV / 60% resto contra RetailPH real), nunca antes
+   expuesta como alerta de listing (solo existía a nivel de orden ya
+   cerrada). El `margin_pct` del tab Catálogo tiene una fórmula distinta
+   y menos precisa (FX fijo, sin comisión de socio) — fuera de alcance
+   hoy, queda para otra sesión.
+6. **ML "Sobrestock" expuesto** — dato ya calculado por
+   `coverage-price-alerts` (`_days_supply>90`), antes solo se usaba para
+   sugerir un recorte de precio, nunca visible como alerta de stock. Cero
+   cálculo nuevo.
+
+**Pendiente, requiere decisión externa (no implementado)**: notificación
+proactiva — confirmado que NO existe ningún canal de salida conectado
+hoy (ni email API tipo Resend/SendGrid, ni webhook de Teams/Slack) — se
+le preguntó a Jovan qué canal prefiere antes de construir nada.
+
+Verificado local (3 endpoints, HTTP 200 sin tracebacks) + sanity check
+aislado de las 2 fórmulas nuevas (Quiebre Inminente y margen Amazon) +
+verificado en producción con datos reales (Sobrestock y Reactivar sí
+dispararon con datos reales; Quiebre Inminente y Margen Amazon no
+tuvieron SKUs que calificaran en este momento para las cuentas
+probadas, sin error). Ver memoria `project_alerts_audit_2026-08-22.md`.
+
+---
+
 ## 2026-08-22 — FIX + FEAT: Lote 1 de la auditoría de alertas de stock (paridad ML/Amazon, antigüedad, cruce Restock Watch)
 
 Jovan pidió auditar todas las alertas de stock para ver si eran únicas o
