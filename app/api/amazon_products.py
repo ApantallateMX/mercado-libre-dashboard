@@ -2626,12 +2626,47 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
                 discrepancia_bm_fba.append(item)
 
             # Stock Crítico BM: BM > 0 pero < 10
-            if 0 < bm_avail < 10:
+            # FIX 2026-08-22 (auditoría de alertas): sin "units_30d > 0", un SKU sin
+            # ventas caía aquí ("cómpralo ya") Y en Estancado ("liquídalo") al mismo
+            # tiempo -- misma contradicción ya corregida en ML el 2026-08-20
+            # (main.py, lista `critical`), replicada aquí para paridad de plataformas.
+            if 0 < bm_avail < 10 and units_30d > 0:
                 stock_critico.append(item)
 
             # Estancado: BM>0, 0 ventas 30d, FBA>0
             if bm_avail > 0 and units_30d == 0 and fulfillable > 0:
                 estancado.append(item)
+
+        # SKU no en catálogo BM — FEATURE 2026-08-22 (auditoría de alertas): ML
+        # ya tenía esta alerta (main.py, lista `no_bm_sku`), Amazon no tenía
+        # equivalente -- violaba la regla de CLAUDE.md de implementar features
+        # en ambas plataformas. Mismo catálogo BM cacheado (nunca llamada en
+        # vivo a BM) y mismos prefijos que el lado ML.
+        from app.services import token_store as _ts_nobm
+        from app.services.sku_utils import normalize_to_bm_sku as _norm_bm_amz
+        _BM_PREFIXES_AMZ = ("SN", "SHIL", "RMTC", "SHEL", "SHFL", "SHHP", "SHLB")
+        try:
+            _cat_rows_amz = await _ts_nobm.get_bm_catalog_all()
+            _bm_catalog_skus_amz = {(r.get("sku") or "").upper() for r in _cat_rows_amz if r.get("sku")}
+        except Exception:
+            _bm_catalog_skus_amz = set()
+        no_bm_sku: list = []
+        if _bm_catalog_skus_amz:
+            _seen_no_bm_amz: set = set()
+            for item in all_items:
+                _raw = (item.get("sku") or "").upper()
+                if not _raw:
+                    # Sin SKU en absoluto -- se reporta siempre (mismo criterio
+                    # que el lado ML tras el fix del mismo día, ver main.py).
+                    no_bm_sku.append(item)
+                    continue
+                if not any(_raw.startswith(_px) for _px in _BM_PREFIXES_AMZ):
+                    continue
+                _norm = _norm_bm_amz(_raw)
+                if _norm and _norm not in _bm_catalog_skus_amz and _norm not in _seen_no_bm_amz:
+                    _seen_no_bm_amz.add(_norm)
+                    no_bm_sku.append(item)
+        no_bm_sku.sort(key=lambda x: x["title"])
 
         # Riesgo Sobreventa real: qty PUBLICADA (FBM) > BM disponible. Único
         # caso donde la sobreventa es accionable — nosotros controlamos ese
@@ -2651,7 +2686,23 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
         stock_bajo.sort(key=lambda x: (x.get("dias_hasta_0") or 9999))
         restock_urgente.sort(key=lambda x: x.get("dias_supply", 9999))
         stock_critico.sort(key=lambda x: x.get("bm_avail") or 0)
-        estancado.sort(key=lambda x: -(x.get("bm_avail") or 0))
+
+        # Racha de Estancado — antigüedad real, mismo mecanismo ya usado en ML
+        # (`stock_issue_streaks`, ver main.py) para paridad de plataformas.
+        # FEATURE 2026-08-22 (auditoría de alertas).
+        from app.services import token_store as _ts_stag
+        await _ts_stag.sync_stock_issue_streak(
+            client.seller_id, "stagnant_amz",
+            {it.get("sku", ""): it.get("title", "") for it in estancado if it.get("sku")},
+        )
+        _stagnant_hours_amz = {
+            r["sku"]: r["hours_active"]
+            for r in await _ts_stag.get_drift_alerts(client.seller_id, "stagnant_amz", min_hours=0.0)
+        }
+        for _it in estancado:
+            _it["_days_stagnant"] = round(_stagnant_hours_amz.get(_it.get("sku", ""), 0.0) / 24, 1)
+        estancado.sort(key=lambda x: (x.get("_days_stagnant") or 0, (x.get("bm_avail") or 0)), reverse=True)
+
         discrepancia_bm_fba.sort(key=lambda x: -(x.get("gap_units") or 0))
 
         # Dedup por SKU único — un mismo SKU puede caer en varias categorías
@@ -2660,7 +2711,7 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
         # una alerta accionable, así que no cuenta hacia total_alertas.
         _alert_skus: set = set()
         for _lst in (sin_stock, reabastecer, riesgo_sobreventa, stock_bajo,
-                     restock_urgente, stock_critico, estancado):
+                     restock_urgente, stock_critico, estancado, no_bm_sku):
             for _it in _lst:
                 _alert_skus.add(_it["sku"])
         total_alertas = len(_alert_skus)
@@ -2674,6 +2725,7 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
             "stock_critico":       stock_critico,
             "estancado":           estancado,
             "discrepancia_bm_fba": discrepancia_bm_fba,
+            "no_bm_sku":           no_bm_sku,
             "total_alertas":       total_alertas,
             "sin_stock_count":     len(sin_stock),
             "reabastecer_count":   len(reabastecer),
@@ -2683,6 +2735,7 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
             "critico_count":       len(stock_critico),
             "estancado_count":     len(estancado),
             "discrepancia_count":  len(discrepancia_bm_fba),
+            "no_bm_sku_count":     len(no_bm_sku),
             "nickname":            client.nickname,
             "marketplace":         client.marketplace_name,
             "warehouse":           _wh_alerts,

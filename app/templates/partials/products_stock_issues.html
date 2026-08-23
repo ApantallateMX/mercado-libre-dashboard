@@ -1501,6 +1501,8 @@ window._stockFilter = function(q) {
                 <div><span class="text-gray-500">Ventas 30d:</span> <span class="font-bold text-red-600">0</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">{{ p.get('available_quantity', 0) }}</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-slate-700">{{ p.get('_bm_avail', 0) }}</span></div>
+                {% set _days = p.get('_days_stagnant', 0) %}
+                <div><span class="text-gray-500">Estancado:</span> <span class="font-bold {% if _days >= 60 %}text-red-600{% elif _days >= 30 %}text-orange-500{% else %}text-gray-500{% endif %}">{{ _days }}d</span></div>
                 {% set _stag_no_wh = not p.get('_bm_wh_fetched') %}
                 <div class="text-[10px] text-gray-400">{% if _stag_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p.get('_bm_mty', 0) or 0 }} CDMX:{{ p.get('_bm_cdmx', 0) or 0 }} TJ:{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</div>
                 {% if p.get('_margen_pct') is not none %}
@@ -1526,6 +1528,7 @@ window._stockFilter = function(q) {
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-blue-500">CDMX</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-purple-400">TJ</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-pink-600">Margen Est.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs" title="Días consecutivos detectado como Estancado">Días</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
                 </tr>
             </thead>
@@ -1568,6 +1571,10 @@ window._stockFilter = function(q) {
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _stag_dt_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right {% if p.get('_margen_pct') is not none and p._margen_pct < 10 %}text-red-600 font-bold{% else %}text-gray-600{% endif %}">
                         {% if p.get('_margen_pct') is not none %}{{ p._margen_pct }}%{% else %}—{% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% set _days = p.get('_days_stagnant', 0) %}
+                        <span class="text-xs font-bold {% if _days >= 60 %}text-red-600{% elif _days >= 30 %}text-orange-500{% else %}text-gray-500{% endif %}">{{ _days }}d</span>
                     </td>
                     <td class="px-3 py-2 text-center">
                         <a href="https://www.mercadolibre.com.mx/anuncios/{{ p.id }}" target="_blank"

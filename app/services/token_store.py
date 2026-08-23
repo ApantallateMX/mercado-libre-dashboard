@@ -3103,6 +3103,7 @@ async def get_pending_restock_watches() -> list[dict]:
 
         cur = await db.execute("""
             SELECT sar.id, sar.original_sku, sar.order_id, sar.username, sar.ts,
+                   sar.account_id,
                    COALESCE(bsm.title, '') AS titulo,
                    COALESCE(bsm.available_qty, 0) AS bm_available_qty
             FROM stock_alert_resolutions sar

@@ -7522,8 +7522,24 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("id") not in _synced_ids
                     and _bm_bulk_ok(p.get("sku", ""))
                 ]
+                # Racha de Estancado — antigüedad real del problema, no solo binario
+                # "0 ventas en 30d sí/no". FEATURE 2026-08-22 (auditoría de alertas,
+                # gap pendiente desde 2026-08-20): reutiliza el mismo mecanismo ya
+                # probado para Desbalance (`stock_issue_streaks`), solo con otro
+                # issue_type -- no distingue un SKU parado hace 35 días de uno
+                # parado hace 300, y ahora sí.
+                await token_store.sync_stock_issue_streak(
+                    str(client.user_id), "stagnant",
+                    {p.get("sku", ""): p.get("title", "") for p in stagnant if p.get("sku")},
+                )
+                _stagnant_hours = {
+                    r["sku"]: r["hours_active"]
+                    for r in await token_store.get_drift_alerts(str(client.user_id), "stagnant", min_hours=0.0)
+                }
+                for _p in stagnant:
+                    _p["_days_stagnant"] = round(_stagnant_hours.get(_p.get("sku", ""), 0.0) / 24, 1)
                 stagnant.sort(
-                    key=lambda x: (x.get("_bm_avail_raw") or 0) * (x.get("price") or 1),
+                    key=lambda x: (x.get("_days_stagnant") or 0, (x.get("_bm_avail_raw") or 0) * (x.get("price") or 1)),
                     reverse=True
                 )
 
@@ -7584,7 +7600,15 @@ async def _prewarm_caches(user_id: str = None):
                     _seen_no_bm: set = set()
                     for _p in products:
                         _raw = ((_p.get("sku") or "")).upper()
-                        if not _raw or not any(_raw.startswith(_px) for _px in _BM_PREFIXES):
+                        if not _raw:
+                            # FIX 2026-08-22 (auditoría de alertas): antes se excluía aquí
+                            # un listing activo sin SKU en absoluto, pero /productos/sin-bm
+                            # SÍ lo reporta ("motivo": "Sin SKU") -- mismo concepto de
+                            # negocio con 2 números distintos. Se reporta siempre, sin dedup
+                            # por SKU normalizado (no hay SKU que normalizar).
+                            no_bm_sku.append(_p)
+                            continue
+                        if not any(_raw.startswith(_px) for _px in _BM_PREFIXES):
                             continue
                         _norm = normalize_to_bm_sku(_raw)
                         if _norm and _norm not in _bm_catalog_skus and _norm not in _seen_no_bm:
@@ -16955,11 +16979,36 @@ async def stock_alert_resolutions_history(request: Request, limit: int = 50, pla
 async def stock_alerts_restock_watch(request: Request):
     """SKUs que se pusieron en 0 por falta de stock y que YA tienen
     inventario disponible de nuevo en BM (bm_sku_master, sincronizado
-    periódicamente) — para el aviso de reactivación."""
+    periódicamente) — para el aviso de reactivación.
+
+    FIX 2026-08-22 (auditoría de alertas): Restock Watch y "Reabastecer"/
+    "Activar" (Alertas de Stock) son 2 fuentes de verdad sin cruzar --
+    confirmado que no son 100% redundantes (uno es log de eventos con
+    contexto de "quién lo puso en 0", el otro es un escaneo en vivo), pero
+    mostrarlos sin cruzar genera trabajo doble para quien reactiva. Marca
+    `already_in_restock` (deduplicación VISUAL, no de dato) si ese mismo
+    SKU ya aparece ahora mismo en `restock`/`activate` de la cache que
+    alimenta esa misma pestaña.
+    """
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
     rows = await token_store.get_pending_restock_watches()
+    for _r in rows:
+        _acc = _r.get("account_id")
+        _entry = _stock_issues_cache.get(f"stock_issues:{_acc}:t10") if _acc else None
+        _target = (_r.get("original_sku") or "").upper()
+        _already = False
+        if _entry and _target:
+            _data = _entry[1]
+            for _lst_name in ("restock", "activate"):
+                for _p in _data.get(_lst_name, []):
+                    if normalize_to_bm_sku((_p.get("sku") or "").upper()) == _target:
+                        _already = True
+                        break
+                if _already:
+                    break
+        _r["already_in_restock"] = _already
     return JSONResponse({"rows": rows})
 
 
