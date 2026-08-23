@@ -7,7 +7,7 @@
 </div>
 {% else %}
 
-{% set total_urgentes = (sin_stock|length) + (reabastecer|length) + (riesgo_sobreventa|length) + (stock_bajo|length) + (restock_urgente|length) + (stock_critico|length) + (estancado|length) + (no_bm_sku|length) %}
+{% set total_urgentes = (sin_stock|length) + (reabastecer|length) + (riesgo_sobreventa|length) + (stock_bajo|length) + (restock_urgente|length) + (stock_critico|length) + (estancado|length) + (no_bm_sku|length) + (reactivar|length) + (price_risk|length) %}
 
 {% if total_urgentes == 0 %}
 <div class="bg-white rounded-xl shadow p-10 text-center">
@@ -88,6 +88,24 @@
         <p class="text-2xl font-bold text-purple-600">{{ no_bm_sku_count }}</p>
         <p class="text-[10px] text-gray-400">Sin equivalente en BinManager</p>
     </div>
+
+    {% if reactivar_count %}
+    <div onclick="document.getElementById('sec-reactivar').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-green-500 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition kpi-card">
+        <p class="text-xs text-gray-500">Reactivar (FBM)</p>
+        <p class="text-2xl font-bold text-green-600">{{ reactivar_count }}</p>
+        <p class="text-[10px] text-gray-400">En 0, BM tiene stock real</p>
+    </div>
+    {% endif %}
+
+    {% if price_risk_count %}
+    <div onclick="document.getElementById('sec-price-risk').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-pink-400 cursor-pointer hover:shadow-md hover:bg-pink-50/30 transition kpi-card">
+        <p class="text-xs text-gray-500">Margen Real Insuficiente</p>
+        <p class="text-2xl font-bold text-pink-600">{{ price_risk_count }}</p>
+        <p class="text-[10px] text-gray-400">Bajo meta de recuperación real</p>
+    </div>
+    {% endif %}
 
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300 kpi-card">
         <p class="text-xs text-gray-500">Total Alertas</p>
@@ -344,8 +362,8 @@
         <div class="flex items-center gap-2">
             <span class="text-lg">⏱</span>
             <div>
-                <h3 class="text-sm font-bold text-yellow-800">Restock Urgente (&lt; 14 días supply)</h3>
-                <p class="text-xs text-yellow-600">Basado en velocidad de ventas — planifica envío FBA</p>
+                <h3 class="text-sm font-bold text-yellow-800">Restock Urgente</h3>
+                <p class="text-xs text-yellow-600">Basado en velocidad de ventas y lead time real del SKU (30d TVs, 14d resto) — planifica envío FBA</p>
             </div>
         </div>
         <span class="px-3 py-1 bg-yellow-400 text-white text-xs font-bold rounded-full">{{ restock_urgente|length }} SKUs</span>
@@ -652,6 +670,119 @@
         </table>
     </div>
     <div id="amz-pager-no-bm-sku" class="border-t border-purple-100 bg-purple-50/30"></div>
+</div>
+{% endif %}
+
+<!-- ─── REACTIVAR (FBM en 0 con stock BM real) ──────────────────────────────── -->
+{% if reactivar %}
+<div id="sec-reactivar" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-green-500">
+    <div class="px-4 py-3 bg-green-50 flex items-center justify-between border-b border-green-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">🟢</span>
+            <div>
+                <h3 class="text-sm font-bold text-green-800">Reactivar (FBM)</h3>
+                <p class="text-xs text-green-600">Listing en 0 (posiblemente inactivo) con stock real disponible en BM — mismo mecanismo que "Sync stock BM"</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-green-500 text-white text-xs font-bold rounded-full">{{ reactivar|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-green-50/50">
+                <tr class="text-xs text-green-700 text-left border-b border-green-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
+                    <th class="py-2 px-3 font-medium text-center">Acción</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-reactivar" class="divide-y divide-green-50">
+                {% for item in reactivar %}
+                <tr class="hover:bg-green-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="text-sm font-bold text-green-600">{{ item.bm_avail or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
+                    <td class="py-3 px-3 text-center">
+                        <button data-sku="{{ item.sku }}" data-bm="{{ item.bm_avail or 0 }}"
+                                onclick="window._amzSyncBmStock(this)"
+                                class="inline-block px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                            Sync stock BM
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-reactivar" class="border-t border-green-100 bg-green-50/30"></div>
+</div>
+{% endif %}
+
+<!-- ─── MARGEN REAL INSUFICIENTE ─────────────────────────────────────────────── -->
+{% if price_risk %}
+<div id="sec-price-risk" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-pink-400">
+    <div class="px-4 py-3 bg-pink-50 flex items-center justify-between border-b border-pink-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">🩷</span>
+            <div>
+                <h3 class="text-sm font-bold text-pink-800">Margen Real Insuficiente</h3>
+                <p class="text-xs text-pink-600">Neto real (fee estimado + comisión de socio 7%) bajo la meta de recuperación de retail (TVs 80%, resto 60%), o directamente negativo</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-pink-400 text-white text-xs font-bold rounded-full">{{ price_risk|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-pink-50/50">
+                <tr class="text-xs text-pink-700 text-left border-b border-pink-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">Precio</th>
+                    <th class="py-2 px-3 font-medium text-right">Neto real</th>
+                    <th class="py-2 px-3 font-medium text-right">% Recuperación</th>
+                    <th class="py-2 px-3 font-medium text-right">Meta</th>
+                    <th class="py-2 px-3 font-medium text-center">Ver</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-price-risk" class="divide-y divide-pink-50">
+                {% for item in price_risk %}
+                <tr class="hover:bg-pink-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right font-bold text-gray-800">${{ "{:,.0f}".format(item.price or 0) }}</td>
+                    <td class="py-3 px-3 text-right font-bold {% if item.get('_neto_negative') %}text-red-600{% else %}text-pink-700{% endif %}">${{ "{:,.0f}".format(item.get('_neto_socio', 0) or 0) }}</td>
+                    <td class="py-3 px-3 text-right font-bold text-red-600">
+                        {% if item.get('_recup_pct') is not none %}{{ item._recup_pct }}%{% else %}— (sin RetailPH){% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-right text-gray-500">{{ item.get('_recup_target_pct', 60) }}%</td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-pink-400 hover:bg-pink-500 text-white text-xs font-medium rounded-lg transition">
+                            Ver →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-price-risk" class="border-t border-pink-100 bg-pink-50/30"></div>
 </div>
 {% endif %}
 

@@ -75,21 +75,7 @@ def _extract_base_sku(sku: str) -> str:
     return sku
 
 
-def _target_coverage_days_for_sku(sku: str) -> int:
-    """Días de cobertura objetivo para _rec_qty (cuánto stock recomendar sincronizar/comprar).
-
-    14 días por default asume reabasto rápido (accesorios, SKUs locales). Pero
-    el lead time real de importación de electrónicos (TVs, aduanas/pedimento,
-    ver CLAUDE.md) es de 20-45 días — con 14 días fijos para TODO el catálogo,
-    SNTV* sistemáticamente se recomendaba comprar corto. Solo se sube SNTV*
-    (categoría de importación confirmada y ya tratada distinto en todo el
-    código, ver _bm_conditions_for_sku) — no se adivinan otros prefijos sin
-    confirmar su taxonomía real, para no des-calibrar compras de SKUs que sí
-    reabastecen rápido.
-    """
-    if (sku or "").upper().startswith("SNTV"):
-        return 30
-    return 14
+from app.services.sku_utils import target_coverage_days_for_sku as _target_coverage_days_for_sku  # noqa: E402  (canónica en sku_utils.py desde 2026-08-22, reusada también en Amazon)
 
 
 def _bm_conditions_for_sku(sku: str) -> str:
@@ -5924,6 +5910,16 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             # Stale banner solo si datos tienen más de 10 min — si no, todo perfecto
             ctx["stale"]        = _data_age_s > 600
             ctx["data_age_min"] = int(_data_age_s // 60)
+            # Sobrestock -- FEATURE 2026-08-22 (auditoría de alertas, gap ya
+            # calculado, solo exponerlo): reusa coverage-price-alerts
+            # (reason="sobrestock", _days_supply>90), ya persistido en cada
+            # prewarm SOLO para sugerir un recorte de precio -- nunca se
+            # había mostrado como alerta de stock visible. Cero cálculo nuevo.
+            try:
+                _cov_alerts = await token_store.get_coverage_price_alerts(str(client.user_id))
+                ctx["sobrestock"] = [a for a in _cov_alerts if a.get("reason") == "sobrestock"]
+            except Exception:
+                ctx["sobrestock"] = []
             # Trigger prewarm en background solo si admin y datos > TTL (30 min)
             if _is_admin_stock and _data_age_s > _STOCK_ISSUES_TTL:
                 asyncio.create_task(_prewarm_caches())
@@ -7543,6 +7539,30 @@ async def _prewarm_caches(user_id: str = None):
                     reverse=True
                 )
 
+                # Quiebre Inminente — FEATURE 2026-08-22 (auditoría de alertas, el gap
+                # más peligroso identificado: "Stock Crítico" solo mira UNIDADES
+                # absolutas <= 10 -- un SKU con 200 unidades pero vendiendo 40/día
+                # (5 días de cobertura real) no disparaba NADA porque 200>10). Usa
+                # _days_supply (ya calculado por _apply_bm_stock en este mismo
+                # ciclo) contra el lead time REAL del SKU (_target_coverage_days_
+                # for_sku, 30d TVs/14d resto -- mismo dato ya usado en _rec_qty, no
+                # un umbral inventado) en vez de un corte plano de unidades.
+                # >_DEFAULT_THRESHOLD para no duplicar "critical" (que ya cubre
+                # <=10 uds independientemente de la velocidad).
+                quiebre_inminente = [
+                    p for p in products
+                    if p.get("status") == "active"
+                    and (p.get("_bm_avail") or 0) > _DEFAULT_THRESHOLD
+                    and p.get("units", 0) > 0
+                    and p.get("_days_supply") is not None
+                    and p.get("_days_supply") < _target_coverage_days_for_sku(p.get("sku", ""))
+                    and not p.get("is_full")
+                    and p.get("sku")
+                    and p.get("id") not in _synced_ids
+                    and _bm_bulk_ok(p.get("sku", ""))
+                ]
+                quiebre_inminente.sort(key=lambda x: x.get("_days_supply") or 9999)
+
                 # GAP 5: margen real insuficiente (antes: "precio MeLi < RetailPrice
                 # PH de BM"). FIX 2026-08-20 (auditoría de alertas): ese criterio
                 # medía la variable equivocada -- comparaba contra el valor de
@@ -7633,7 +7653,7 @@ async def _prewarm_caches(user_id: str = None):
                 # listing único (item id), no por aparición en cada lista.
                 _alert_ids: set = set()
                 for _lst in (restock, oversell_risk, activate, critical, full_no_stock,
-                             imbalanced, stagnant, price_risk, no_bm_sku):
+                             imbalanced, stagnant, price_risk, no_bm_sku, quiebre_inminente):
                     for _it in _lst:
                         if _it.get("id"):
                             _alert_ids.add(_it["id"])
@@ -7642,6 +7662,7 @@ async def _prewarm_caches(user_id: str = None):
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                     "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
                     "stagnant": stagnant, "price_risk": price_risk, "no_bm_sku": no_bm_sku,
+                    "quiebre_inminente": quiebre_inminente,
                     "total_alertas_unique": len(_alert_ids),
                     "restock_count": len(restock) + len(activate),
                     "lost_revenue": sum(p.get("revenue", 0) for p in restock) + sum(p.get("price", 0) * min(p.get("_bm_avail", 0), 3) for p in activate),
@@ -7653,6 +7674,7 @@ async def _prewarm_caches(user_id: str = None):
                     "stagnant_count": len(stagnant), "stagnant_bm": sum(p.get("_bm_avail", 0) for p in stagnant),
                     "price_risk_count": len(price_risk), "price_risk_gap": sum(_price_risk_shortfall_mxn(p) for p in price_risk),
                     "no_bm_sku_count": len(no_bm_sku),
+                    "quiebre_inminente_count": len(quiebre_inminente),
                     "bm_catalog_size": len(_bm_catalog_skus),
                     "threshold": _DEFAULT_THRESHOLD,
                     "active_seasonal_events": _active_seasonal_events,
@@ -8585,30 +8607,47 @@ async def products_inventory_partial(
             products = [p for p in products if p.get("available_quantity", 0) == 0]
         elif preset == "accion":
             # Vista unificada de urgencia: sobreventa + sin stock + stock crítico
-            THRESHOLD = 10
             if enrich != "full":
                 enrich = "full"  # siempre enriquecido para mostrar costos y márgenes
-            risk_ids = {
-                p["id"] for p in products
-                if p.get("available_quantity", 0) > 0
-                and (p.get("_bm_avail") or 0) == 0
-                and not p.get("is_full")
-                and p.get("sku")
-            }
-            restock_ids = {
-                p["id"] for p in products
-                if p.get("available_quantity", 0) == 0
-                and (p.get("_bm_avail") or 0) > 0
-                and p.get("units", 0) > 0
-            }
-            critical_ids = {
-                p["id"] for p in products
-                if p.get("available_quantity", 0) > 0
-                and 0 < (p.get("_bm_avail") or 0) <= THRESHOLD
-                and not p.get("is_full")
-                and p.get("sku")
-                and p["id"] not in risk_ids
-            }
+            # FIX 2026-08-22 (auditoría de alertas, hallazgo #2): este preset
+            # recalculaba risk_ids/restock_ids/critical_ids con SU PROPIA
+            # lógica, sin los guardias que sí tiene "Alertas de Stock"
+            # (_synced_ids, _uid_suppress, _bm_avail_verified_zero,
+            # _bm_bulk_ok, status=="active") -- un mismo SKU podía verse
+            # "en riesgo" aquí y "resuelto" allá al mismo tiempo. Ahora usa
+            # las mismas listas ya vetadas de _stock_issues_cache como
+            # fuente de verdad de QUÉ ids califican; fallback al cálculo
+            # local de antes solo si el caché está frío (nunca deja la
+            # vista vacía).
+            THRESHOLD = 10
+            _sic_entry = _stock_issues_cache.get(f"stock_issues:{client.user_id}:t10")
+            if _sic_entry:
+                _sic = _sic_entry[1]
+                risk_ids = {p["id"] for p in _sic.get("oversell_risk", []) if p.get("id")}
+                restock_ids = {p["id"] for p in _sic.get("restock", []) if p.get("id")}
+                critical_ids = {p["id"] for p in _sic.get("critical", []) if p.get("id")}
+            else:
+                risk_ids = {
+                    p["id"] for p in products
+                    if p.get("available_quantity", 0) > 0
+                    and (p.get("_bm_avail") or 0) == 0
+                    and not p.get("is_full")
+                    and p.get("sku")
+                }
+                restock_ids = {
+                    p["id"] for p in products
+                    if p.get("available_quantity", 0) == 0
+                    and (p.get("_bm_avail") or 0) > 0
+                    and p.get("units", 0) > 0
+                }
+                critical_ids = {
+                    p["id"] for p in products
+                    if p.get("available_quantity", 0) > 0
+                    and 0 < (p.get("_bm_avail") or 0) <= THRESHOLD
+                    and not p.get("is_full")
+                    and p.get("sku")
+                    and p["id"] not in risk_ids
+                }
             for p in products:
                 pid = p["id"]
                 if pid in risk_ids:

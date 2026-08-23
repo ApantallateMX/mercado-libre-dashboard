@@ -173,6 +173,14 @@ window._stockFilter = function(q) {
         <p class="text-2xl font-bold text-red-600">{{ critical_count }}</p>
         <p class="text-[10px] text-gray-400">{{ critical_bm_total }} uds. BM disponible</p>
     </div>
+    {% if quiebre_inminente_count %}
+    <div onclick="document.getElementById('quiebre-inminente-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-amber-600 cursor-pointer hover:shadow-md hover:bg-amber-50/30 transition kpi-card">
+        <p class="text-xs text-gray-500">Quiebre Inminente</p>
+        <p class="text-2xl font-bold text-amber-700">{{ quiebre_inminente_count }}</p>
+        <p class="text-[10px] text-gray-400">Cobertura real por debajo del lead time del SKU</p>
+    </div>
+    {% endif %}
     {% if full_no_stock_count %}
     <div onclick="document.getElementById('full-nostock-section').scrollIntoView({behavior:'smooth'})"
          class="bg-white rounded-lg shadow p-4 border-l-4 border-cyan-400 cursor-pointer hover:shadow-md hover:bg-cyan-50/30 transition kpi-card">
@@ -213,6 +221,14 @@ window._stockFilter = function(q) {
         <p class="text-[10px] text-gray-400">Requieren registro en BinManager</p>
     </div>
     {% endif %}
+    {% if sobrestock %}
+    <div onclick="document.getElementById('sobrestock-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-cyan-500 cursor-pointer hover:shadow-md hover:bg-cyan-50/30 transition kpi-card">
+        <p class="text-xs text-gray-500">Sobrestock</p>
+        <p class="text-2xl font-bold text-cyan-700">{{ sobrestock|length }}</p>
+        <p class="text-[10px] text-gray-400">&gt;90 días de cobertura — considera bajar precio/liquidar</p>
+    </div>
+    {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300 kpi-card">
         <p class="text-xs text-gray-500">Total Alertas</p>
         {# FIX 2026-08-08: varias categorías no son mutuamente excluyentes (un
@@ -220,7 +236,7 @@ window._stockFilter = function(q) {
            counts por categoría inflaba el total. total_alertas_unique cuenta
            listings únicos con al menos un problema (mismo criterio ya aplicado
            a Amazon el mismo día). #}
-        <p class="text-2xl font-bold text-gray-700">{{ total_alertas_unique if total_alertas_unique is not none else (restock_count + risk_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0)) }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ total_alertas_unique if total_alertas_unique is not none else (restock_count + risk_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0) + (quiebre_inminente_count or 0)) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
     {% if orphan_count %}
@@ -882,6 +898,61 @@ window._stockFilter = function(q) {
     {% endif %}
     <span id="bulk-critical-msg" class="text-xs mt-2 block text-center"></span>
 </div>
+
+<!-- ===== Seccion D2: Quiebre Inminente ===== -->
+{% if quiebre_inminente %}
+<div class="mb-8" id="quiebre-inminente-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-amber-600 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Quiebre Inminente</h3>
+        <span class="text-xs text-gray-400">(stock por encima de {{ threshold }} uds., pero cobertura real por debajo del lead time del SKU)</span>
+    </div>
+    <!-- FEATURE 2026-08-22 (auditoría de alertas, el gap más peligroso: un SKU
+    con 200 uds vendiendo 40/día -5 días de cobertura real- no disparaba nada
+    porque 200>10. Usa el lead time real del SKU (30d TVs/14d resto, mismo
+    dato ya usado para calcular cuánto comprar), no un umbral inventado. -->
+    <div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 mb-3 text-xs text-amber-800">
+        Estos SKUs tienen más de {{ threshold }} unidades en BM, pero al ritmo de venta actual se agotan antes de que llegue el próximo reabasto (30 días para TVs, 14 para el resto). No aparecen en "Stock Crítico" porque ese solo mira unidades absolutas.
+    </div>
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-amber-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-amber-700 font-medium text-xs">Cobertura real</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acción</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in quiebre_inminente %}
+                <tr class="hover:bg-amber-50/30">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                            <span class="text-gray-800 truncate max-w-[220px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2"><span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span></td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-700">{{ p.get('_bm_avail', 0) }}</td>
+                    <td class="px-3 py-2 text-right text-gray-600">{{ p.get('units', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-amber-700">{{ p._days_supply }}d</td>
+                    <td class="px-3 py-2 text-center">
+                        {% set _qi_final_qty = p.get('_rec_qty') or ([(p.get('_bm_avail', 0) * 0.6) | int, 1] | max) %}
+                        <button onclick="syncRestockItem('{{ p.id }}', {{ _qi_final_qty }}, this)"
+                                class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
+                            Sync BM
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
 
 <!-- ===== Seccion C: Activar ===== -->
 <div class="mb-6" id="activate-section">
@@ -1660,6 +1731,67 @@ window._stockFilter = function(q) {
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">${{ "{:,.0f}".format(p.get('price', 0)) }}</span></div>
                 <div><span class="text-gray-500">Neto real:</span> <span class="font-bold {% if p.get('_neto_ml_negative') %}text-red-600{% else %}text-pink-700{% endif %}">${{ "{:,.0f}".format(p.get('_neto_ml', 0) or 0) }}</span></div>
                 <div><span class="text-red-600 font-bold">Recuperación: {% if p.get('_recup_retail_pct') is not none %}{{ p._recup_retail_pct }}%{% else %}— (sin RetailPH){% endif %}</span></div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- ===== Seccion I: Sobrestock (>90 dias de cobertura) ===== -->
+{% if sobrestock %}
+<div class="mb-8" id="sobrestock-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-cyan-500 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Sobrestock</h3>
+        <span class="text-xs text-gray-400">(&gt;90 días de cobertura al ritmo de venta actual)</span>
+    </div>
+    <!-- FEATURE 2026-08-22 (auditoría de alertas, gap ya calculado): este dato
+    ya existía para sugerir un recorte de precio (coverage-price-alerts,
+    _days_supply>90) pero nunca se mostraba como alerta de stock visible.
+    Cero cálculo nuevo -- misma fuente, ahora también expuesta aquí. -->
+    <div class="bg-cyan-50 border border-cyan-200 rounded-lg px-4 py-2 mb-3 text-xs text-cyan-800">
+        Más de 90 días de inventario al ritmo de venta actual — capital inmovilizado. Precio sugerido ya calculado con piso de margen real (nunca por debajo de costo).
+    </div>
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-cyan-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Días cobertura</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio actual</th>
+                    <th class="text-right px-3 py-2 text-cyan-700 font-medium text-xs">Precio sugerido</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for a in sobrestock %}
+                <tr class="hover:bg-cyan-50/30">
+                    <td class="px-3 py-2"><span class="text-gray-800 truncate max-w-[220px] block text-xs" title="{{ a.product_title }}">{{ (a.product_title or '')[:50] }}</span></td>
+                    <td class="px-3 py-2"><span class="font-mono text-[11px] font-bold text-orange-600">{{ a.sku or '-' }}</span></td>
+                    <td class="px-3 py-2 text-right font-bold text-cyan-700">{{ a.days_supply }}d</td>
+                    <td class="px-3 py-2 text-right text-gray-600">{{ a.units_30d }}</td>
+                    <td class="px-3 py-2 text-right text-gray-500 line-through">${{ "{:,.0f}".format(a.current_price) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-cyan-700">${{ "{:,.0f}".format(a.suggested_price) }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <a href="https://www.mercadolibre.com.mx/anuncios/{{ a.item_id }}" target="_blank"
+                           class="text-xs text-blue-600 hover:underline">Ver →</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="md:hidden space-y-2">
+        {% for a in sobrestock %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-cyan-500">
+            <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ a.product_title }}</p>
+            <span class="font-mono text-[11px] font-bold text-orange-600">{{ a.sku or '-' }}</span>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">Cobertura:</span> <span class="font-bold text-cyan-700">{{ a.days_supply }}d</span></div>
+                <div><span class="text-gray-500">Sugerido:</span> <span class="font-bold text-cyan-700">${{ "{:,.0f}".format(a.suggested_price) }}</span> <span class="text-gray-400 line-through">${{ "{:,.0f}".format(a.current_price) }}</span></div>
             </div>
         </div>
         {% endfor %}

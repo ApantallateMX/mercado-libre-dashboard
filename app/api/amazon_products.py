@@ -41,6 +41,7 @@ from app.services.amazon_client import get_amazon_client
 from app.services import openrouter_client as _or_client
 from app.api.metrics import _get_cached_order_metrics
 from app.services import user_store as _user_store
+from app.services.sku_utils import target_coverage_days_for_sku as _target_coverage_days
 
 logger = logging.getLogger(__name__)
 
@@ -2605,11 +2606,18 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
                 )
                 stock_bajo.append(item)
 
-            # Restock Urgente (< 14 días supply)
+            # Restock Urgente (< lead time real del SKU)
+            # FIX 2026-08-22 (auditoría de alertas): 14 días fijos para TODO el
+            # catálogo, incluidas TVs -- el lead time real de importación (ver
+            # CLAUDE.md, aduanas/pedimento) es de 20-45 días. Usa el mismo dato
+            # real ya validado del lado ML (_target_coverage_days_for_sku, 30d
+            # TVs/14d resto), no un umbral nuevo inventado.
             elif vel_v > 0 and fulfillable > 10:
                 dias_s = fulfillable / vel_v
-                if dias_s < 14:
+                _lead_days = _target_coverage_days(item.get("sku", ""))
+                if dias_s < _lead_days:
                     item["dias_supply"] = round(dias_s, 1)
+                    item["lead_days"]   = _lead_days
                     item["sugeridas"]   = max(0, round(vel_v * 60) - fulfillable - item["inbound"])
                     restock_urgente.append(item)
 
@@ -2671,13 +2679,24 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
         # Riesgo Sobreventa real: qty PUBLICADA (FBM) > BM disponible. Único
         # caso donde la sobreventa es accionable — nosotros controlamos ese
         # stock (vía set_qty), a diferencia de FBA/FLX que controla Amazon.
+        # Reactivar: listing FBM en 0 con stock BM real disponible -- FEATURE
+        # 2026-08-22 (auditoría de alertas, gap #7: Amazon no tenía equivalente
+        # de "Activar" de ML). `fbm_items` ya incluye listings inactivos (no
+        # filtra por status), solo nadie los mostraba antes. Reutiliza el
+        # mismo botón/mecanismo "Sync stock BM" (set_qty) ya existente --
+        # cero escritura nueva, confirmado que ya reactiva el listing.
+        reactivar: list = []
         for item in fbm_items:
             qty_pub  = item["qty"]
             bm_avail = int(item.get("bm_avail") or 0)
-            if qty_pub > 0 and qty_pub > bm_avail:
+            if qty_pub == 0 and bm_avail > 0:
+                item["gap_units"] = bm_avail
+                reactivar.append(item)
+            elif qty_pub > 0 and qty_pub > bm_avail:
                 item["gap_units"] = qty_pub - bm_avail
                 item["bm_zero"] = (bm_avail == 0)
                 riesgo_sobreventa.append(item)
+        reactivar.sort(key=lambda x: -(x.get("bm_avail") or 0))
 
         # Ordenar
         sin_stock.sort(key=lambda x: x["title"])
@@ -2705,13 +2724,53 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
 
         discrepancia_bm_fba.sort(key=lambda x: -(x.get("gap_units") or 0))
 
+        # Margen Real Insuficiente — FEATURE 2026-08-22 (auditoría de alertas,
+        # gap pendiente desde 2026-08-20: ML ya tenía esta alerta, Amazon no).
+        # Reutiliza EXACTAMENTE la fórmula ya validada y en uso real para
+        # márgenes de Amazon (ver amazon_orders.py: _save_amazon_items_history_bg
+        # y compute_real_fees) -- comisión de socio 7% (_PARTNER_COMMISSION_PCT)
+        # + fee estimado 10% (mismo criterio que ya se usa ahí cuando no hay fee
+        # real de Finances API) + meta de recuperación 80% TV / 60% resto contra
+        # RetailPH real (_sku_retail_map). Nada de esto es una fórmula inventada.
+        # NOTA: el margin_pct que se muestra en el tab "Catálogo" (línea ~795)
+        # usa una fórmula distinta y menos precisa (FX fijo, sin comisión de
+        # socio) -- fuera de alcance hoy, no se toca en este fix.
+        price_risk: list = []
+        try:
+            from app.main import _sku_retail_map, _sku_cost_map, _PARTNER_COMMISSION_PCT, _RECOVERY_TARGET_TV, _RECOVERY_TARGET_OTHER
+        except Exception:
+            _sku_retail_map, _sku_cost_map, _PARTNER_COMMISSION_PCT = {}, {}, 0.07
+            _RECOVERY_TARGET_TV, _RECOVERY_TARGET_OTHER = 80.0, 60.0
+        for item in all_items:
+            _price = item.get("price") or 0
+            if _price <= 0:
+                continue
+            _sku_bm = _norm_bm_amz(item.get("sku", ""))
+            _retail_mxn = _sku_retail_map.get(_sku_bm, 0) or 0
+            _cost_mxn = _sku_cost_map.get(_sku_bm, 0) or 0
+            _neto_socio = (_price - _price * 0.10) * (1 - _PARTNER_COMMISSION_PCT)
+            _below_target = False
+            if _retail_mxn > 0:
+                _recup_pct = round(_neto_socio / _retail_mxn * 100, 1)
+                _target_pct = _RECOVERY_TARGET_TV if _sku_bm.upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
+                item["_recup_pct"] = _recup_pct
+                item["_recup_target_pct"] = _target_pct
+                _below_target = _recup_pct < _target_pct
+            _neto_negative = _cost_mxn > 0 and (_neto_socio - _cost_mxn) < 0
+            if _below_target or _neto_negative:
+                item["_neto_socio"] = round(_neto_socio, 0)
+                item["_neto_negative"] = _neto_negative
+                price_risk.append(item)
+        price_risk.sort(key=lambda x: x.get("_recup_pct") if x.get("_recup_pct") is not None else 0)
+
         # Dedup por SKU único — un mismo SKU puede caer en varias categorías
         # (ej. Stock Bajo + Riesgo Sobreventa a la vez) y antes se contaba
         # doble en "Total Alertas". Discrepancia BM vs FBA es informativa, NO
         # una alerta accionable, así que no cuenta hacia total_alertas.
         _alert_skus: set = set()
         for _lst in (sin_stock, reabastecer, riesgo_sobreventa, stock_bajo,
-                     restock_urgente, stock_critico, estancado, no_bm_sku):
+                     restock_urgente, stock_critico, estancado, no_bm_sku,
+                     reactivar, price_risk):
             for _it in _lst:
                 _alert_skus.add(_it["sku"])
         total_alertas = len(_alert_skus)
@@ -2726,6 +2785,8 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
             "estancado":           estancado,
             "discrepancia_bm_fba": discrepancia_bm_fba,
             "no_bm_sku":           no_bm_sku,
+            "reactivar":           reactivar,
+            "price_risk":          price_risk,
             "total_alertas":       total_alertas,
             "sin_stock_count":     len(sin_stock),
             "reabastecer_count":   len(reabastecer),
@@ -2736,6 +2797,8 @@ async def amazon_products_stock_alerts(request: Request, warehouse: str = Query(
             "estancado_count":     len(estancado),
             "discrepancia_count":  len(discrepancia_bm_fba),
             "no_bm_sku_count":     len(no_bm_sku),
+            "reactivar_count":     len(reactivar),
+            "price_risk_count":    len(price_risk),
             "nickname":            client.nickname,
             "marketplace":         client.marketplace_name,
             "warehouse":           _wh_alerts,

@@ -137,6 +137,26 @@ def clean_bm_title(title: str, brand: str = "", model: str = "") -> str:
             real_rest = rest[len(glue):].lstrip(" ")
             return (first + (" " + real_rest if real_rest else "")).strip()
 
+
+def target_coverage_days_for_sku(sku: str) -> int:
+    """Días de cobertura objetivo (lead time real de reabasto) para un SKU.
+
+    Canónica -- antes vivía solo en main.py como `_target_coverage_days_for_sku`
+    (usada por `_rec_qty`), movida aquí 2026-08-22 para reusarla también en
+    Amazon (amazon_products.py) sin import circular con main.py.
+
+    14 días por default asume reabasto rápido (accesorios, SKUs locales). Pero
+    el lead time real de importación de electrónicos (TVs, aduanas/pedimento,
+    ver CLAUDE.md) es de 20-45 días — con 14 días fijos para TODO el catálogo,
+    SNTV* sistemáticamente se recomendaba comprar corto. Solo se sube SNTV*
+    (categoría de importación confirmada y ya tratada distinto en todo el
+    código) — no se adivinan otros prefijos sin confirmar su taxonomía real,
+    para no des-calibrar compras/alertas de SKUs que sí reabastecen rápido.
+    """
+    if (sku or "").upper().startswith("SNTV"):
+        return 30
+    return 14
+
     return t
 
 
