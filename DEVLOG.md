@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-22 — FIX + FEAT: Lote 1 de la auditoría de alertas de stock (paridad ML/Amazon, antigüedad, cruce Restock Watch)
+
+Jovan pidió auditar todas las alertas de stock para ver si eran únicas o
+había duplicados/vacíos. `planning-specialist` hizo el catálogo completo
+(4 sistemas de alertas distintos hoy, no 2) y publicó el reporte como
+Artifact. De los 7 hallazgos + 12 gaps, se implementó el lote de alto
+impacto/bajo esfuerzo (commit `c12f088`):
+
+1. **Amazon Stock Crítico ya no contradice a Estancado** (`amazon_products.py`)
+   — le faltaba `units_30d > 0`, mismo fix que ya se aplicó en ML el
+   2026-08-20. Sin esto, un SKU sin ventas podía aparecer a la vez como
+   "cómpralo ya" y "considera liquidar".
+2. **Nueva alerta "SKU no en catálogo BM" para Amazon** — ML ya la tenía,
+   Amazon no, violando la regla de features en ambas plataformas. Mismo
+   catálogo BM cacheado, mismos prefijos (`SN/SHIL/RMTC/SHEL/SHFL/SHHP/SHLB`).
+3. **"SKU no en catálogo BM" (ML) alineado con `/productos/sin-bm`** — el
+   primero excluía listings sin SKU, el segundo los incluía siempre; mismo
+   concepto de negocio, 2 números distintos. Ahora ambos los incluyen.
+4. **Antigüedad real en "Inventario Estancado"** (ML y Amazon) — reutiliza
+   el mecanismo de racha ya probado en Desbalance (`stock_issue_streaks`,
+   `token_store.sync_stock_issue_streak`/`get_drift_alerts`) con un
+   `issue_type` nuevo (`"stagnant"`/`"stagnant_amz"`). Antes era binario
+   (0 ventas en 30d sí/no), ahora muestra días consecutivos y ordena por
+   eso, no solo por unidades BM.
+5. **Restock Watch cruza contra Reabastecer/Activar** — marca
+   `already_in_restock` si el SKU ya aparece ahora mismo en esas listas
+   (misma cache `_stock_issues_cache`), para no hacer trabajo doble entre
+   las 2 fuentes de verdad que siguen sin fusionarse del todo.
+
+Verificado local (uvicorn + JWT cookie, 3 endpoints, HTTP 200 sin
+tracebacks) y en producción post-deploy (mismo resultado, datos reales).
+Pendiente para un lote 2 (requiere más diseño): unificar "⚡ Acción Req."
+(Inventario) con Alertas de Stock — motor de cálculo duplicado detectado
+hoy, nunca documentado antes —, filtro de status + "Activar" para
+inactivos en Amazon, punto de reorden real con lead time, y alerta de
+quiebre inminente por velocidad de venta (el gap más peligroso de cara a
+Buen Fin/Hot Sale). Ver memoria `project_alerts_audit_2026-08-22.md`.
+
+---
+
 ## 2026-08-22 — FIX CRÍTICO: paginación y botones de Alertas de Stock (Amazon) nunca se ejecutaban
 
 Jovan reportó (con captura) la tabla "Riesgo Sobreventa" de Alertas de Stock
