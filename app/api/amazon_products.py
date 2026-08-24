@@ -5322,6 +5322,46 @@ async def amazon_products_devoluciones(
 # DIAGNÓSTICO — Test lookup de SKU específico (para debug de gaps falsos)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/diag/flx-status", response_class=JSONResponse)
+async def diag_flx_status(token: str = "", seller_id: Optional[str] = Query(None)):
+    """DIAG 2026-08-24 (Jovan reportó "actualizando stock" sin fin visible en
+    Seller Flex): expone el estado real del refresh BG de FLX/Onsite
+    (_refresh_flx_stock_bg) -- si sigue corriendo, hace cuánto se completó
+    el último ciclo, y cuántos SKUs quedaron SIN dato tras ese ciclo (los
+    que probablemente disparan un refresh nuevo en cada carga de página,
+    ver `new_flx` en amazon_products_seller_flex/inventario -- un SKU que
+    nunca logra cachearse, aunque sea con fulfillable=0, reinicia el ciclo
+    completo indefinidamente)."""
+    try:
+        from app.main import _DIAG_TOKEN
+    except Exception:
+        _DIAG_TOKEN = None
+    if not _DIAG_TOKEN or token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    key = client.seller_id
+    is_refreshing = key in _flx_stock_refreshing
+    cached = _flx_stock_cache.get(key)
+    cache_age_s = round(_time.time() - cached[0]) if cached else None
+    cached_count = len(cached[1]) if cached else 0
+    listings = await _get_listings_cached(client)
+    flx_skus = list(dict.fromkeys(item.get("sku", "") for item in listings if _is_amz_onsite(item) and item.get("sku")))
+    missing = [s for s in flx_skus if not cached or s not in cached[1]]
+    return JSONResponse({
+        "seller_id": key,
+        "is_refreshing_now": is_refreshing,
+        "cache_age_s": cache_age_s,
+        "cache_ttl_s": _FLX_STOCK_TTL,
+        "flx_skus_total": len(flx_skus),
+        "flx_skus_cached": cached_count,
+        "flx_skus_missing": len(missing),
+        "missing_sample": missing[:20],
+        "will_retrigger_on_next_load": bool(missing) and not is_refreshing,
+    })
+
+
 @router.get("/diag/check-sku", response_class=JSONResponse)
 async def diag_check_sku(
     sku: str = Query(..., description="SKU a verificar en Amazon"),
