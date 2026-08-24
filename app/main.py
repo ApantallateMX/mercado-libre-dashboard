@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, Request, Query, UploadFile, File, Form, HTTPException, Body
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -17904,6 +17904,24 @@ async def diag_sku(sku: str = "", token: str = ""):
             "retail_ph_usd": round(_bm_retail_ph_cache[bm_key][1], 2) if bm_key in _bm_retail_ph_cache else None,
         },
     })
+
+
+@app.post("/api/diag/bulk-sku-lookup")
+async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
+    """Diagnóstico externo: cruza un set arbitrario de SKUs contra
+    bm_sku_master + order_history (ventas 12m) en una sola llamada.
+    SELECT puro, cero llamadas a BM. Agregado 2026-08-24 para el análisis
+    de archivos de inventario externo (qué priorizar enviar a MTY/CDMX).
+
+    Body: {"skus": ["SNHT000287", ...]}
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    skus = payload.get("skus") or []
+    if not isinstance(skus, list) or not skus:
+        return JSONResponse({"error": "skus (list) requerido en el body"}, status_code=400)
+    result = await token_store.get_bulk_sku_lookup(skus)
+    return JSONResponse({"count": len(result), "items": result})
 
 
 @app.get("/api/diag/supplier-debt")

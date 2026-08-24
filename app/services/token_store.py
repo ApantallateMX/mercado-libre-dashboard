@@ -2552,6 +2552,67 @@ async def get_tj_only_transfer_candidates() -> list[dict]:
     return items
 
 
+async def get_bulk_sku_lookup(skus: list[str]) -> dict:
+    """FEATURE 2026-08-24 (Jovan: análisis de 3 archivos de inventario
+    externo para decidir prioridad de envío a MTY/CDMX). Cruza un set
+    arbitrario de SKUs contra bm_sku_master (stock real MTY/CDMX/Tijuana)
+    + order_history (ventas 12 meses ML+Amazon combinado) en una sola
+    consulta -- SELECT puro, cero llamadas a BM, mismo patrón que
+    get_tj_only_transfer_candidates pero sin el filtro fijo de esa
+    feature (aquí el SKU puede o no estar en bm_sku_master, y puede o no
+    tener stock vendible).
+
+    Retorna {sku: {found, available_qty, mty_qty, cdmx_qty, tj_qty,
+    retail_ph, title, brand, model, category, units_12m,
+    last_sale_date}} -- found=False cuando el SKU nunca apareció en
+    bm_sku_master (candidato a "producto nuevo", sin dato de estas
+    columnas ni de ventas)."""
+    from datetime import datetime as _dt_bsl, timedelta as _td_bsl
+    if not skus:
+        return {}
+    uniq = list({s.strip().upper() for s in skus if s and s.strip()})
+    _cutoff = (_dt_bsl.utcnow() - _td_bsl(days=365)).strftime("%Y-%m-%d")
+    out = {s: {"found": False, "units_12m": 0, "last_sale_date": None} for s in uniq}
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        for i in range(0, len(uniq), 500):
+            chunk = uniq[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""SELECT sku, available_qty, mty_qty, cdmx_qty, tj_qty, retail_ph,
+                           title, brand, model, category
+                    FROM bm_sku_master WHERE sku IN ({placeholders})""",
+                chunk,
+            )
+            for r in await cur.fetchall():
+                out[r["sku"]] = {
+                    "found": True,
+                    "available_qty": r["available_qty"] or 0,
+                    "mty_qty": r["mty_qty"] or 0,
+                    "cdmx_qty": r["cdmx_qty"] or 0,
+                    "tj_qty": r["tj_qty"] or 0,
+                    "retail_ph": r["retail_ph"],
+                    "title": r["title"], "brand": r["brand"], "model": r["model"],
+                    "category": r["category"],
+                    "units_12m": 0, "last_sale_date": None,
+                }
+            cur = await db.execute(
+                f"""SELECT sku, SUM(quantity) AS units_12m, MAX(order_date) AS last_sale_date
+                    FROM order_history
+                    WHERE sku IN ({placeholders}) AND order_date >= ?
+                      AND LOWER(status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
+                    GROUP BY sku""",
+                chunk + [_cutoff],
+            )
+            for r in await cur.fetchall():
+                sku = r["sku"]
+                if sku not in out:
+                    out[sku] = {"found": False, "units_12m": 0, "last_sale_date": None}
+                out[sku]["units_12m"] = r["units_12m"] or 0
+                out[sku]["last_sale_date"] = r["last_sale_date"]
+    return out
+
+
 async def get_categories_ordered_by_sales(days: int = 90) -> list[dict]:
     """FEATURE 2026-08-19 (pedido por Jovan, plan de migración a
     ConfColumns_Conditions_Excel por categoría): ordena las categorías BM
