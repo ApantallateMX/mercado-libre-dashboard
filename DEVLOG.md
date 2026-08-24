@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-24 (6) — FEAT: endpoint `/api/diag/bulk-sku-lookup` + análisis de prioridad de envío MTY/CDMX (3 archivos externos)
+
+Jovan pidió analizar 3 archivos en su escritorio (`Bosh-Aspiradoras.xlsx`
+211 SKUs, `Micros.xlsx` 3 SKUs, `Kitchen-Baterias.xlsx` 32 SKUs — 246 en
+total) para saber qué no tenemos en MTY/CDMX y priorizar el envío.
+Confirmado que ya usan nuestra propia nomenclatura de SKU (prefijos
+SNHT/SNVC/SNMW/SNKT/SNMC), no es catálogo de un tercero.
+
+**Nuevo endpoint** `POST /api/diag/bulk-sku-lookup` (`main.py` +
+`token_store.get_bulk_sku_lookup`, commit `8a5fbac`) — cruza un set
+arbitrario de SKUs contra `bm_sku_master` (stock MTY/CDMX/Tijuana real)
++ `order_history` (ventas 12 meses ML+Amazon) en una sola llamada.
+SELECT puro, cero llamadas a BM, mismo patrón que
+`get_tj_only_transfer_candidates` pero sin su filtro fijo. Verificado
+local antes de push, y en producción después del deploy.
+
+**Jovan pidió explícitamente** (mid-análisis): separar primero lo que
+"ya tuvimos, con ventas o histórico" de lo que "puede ser nuevo" — así
+se estructuró el archivo de salida en 3 grupos por SKU (no 2):
+1. **Con historial de ventas** (units_12m > 0) — badge Alta/Media/Baja
+   igual que la feature "Solo en Tijuana"
+2. **En catálogo, sin ventas 12m** — existe en bm_sku_master pero sin
+   venta reciente
+3. **Posible nuevo / sin catalogar** — nunca apareció en bm_sku_master
+   (solo 5 de 246 cayeron aquí)
+
+**Resultado** (`Prioridad_Envio_MTY_CDMX_2026-08-24.xlsx`, en el
+escritorio de Jovan, 1 hoja por archivo + resumen): de 246 SKUs, 241
+sí están en catálogo, 75 tienen ventas en 12 meses, 179 tienen 0 stock
+vendible en MTY+CDMX ahora mismo. Prioridad 1 (con ventas Y sin stock)
+= 10 en Bosch + 10 en Kitchen + 0 en Micros. Filas con color rojo
+(prioridad 1) / amarillo (sin ventas recientes pero sin stock) / gris
+(posible nuevo) para que el equipo de almacén decida de un vistazo.
+
+**Nota de fidelidad de datos** dejada en la hoja Resumen: la columna
+"CDMX (aprox)" del desglose es solo LOCATIONID 47 (Ebanistas), NO
+incluye Cuautitlán (62) — la columna confiable para "sí/no tenemos" es
+"Disponible MTY+CDMX (real)" (`available_qty`, sí incluye Cuautitlán).
+
+---
+
 ## 2026-08-24 (5) — INVESTIGACIÓN + FEAT: fin del "ciclo infinito" del indicador FLX + refresco manual real de VECTOR vía export CSV del portal
 
 Jovan reportó (captura) que el indicador "⟳ actualizando stock" de
