@@ -7,6 +7,72 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-24 (5) — INVESTIGACIÓN + FEAT: fin del "ciclo infinito" del indicador FLX + refresco manual real de VECTOR vía export CSV del portal
+
+Jovan reportó (captura) que el indicador "⟳ actualizando stock" de
+Seller Flex gira sin fin, sin ETA visible. Investigado en 3 capas
+reales (no una sola causa), todas confirmadas en producción antes de
+corregir:
+
+1. **`_FLX_STOCK_TTL=300s`** (5 min) vs duración real del scan (20-40
+   min) → el caché quedaba "viejo" el instante que terminaba →
+   reiniciaba solo, para siempre. Subido a `10800s` (3h).
+2. **"Recarga rápida"** (`force=1`) borraba `_flx_stock_cache` completo
+   en 2 endpoints (`amazon_products_seller_flex` e
+   `amazon_products_inventario_partial`) aunque su propio comentario
+   decía "~3 seg" — destruía 20-40 min de avance en cada click. Quitado
+   el `.pop()` de ambos.
+3. **Confirmado en vivo con `/api/diag/flx-status`** (se le agregó
+   `db_meta`/`db_rows_count`): un deploy interrumpió un scan ya 100%
+   completo (2311/2311 SKUs) justo antes de escribir el timestamp final
+   → `last_full_sync_at` nunca se grabó → el sistema veía la data como
+   "infinitamente vieja" y reiniciaba con 100% de cobertura real ya en
+   DB. Fix: la decisión de re-scanear ahora se basa en cobertura real
+   (`covered/total >= 0.98`), no solo en el timestamp; si la cobertura
+   ya es suficiente se graba el timestamp retroactivamente.
+
+**Hallazgo arquitectónico** (a raíz de pregunta de Jovan: "¿no
+convendría bajar una vez y solo actualizar?"): el mecanismo caro
+(scan SKU por SKU, 20-40 min) ya es innecesario en la mayoría de casos
+porque el reporte oficial barato (`_onsite_periodic_sync_loop`,
+reactivado 2026-08-22, cada 3h, ~30-90s) ya cubre la misma necesidad.
+Se agregó el gate `not _flx_cache_valid(key)` antes de disparar el scan
+caro en los 2 puntos de entrada (`_get_flx_stock_cached`) — el
+mecanismo lento ahora es un último recurso real, no un job de fondo
+automático.
+
+**API oficial más granular — investigada, no autoservicio**: existe
+"External Fulfillment Inventory API v2024-09-11" (`batchInventory`,
+`locationId` = código de 4 caracteres por nodo Seller Flex, exactamente
+la granularidad que necesitamos) pero requiere el rol IAM "Direct-to-
+Consumer Shipping (Restricted)" — según foro de Seller Central esto se
+gestiona con el Account Manager / Solution Provider Support de Amazon,
+no con registro normal de app SP-API. Se le dio a Jovan un mensaje
+listo para copiar/pegar y escalarlo — pendiente de él, no de código.
+
+**Solución inmediata implementada hoy** (Jovan: "ya no quiero más
+excusas, quiero soluciones"): descubierto en vivo (navegación real del
+portal `sellerflex.amazon.com.mx`) que existe una sección "Descargas"
+con reporte "Inventario por SKU" (CSV) por nodo/cuenta, ya usado a
+diario por el equipo de almacén — columnas `Msku` (= nuestro SKU real),
+`Sellable`, `Reserved`. Usado hoy para refrescar manualmente ambos
+nodos de VECTOR con datos 100% reales y frescos:
+- **SYQJ (CDMX)**: 1981 SKUs, 644 con stock > 0
+- **SYGL (MTY)**: 3190 SKUs, 749 con stock > 0
+
+Ambos vía `/api/diag/seller-flex-ingest` (mismo endpoint ya existente,
+solo cambia el origen del dato — CSV en vez de scraping GraphQL).
+Verificado con `/api/diag/seller-flex-lookup` — ambos nodos con
+`synced_at` de hoy. Pendiente (no urgente, a decidir con Jovan):
+migrar el código del "snapshot manual" para que use este export CSV en
+vez de GraphQL de forma permanente, y repetir el refresco para los 2
+nodos de AUTOBOT (SOKA/SBBQ) si se quiere.
+
+Ver memoria `project_seller_flex_portal_and_qty_gap.md` (actualización
+2026-08-24) para el detalle completo.
+
+---
+
 ## 2026-08-24 — FIX: pestaña "Alertas de Stock" (tiempo real) regresaba a página 1 en cada refresco automático
 
 Jovan reportó que quien trabaja sustituyendo SKUs en página 2+ de la
