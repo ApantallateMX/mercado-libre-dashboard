@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-24 — FIX: pestaña "Alertas de Stock" (tiempo real) regresaba a página 1 en cada refresco automático
+
+Jovan reportó que quien trabaja sustituyendo SKUs en página 2+ de la
+tabla "Órdenes sin stock — en el momento" era regresado a la página 1
+por el refresco automático (cada 30s), perdiendo su lugar a media tarea.
+Causa: `alertasLoadData()` (compartida por el `setInterval` de 30s, el
+botón "Actualizar", y la recarga tras Sustituir/Sin stock) siempre
+llamaba `alertas-pagination_go(1)` sin importar la página real del
+usuario. Fix (`orders.html`, commit `8025502`): nueva variable
+`_alertasCurrentPage`, actualizada en cada click de paginación y
+restaurada (en vez de resetear a 1) después de cada recarga.
+
+Jovan generalizó la lección: la app la usan varias personas al mismo
+tiempo, y cualquier refresco automático/background debe diseñarse para
+no pisar el estado de trabajo en curso de nadie — ver
+[[feedback_disenar_para_multiusuario_concurrente]] (memoria nueva).
+Verificado local + producción, HTTP 200 sin errores.
+
+---
+
+## 2026-08-24 — FIX CRÍTICO: `clean_bm_title()` vaciaba el título en ~8 lugares del código (bug de 6 días)
+
+Jovan reportó con captura real que la columna "Título" de Alertas de
+Stock (tiempo real, ML+Amazon) salía vacía para varias filas. Investigado
+sin adivinar: se agregó `title`/`brand`/`model` a `/api/diag/sku` (commit
+`2af20fb`) para comparar `bm_sku_master` de producción contra lo
+reportado, confirmando que el dato SÍ existía completo en BM -- el hueco
+era de código, no de datos.
+
+**Causa raíz real**: `clean_bm_title()` (`sku_utils.py`, agregada
+2026-08-18 para limpiar el patrón de título duplicado de un feed sucio de
+proveedor tipo Home Depot) tenía un `for` sin `return` final. Cuando un
+título empezaba con "{Marca} {Modelo}" pero NO tenía el patrón exacto de
+duplicado después (el caso normal — ej. "Samsung UN55U8000FBXZA 55"
+Class..." — no el feed sucio que la función fue diseñada para arreglar),
+el for-loop terminaba sin ejecutar ningún `return` y Python regresaba
+`None` implícito. El propio docstring de la función ya documentaba que
+ese caso debía devolver el título tal cual — nunca se implementó.
+
+Afectaba silenciosamente ~8 call sites en `main.py`/`token_store.py`
+desde hace 6 días, sin que nadie lo hubiera notado hasta ahora. Fix de
+una línea en la fuente (`sku_utils.py`, commit `03c4f90`) en vez de
+parchar cada llamador — corrige todos a la vez. Verificado con las 7 SKUs
+exactas de la captura de Jovan (4/7 daban `None` antes del fix, las 7 dan
+título completo después) y en producción con datos reales (0 filas con
+título vacío en todo el feed).
+
+---
+
 ## 2026-08-22 — FEAT: Lote 2 de la auditoría de alertas de stock (unificar Acción Req., Reactivar Amazon, ROP real, Quiebre Inminente, margen Amazon, Sobrestock)
 
 Jovan aprobó ("dale a todo, confío en ti") seguir con el lote 2 (más
