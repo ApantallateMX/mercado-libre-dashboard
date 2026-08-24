@@ -732,7 +732,19 @@ async def _warm_flx_cache_from_db_then_refresh(client, flx_skus: list) -> None:
     tuviera solo minutos de antigüedad. Ahora calienta primero desde BD
     (rápido, sin llamar a Amazon) y solo dispara el refresh en vivo si el
     dato persistido está vencido o no existe. `_flx_stock_refreshing[key]`
-    ya viene marcado por el caller (_get_flx_stock_cached)."""
+    ya viene marcado por el caller (_get_flx_stock_cached).
+
+    FIX 2026-08-24 (2da vuelta -- confirmado en vivo: un deploy interrumpió
+    un escaneo YA COMPLETO justo antes de su último paso, `mark_amz_flx_
+    full_sync_done` nunca se ejecutó, así que `meta` quedaba None aunque
+    `amz_flx_stock_cache` ya tuviera el 100% de los SKUs -- eso se leía
+    como "sin fecha" (last_sync=0) y disparaba OTRO escaneo completo desde
+    cero, un ciclo real). Ahora la decisión de re-escanear en vivo se basa
+    en la COBERTURA real de datos persistidos, no solo en si existe una
+    marca formal de "ciclo completo" -- si la BD ya cubre ~todo lo que se
+    necesita, se usa tal cual (y se escribe la marca retroactivamente) en
+    vez de volver a empezar.
+    """
     key = client.seller_id
     from app.services import token_store as _ts_warm
     try:
@@ -742,9 +754,20 @@ async def _warm_flx_cache_from_db_then_refresh(client, flx_skus: list) -> None:
         if db_data:
             _flx_stock_cache[key] = (last_sync, db_data)
             logger.info(f"[FLX] Calentado desde BD: {len(db_data)} SKUs (edad: {int(_time.time() - last_sync)}s)")
-        if not db_data or (_time.time() - last_sync) >= _FLX_STOCK_TTL:
+
+        unique_skus = list(dict.fromkeys(s for s in flx_skus if s))
+        covered = sum(1 for s in unique_skus if s in db_data)
+        coverage_ok = bool(unique_skus) and (covered / len(unique_skus)) >= 0.98
+
+        if not db_data or (not coverage_ok and (_time.time() - last_sync) >= _FLX_STOCK_TTL):
             await _refresh_flx_stock_bg(client, flx_skus)  # limpia _flx_stock_refreshing en su finally
         else:
+            if db_data and not meta:
+                # Datos ya casi/completamente cubiertos pero sin marca formal
+                # (ej. un deploy interrumpió el ciclo justo antes de escribirla)
+                # -- se escribe ahora para no repetir este razonamiento en
+                # cada carga de página futura.
+                await _ts_warm.mark_amz_flx_full_sync_done(key, len(unique_skus))
             _flx_stock_refreshing.discard(key)
     except Exception as exc:
         logger.warning(f"[FLX] Error calentando desde BD: {exc}")
@@ -5497,6 +5520,9 @@ async def diag_flx_status(token: str = "", seller_id: Optional[str] = Query(None
     listings = await _get_listings_cached(client)
     flx_skus = list(dict.fromkeys(item.get("sku", "") for item in listings if _is_amz_onsite(item) and item.get("sku")))
     missing = [s for s in flx_skus if not cached or s not in cached[1]]
+    from app.services import token_store as _ts_diag_flx
+    db_meta = await _ts_diag_flx.get_amz_flx_sync_meta(key)
+    db_rows = await _ts_diag_flx.get_amz_flx_stock_from_db(key)
     return JSONResponse({
         "seller_id": key,
         "is_refreshing_now": is_refreshing,
@@ -5507,6 +5533,8 @@ async def diag_flx_status(token: str = "", seller_id: Optional[str] = Query(None
         "flx_skus_missing": len(missing),
         "missing_sample": missing[:20],
         "will_retrigger_on_next_load": bool(missing) and not is_refreshing,
+        "db_meta": db_meta,
+        "db_rows_count": len(db_rows),
     })
 
 
