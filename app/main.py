@@ -17870,6 +17870,13 @@ async def diag_sku(sku: str = "", token: str = ""):
             "total": int(_master_row.get("total_qty") or 0),
             "verified": bool(_master_row.get("verified")),
             "stock_age_s": round(now - (_master_row.get("stock_updated_at") or 0)),
+            # DIAG 2026-08-24 (Jovan reportó "Título" vacío en Alertas de Stock
+            # tiempo real -- esa columna sale de bm_sku_master.title vía JOIN):
+            # agregado para diagnosticar si el hueco es de sync de catálogo
+            # (title/brand/model sin poblar) o de otra causa.
+            "title": _master_row.get("title") or None,
+            "brand": _master_row.get("brand") or None,
+            "model": _master_row.get("model") or None,
         }
     else:
         master_info = {"found": False}
