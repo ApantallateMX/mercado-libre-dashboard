@@ -276,6 +276,9 @@ function loadAmzProdTab(tabName, url, btn) {
             if (tabName === 'seller-flex' && document.getElementById('sfx-auto-sync-trigger')) {
                 _sfxStartPollingOnly('');
             }
+            if (tabName === 'seller-flex') {
+                window._sfxFlxProgressWatch();
+            }
             if (tabName === 'stock') {
                 // FIX 2026-08-22 (bug real reportado por Jovan: tablas de cientos
                 // de filas sin paginar, "1 minuto de scroll"): el <script> que
@@ -1242,7 +1245,7 @@ window._sfxRefresh = function(includeReport) {
             'Actualizando desde Amazon…</div>';
         fetch(url)
             .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-            .then(function(html) { container.innerHTML = html; })
+            .then(function(html) { container.innerHTML = html; window._sfxFlxProgressWatch(); })
             .catch(function(e) {
                 container.innerHTML =
                     '<div class="bg-white rounded-xl p-8 text-center"><p class="text-red-500">' + e.message + '</p></div>';
@@ -1288,7 +1291,7 @@ function _sfxStartPollingOnly(q) {
                     if (msgEl) msgEl.textContent = '✓ ' + st.skus_found + ' SKUs encontrados. Cargando tabla…';
                     var url = '/api/amazon/products/seller-flex' + (q ? '?q=' + encodeURIComponent(q) : '');
                     fetch(url).then(function(r2) { return r2.text(); })
-                              .then(function(html) { container.innerHTML = html; });
+                              .then(function(html) { container.innerHTML = html; window._sfxFlxProgressWatch(); });
                 } else if (st.status === 'error') {
                     clearInterval(barTimer);
                     container.innerHTML =
@@ -1501,8 +1504,50 @@ window._sfxSetWarehouse = function(wh) {
     var container = document.getElementById('amz-prod-tab-content');
     fetch(url)
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-        .then(function(html) { container.innerHTML = html; })
+        .then(function(html) { container.innerHTML = html; window._sfxFlxProgressWatch(); })
         .catch(function(e) { alert('Error cambiando de almacén: ' + e.message); });
+};
+
+// FEATURE 2026-08-24 (Jovan: "tengo que darle al botón de refrescar para
+// que el número cambie, no cambia por sí solo, eso está mal"): el
+// indicador "actualizando stock (X/Y)" ahora se actualiza SOLO cada 5s,
+// sin recargar toda la tabla (evita perder cantidades que alguien esté
+// llenando en otras filas mientras tanto). Al terminar, hace UN refresco
+// silencioso completo para mostrar los datos ya listos.
+var _sfxFlxProgressTimer = null;
+window._sfxFlxProgressWatch = function() {
+    if (_sfxFlxProgressTimer) { clearInterval(_sfxFlxProgressTimer); _sfxFlxProgressTimer = null; }
+    var indicator = document.getElementById('sfx-flx-indicator');
+    if (!indicator || indicator.getAttribute('data-loading') !== 'true') return;
+
+    _sfxFlxProgressTimer = setInterval(function() {
+        fetch('/api/amazon/products/seller-flex/flx-progress')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (!d.loading) {
+                    clearInterval(_sfxFlxProgressTimer);
+                    _sfxFlxProgressTimer = null;
+                    // Refresco silencioso — sin el placeholder "Actualizando desde
+                    // Amazon…" de _sfxRefresh, para no interrumpir a quien esté viendo.
+                    var q = (document.getElementById('sfx-search') || {}).value || '';
+                    var wh = (document.getElementById('sfx-warehouse') || {}).value || 'MTY';
+                    var url = '/api/amazon/products/seller-flex?warehouse=' + encodeURIComponent(wh) +
+                              (q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '');
+                    fetch(url)
+                        .then(function(r2) { return r2.text(); })
+                        .then(function(html) {
+                            var container = document.getElementById('amz-prod-tab-content');
+                            if (container) container.innerHTML = html;
+                        });
+                    return;
+                }
+                var txt = document.getElementById('sfx-flx-indicator-text');
+                if (txt && d.done !== null && d.total !== null) {
+                    txt.textContent = 'actualizando stock (' + d.done + '/' + d.total + ')';
+                }
+            })
+            .catch(function() { /* silencioso — se reintenta en el próximo tick */ });
+    }, 5000);
 };
 
 window._sfxGenerateAdjustXLSX = function() {

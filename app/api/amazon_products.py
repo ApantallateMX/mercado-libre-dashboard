@@ -177,10 +177,16 @@ _flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: d
 # vivo: 2,311 SKUs Onsite en VECKTOR tardó 20+ minutos): el comentario viejo
 # ("~30-60s con 1000 SKUs") estaba muy desactualizado para cuentas con
 # catálogos grandes -- la mayoría de esos SKUs necesita consulta individual
-# (Fase 2, ~0.6-1s cada uno por rate limit real de Amazon, no evitable). TTL
-# sigue en 5 min (evita re-disparar de inmediato) pero ahora el progreso y el
-# resultado sobreviven un reinicio -- ver amz_flx_stock_cache/amz_flx_sync_meta.
-_FLX_STOCK_TTL     = 300
+# (Fase 2, ~0.6-1s cada uno por rate limit real de Amazon, no evitable).
+# BUG REAL 2026-08-24 (2da vuelta, Jovan preguntó "es un ciclo infinito?"):
+# con TTL=300s (5 min) y un ciclo real de 20-40 min, el caché SIEMPRE
+# quedaba "vencido" para cuando terminaba de correr -- la próxima carga de
+# página disparaba OTRO ciclo completo de inmediato, por siempre, sin
+# descanso. Subido a 3h -- esta vista ya se documenta como "snapshot
+# manual, no en vivo" (ver banner en la plantilla), no necesita
+# refrescarse sola cada 5 min. El progreso y el resultado sobreviven un
+# reinicio del proceso -- ver amz_flx_stock_cache/amz_flx_sync_meta.
+_FLX_STOCK_TTL     = 10800
 _flx_stock_refreshing: set = set()  # seller_ids con refresh BG activo (evita doble tarea)
 _flx_progress: dict[str, tuple[int, int]] = {}  # {seller_id: (skus_procesados, total)} -- progreso en vivo del refresh activo
 
@@ -1754,7 +1760,14 @@ async def amazon_products_inventario(
     if force:
         _listings_cache.pop(client.seller_id, None)
         _fba_cache.pop(client.seller_id, None)
-        _flx_stock_cache.pop(client.seller_id, None)
+        # FIX 2026-08-24 (Jovan: "le doy a recargar y reinicia todo, es un
+        # ciclo infinito?"): este botón es la "Recarga rápida" (~3 seg,
+        # según su propio comentario original) -- pero también tronaba el
+        # caché de FLX/Onsite, que NO es rápido de reconstruir (20-40 min,
+        # consulta individual por SKU a Amazon). Cada click aquí destruía
+        # el progreso ya hecho y forzaba un ciclo completo nuevo desde
+        # cero. FLX ya tiene su propio mecanismo de refresco (TTL +
+        # progreso persistido en BD) -- no se toca desde este botón.
 
     try:
         listings, fba_summaries = await asyncio.gather(
@@ -3254,6 +3267,26 @@ async def get_historial_acciones(request: Request, seller_id: str = ""):
 # SELLER FLEX — inventario en bodega propia + generador CSV para carga en lote
 # ─────────────────────────────────────────────────────────────────────────────
 
+@router.get("/products/seller-flex/flx-progress", response_class=JSONResponse)
+async def amazon_products_seller_flex_flx_progress():
+    """FEATURE 2026-08-24 (Jovan: "tengo que darle al botón de refrescar
+    para que el número cambie, no cambia por sí solo, eso está mal"):
+    endpoint chico para que el indicador "actualizando stock (X/Y)" se
+    actualice solo, sin recargar toda la tabla (evita perder inputs de
+    cantidad que alguien pueda estar llenando en otras filas mientras
+    tanto)."""
+    client = await get_amazon_client()
+    if not client:
+        return JSONResponse({"loading": False, "done": None, "total": None})
+    loading = client.seller_id in _flx_stock_refreshing
+    prog = _flx_progress.get(client.seller_id)
+    return JSONResponse({
+        "loading": loading,
+        "done":    prog[0] if prog else None,
+        "total":   prog[1] if prog else None,
+    })
+
+
 @router.get("/products/seller-flex", response_class=HTMLResponse)
 async def amazon_products_seller_flex(
     request: Request,
@@ -3273,7 +3306,14 @@ async def amazon_products_seller_flex(
     if force:
         _listings_cache.pop(client.seller_id, None)
         _fba_cache.pop(client.seller_id, None)
-        _flx_stock_cache.pop(client.seller_id, None)
+        # FIX 2026-08-24 (Jovan: "le doy a recargar y reinicia todo, es un
+        # ciclo infinito?"): este botón es la "Recarga rápida" (~3 seg) --
+        # pero también tronaba el caché de FLX/Onsite, que NO es rápido de
+        # reconstruir (20-40 min, consulta individual por SKU a Amazon).
+        # Cada click aquí destruía el progreso ya hecho y forzaba un ciclo
+        # completo nuevo desde cero. FLX ya tiene su propio mecanismo de
+        # refresco (TTL + progreso persistido en BD) -- no se toca desde
+        # este botón.
 
     try:
         listings = await _get_listings_cached(client)
