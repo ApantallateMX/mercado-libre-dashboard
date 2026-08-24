@@ -759,10 +759,28 @@ async def _warm_flx_cache_from_db_then_refresh(client, flx_skus: list) -> None:
         covered = sum(1 for s in unique_skus if s in db_data)
         coverage_ok = bool(unique_skus) and (covered / len(unique_skus)) >= 0.98
 
-        if not db_data or (not coverage_ok and (_time.time() - last_sync) >= _FLX_STOCK_TTL):
+        # FIX 2026-08-24 (Jovan: "por qué no mejor una lógica más inteligente
+        # en vez de bajar todo, investiga"): investigado -- ya existe un
+        # mecanismo mucho más barato que cubre esta misma necesidad para TODA
+        # la cuenta de un jalón: el reporte oficial
+        # GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA (_onsite_periodic_sync_loop,
+        # cada 3h, ~30-90s por cuenta -- YA ACTIVO desde el 2026-08-22). La
+        # pantalla ya usa ese reporte como fallback automático (ver
+        # _flx_cache_valid/_flx_cache_read, líneas ~3449 de esta misma
+        # sección) cada vez que este caché por-SKU no tiene dato -- así que
+        # mientras el reporte esté vigente, el número que el usuario ve YA
+        # es bueno sin necesitar este mecanismo (20-40 min, consulta
+        # individual por SKU). Se vuelve un último recurso genuino: solo se
+        # dispara si el reporte oficial no está disponible para la cuenta
+        # (cuenta nueva, o el reporte está fallando).
+        needs_live_refresh = (
+            not _flx_cache_valid(key)
+            and (not db_data or (not coverage_ok and (_time.time() - last_sync) >= _FLX_STOCK_TTL))
+        )
+        if needs_live_refresh:
             await _refresh_flx_stock_bg(client, flx_skus)  # limpia _flx_stock_refreshing en su finally
         else:
-            if db_data and not meta:
+            if db_data and not meta and coverage_ok:
                 # Datos ya casi/completamente cubiertos pero sin marca formal
                 # (ej. un deploy interrumpió el ciclo justo antes de escribirla)
                 # -- se escribe ahora para no repetir este razonamiento en
@@ -791,10 +809,16 @@ def _get_flx_stock_cached(client, flx_skus: list) -> dict:
     cached = _flx_stock_cache.get(key)
     if cached:
         ts, data = cached
-        if (now - ts) >= _FLX_STOCK_TTL and key not in _flx_stock_refreshing:
+        # FIX 2026-08-24: no re-disparar el escaneo caro (20-40 min) solo
+        # porque este caché específico venció -- si el reporte oficial
+        # barato (_flx_cache_valid) ya está vigente para la cuenta, el
+        # número que se muestra ya sale bueno de ahí (ver fallback más abajo
+        # en amazon_products_seller_flex/inventario). Ver misma nota en
+        # _warm_flx_cache_from_db_then_refresh.
+        if (now - ts) >= _FLX_STOCK_TTL and key not in _flx_stock_refreshing and not _flx_cache_valid(key):
             _flx_stock_refreshing.add(key)
             asyncio.create_task(_refresh_flx_stock_bg(client, flx_skus))
-            logger.info(f"[FLX] Cache stale ({int(now - ts)}s) — refresh BG iniciado")
+            logger.info(f"[FLX] Cache stale ({int(now - ts)}s) — refresh BG iniciado (reporte oficial no disponible)")
         return data  # siempre retorna inmediatamente (fresco o stale)
 
     # Primera carga tras un reinicio: sin caché EN MEMORIA todavía (puede
