@@ -83,8 +83,9 @@
         {% if listings_loading or sku_sales_loading or bm_loading or flx_loading or fba_loading %}
         <span id="inv-bg-chip"
               class="flex items-center gap-1 text-xs text-gray-400 animate-pulse px-1"
-              title="{% if listings_loading %}Catálogo{% endif %}{% if fba_loading %} · FBA Stock{% endif %}{% if sku_sales_loading %} · Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% endif %} actualizando…">
-            <span class="inline-block animate-spin">↻</span> actualizando
+              title="{% if listings_loading %}Catálogo{% endif %}{% if fba_loading %} · FBA Stock{% endif %}{% if sku_sales_loading %} · Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% if flx_progress %} ({{ flx_progress[0] }}/{{ flx_progress[1] }}){% endif %}{% endif %} actualizando…">
+            <span class="inline-block animate-spin">↻</span>
+            actualizando{% if flx_loading and flx_progress %} FLX {{ flx_progress[0] }}/{{ flx_progress[1] }}{% endif %}
         </span>
         {% endif %}
         <button onclick="window._forceRefreshInv()"

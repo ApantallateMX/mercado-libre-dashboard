@@ -71,8 +71,13 @@
     <!-- Indicador de carga FLX -->
     {% if flx_loading %}
     <span class="flex items-center gap-1 text-xs text-purple-500 animate-pulse px-1"
-          title="Actualizando stock Amazon en background…">
-        <span class="inline-block animate-spin">↻</span> actualizando stock
+          title="Actualizando stock Amazon en background — cada SKU Onsite requiere una consulta individual a Amazon (límite de su API), en catálogos grandes puede tardar varios minutos.">
+        <span class="inline-block animate-spin">↻</span>
+        {% if flx_progress %}
+            actualizando stock ({{ flx_progress[0] }}/{{ flx_progress[1] }})
+        {% else %}
+            actualizando stock…
+        {% endif %}
     </span>
     {% endif %}
 

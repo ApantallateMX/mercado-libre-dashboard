@@ -1690,6 +1690,34 @@ async def init_db():
             await db.commit()
         except Exception:
             pass  # ya existe
+        # TABLA: amz_flx_stock_cache — persistencia del refresh BG de FLX/Onsite
+        # vía FBA Inventory API (_refresh_flx_stock_bg, amazon_products.py).
+        # FEATURE 2026-08-24 (Jovan reportó "actualizando stock" sin fin visible):
+        # antes este caché vivía SOLO en memoria (_flx_stock_cache) -- un deploy
+        # (reinicio del proceso) lo borraba por completo, obligando a repetir un
+        # escaneo que en catálogos grandes (2000+ SKUs Onsite) toma 20-40+ min
+        # por límite real de rate-limit de Amazon. Ahora sobrevive reinicios.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_flx_stock_cache (
+                seller_id   TEXT NOT NULL,
+                sku         TEXT NOT NULL,
+                fulfillable INTEGER,
+                reserved    INTEGER,
+                inbound     INTEGER,
+                total       INTEGER,
+                is_error    INTEGER NOT NULL DEFAULT 0,
+                synced_at   REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (seller_id, sku)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_amz_flx_stock_cache_seller ON amz_flx_stock_cache(seller_id)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_flx_sync_meta (
+                seller_id          TEXT PRIMARY KEY,
+                last_full_sync_at  REAL NOT NULL DEFAULT 0,
+                total_skus         INTEGER NOT NULL DEFAULT 0
+            )
+        """)
         # TABLA: amz_launched_listings — productos lanzados via wizard para monitoreo post-publicación
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_launched_listings (
@@ -2197,6 +2225,89 @@ async def get_seller_flex_bins_for_node(node: str) -> list[str]:
             (node,),
         )
         return [r[0] for r in await cur.fetchall()]
+
+
+async def upsert_amz_flx_stock_batch(seller_id: str, items: list[dict]) -> None:
+    """Persiste un lote de resultados del refresh BG de FLX/Onsite
+    (_refresh_flx_stock_bg, amazon_products.py) -- escritura incremental (no
+    espera a que termine TODO el catálogo) para que un reinicio a media
+    corrida no pierda el progreso ya hecho. `items`: [{sku, fulfillable,
+    reserved, inbound, total, is_error}]. fulfillable=None + is_error=True
+    marca un SKU que falló la consulta (no confundir con 0 confirmado)."""
+    if not items:
+        return
+    import time as _time_flx_batch
+    now = _time_flx_batch.time()
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.executemany("""
+            INSERT INTO amz_flx_stock_cache (seller_id, sku, fulfillable, reserved, inbound, total, is_error, synced_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(seller_id, sku) DO UPDATE SET
+                fulfillable=excluded.fulfillable, reserved=excluded.reserved,
+                inbound=excluded.inbound, total=excluded.total,
+                is_error=excluded.is_error, synced_at=excluded.synced_at
+        """, [
+            (seller_id, it["sku"], it.get("fulfillable"), it.get("reserved"),
+             it.get("inbound"), it.get("total"), int(bool(it.get("is_error"))), now)
+            for it in items
+        ])
+        await db.commit()
+
+
+async def mark_amz_flx_full_sync_done(seller_id: str, total_skus: int) -> None:
+    """Marca que un ciclo COMPLETO de refresh FLX/Onsite terminó -- separado
+    de las escrituras incrementales por lote, para saber cuándo el
+    catálogo entero quedó cubierto (no solo el último lote)."""
+    import time as _time_flx
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute("""
+            INSERT INTO amz_flx_sync_meta (seller_id, last_full_sync_at, total_skus)
+            VALUES (?, ?, ?)
+            ON CONFLICT(seller_id) DO UPDATE SET last_full_sync_at=excluded.last_full_sync_at, total_skus=excluded.total_skus
+        """, (seller_id, _time_flx.time(), total_skus))
+        await db.commit()
+
+
+async def get_amz_flx_stock_from_db(seller_id: str) -> dict:
+    """Lee el snapshot persistido de FLX/Onsite para una cuenta -- usado para
+    calentar el caché en memoria al arrancar el proceso (sobrevive un
+    reinicio/deploy, ver amz_flx_stock_cache) y para el indicador de
+    progreso real. Retorna {sku: {fulfillable, reserved, inbound, total,
+    is_error}}. Los SKUs con is_error=1 (fallo puntual de Amazon en su
+    último intento) SÍ se incluyen -- fulfillable=None ahí (no un 0 falso)
+    -- para que cuenten como "ya intentado" y no disparen un re-escaneo
+    completo del catálogo en cada carga de página solo por ese SKU."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT sku, fulfillable, reserved, inbound, total, is_error FROM amz_flx_stock_cache "
+            "WHERE seller_id = ?",
+            (seller_id,),
+        )
+        rows = await cur.fetchall()
+    return {
+        r["sku"]: {
+            "fulfillable": r["fulfillable"] if not r["is_error"] else None,
+            "reserved":    r["reserved"] or 0,
+            "inbound":     r["inbound"] or 0,
+            "total":       r["total"] or 0,
+            "is_error":    bool(r["is_error"]),
+        }
+        for r in rows
+    }
+
+
+async def get_amz_flx_sync_meta(seller_id: str) -> dict | None:
+    """Metadata del último ciclo COMPLETO de refresh FLX/Onsite para una
+    cuenta -- None si nunca ha terminado un ciclo completo."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT last_full_sync_at, total_skus FROM amz_flx_sync_meta WHERE seller_id = ?",
+            (seller_id,),
+        )
+        row = await cur.fetchone()
+    return dict(row) if row else None
 
 
 async def get_seller_flex_stock_for_skus(skus: list[str]) -> dict:

@@ -173,8 +173,16 @@ _NODE_BY_SELLER_WAREHOUSE = {
 # ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
 # El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
 _flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: data})}
-_FLX_STOCK_TTL     = 300  # 5 min — el bg task tarda ~30-60s con 1000 SKUs; no reejecutar demasiado rápido
+# FIX 2026-08-24 (Jovan reportó "actualizando stock" sin fin visible, medido en
+# vivo: 2,311 SKUs Onsite en VECKTOR tardó 20+ minutos): el comentario viejo
+# ("~30-60s con 1000 SKUs") estaba muy desactualizado para cuentas con
+# catálogos grandes -- la mayoría de esos SKUs necesita consulta individual
+# (Fase 2, ~0.6-1s cada uno por rate limit real de Amazon, no evitable). TTL
+# sigue en 5 min (evita re-disparar de inmediato) pero ahora el progreso y el
+# resultado sobreviven un reinicio -- ver amz_flx_stock_cache/amz_flx_sync_meta.
+_FLX_STOCK_TTL     = 300
 _flx_stock_refreshing: set = set()  # seller_ids con refresh BG activo (evita doble tarea)
+_flx_progress: dict[str, tuple[int, int]] = {}  # {seller_id: (skus_procesados, total)} -- progreso en vivo del refresh activo
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -520,7 +528,7 @@ async def _get_bsr_cached(client, asins: list) -> dict:
     return result
 
 
-async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
+async def _refresh_flx_stock_bg(client, flx_skus: list, merge: bool = False) -> None:
     """
     Tarea BG: descarga FLX stock de FBA API y actualiza caché.
     Nunca bloquea requests — se lanza con asyncio.create_task().
@@ -531,11 +539,35 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
     Por eso usamos dos fases:
       Fase 1: batch de 20 SKUs (captura FBA puro y algunos Onsite)
       Fase 2: retry individual para SKUs no retornados por el batch
+
+    FEATURE 2026-08-24 (Jovan reportó "actualizando stock" sin fin visible,
+    medido en vivo: 2,311 SKUs Onsite en VECKTOR tardó 20+ min -- Fase 2 es
+    ~0.6-1s por SKU, límite real de rate-limit de Amazon, no evitable):
+    - Progreso (`_flx_progress`) y resultado se escriben incrementalmente en
+      BD (`amz_flx_stock_cache`) por lote/cada 25 SKUs -- un reinicio a media
+      corrida (ej. un deploy) ya NO pierde todo el avance.
+    - `merge=True`: parte del caché YA existente (memoria) y solo consulta
+      `flx_skus` (ej. un puñado de SKUs nuevos detectados) en vez de
+      re-escanear el catálogo completo -- usado por el trigger de "SKU
+      nuevo no visto antes" para no disparar 20+ min de trabajo por 1 SKU.
+    - Un SKU que falla la consulta (timeout/429/etc, no "Amazon confirmó 0")
+      se marca is_error=True -- cuenta como "ya intentado" así no vuelve a
+      disparar un re-escaneo completo en cada carga de página, pero
+      tampoco se muestra como stock=0 falso (fulfillable=None).
     """
     key = client.seller_id
+    from app.services import token_store as _ts_flx
     try:
-        result: dict = {}
+        result: dict = dict(_flx_stock_cache.get(key, (0, {}))[1]) if merge else {}
         unique_skus = list(dict.fromkeys(s for s in flx_skus if s))
+        total = len(unique_skus)
+        _flx_progress[key] = (0, total)
+        _pending_db_batch: list = []
+
+        async def _flush_db():
+            if _pending_db_batch:
+                await _ts_flx.upsert_amz_flx_stock_batch(key, _pending_db_batch)
+                _pending_db_batch.clear()
 
         # ── Fase 1: Batch queries ─────────────────────────────────────────────
         for i in range(0, len(unique_skus), 20):
@@ -562,7 +594,8 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
                         s_sku = s.get("sellerSku", "")
                         det   = s.get("inventoryDetails", {}) or {}
                         res   = det.get("reservedQuantity", {}) or {}
-                        result[s_sku] = {
+                        item  = {
+                            "sku":         s_sku,
                             "fulfillable": int(det.get("fulfillableQuantity") or 0),
                             "reserved":    int(res.get("totalReservedQuantity") or 0),
                             "inbound":     (
@@ -572,6 +605,8 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
                             ),
                             "total":       int(s.get("totalQuantity") or 0),
                         }
+                        result[s_sku] = item
+                        _pending_db_batch.append(item)
                     next_tok = payload.get("nextToken")
                     if not next_tok:
                         break  # sin más páginas
@@ -581,6 +616,8 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
                     logger.warning(f"[FLX-BG] Error batch {i} pág {_page}: {exc}")
                     break  # pasar al siguiente batch
 
+            _flx_progress[key] = (min(i + 20, total), total)
+            await _flush_db()
             # Pausa entre batches: 0.55s = ~1.8 req/s (bajo el límite de 2 req/s)
             if i + 20 < len(unique_skus):
                 await asyncio.sleep(0.55)
@@ -593,7 +630,8 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
             logger.info(
                 f"[FLX-BG] Fase 2: {len(missing_skus)} SKUs omitidos por batch → retry individual"
             )
-            for sku in missing_skus:
+            _phase1_done = len(unique_skus) - len(missing_skus)
+            for idx, sku in enumerate(missing_skus):
                 try:
                     params = [
                         ("granularityType", "Marketplace"),
@@ -611,7 +649,8 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
                             if s_sku:
                                 det = s.get("inventoryDetails", {}) or {}
                                 res = det.get("reservedQuantity", {}) or {}
-                                result[s_sku] = {
+                                item = {
+                                    "sku":         s_sku,
                                     "fulfillable": int(det.get("fulfillableQuantity") or 0),
                                     "reserved":    int(res.get("totalReservedQuantity") or 0),
                                     "inbound":     (
@@ -621,28 +660,88 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
                                     ),
                                     "total":       int(s.get("totalQuantity") or 0),
                                 }
+                                result[s_sku] = item
+                                _pending_db_batch.append(item)
                     else:
                         # API confirma 0 para este SKU — guardamos para no re-consultar
-                        result[sku] = {"fulfillable": 0, "reserved": 0, "inbound": 0, "total": 0}
+                        item = {"sku": sku, "fulfillable": 0, "reserved": 0, "inbound": 0, "total": 0}
+                        result[sku] = item
+                        _pending_db_batch.append(item)
                     await asyncio.sleep(0.6)  # rate limit: ~1.6 req/s
 
                 except Exception as exc:
                     logger.warning(f"[FLX-BG] Error retry individual {sku}: {exc}")
+                    # FIX 2026-08-24: antes este SKU quedaba permanentemente ausente
+                    # de `result` -- eso lo marcaba como "nuevo" en CADA carga de
+                    # página futura, disparando un re-escaneo completo del catálogo
+                    # una y otra vez por un solo fallo puntual. Se marca is_error
+                    # (fulfillable=None, no un 0 falso) para que cuente como
+                    # "ya intentado" -- se reintentará en el próximo ciclo normal
+                    # (TTL de 5 min), no en cada page load.
+                    item = {"sku": sku, "fulfillable": None, "reserved": None, "inbound": None, "total": None, "is_error": True}
+                    result[sku] = item
+                    _pending_db_batch.append(item)
+
+                if (idx + 1) % 25 == 0 or idx == len(missing_skus) - 1:
+                    _flx_progress[key] = (min(_phase1_done + idx + 1, total), total)
+                    await _flush_db()
+
+        await _flush_db()
+        if not merge:
+            # Solo marcar "ciclo completo" cuando de verdad se barrió TODO el
+            # catálogo -- un refresh merge=True (unos pocos SKUs nuevos) no
+            # debe hacer creer que el catálogo entero está fresco.
+            await _ts_flx.mark_amz_flx_full_sync_done(key, len(unique_skus))
 
         # ── Resumen final ─────────────────────────────────────────────────────
         still_missing = [s for s in unique_skus if s not in result]
-        with_stock    = [s for s, v in result.items() if v.get("fulfillable", 0) > 0]
-        zero_skus     = [s for s, v in result.items() if v["fulfillable"] == 0 and v["total"] == 0]
+        with_stock    = [s for s, v in result.items() if (v.get("fulfillable") or 0) > 0]
+        zero_skus     = [s for s, v in result.items() if v.get("fulfillable") == 0 and v.get("total") == 0]
+        errored       = [s for s, v in result.items() if v.get("is_error")]
         logger.info(
             f"[FLX-BG] Completado: {len(result)}/{len(unique_skus)} SKUs en caché. "
             f"Con stock: {len(with_stock)}. "
             f"fulfillable=0: {len(zero_skus)}. "
+            f"Con error (reintenta en {int(_FLX_STOCK_TTL/60)}min): {len(errored)}. "
             f"Sin datos: {len(still_missing)}."
         )
         if with_stock:
             logger.info(f"[FLX-BG] SKUs con stock Onsite: {with_stock}")
-        _flx_stock_cache[key] = (_time.time(), result)
+        # FIX 2026-08-24: en merge=True (solo unos SKUs nuevos) NO se debe
+        # resetear el reloj de frescura del catálogo completo -- si no, un
+        # puñado de SKUs nuevos podía posponer indefinidamente el próximo
+        # refresh real de TODO el catálogo (TTL nunca se cumplía).
+        _prev_ts = _flx_stock_cache.get(key, (0, {}))[0]
+        _flx_stock_cache[key] = (_prev_ts if merge else _time.time(), result)
     finally:
+        _flx_stock_refreshing.discard(key)
+        _flx_progress.pop(key, None)
+
+
+async def _warm_flx_cache_from_db_then_refresh(client, flx_skus: list) -> None:
+    """FIX 2026-08-24 (Jovan reportó "actualizando stock" sin fin visible):
+    al primer request tras un reinicio del proceso (deploy), el caché en
+    memoria siempre estaba vacío y esto forzaba un escaneo completo contra
+    Amazon desde cero -- 20+ min en catálogos grandes, aunque el dato en BD
+    tuviera solo minutos de antigüedad. Ahora calienta primero desde BD
+    (rápido, sin llamar a Amazon) y solo dispara el refresh en vivo si el
+    dato persistido está vencido o no existe. `_flx_stock_refreshing[key]`
+    ya viene marcado por el caller (_get_flx_stock_cached)."""
+    key = client.seller_id
+    from app.services import token_store as _ts_warm
+    try:
+        db_data = await _ts_warm.get_amz_flx_stock_from_db(key)
+        meta = await _ts_warm.get_amz_flx_sync_meta(key)
+        last_sync = meta["last_full_sync_at"] if meta else 0
+        if db_data:
+            _flx_stock_cache[key] = (last_sync, db_data)
+            logger.info(f"[FLX] Calentado desde BD: {len(db_data)} SKUs (edad: {int(_time.time() - last_sync)}s)")
+        if not db_data or (_time.time() - last_sync) >= _FLX_STOCK_TTL:
+            await _refresh_flx_stock_bg(client, flx_skus)  # limpia _flx_stock_refreshing en su finally
+        else:
+            _flx_stock_refreshing.discard(key)
+    except Exception as exc:
+        logger.warning(f"[FLX] Error calentando desde BD: {exc}")
         _flx_stock_refreshing.discard(key)
 
 
@@ -652,7 +751,9 @@ def _get_flx_stock_cached(client, flx_skus: list) -> dict:
 
     • Cache fresco  → retorna datos inmediatamente.
     • Cache stale   → retorna datos stale + lanza refresh BG.
-    • Sin cache     → retorna {} + lanza refresh BG (FLX muestra ··· en primera carga).
+    • Sin cache     → retorna {} + calienta desde BD (rápido) y decide desde
+      ahí si hace falta ir en vivo contra Amazon (ver
+      _warm_flx_cache_from_db_then_refresh, FIX 2026-08-24).
 
     El BG task (_refresh_flx_stock_bg) actualiza _flx_stock_cache cuando termina.
     """
@@ -667,11 +768,12 @@ def _get_flx_stock_cached(client, flx_skus: list) -> dict:
             logger.info(f"[FLX] Cache stale ({int(now - ts)}s) — refresh BG iniciado")
         return data  # siempre retorna inmediatamente (fresco o stale)
 
-    # Primera carga: sin caché todavía
+    # Primera carga tras un reinicio: sin caché EN MEMORIA todavía (puede
+    # que sí haya dato persistido en BD -- ver _warm_flx_cache_from_db_then_refresh).
     if key not in _flx_stock_refreshing:
         _flx_stock_refreshing.add(key)
-        asyncio.create_task(_refresh_flx_stock_bg(client, flx_skus))
-        logger.info(f"[FLX] Primera carga — refresh BG iniciado ({len(flx_skus)} FLX SKUs)")
+        asyncio.create_task(_warm_flx_cache_from_db_then_refresh(client, flx_skus))
+        logger.info(f"[FLX] Primera carga tras reinicio — calentando desde BD ({len(flx_skus)} FLX SKUs)")
     return {}
 
 
@@ -1670,15 +1772,19 @@ async def amazon_products_inventario(
 
         # Edge case: listings nuevos que aún no están en el caché FLX vigente.
         # Si el caché existe pero no tiene un SKU FLX (listing creado después del último refresh),
-        # forzar un nuevo refresh inmediato para capturar el SKU nuevo.
+        # forzar un refresh inmediato -- SOLO de los SKUs faltantes (merge=True), no de TODO
+        # el catálogo. FIX 2026-08-24: antes re-escaneaba flx_skus completo (20+ min en
+        # catálogos grandes) por solo 1-2 SKUs nuevos; además, un SKU que falla la consulta
+        # ahora queda marcado is_error (ver _refresh_flx_stock_bg) así que ya NO vuelve a
+        # aparecer aquí como "nuevo" en cada carga de página -- solo los genuinamente nuevos.
         if flx_stock_index and not flx_loading:
             new_flx = [s for s in flx_skus if s and s not in flx_stock_index]
             if new_flx:
                 _key = client.seller_id
                 _flx_stock_refreshing.add(_key)
-                asyncio.create_task(_refresh_flx_stock_bg(client, flx_skus))
+                asyncio.create_task(_refresh_flx_stock_bg(client, new_flx, merge=True))
                 flx_loading = True
-                logger.info(f"[FLX] {len(new_flx)} SKUs nuevos detectados (no en caché) → refresh forzado")
+                logger.info(f"[FLX] {len(new_flx)} SKUs nuevos detectados (no en caché) → refresh forzado (solo estos)")
 
         # BM pre-fetch BG: calienta caché BM para todos los SKUs (permite filtrar/ordenar por BM)
         _trigger_bm_prefetch(listings)
@@ -1919,6 +2025,7 @@ async def amazon_products_inventario(
             "marketplace":      client.marketplace_name,
             "last_updated_ts":   cache_ts,
             "flx_loading":       flx_loading,        # True = BG refresh de FLX activo
+            "flx_progress":      _flx_progress.get(client.seller_id),  # (procesados, total) o None -- FIX 2026-08-24
             "sku_sales_loading": sku_sales_loading,  # True = BG refresh de ventas activo
             "bm_loading":        bm_loading,         # True = BG pre-fetch BM activo
             "fba_loading":       client.seller_id in _fba_refreshing,   # True = FBA BG activo
@@ -3322,6 +3429,7 @@ async def amazon_products_seller_flex(
             "total":       len(flx_items),
             "q":           q,
             "flx_loading": flx_loading,
+            "flx_progress": _flx_progress.get(client.seller_id),  # (procesados, total) o None -- FIX 2026-08-24
             "warehouse":   _wh,
             "available_bins": available_bins,
         }
