@@ -137,6 +137,18 @@ def clean_bm_title(title: str, brand: str = "", model: str = "") -> str:
             real_rest = rest[len(glue):].lstrip(" ")
             return (first + (" " + real_rest if real_rest else "")).strip()
 
+    # BUG REAL 2026-08-24 (Jovan reportó "Título" vacío en Alertas de Stock
+    # tiempo real): faltaba este return. El título SÍ empieza con "{brand}
+    # {model}" (línea 131 no lo descartó), pero el patrón de duplicado exacto
+    # no aparece después -- ej. "Samsung UN55U8000FBXZA 55" Class..." (un
+    # título normal, no el feed sucio de dropship). Sin este return, Python
+    # regresaba None implícito -- silenciosamente vaciaba el título en TODOS
+    # los llamadores de clean_bm_title() sin fallback propio (confirmado con
+    # los 4/7 SKUs reales de la captura de Jovan). El propio docstring de esta
+    # función (arriba) ya documentaba que este caso debía devolver `t` tal
+    # cual -- nunca se implementó.
+    return t
+
 
 def target_coverage_days_for_sku(sku: str) -> int:
     """Días de cobertura objetivo (lead time real de reabasto) para un SKU.
