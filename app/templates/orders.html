@@ -559,6 +559,13 @@ var IS_ADMIN_ALERTAS = {{ 'true' if dashboard_user and (dashboard_user.role == '
 var _alertasRowsHtml = [];
 var _ALERTAS_PAGE_SIZE = 10;
 var _alertasLastLoadTs = 0;
+// FIX 2026-08-24 (reportado por Jovan): el refresco automático cada 30s
+// (y cualquier otra llamada a alertasLoadData -- botón Actualizar, después
+// de Sustituir/Sin stock) siempre reconstruía la tabla en página 1, sin
+// importar en qué página estuviera trabajando el usuario -- perdía el
+// lugar en medio de una sustitución. Se recuerda la página actual y se
+// restaura después de cada recarga en vez de resetear a 1.
+var _alertasCurrentPage = 1;
 
 // ─── Sub-vistas: En vivo / Pendientes de Envío / Historial ─────────────────
 window.setAlertasSubView = function(v) {
@@ -1406,7 +1413,7 @@ function alertasLoadData() {
                 '</div>';
                 return { tr: tr, card: card };
             });
-            window['alertas-pagination_go'](1);
+            window['alertas-pagination_go'](_alertasCurrentPage);
         })
         .catch(function() {
             document.getElementById('alertas-tbody').innerHTML =
@@ -1423,6 +1430,7 @@ window['alertas-pagination_go'] = function(page) {
     var total = _alertasRowsHtml.length;
     var totalPages = Math.max(1, Math.ceil(total / _ALERTAS_PAGE_SIZE));
     var p = Math.min(Math.max(1, page), totalPages);
+    _alertasCurrentPage = p;
     var start = (p - 1) * _ALERTAS_PAGE_SIZE, end = Math.min(start + _ALERTAS_PAGE_SIZE, total);
     var pageItems = _alertasRowsHtml.slice(start, end);
     document.getElementById('alertas-tbody').innerHTML = pageItems.map(function(it) { return it.tr; }).join('');
