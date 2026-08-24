@@ -63,10 +63,30 @@ nodos de VECTOR con datos 100% reales y frescos:
 Ambos vía `/api/diag/seller-flex-ingest` (mismo endpoint ya existente,
 solo cambia el origen del dato — CSV en vez de scraping GraphQL).
 Verificado con `/api/diag/seller-flex-lookup` — ambos nodos con
-`synced_at` de hoy. Pendiente (no urgente, a decidir con Jovan):
-migrar el código del "snapshot manual" para que use este export CSV en
-vez de GraphQL de forma permanente, y repetir el refresco para los 2
-nodos de AUTOBOT (SOKA/SBBQ) si se quiere.
+`synced_at` de hoy.
+
+**Extendido a AUTOBOT el mismo día**: Jovan pidió repetirlo para
+AUTOBOT AMZ MX. Detalle importante descubierto: la sesión de Seller
+Flex de VECTOR y la de AUTOBOT son **navegadores Chrome distintos**
+conectados (2 logins de Google separados, como ya estaban registrados)
+-- el dropdown de nodo de una sesión NUNCA muestra los nodos de la
+otra cuenta (VECTOR solo ve SYGL/SYQJ; AUTOBOT solo ve SBBQ/SOKA/SHDN).
+Se usó `switch_browser` para conectar al Chrome nombrado "Autobot" y
+se repitió el mismo flujo:
+- **SBBQ (CDMX)**: 73,291 filas, 2,135 con stock > 0 (catálogo de
+  AUTOBOT es mucho más grande que el de VECTOR)
+- **SOKA (MTY)**: 2,446 filas, 772 con stock > 0
+
+Verificado con SKU real cruzado en ambos nodos (`SNAC000046-GRB`:
+54 disponible en SBBQ vs 0 disponible/1 reservado en SOKA) — coincide
+exacto con lo que mostraba el portal en pantalla.
+
+Con esto, los 4 nodos activos (SYQJ, SYGL, SBBQ, SOKA) de las 2 cuentas
+Amazon con Seller Flex quedan con snapshot manual 100% fresco de hoy.
+Pendiente (no urgente, a decidir con Jovan): migrar el código del
+"snapshot manual" para que use este export CSV en vez de GraphQL de
+forma permanente — seguiría requiriendo una sesión de navegador activa
+igual que hoy, solo sería más robusto que el scraping GraphQL actual.
 
 Ver memoria `project_seller_flex_portal_and_qty_gap.md` (actualización
 2026-08-24) para el detalle completo.
