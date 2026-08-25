@@ -273,9 +273,23 @@ function buildAnalysisHtml(d) {
     html += '<div class="border-t border-blue-200 pt-2">';
     html += '<p class="text-sm text-gray-700 mb-2">' + (d.summary || '') + '</p>';
     if (d.affects_reputation) {
-        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold">Afecta reputacion</span>';
+        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold mr-1">Afecta reputacion</span>';
     } else {
-        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold">No afecta reputacion</span>';
+        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold mr-1">No afecta reputacion</span>';
+    }
+    // FEATURE 2026-08-25 (pedido de Jovan): veredicto de exclusion contra la
+    // regla OFICIAL completa de ML (ver build_claim_analysis_prompt) -- antes
+    // solo existia "affects_reputation" con una lista vieja/incompleta.
+    var _excl = d.exclusion_eligible;
+    if (_excl === 'si') {
+        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-700 font-semibold">✓ Puedes pedir exclusion</span>';
+    } else if (_excl === 'no') {
+        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 font-semibold">No aplica exclusion</span>';
+    } else if (_excl === 'revisar_manualmente') {
+        html += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold">Revisar exclusion manualmente</span>';
+    }
+    if (d.exclusion_reason) {
+        html += '<p class="text-xs text-gray-500 mt-1">' + d.exclusion_reason + '</p>';
     }
     html += '</div></div>';
     return html;

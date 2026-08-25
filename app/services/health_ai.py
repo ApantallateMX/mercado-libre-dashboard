@@ -197,6 +197,36 @@ def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title,
     return system, user, 300
 
 
+# FIX 2026-08-25 (pedido de Jovan: alertas de reputacion accionables --
+# "que reclamos podria atender para tenerla al 100%"): la lista vieja de
+# "no afecta reputacion" tenia solo 4 casos genericos, inventados/aproximados,
+# no la regla real de Mercado Libre. Reemplazada por las 2 listas OFICIALES
+# completas de "Conoce las reglas de exclusion"
+# (vendedores.mercadolibre.com.mx/nota/conoce-las-reglas-de-exclusion,
+# verificada en vivo el 2026-08-25 -- pagina publica, sin login). Con esto
+# el campo "exclusion_eligible" ya no es una aproximacion del modelo, es
+# una clasificacion contra la regla real y completa.
+_EXCLUSION_NO_APLICA = """Casos en los que NO se puede pedir exclusion (el reclamo es valido):
+- El producto es defectuoso o diferente al publicado
+- El comprador recibio menos productos/partes de las anunciadas
+- El vendedor no despacho o despacho fuera de tiempo o por falta de stock
+- El comprador afirma que el producto es falso
+- El vendedor no contesto mensajeria en 8 horas habiles desde el primer contacto
+- Mensajeria le indico al comprador que no abriera un reclamo"""
+
+_EXCLUSION_SI_APLICA = """Casos en los que SI se puede pedir exclusion (el reclamo puede ser injusto):
+- El comprador inicio el reclamo por error, o no reconoce la compra
+- El envio aparece "entregado" pero el comprador dice que no lo recibio
+- Arrepentimiento de compra con el producto en perfectas condiciones
+- El comprador uso el reclamo solo como medio de contacto
+- Demora de paqueteria/MercadoEnvios estando el despacho dentro del plazo
+- Problema que afecta globalmente a la plataforma de Mercado Libre
+- Reclamo iniciado por competencia o venganza
+- Todavia esta dentro de las 8 horas habiles para responder mensajeria
+- Cambio de talla/modelo en ropa, calzado, bolsos o autopartes
+- Cuenta hackeada, transaccion fraudulenta, o suspension incorrecta de ML"""
+
+
 def build_claim_analysis_prompt(reason_desc, product_title, product_price, days_open,
                                 claims_rate, claims_status, sale_fee, shipping_cost, bm_product=None):
     system = (
@@ -215,16 +245,18 @@ def build_claim_analysis_prompt(reason_desc, product_title, product_price, days_
         f"Tasa de reclamos actual: {claims_rate}% ({claims_status})\n"
         f"Comision de venta: ${sale_fee}\n"
         f"Costo de envio: ${shipping_cost}\n\n"
-        "RECLAMOS QUE NO AFECTAN REPUTACION (no importa resultado):\n"
-        "- Paquete danado por paqueteria\n"
-        "- Arrepentimiento del comprador\n"
-        "- Cambio de talla/color\n"
-        "- Demora de paqueteria\n\n"
+        f"{_EXCLUSION_NO_APLICA}\n\n"
+        f"{_EXCLUSION_SI_APLICA}\n\n"
+        "Clasifica este reclamo especifico contra ESTAS DOS LISTAS (no inventes otra regla). "
+        "Si la razon del reclamo no da suficiente informacion para decidir con confianza, "
+        "exclusion_eligible debe ser \"revisar_manualmente\", no adivines.\n\n"
         "Responde con este JSON exacto:\n"
         "{\n"
         '  "recommendation": "devolver_total | devolver_parcial | reemplazar | mediar | rechazar",\n'
         '  "confidence": "alta | media | baja",\n'
         '  "affects_reputation": true o false,\n'
+        '  "exclusion_eligible": "si | no | revisar_manualmente",\n'
+        '  "exclusion_reason": "cual de las 2 listas y por que aplica ese caso especifico",\n'
         '  "financial_impact": {\n'
         '    "refund_cost": 0.00,\n'
         '    "recovered_commission": 0.00,\n'
@@ -380,6 +412,8 @@ def _fallback_analysis(summary_text):
         "recommendation": "mediar",
         "confidence": "baja",
         "affects_reputation": True,
+        "exclusion_eligible": "revisar_manualmente",
+        "exclusion_reason": "",
         "financial_impact": {"refund_cost": 0, "recovered_commission": 0, "net_loss": 0},
         "pros": ["No se pudo analizar automaticamente"],
         "cons": ["Revisa manualmente el reclamo"],
