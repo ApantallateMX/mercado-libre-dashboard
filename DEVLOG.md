@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-25 (2) — FIX: reglas de exclusión de reclamos ML — regla oficial completa (no aproximada)
+
+Jovan pidió que las alertas de reputación fueran accionables: no solo
+"estás amarillo", sino qué reclamos se pueden atender/excluir para
+volver a verde. Al construir eso, encontré que `build_claim_analysis_prompt`
+(usado HOY por Said/Alejandro al revisar reclamos manualmente en Salud)
+tenía una lista de "no afecta reputación" con solo 4 casos genéricos,
+aproximados de memoria, no la regla real de ML.
+
+**Verificado en vivo** contra la página pública oficial de Mercado
+Libre ("Conoce las reglas de exclusión",
+vendedores.mercadolibre.com.mx/nota/conoce-las-reglas-de-exclusion —
+no requiere login, solo hay que scrollear, un intento anterior la dio
+por bloqueada sin scrollear lo suficiente): 6 casos donde NO se puede
+pedir exclusión, 10 donde SÍ se puede — reemplazó por completo la
+lista vieja.
+
+**Cambio** (`health_ai.py`, commit `9e2d5c4`): nuevo campo
+`exclusion_eligible` (si/no/revisar_manualmente) + `exclusion_reason`
+en la respuesta de IA, distinto de `affects_reputation` (que ya
+existía) — ahora es una clasificación contra la regla real, no una
+aproximación. Ya visible como badge en el panel de "Analizar reclamo"
+(Salud → Reclamos), commit incluye el fix del frontend
+(`health_ai.js`).
+
+**También verificado con datos reales de las 4 cuentas ML** (vía
+marketplace-strategist, llamando `GET /users/{id}` directo con los
+tokens ya guardados): AUTOBOT está 🟡 amarillo únicamente por reclamos
+(2.10%, sus otras 2 métricas están en verde) — BLOWTECHNOLOGIES sigue
+verde pero a 0.09pp de cruzar a amarillo (1.41% vs límite 1.5%). Los
+umbrales oficiales MLM completos (Líderes/Verde/Amarillo/Naranja/Rojo
+para reclamos, cancelaciones y demora en manejo) quedaron documentados
+en memoria para el resto del sistema de alertas.
+
+**Pendiente** ("poco a poco"): meter el listado de reclamos abiertos +
+veredicto de exclusión DENTRO del mensaje de alerta de Mattermost
+(hoy sigue pausada, ver entrada anterior) — requiere traer cada
+reclamo abierto y correrlo por este mismo análisis antes de armar el
+resumen, todavía no cableado al loop automático.
+
+---
+
 ## 2026-08-25 — FEAT: alertas automáticas del dashboard a Mattermost — piloto 1 (reputación ML)
 
 Jovan pidió que el dashboard avise directo a la persona responsable
