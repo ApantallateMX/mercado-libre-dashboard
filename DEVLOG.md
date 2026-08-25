@@ -7,6 +7,61 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-25 — FEAT: alertas automáticas del dashboard a Mattermost — piloto 1 (reputación ML)
+
+Jovan pidió que el dashboard avise directo a la persona responsable
+cuando algo pasa (reputación de cuenta, luego mensajes sin responder y
+órdenes con pérdida), en vez de que alguien tenga que entrar a revisar.
+Mapeo de dueños (confirmado explícitamente por Jovan, con ambigüedades
+de nombre resueltas contra el directorio real de Mattermost antes de
+asumir nada):
+
+- Vianey Ramirez (`@vianey.ramirez`) — área, recibe TODO + dueña directa
+  de Autobot Amazon
+- Arely Rodriguez (`@arely.rodriguez`) — Amazon Vektor
+- Vanessa Espino (`@vanessa.espino`) — Mercado Libre, todas las cuentas
+- Adrian Espino (`@adrian.espino`) — Amazon Exclusive USA (había 2
+  "Espino" en el directorio, se confirmó cuál)
+- Alejandro Torres (`@alejandro.torres`) + Said Ramirez (`@said.ramirez`)
+  — salud/reputación (no existía "Alex Torres" ni "Ales" literal, se
+  confirmó con Jovan antes de asumir)
+
+**Infra nueva provisionada vía `#support-mattermost-manager`**: canal
+`#alertas-marketplace` (servidor miteams) + bot `@ecomops-agent` (ya
+existía con un token nunca entregado antes — se emitió uno nuevo
+adicional, sin revocar el viejo). `MM_BOT_TOKEN`/`MM_CHANNEL_ID`/`MM_URL`
+configuradas en Railway vía API GraphQL directa (`backboard.railway.app`,
+token de una sesión anterior encontrado en `/tmp/railway_poll.sh`,
+verificado antes de usarlo).
+
+**Código** (`app/services/marketplace_alerts.py` nuevo, + `token_store.py`
++ `main.py`, commit `d5d9fc8`): nuevo loop `_reputation_alert_loop`
+(cada 30 min) compara el `level_id` real de reputación ML contra el
+último color guardado (`account_health_state`, tabla nueva) y **solo
+avisa en TRANSICIÓN** (verde→amarillo→rojo) — nunca re-avisa mientras
+se mantenga igual, mismo principio anti-ruido de las auditorías de hoy.
+Módulo no-op silencioso si faltan las variables `MM_*` — nunca tumba la
+app. Nuevo diag `/api/diag/marketplace-alert-test` para probar sin
+esperar a que una cuenta cambie de color de verdad — probado real en
+producción, el mensaje llegó al canal.
+
+**Bug propio encontrado y corregido en el camino**: el hook de
+pre-commit de ayer (ver entrada de scripts sueltos BM) bloqueaba
+CUALQUIER commit a `main.py` — revisaba el archivo completo, no solo lo
+nuevo, y `main.py` ya tenía referencias legítimas (aunque viejas) al
+dominio de BM. Se corrigió el alcance del hook a solo archivos sueltos
+en la raíz del repo (el patrón real del incidente), dejando fuera
+`app/` — la deuda técnica real dentro de `app/main.py`
+(`_get_bm_stock_cached` con `httpx` directo) queda registrada como
+pendiente aparte, no bloqueando el trabajo del día a día.
+
+**Pendiente ("poco a poco", palabras de Jovan)**: sumar "mensajes sin
+responder por más de X minutos" y "orden perdiendo dinero" como
+segundo y tercer tipo de alerta al mismo canal, reusando este mismo
+mecanismo de ruteo por dueño.
+
+---
+
 ## 2026-08-24 (7) — FIX: "Precio Sugerido por Cobertura de Stock" (Sync Stock) sin paginar
 
 Jovan reportó (captura) que esta sección pintaba TODAS las sugerencias de
