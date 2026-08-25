@@ -47,13 +47,18 @@ ACCOUNT_OWNERS: dict[str, str] = {
     "A22XNR713HGDVG": "@adrian.espino",     # ExclusiveBulbs (Amazon, USA)
 }
 
-# ML level_id real (5_green/4_yellow/3_orange/2_orange/1_red) -> semáforo de
-# 3 colores que pidió Jovan. orange se trata como advertencia intermedia,
-# igual que yellow -- Jovan solo pidió verde/amarillo/rojo, no 5 niveles.
+# FIX 2026-08-25 (bug real encontrado al mandar la primera prueba a
+# AUTOBOT -- dio "desconocido" en vez de "amarillo"): los valores REALES de
+# level_id son 5_green/4_light_green/3_yellow/2_orange/1_red (verificado en
+# vivo con /api/diag/marketplace-alert-debug-user, AUTOBOT trae "3_yellow"
+# tal cual), NO "4_yellow"/"3_orange" que tenia aqui antes -- claves
+# equivocadas, nunca hacian match. Mapeo a los 3 colores que pidio Jovan:
+# 4_light_green sigue siendo familia verde; 2_orange se agrupa con amarillo
+# (Jovan pidio 3 colores, no 5 niveles).
 _LEVEL_TO_COLOR = {
     "5_green": "verde",
-    "4_yellow": "amarillo",
-    "3_orange": "amarillo",
+    "4_light_green": "verde",
+    "3_yellow": "amarillo",
     "2_orange": "amarillo",
     "1_red": "rojo",
 }
