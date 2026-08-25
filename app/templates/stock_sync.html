@@ -270,27 +270,21 @@
     <div id="prewarm-status-row" class="text-xs text-gray-500 mb-2">Cargando estado...</div>
     <div id="retail-ph-status" class="text-[10px] text-gray-400 mb-3 font-mono hidden"></div>
 
-    <!-- Historial de syncs BM -->
-    <div id="bm-sync-log-wrap" class="mb-3">
-      <p class="text-xs font-semibold text-gray-600 mb-1">Historial de actualizaciones</p>
-      <table class="w-full text-xs" id="bm-sync-log-table">
-        <thead>
-          <tr class="text-left text-gray-400 border-b border-gray-100">
-            <th class="pb-1 font-medium">Cuándo</th>
-            <th class="pb-1 font-medium text-right">SKUs</th>
-            <th class="pb-1 font-medium text-right">Precios</th>
-            <th class="pb-1 font-medium text-right">Duración</th>
-          </tr>
-        </thead>
-        <tbody id="bm-sync-log-body">
-          <tr><td colspan="4" class="py-2 text-gray-400 text-center">Cargando...</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <!-- FIX 2026-08-24 (Jovan, auditoría de "esta sección aún nos es funcional"):
+         el "Historial de actualizaciones" viejo (bm_sync_log) y el panel de
+         "Cobertura del último bulk BM" quedaron muertos desde el 2026-08-20 --
+         dependían de un bulk-fetch que la migración a bm_sku_master dejó
+         huérfano (nadie lo vuelve a llamar). En vez de arreglar ese mecanismo
+         viejo (ya no hace falta, bm_sku_master lo reemplazó), se retiraron y
+         en su lugar se embebe el mismo "Estado del Sistema" real (ver
+         app/api/system_health.py) que ya vive en Dashboard -- una sola fuente
+         de verdad, no un segundo historial paralelo. -->
+    <div id="system-health-widget" class="mb-3"
+         hx-get="/api/system-health/widget" hx-trigger="load" hx-swap="innerHTML"></div>
 
     <!-- Diagnóstico por SKU -->
     <div class="border-t border-gray-100 pt-3">
-      <p class="text-xs text-gray-400 mb-2">Consultar SKU en caché:</p>
+      <p class="text-xs text-gray-400 mb-2">Consultar SKU en caché (bm_sku_master):</p>
       <div class="flex gap-2">
         <input id="bm-sku-input" type="text" placeholder="Ej: SNHG000004"
                class="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-400"
@@ -301,48 +295,6 @@
         </button>
       </div>
       <div id="bm-sku-result" class="mt-2 hidden"></div>
-    </div>
-
-    <!-- Cobertura BM — resultados del último bulk fetch -->
-    <div id="bm-coverage-panel" class="border-t border-gray-100 pt-3 mt-3 hidden">
-      <p class="text-xs font-medium text-gray-600 mb-2">Cobertura del último bulk BM</p>
-      <div class="grid grid-cols-3 gap-2 mb-2">
-        <div class="text-center bg-gray-50 rounded-lg p-2">
-          <div id="cov-total" class="text-lg font-bold text-gray-700">—</div>
-          <div class="text-[10px] text-gray-400">SKUs procesados</div>
-        </div>
-        <div class="text-center bg-green-50 rounded-lg p-2">
-          <div id="cov-found" class="text-lg font-bold text-green-600">—</div>
-          <div class="text-[10px] text-gray-400">Con stock en BM</div>
-        </div>
-        <div class="text-center bg-red-50 rounded-lg p-2">
-          <div id="cov-zero" class="text-lg font-bold text-red-500">—</div>
-          <div class="text-[10px] text-gray-400">BM=0 total</div>
-        </div>
-      </div>
-      <div class="flex flex-wrap gap-2 mb-1">
-        <span class="text-[10px] text-gray-400">Filas GR bulk: <span id="cov-gr-rows" class="font-mono">—</span></span>
-        <span class="text-[10px] text-gray-300">|</span>
-        <span class="text-[10px] text-gray-400">Filas ALL bulk: <span id="cov-all-rows" class="font-mono">—</span></span>
-        <span class="text-[10px] text-gray-300">|</span>
-        <span class="text-[10px] text-blue-500">TotalQty fallback: <span id="cov-fallback" class="font-mono">—</span></span>
-      </div>
-      <div class="flex flex-wrap gap-2 mb-1">
-        <span class="text-[10px] text-gray-400">BM confirmó 0: <span id="cov-zero-in-bulk" class="font-mono text-gray-500">—</span></span>
-        <span class="text-[10px] text-gray-300">|</span>
-        <span class="text-[10px] text-orange-500">No en bulk (retry): <span id="cov-not-in-bulk" class="font-mono font-bold">—</span></span>
-      </div>
-      <div id="cov-zero-skus" class="hidden mt-1">
-        <p class="text-[10px] text-gray-400 mb-1">No en bulk → retry per-SKU (primeros 50):</p>
-        <div id="cov-zero-skus-list" class="flex flex-wrap gap-1"></div>
-      </div>
-      <button onclick="document.getElementById('cov-zero-skus').classList.toggle('hidden')"
-              class="text-[10px] text-indigo-500 hover:text-indigo-700 mt-1" id="cov-toggle-btn">Ver SKUs con BM=0</button>
-      <!-- RetailPH diag — para diagnosticar VS REF% en planeación -->
-      <div class="mt-2 pt-2 border-t border-gray-50">
-        <p class="text-[10px] text-gray-400 mb-1">Precios RetailPH en caché (para VS REF% en Planeación):</p>
-        <div id="retail-ph-diag" class="text-[10px] text-gray-500 font-mono">—</div>
-      </div>
     </div>
 
     <!-- Diagnóstico por MLM -->
@@ -1544,7 +1496,6 @@ function _pollPrewarmStatus() {
         _prewarmPollTimer = null;
         if (d.ready) showToast('Caché BM actualizado — recarga el tab de Stock para ver cambios');
         _loadPerAccountStatus();  // refrescar desglose por cuenta al completar ciclo
-        _loadBmSyncLog();          // refrescar historial BM
       }
       // Llenar cobertura si ya tenemos stats (primera carga o prewarm previo)
       if (!d.running && d.ready && d.bulk_stats && d.bulk_stats.skus_total > 0) {
@@ -1581,38 +1532,6 @@ window.forcePrewarm = function() {
 _pollPrewarmStatus();
 _loadPerAccountStatus();
 _loadListingsSummary();
-_loadBmSyncLog();
-
-// ── Historial de syncs BM ─────────────────────────────────────────────────────
-function _loadBmSyncLog() {
-  fetch('/api/stock/bm-sync-log', {headers: {'ngrok-skip-browser-warning': 'true'}})
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var tbody = document.getElementById('bm-sync-log-body');
-      if (!tbody) return;
-      var rows = d.log || [];
-      if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="py-2 text-gray-400 text-center">Sin datos — presiona Actualizar ahora</td></tr>';
-        return;
-      }
-      tbody.innerHTML = rows.map(function(r) {
-        var srcBadge = r.source === 'manual'
-          ? '<span class="ml-1 px-1 bg-indigo-50 text-indigo-500 rounded text-[10px]">manual</span>'
-          : '';
-        var rph = (r.retail_ph != null) ? r.retail_ph : '—';
-        return '<tr class="border-b border-gray-50 last:border-0">' +
-          '<td class="py-1 text-gray-500">' + r.age_str + srcBadge + '</td>' +
-          '<td class="py-1 text-right font-mono text-gray-700">' + r.sku_count.toLocaleString() + '</td>' +
-          '<td class="py-1 text-right font-mono text-gray-500">' + rph + '</td>' +
-          '<td class="py-1 text-right text-gray-400">' + r.elapsed_s + 's</td>' +
-          '</tr>';
-      }).join('');
-    })
-    .catch(function() {
-      var tbody = document.getElementById('bm-sync-log-body');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="3" class="py-2 text-red-400 text-center">Error cargando historial</td></tr>';
-    });
-}
 
 // ── Estado por cuenta ─────────────────────────────────────────────────────────
 function _loadPerAccountStatus() {

@@ -57,13 +57,16 @@ _state: dict = {
     "running":   False,
     "overall":   "unknown",   # "ok" | "warning" | "error" | "unknown"
     "checks": {
-        "db":          {"status": "unknown", "msg": "Sin datos", "ms": 0},
-        "meli_tokens": {"status": "unknown", "msg": "Sin datos", "ms": 0},
-        "binmanager":  {"status": "unknown", "msg": "Sin datos", "ms": 0},
-        "stock_sync":  {"status": "unknown", "msg": "Sin datos", "ms": 0},
-        "revenue":     {"status": "unknown", "msg": "Sin datos", "ms": 0},
-        "amazon":      {"status": "unknown", "msg": "Sin datos", "ms": 0},
-        "endpoints":   {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "db":            {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "meli_tokens":   {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "binmanager":    {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "category_loop": {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "oversell":      {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "onsite":        {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "stock_sync":    {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "revenue":       {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "amazon":        {"status": "unknown", "msg": "Sin datos", "ms": 0},
+        "endpoints":     {"status": "unknown", "msg": "Sin datos", "ms": 0},
     },
 }
 
@@ -159,6 +162,116 @@ async def _check_binmanager() -> dict:
         return _ok(f"bm_sku_master fresco (hace {int(age_s)}s, {meta['total_skus']} SKUs)", ms)
     except Exception as e:
         return _err(f"bm_sku_master error: {str(e)[:80]}", _elapsed_ms(t0))
+
+
+# Umbrales de frescura para los checks nuevos de 2026-08-24 (auditoría pedida
+# por Jovan tras el bloqueo de BM del mismo día) -- cada uno con margen sobre
+# su propio intervalo real, para no generar falsa alarma por variación normal.
+_TOP_LOOP_INTERVAL_S      = 15 * 60      # _conf_columns_top_categories_loop
+_LONGTAIL_LOOP_INTERVAL_S = 2 * 3600     # _conf_columns_longtail_loop
+_OVERSELL_LOOP_INTERVAL_S = 1 * 3600     # _oversell_alert_loop
+_ONSITE_LOOP_INTERVAL_S   = 3 * 3600     # _onsite_periodic_sync_loop (amazon_products.py)
+
+
+async def _check_category_loop() -> dict:
+    """FEATURE 2026-08-24 (auditoría pedida por Jovan tras el bloqueo real de
+    BM ese día): el check `binmanager` de arriba solo mide qué tan viejo está
+    bm_sku_master en general -- detecta un bloqueo real, pero HASTA 45 min
+    después de que empezó (el umbral de staleness). El auto-halt real
+    (`_bm_category_loop_halt_reason`, main.py) se activa mucho antes (tras
+    solo 3 lecturas vacías seguidas) pero nada lo exponía en este dashboard
+    -- este check lo hace visible de inmediato, sin esperar a que
+    bm_sku_master se ponga viejo. Cero llamadas nuevas a BM -- solo lee el
+    estado en memoria que el loop ya mantiene."""
+    t0 = time.monotonic()
+    try:
+        from app.main import (
+            _bm_category_loop_halt_reason,
+            _bm_top_category_empty_streak,
+            _conf_columns_progress,
+        )
+        ms = _elapsed_ms(t0)
+        if _bm_category_loop_halt_reason:
+            return _err(f"Loop de categorías PAUSADO: {_bm_category_loop_halt_reason[:140]}", ms)
+
+        now = time.time()
+
+        def _last_finished_age(name: str, interval_s: int):
+            hist = _conf_columns_progress.get(name, {}).get("history") or []
+            if not hist:
+                return None
+            return now - hist[-1].get("finished_at", now)
+
+        top_age = _last_finished_age("top", _TOP_LOOP_INTERVAL_S)
+        tail_age = _last_finished_age("longtail", _LONGTAIL_LOOP_INTERVAL_S)
+
+        streaks = {k: v for k, v in _bm_top_category_empty_streak.items() if v > 0}
+        streak_msg = f", rachas de 0 filas: {streaks}" if streaks else ""
+
+        if top_age is not None and top_age > _TOP_LOOP_INTERVAL_S * 3:
+            return _warn(f"Loop top-5 sin correr hace {int(top_age)}s (esperado c/{_TOP_LOOP_INTERVAL_S}s){streak_msg}", ms)
+        if tail_age is not None and tail_age > _LONGTAIL_LOOP_INTERVAL_S * 3:
+            return _warn(f"Loop longtail sin correr hace {int(tail_age)}s (esperado c/{_LONGTAIL_LOOP_INTERVAL_S}s)", ms)
+        if streaks:
+            return _warn(f"Loop activo pero con rachas de 0 filas sin confirmar{streak_msg}", ms)
+
+        top_str = f"top hace {int(top_age)}s" if top_age is not None else "top sin datos aún"
+        return _ok(f"Loop de categorías corriendo -- {top_str}", ms)
+    except Exception as e:
+        return _err(f"Error: {str(e)[:80]}", _elapsed_ms(t0))
+
+
+async def _check_oversell_alert() -> dict:
+    """FEATURE 2026-08-24 -- frescura del loop de exposición por sobreventa
+    cross-cuenta (banner "N SKUs con más unidades publicadas que stock real
+    de BM" en Sync Stock). Corre cada 1h; cero llamadas nuevas a BM."""
+    t0 = time.monotonic()
+    try:
+        from app.main import _oversell_alert_cache
+        ms = _elapsed_ms(t0)
+        checked_at = _oversell_alert_cache.get("checked_at", 0.0)
+        if not checked_at:
+            return _warn("Alerta de sobreventa aún sin primer ciclo", ms)
+        age_s = time.time() - checked_at
+        if age_s > _OVERSELL_LOOP_INTERVAL_S * 3:
+            return _warn(f"Alerta de sobreventa sin refrescar hace {int(age_s)}s (esperado c/{_OVERSELL_LOOP_INTERVAL_S}s)", ms)
+        return _ok(f"Sobreventa OK -- {_oversell_alert_cache.get('total', 0)} SKUs con brecha, hace {int(age_s)}s", ms)
+    except Exception as e:
+        return _err(f"Error: {str(e)[:80]}", _elapsed_ms(t0))
+
+
+async def _check_onsite_seller_flex() -> dict:
+    """FEATURE 2026-08-24 -- frescura del sync automático de stock Onsite/
+    Seller Flex (Reportes oficiales SP-API, `_onsite_periodic_sync_loop`,
+    reactivado 2026-08-22). No confundir con el mecanismo caro por-SKU
+    (gateado detrás de este) -- este es el barato que corre solo cada 3h."""
+    t0 = time.monotonic()
+    try:
+        from app.services import token_store
+        from app.api.amazon_products import _onsite_stock_cache
+        amazon_accounts = await token_store.get_all_amazon_accounts()
+        if not amazon_accounts:
+            return _ok("Sin cuentas Amazon configuradas", _elapsed_ms(t0))
+        ms = _elapsed_ms(t0)
+        now = time.time()
+        missing, stale = [], []
+        for acc in amazon_accounts:
+            sid = acc.get("seller_id", "")
+            nick = acc.get("nickname", sid)
+            entry = _onsite_stock_cache.get(sid)
+            if not entry:
+                missing.append(nick)
+                continue
+            age_s = now - entry[0]
+            if age_s > _ONSITE_LOOP_INTERVAL_S * 3:
+                stale.append(f"{nick}({int(age_s)}s)")
+        if missing:
+            return _warn(f"Sin sync Onsite todavía: {', '.join(missing)}", ms)
+        if stale:
+            return _warn(f"Onsite desactualizado: {', '.join(stale)} (esperado c/{_ONSITE_LOOP_INTERVAL_S}s)", ms)
+        return _ok(f"Onsite/Seller Flex fresco en {len(amazon_accounts)} cuenta(s)", ms)
+    except Exception as e:
+        return _warn(f"Onsite check error: {str(e)[:60]}", _elapsed_ms(t0))
 
 
 async def _check_stock_sync() -> dict:
@@ -298,13 +411,17 @@ async def run_all_checks():
             _check_db(),
             _check_meli_tokens(),
             _check_binmanager(),
+            _check_category_loop(),
+            _check_oversell_alert(),
+            _check_onsite_seller_flex(),
             _check_stock_sync(),
             _check_revenue(),
             _check_amazon(),
             _check_endpoints(),
             return_exceptions=True,
         )
-        keys = ["db", "meli_tokens", "binmanager", "stock_sync", "revenue", "amazon", "endpoints"]
+        keys = ["db", "meli_tokens", "binmanager", "category_loop", "oversell", "onsite",
+                "stock_sync", "revenue", "amazon", "endpoints"]
         for key, result in zip(keys, results):
             if isinstance(result, Exception):
                 _state["checks"][key] = _err(str(result)[:100], 0)
@@ -425,13 +542,16 @@ _ICON = {
 }
 
 _LABEL = {
-    "db":          "Base de datos",
-    "meli_tokens": "Tokens MeLi",
-    "binmanager":  "BinManager",
-    "stock_sync":  "Sync de Stock",
-    "revenue":     "Orders API",
-    "amazon":      "Amazon SP-API",
-    "endpoints":   "Páginas web",
+    "db":            "Base de datos",
+    "meli_tokens":   "Tokens MeLi",
+    "binmanager":    "BinManager (bm_sku_master)",
+    "category_loop": "Loop de categorías BM",
+    "oversell":      "Alerta Sobreventa",
+    "onsite":        "Onsite/Seller Flex",
+    "stock_sync":    "Sync de Stock",
+    "revenue":       "Orders API",
+    "amazon":        "Amazon SP-API",
+    "endpoints":     "Páginas web",
 }
 
 _BADGE_COLOR = {
