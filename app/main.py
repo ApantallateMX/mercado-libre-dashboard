@@ -812,6 +812,7 @@ async def lifespan(app: FastAPI):
     from app.services.stock_sync_multi import start_multi_stock_sync
     start_multi_stock_sync()
     asyncio.create_task(_oversell_alert_loop())
+    asyncio.create_task(_reputation_alert_loop())
     start_token_refresh()
     start_supplier_debt_sync()
     start_realtime_alerts_reconcile()
@@ -18189,6 +18190,62 @@ async def _oversell_alert_loop():
         except Exception as _e:
             logger.warning(f"[OVERSELL-ALERT] Error en chequeo periódico: {_e}")
         await asyncio.sleep(_OVERSELL_ALERT_INTERVAL)
+
+
+_REPUTATION_ALERT_INTERVAL = 1800  # 30 min -- reputación ML no cambia más seguido que esto
+
+
+async def _reputation_alert_loop():
+    """FEATURE 2026-08-25 (pedido explícito de Jovan): avisa a
+    #alertas-marketplace (vía app/services/marketplace_alerts.py) cuando la
+    reputación de una cuenta ML cambia de color (verde/amarillo/rojo) --
+    piloto #1 de las alertas por dueño de cuenta. Solo lectura (get_user_info,
+    mismo endpoint que ya usa /api/health/summary), nunca escribe nada en ML.
+    Solo notifica en TRANSICIÓN de color, nunca mientras se mantenga igual
+    (ver account_health_state en token_store.py) -- evita el mismo problema
+    de ruido que ya vimos con los check-ins de coolify-manager."""
+    from app.services import marketplace_alerts as _ma
+    await asyncio.sleep(180)  # dejar que el arranque normal termine primero
+    while True:
+        try:
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = str(acc.get("user_id", ""))
+                nickname = acc.get("nickname") or uid
+                if not uid:
+                    continue
+                try:
+                    client = await get_meli_client(user_id=uid)
+                    if not client:
+                        continue
+                    user = await client.get_user_info()
+                    level_id = (user.get("seller_reputation") or {}).get("level_id", "")
+                    new_color = _ma.level_id_to_color(level_id)
+                    old_color = await token_store.get_account_health_color(uid)
+                    if old_color and old_color != new_color:
+                        await _ma.notify_reputation_change(uid, nickname, old_color, new_color)
+                    if new_color != old_color:
+                        await token_store.set_account_health_color(uid, new_color)
+                except Exception as _acc_e:
+                    logger.warning(f"[REPUTATION-ALERT] {nickname}: {_acc_e}")
+        except Exception as _e:
+            logger.warning(f"[REPUTATION-ALERT] Error en chequeo periódico: {_e}")
+        await asyncio.sleep(_REPUTATION_ALERT_INTERVAL)
+
+
+@app.post("/api/diag/marketplace-alert-test")
+async def diag_marketplace_alert_test(token: str = ""):
+    """Manda un mensaje de prueba a #alertas-marketplace -- para verificar
+    que MM_BOT_TOKEN/MM_CHANNEL_ID/MM_URL están bien configurados en Railway
+    sin esperar a que la reputación de alguna cuenta cambie de verdad."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import marketplace_alerts as _ma
+    ok = await _ma.post_marketplace_alert(
+        "🧪 Prueba de conexión — el dashboard ya puede postear aquí. "
+        "Este canal recibirá avisos cuando la reputación de una cuenta cambie de color."
+    )
+    return JSONResponse({"ok": ok, "mm_configured": bool(_ma.MM_URL and _ma.MM_BOT_TOKEN and _ma.MM_CHANNEL_ID)})
 
 
 @app.post("/api/diag/force-qty-sync")

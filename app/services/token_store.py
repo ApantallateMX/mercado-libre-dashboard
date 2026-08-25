@@ -703,6 +703,20 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: account_health_state — último color de reputación conocido
+        # por cuenta (ver app/services/marketplace_alerts.py). Solo sirve
+        # para detectar TRANSICIONES (verde->amarillo->rojo) y no re-avisar
+        # cada ciclo mientras el color se mantenga igual -- pedido explícito
+        # de Jovan 2026-08-25.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS account_health_state (
+                account_id  TEXT PRIMARY KEY,
+                color       TEXT NOT NULL DEFAULT '',
+                updated_at  REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_bulk_fetch_log — histórico de CADA intento real de bajar
         # el bulk de BM (éxito, vacío o error), no solo los éxitos como
         # bm_sync_log. FEATURE 2026-08-18 (pedido por Jovan tras el
@@ -5075,6 +5089,25 @@ async def log_bm_sync_event(sku_count: int, elapsed_s: float, source: str = "aut
         await db.execute(
             "DELETE FROM bm_sync_log WHERE id NOT IN "
             "(SELECT id FROM bm_sync_log ORDER BY id DESC LIMIT 50)"
+        )
+        await db.commit()
+
+
+async def get_account_health_color(account_id: str) -> str:
+    """Último color de reputación guardado para esta cuenta, '' si nunca se ha visto."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute("SELECT color FROM account_health_state WHERE account_id = ?", (account_id,))
+        row = await cur.fetchone()
+        return row[0] if row else ""
+
+
+async def set_account_health_color(account_id: str, color: str) -> None:
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "INSERT INTO account_health_state (account_id, color, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(account_id) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at",
+            (account_id, color, _t.time()),
         )
         await db.commit()
 
