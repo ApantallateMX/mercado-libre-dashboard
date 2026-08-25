@@ -24,6 +24,14 @@ MM_URL = os.getenv("MM_URL", "")
 MM_BOT_TOKEN = os.getenv("MM_BOT_TOKEN", "")
 MM_CHANNEL_ID = os.getenv("MM_CHANNEL_ID", "")
 
+# PAUSADO 2026-08-25 (pedido explícito de Jovan: "espera aún no mandemos
+# alertas") -- interruptor explícito, apagado por default. Nadie recibe
+# nada hasta que Jovan pida encenderlo con MARKETPLACE_ALERTS_ENABLED=true
+# en Railway. El resto del mecanismo (loop, detección de transición,
+# endpoint de prueba) sigue corriendo/probable, solo el envío real queda
+# bloqueado aquí, en un único punto.
+ALERTS_ENABLED = os.getenv("MARKETPLACE_ALERTS_ENABLED", "false").strip().lower() == "true"
+
 AREA_LEAD = "@vianey.ramirez"
 HEALTH_TEAM = ["@alejandro.torres", "@said.ramirez"]
 
@@ -58,7 +66,11 @@ def level_id_to_color(level_id: str) -> str:
 
 async def post_marketplace_alert(text: str) -> bool:
     """POST puro a Mattermost -- nunca lanza, solo loguea si falla. No-op
-    silencioso si el bot no está configurado (env vars ausentes)."""
+    silencioso si el bot no está configurado (env vars ausentes) O si
+    ALERTS_ENABLED sigue apagado (pausado a pedido de Jovan 2026-08-25)."""
+    if not ALERTS_ENABLED:
+        logger.info("[MarketplaceAlerts] PAUSADO (MARKETPLACE_ALERTS_ENABLED != true) -- alerta no enviada: %s", text[:120])
+        return False
     if not (MM_URL and MM_BOT_TOKEN and MM_CHANNEL_ID):
         logger.info("[MarketplaceAlerts] MM_* no configurado -- alerta no enviada: %s", text[:120])
         return False

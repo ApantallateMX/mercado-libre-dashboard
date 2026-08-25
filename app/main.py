@@ -18245,7 +18245,11 @@ async def diag_marketplace_alert_test(token: str = ""):
         "🧪 Prueba de conexión — el dashboard ya puede postear aquí. "
         "Este canal recibirá avisos cuando la reputación de una cuenta cambie de color."
     )
-    return JSONResponse({"ok": ok, "mm_configured": bool(_ma.MM_URL and _ma.MM_BOT_TOKEN and _ma.MM_CHANNEL_ID)})
+    return JSONResponse({
+        "ok": ok,
+        "mm_configured": bool(_ma.MM_URL and _ma.MM_BOT_TOKEN and _ma.MM_CHANNEL_ID),
+        "alerts_enabled": _ma.ALERTS_ENABLED,
+    })
 
 
 @app.post("/api/diag/force-qty-sync")
