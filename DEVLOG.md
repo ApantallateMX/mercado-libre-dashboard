@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-24 (7) — FIX: "Precio Sugerido por Cobertura de Stock" (Sync Stock) sin paginar
+
+Jovan reportó (captura) que esta sección pintaba TODAS las sugerencias de
+precio de una sola vez, sin paginación — violación directa de la regla del
+proyecto ("toda tabla nueva: paginación de 10 filas/página") que ya se
+había pedido corregir antes en otras vistas.
+
+**Fix** (`stock_sync.html`, commit `38016c2`): `loadCoverageAlerts()` ahora
+guarda el HTML de cada tarjeta en un arreglo (`_covAlertsHtml`) en vez de
+volcarlo directo al DOM, y usa el patrón estándar `_renderPaginated()`
+(mismo mecanismo ya usado en `products_listings.html`) — 10 por página,
+con paginador (`coverage-alerts-pag`). Las acciones "Aplicar en ML" e
+"Ignorar" ya no borran el nodo del DOM directamente (dejaba la página con
+menos de 10 tarjetas) — ahora quitan del arreglo vía `_removeCoverageAlert()`
+y repintan la página actual, jalando el siguiente ítem disponible.
+
+Verificado local (sintaxis JS con `node --check` aislando el bloque,
+`/stock-sync` HTTP 200, `/api/coverage-price-alerts` sin cambios) antes
+de subir.
+
+---
+
 ## 2026-08-24 (6) — FEAT: endpoint `/api/diag/bulk-sku-lookup` + análisis de prioridad de envío MTY/CDMX (3 archivos externos)
 
 Jovan pidió analizar 3 archivos en su escritorio (`Bosh-Aspiradoras.xlsx`
