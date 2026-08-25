@@ -103,6 +103,56 @@ METRIC_THRESHOLDS = {
     "cancelaciones":  {"lideres": 0.5, "verde": 1.0, "amarillo": 2.5, "naranja": 3.0},
     "demora_manejo":  {"lideres": 8.0, "verde": 10.0, "amarillo": 15.0, "naranja": 22.0},
 }
+_METRIC_LABEL = {"reclamos": "Reclamos", "cancelaciones": "Cancelaciones", "demora_manejo": "Demora en manejo"}
+_STATUS_EMOJI = {"lider": "🏆", "verde": "🟢", "amarillo": "🟡", "naranja": "🟠", "rojo": "🔴"}
+
+
+def _metric_status(metric_key: str, value_pct: float) -> str:
+    t = METRIC_THRESHOLDS[metric_key]
+    if value_pct <= t["lideres"]:
+        return "lider"
+    if value_pct <= t["verde"]:
+        return "verde"
+    if value_pct <= t["amarillo"]:
+        return "amarillo"
+    if value_pct <= t["naranja"]:
+        return "naranja"
+    return "rojo"
+
+
+def extract_metrics(user: dict) -> dict:
+    """De seller_reputation.metrics (ya viene de get_user_info) a
+    {reclamos, cancelaciones, demora_manejo} en % (0-100), listo para
+    comparar contra METRIC_THRESHOLDS."""
+    m = (user.get("seller_reputation") or {}).get("metrics") or {}
+    return {
+        "reclamos": round((m.get("claims") or {}).get("rate", 0) * 100, 2),
+        "cancelaciones": round((m.get("cancellations") or {}).get("rate", 0) * 100, 2),
+        "demora_manejo": round((m.get("delayed_handling_time") or {}).get("rate", 0) * 100, 2),
+    }
+
+
+def build_metrics_table(metrics: dict) -> str:
+    """Tabla markdown con las 3 metricas reales vs umbrales oficiales MLM --
+    deja claro CUAL metrica especifica esta empujando el color (nunca es un
+    promedio, ver METRIC_THRESHOLDS)."""
+    rows = ["| Métrica | Actual | Meta Líder | Límite Verde | Estado |", "|---|---|---|---|---|"]
+    worst_key, worst_rank = None, -1
+    _rank = {"lider": 0, "verde": 1, "amarillo": 2, "naranja": 3, "rojo": 4}
+    for key in ("reclamos", "cancelaciones", "demora_manejo"):
+        val = metrics.get(key, 0)
+        status = _metric_status(key, val)
+        if _rank[status] > worst_rank:
+            worst_rank, worst_key = _rank[status], key
+        t = METRIC_THRESHOLDS[key]
+        rows.append(
+            f"| {_METRIC_LABEL[key]} | {val}% | ≤{t['lideres']}% | ≤{t['verde']}% | "
+            f"{_STATUS_EMOJI[status]} {status.capitalize()} |"
+        )
+    table = "\n".join(rows)
+    if worst_key:
+        table += f"\n\n_El color de la cuenta lo define **{_METRIC_LABEL[worst_key]}** (la métrica en peor estado — el color nunca es un promedio)._"
+    return table
 
 
 async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_claims: int = 15) -> str:
@@ -175,21 +225,43 @@ async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_c
     return "\n".join(lines)
 
 
-async def notify_reputation_change(account_id: str, nickname: str, old_color: str, new_color: str, client=None) -> None:
+# FIX 2026-08-25 (pedido de Jovan: "quiero un poco mas bonito y que me lo
+# muestres aqui antes de mandar, no mandemos a lo loco"): separado en 2
+# pasos -- build_health_alert_message() SOLO arma el texto (nunca llama a
+# Mattermost, se puede llamar cuantas veces se quiera para preview), y
+# notify_reputation_change() es la unica que de verdad envia (a traves de
+# post_marketplace_alert, que ya respeta ALERTS_ENABLED).
+async def build_health_alert_message(account_id: str, nickname: str, old_color: str, new_color: str,
+                                      metrics: dict | None = None, client=None) -> str:
     owner = ACCOUNT_OWNERS.get(account_id)
     mentions = [AREA_LEAD] + HEALTH_TEAM
     if owner and owner not in mentions:
         mentions.append(owner)
-    emoji_old, emoji_new = _COLOR_EMOJI.get(old_color, "⚪"), _COLOR_EMOJI.get(new_color, "⚪")
+    emoji_new = _COLOR_EMOJI.get(new_color, "⚪")
+
     if old_color == new_color:
-        headline = f"**reputación de {nickname}**: {emoji_new} {new_color} (sin cambio, chequeo puntual)"
+        title = f"### {emoji_new} {nickname} — Reputación (chequeo puntual, sin cambio de color)"
     else:
-        headline = f"**reputación de {nickname}** cambió: {emoji_old} {old_color} → {emoji_new} **{new_color}**"
-    text = f"{' '.join(mentions)} — {headline}\nRevisar en el dashboard: pestaña Salud, cuenta {nickname}."
+        emoji_old = _COLOR_EMOJI.get(old_color, "⚪")
+        title = f"### {emoji_new} {nickname} — Reputación cambió: {emoji_old} {old_color} → {emoji_new} **{new_color}**"
+
+    parts = [title]
+    if metrics:
+        parts.append(build_metrics_table(metrics))
+    parts.append(f"[Ver en el dashboard]({os.getenv('DASHBOARD_BASE_URL', '')}/health) — pestaña Salud, cuenta {nickname}.")
+
     if client is not None:
         try:
             claims_summary = await build_actionable_claims_summary(client)
-            text += f"\n\n{claims_summary}"
+            parts.append("---\n📋 " + claims_summary)
         except Exception as e:
             logger.warning(f"[MarketplaceAlerts] No se pudo agregar resumen de reclamos: {e}")
-    await post_marketplace_alert(text)
+
+    parts.append(" ".join(mentions))
+    return "\n\n".join(parts)
+
+
+async def notify_reputation_change(account_id: str, nickname: str, old_color: str, new_color: str,
+                                    metrics: dict | None = None, client=None) -> bool:
+    text = await build_health_alert_message(account_id, nickname, old_color, new_color, metrics=metrics, client=client)
+    return await post_marketplace_alert(text)
