@@ -18223,7 +18223,7 @@ async def _reputation_alert_loop():
                     new_color = _ma.level_id_to_color(level_id)
                     old_color = await token_store.get_account_health_color(uid)
                     if old_color and old_color != new_color:
-                        await _ma.notify_reputation_change(uid, nickname, old_color, new_color)
+                        await _ma.notify_reputation_change(uid, nickname, old_color, new_color, client=client)
                     if new_color != old_color:
                         await token_store.set_account_health_color(uid, new_color)
                 except Exception as _acc_e:
@@ -18231,6 +18231,33 @@ async def _reputation_alert_loop():
         except Exception as _e:
             logger.warning(f"[REPUTATION-ALERT] Error en chequeo periódico: {_e}")
         await asyncio.sleep(_REPUTATION_ALERT_INTERVAL)
+
+
+@app.post("/api/diag/marketplace-alert-send-now")
+async def diag_marketplace_alert_send_now(token: str = "", account_id: str = ""):
+    """Manda AHORA el mensaje completo de salud de cuenta (color + reclamos
+    accionables) para una cuenta ML puntual, sin esperar a una transicion de
+    color real ni al ciclo de 30 min -- pedido de Jovan para mandar la
+    primera prueba real al equipo. Respeta MARKETPLACE_ALERTS_ENABLED igual
+    que el resto (post_marketplace_alert es el unico punto de envio real)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    from app.services import marketplace_alerts as _ma
+    accounts = await token_store.get_all_tokens()
+    acc = next((a for a in accounts if str(a.get("user_id")) == account_id), None)
+    if not acc:
+        return JSONResponse({"error": f"cuenta {account_id} no encontrada"}, status_code=404)
+    nickname = acc.get("nickname") or account_id
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "no se pudo crear cliente ML para esa cuenta"}, status_code=502)
+    user = await client.get_user_info()
+    level_id = (user.get("seller_reputation") or {}).get("level_id", "")
+    color = _ma.level_id_to_color(level_id)
+    await _ma.notify_reputation_change(account_id, nickname, color, color, client=client)
+    return JSONResponse({"ok": True, "account": nickname, "color": color, "alerts_enabled": _ma.ALERTS_ENABLED})
 
 
 @app.post("/api/diag/marketplace-alert-test")

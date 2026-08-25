@@ -377,6 +377,69 @@ def build_buyer_message_reply_prompt(buyer_message, thread_history, product_titl
     return system, user, 300
 
 
+def build_claims_batch_exclusion_prompt(claims: list) -> tuple:
+    """FEATURE 2026-08-25 (pedido de Jovan: alertas de reputacion accionables
+    -- listar reclamos abiertos con veredicto de exclusion). Version LIGERA
+    de build_claim_analysis_prompt para uso en background (loop de alertas):
+    clasifica VARIOS reclamos en una sola llamada (mas barato/rapido que 1
+    llamada por reclamo) usando solo reason_desc + dias_abierto -- sin
+    precio/comision/costo de envio (esos requieren llamadas extra por
+    reclamo que solo se justifican cuando el usuario pide el analisis
+    financiero completo de UN reclamo puntual, no para un resumen masivo).
+    Misma regla oficial completa que build_claim_analysis_prompt."""
+    system = (
+        "Eres un consultor experto en Mercado Libre Mexico. "
+        "Clasifica reclamos segun si pueden pedir exclusion de reputacion. "
+        "Responde UNICAMENTE con un JSON valido (sin markdown, sin texto extra, sin backticks)."
+    )
+    items = "\n".join(
+        f'{i+1}. id={c.get("id","")} | razon="{c.get("reason_desc","")}" | dias_abierto={c.get("days_open",0)}'
+        for i, c in enumerate(claims)
+    )
+    user = (
+        f"{_EXCLUSION_NO_APLICA}\n\n"
+        f"{_EXCLUSION_SI_APLICA}\n\n"
+        "Clasifica CADA UNO de estos reclamos contra las 2 listas de arriba "
+        "(no inventes otra regla). Si la razon no da suficiente informacion "
+        "para decidir con confianza, exclusion_eligible debe ser "
+        '"revisar_manualmente".\n\n'
+        f"Reclamos:\n{items}\n\n"
+        "Responde con un arreglo JSON exacto (mismo orden que la lista):\n"
+        '[{"id": "...", "exclusion_eligible": "si | no | revisar_manualmente", '
+        '"exclusion_reason": "breve, 1 linea"}, ...]'
+    )
+    return system, user, 300 + 120 * max(1, len(claims))
+
+
+def parse_claims_batch_exclusion(raw_text: str, claim_ids: list) -> dict:
+    """Retorna {claim_id: {"exclusion_eligible", "exclusion_reason"}}. Si el
+    parseo falla o faltan ids, esos quedan en 'revisar_manualmente' -- nunca
+    se le atribuye un 'si' a un reclamo que el modelo no confirmo."""
+    out = {cid: {"exclusion_eligible": "revisar_manualmente", "exclusion_reason": ""} for cid in claim_ids}
+    try:
+        parsed = json.loads(raw_text.strip())
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        match = re.search(r'\[.*\]', raw_text or "", re.DOTALL)
+        if not match:
+            return out
+        try:
+            parsed = json.loads(match.group(0))
+        except (json.JSONDecodeError, TypeError):
+            return out
+    if not isinstance(parsed, list):
+        return out
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        cid = str(item.get("id", ""))
+        if cid in out:
+            out[cid] = {
+                "exclusion_eligible": item.get("exclusion_eligible", "revisar_manualmente"),
+                "exclusion_reason": item.get("exclusion_reason", ""),
+            }
+    return out
+
+
 def parse_claim_analysis(raw_text):
     """Parse claim analysis JSON from Claude response."""
     if not raw_text:

@@ -90,15 +90,101 @@ async def post_marketplace_alert(text: str) -> bool:
         return False
 
 
-async def notify_reputation_change(account_id: str, nickname: str, old_color: str, new_color: str) -> None:
+# Umbrales OFICIALES MLM (Mexico) -- verificados en vivo 2026-08-25 contra
+# developers.mercadolibre.com.mx/es_ar/manejo-de-ordenes/reputacion-de-vendedores.
+# El color de la cuenta = LA PEOR de las 3, nunca un promedio.
+METRIC_THRESHOLDS = {
+    "reclamos":       {"lideres": 1.0, "verde": 1.5, "amarillo": 3.0, "naranja": 6.0},
+    "cancelaciones":  {"lideres": 0.5, "verde": 1.0, "amarillo": 2.5, "naranja": 3.0},
+    "demora_manejo":  {"lideres": 8.0, "verde": 10.0, "amarillo": 15.0, "naranja": 22.0},
+}
+
+
+async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_claims: int = 15) -> str:
+    """FEATURE 2026-08-25 (pedido de Jovan: "que reclamos podria atender para
+    tenerla al 100%"). Trae reclamos abiertos, los clasifica en 1 sola
+    llamada de IA contra la regla OFICIAL completa (ver
+    health_ai.build_claims_batch_exclusion_prompt) y arma un resumen
+    accionable: cuantos son excluibles + cuantos hacen falta resolver para
+    volver al umbral objetivo. Nunca lanza -- si algo falla, regresa texto
+    explicando que no se pudo generar, para que la alerta principal (cambio
+    de color) siga saliendo igual."""
+    from datetime import datetime, timezone
+    from app.main import _claim_reason_label
+    from app.services import openrouter_client
+    from app.services.health_ai import build_claims_batch_exclusion_prompt, parse_claims_batch_exclusion
+
+    try:
+        data = await client.get_claims(status="opened", limit=max_claims)
+        raw_claims = data.get("results", []) or []
+    except Exception as e:
+        return f"_No se pudo traer los reclamos abiertos ({e})._"
+
+    if not raw_claims:
+        return "Sin reclamos abiertos ahora mismo. 🎉"
+
+    now = datetime.now(timezone.utc)
+    claims = []
+    for c in raw_claims:
+        cid = str(c.get("id", ""))
+        if not cid:
+            continue
+        dc = c.get("date_created", "")
+        days_open = 0
+        try:
+            dt_obj = datetime.fromisoformat(dc.replace("Z", "+00:00"))
+            days_open = max(0, (now - dt_obj).days)
+        except Exception:
+            pass
+        claims.append({
+            "id": cid,
+            "reason_desc": _claim_reason_label(c.get("reason_id", "")),
+            "days_open": days_open,
+        })
+
+    verdicts = {}
+    if openrouter_client.is_available():
+        try:
+            system, prompt, max_tokens = build_claims_batch_exclusion_prompt(claims)
+            raw = await openrouter_client.generate(prompt, system=system, max_tokens=max_tokens)
+            verdicts = parse_claims_batch_exclusion(raw, [c["id"] for c in claims])
+        except Exception as e:
+            logger.warning(f"[MarketplaceAlerts] Error clasificando reclamos: {e}")
+
+    excludable = [c for c in claims if verdicts.get(c["id"], {}).get("exclusion_eligible") == "si"]
+    manual = [c for c in claims if verdicts.get(c["id"], {}).get("exclusion_eligible") == "revisar_manualmente"]
+
+    lines = [f"**{len(claims)} reclamo(s) abierto(s)**"]
+    if excludable:
+        lines.append(f"\n✅ **{len(excludable)} podrían pedir exclusión** (revisar y solicitar en Métricas → Atención a tus compradores):")
+        for c in excludable[:8]:
+            reason = verdicts.get(c["id"], {}).get("exclusion_reason", "")
+            lines.append(f"  • #{c['id']} — {c['reason_desc']} ({c['days_open']}d) — _{reason}_")
+    if manual:
+        lines.append(f"\n⚠️ {len(manual)} necesitan revisión manual (info insuficiente para que la IA decida sola).")
+    not_excludable = len(claims) - len(excludable) - len(manual)
+    if not_excludable > 0:
+        lines.append(f"\n❌ {not_excludable} no califican para exclusión según la regla oficial de ML.")
+    if excludable:
+        lines.append(f"\n👉 Si se excluyen esos {len(excludable)}, la tasa de reclamos baja de inmediato.")
+    return "\n".join(lines)
+
+
+async def notify_reputation_change(account_id: str, nickname: str, old_color: str, new_color: str, client=None) -> None:
     owner = ACCOUNT_OWNERS.get(account_id)
     mentions = [AREA_LEAD] + HEALTH_TEAM
     if owner and owner not in mentions:
         mentions.append(owner)
     emoji_old, emoji_new = _COLOR_EMOJI.get(old_color, "⚪"), _COLOR_EMOJI.get(new_color, "⚪")
-    text = (
-        f"{' '.join(mentions)} — **reputación de {nickname}** cambió: "
-        f"{emoji_old} {old_color} → {emoji_new} **{new_color}**\n"
-        f"Revisar en el dashboard: pestaña Salud, cuenta {nickname}."
-    )
+    if old_color == new_color:
+        headline = f"**reputación de {nickname}**: {emoji_new} {new_color} (sin cambio, chequeo puntual)"
+    else:
+        headline = f"**reputación de {nickname}** cambió: {emoji_old} {old_color} → {emoji_new} **{new_color}**"
+    text = f"{' '.join(mentions)} — {headline}\nRevisar en el dashboard: pestaña Salud, cuenta {nickname}."
+    if client is not None:
+        try:
+            claims_summary = await build_actionable_claims_summary(client)
+            text += f"\n\n{claims_summary}"
+        except Exception as e:
+            logger.warning(f"[MarketplaceAlerts] No se pudo agregar resumen de reclamos: {e}")
     await post_marketplace_alert(text)
