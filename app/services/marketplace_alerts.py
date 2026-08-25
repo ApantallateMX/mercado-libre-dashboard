@@ -248,7 +248,8 @@ async def build_health_alert_message(account_id: str, nickname: str, old_color: 
     parts = [title]
     if metrics:
         parts.append(build_metrics_table(metrics))
-    parts.append(f"[Ver en el dashboard]({os.getenv('DASHBOARD_BASE_URL', '')}/health) — pestaña Salud, cuenta {nickname}.")
+    dashboard_url = os.getenv("DASHBOARD_BASE_URL", "https://apantallatemx.up.railway.app")
+    parts.append(f"[Ver en el dashboard]({dashboard_url}/health) — pestaña Salud, cuenta {nickname}.")
 
     if client is not None:
         try:
