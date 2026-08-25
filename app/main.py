@@ -18233,6 +18233,28 @@ async def _reputation_alert_loop():
         await asyncio.sleep(_REPUTATION_ALERT_INTERVAL)
 
 
+@app.get("/api/diag/marketplace-alert-debug-user")
+async def diag_marketplace_alert_debug_user(token: str = "", account_id: str = ""):
+    """DEBUG puntual 2026-08-25: investigar por que la primera prueba real
+    mando 'desconocido' en vez del color real para AUTOBOT. Muestra el user
+    dict crudo tal cual lo devuelve get_user_info() para esa cuenta."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "sin cliente"}, status_code=502)
+    try:
+        user = await client.get_user_info()
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=200)
+    return JSONResponse({
+        "keys": list(user.keys()) if isinstance(user, dict) else str(type(user)),
+        "seller_reputation": user.get("seller_reputation") if isinstance(user, dict) else None,
+        "id": user.get("id") if isinstance(user, dict) else None,
+        "nickname": user.get("nickname") if isinstance(user, dict) else None,
+    })
+
+
 @app.post("/api/diag/marketplace-alert-send-now")
 async def diag_marketplace_alert_send_now(token: str = "", account_id: str = ""):
     """Manda AHORA el mensaje completo de salud de cuenta (color + reclamos
