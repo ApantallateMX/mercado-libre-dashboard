@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-26 (2) — FEAT: gate de precio + memoria de ciclo/color para la cascada de SKUs estancados
+
+Continuación directa de la entrada de abajo (mismo día). Se enriqueció el
+diseño consultando a `marketplace-ads-strategist` (cascada de escalones
+medidos contra el 100% original, qué hacer si la cascada se agota, árbol
+de decisión del gate de precio, paleta de colores, notificaciones, KPI
+real). Implementado el primer bloque (commit `67fcd49`, pushed origin+mi2,
+Railway SUCCESS, verificado en producción):
+
+- `check_price_drift()` (`token_store.py`) — compara el precio de la
+  última venta real (`order_history`) contra el precio actual del
+  listing, por cuenta+plataforma. `drift_arriba`/`drift_abajo` si
+  difieren, `confirmar_manual` si la última venta es de hace &gt;90 días
+  (no comparar contra un precio muy viejo sin ojo humano), `sin_historial`
+  si nunca vendió.
+- Tabla nueva `stagnation_cascade` + `advance_cascade_cycle()` — "memoria"
+  de en qué escalón va cada SKU+cuenta. Se escribe SOLO cuando un humano
+  aprueba (endpoint `POST /api/diag/stagnation/advance-cycle`), nunca
+  automático — regla dura del proyecto.
+- Paleta de colores nueva, deliberadamente DISTINTA a la de reputación de
+  cuenta (gris/amarillo/naranja/rojo/verde): gris (sin cascada), azul
+  (gate de drift activo — anula el color de ciclo mientras no se resuelva),
+  amarillo/naranja/rojo (escalones 1/2/3-4), morado (cascada agotada,
+  requiere decisión de negocio, no es "peor que rojo").
+
+**Hallazgo real verificado en producción, piloto `SNEE000054`**: las 3
+cuentas donde el SKU SÍ vende (APANTALLATEMX, AUTOBOT, VECKTOR IMPORTS)
+tienen las 3 en `drift_arriba` — el precio subió después de su última
+venta real (ej. APANTALLATEMX vendió a $3,699 hace 16 días, hoy está en
+$4,199). Este es exactamente el caso que Jovan pidió atrapar: antes de
+pensar en descuento, revisar por qué subió el precio.
+
+**Pendiente**: UI de revisión (colores + botón de aprobar escalón) en
+`products_stock_issues.html`, notificaciones a Mattermost para gate activo
+y cascada agotada, y las fases posteriores acordadas (bundle/B2B, KPI
+dashboard, feedback a orden de compra) — quedaron documentadas pero no
+construidas, no bloquean el piloto actual.
+
+---
+
 ## 2026-08-26 — FEAT: diagnóstico de solo lectura para SKUs estancados (piloto SNEE000054)
 
 Plan aprobado por Jovan el mismo día ("Plan - SKUs Estancados (Remate y
