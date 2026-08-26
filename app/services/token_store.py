@@ -1066,6 +1066,32 @@ async def init_db():
         except Exception:
             pass
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: stagnation_cascade — "memoria" de la cascada de SKUs
+        # estancados (plan 2026-08-26, enriquecido con marketplace-ads-strategist).
+        # Un row por (sku, account_id, platform). Se escribe SOLO cuando un
+        # humano aprueba aplicar un escalón (nunca automático — regla dura
+        # del proyecto). cycle: 0=sin cascada, 1..4=escalones, 5=agotada
+        # (requiere decisión de negocio, ver color 'purple').
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stagnation_cascade (
+                sku              TEXT NOT NULL,
+                account_id       TEXT NOT NULL,
+                platform         TEXT NOT NULL,
+                cycle            INTEGER NOT NULL DEFAULT 0,
+                color            TEXT NOT NULL DEFAULT 'gray',
+                reference_price_mxn REAL NOT NULL DEFAULT 0,
+                price_at_step_mxn   REAL NOT NULL DEFAULT 0,
+                step_started_at  REAL NOT NULL DEFAULT 0,
+                step_expires_at  REAL NOT NULL DEFAULT 0,
+                notes            TEXT NOT NULL DEFAULT '',
+                updated_by       TEXT NOT NULL DEFAULT '',
+                updated_at       REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (sku, account_id, platform)
+            )
+        """)
+
+        # ─────────────────────────────────────────────────────────────────
         # TABLAS: deuda semanal con la empresa proveedora — % fijo del retail
         # por unidad vendida (teles vs otras categorías). Un row del ledger
         # por (order_id, item_id, platform) generado desde upsert_order_history
@@ -7283,6 +7309,168 @@ async def get_stagnation_diagnosis(
             "ventas sin distinguir precio normal de descuento."
         ),
     }
+
+
+_CASCADE_MAX_CYCLE = 4  # escalones 1-4; 5 = agotada (ver _cascade_color)
+
+
+def _cascade_color(cycle: int, gate_active: bool) -> str:
+    """Color de la cascada -- paleta propuesta por marketplace-ads-strategist
+    2026-08-26, DELIBERADAMENTE distinta de verde/amarillo/naranja/rojo de
+    reputación de cuenta ML (ejes distintos: aquí es "en qué paso de un
+    proceso de intervención va el SKU", no "salud de la cuenta" -- reusar
+    la misma semántica confundiría al equipo).
+
+    azul dominante mientras el gate de precio está activo (no importa el
+    ciclo -- hay que resolver el drift antes de seguir con la cascada).
+    morado es una cola de excepción, no "peor que rojo".
+    """
+    if gate_active:
+        return "blue"
+    if cycle <= 0:
+        return "gray"
+    if cycle == 1:
+        return "yellow"
+    if cycle == 2:
+        return "orange"
+    if cycle in (3, 4):
+        return "red"
+    return "purple"  # cycle >= 5: cascada agotada, requiere decisión de negocio
+
+
+async def get_cascade_state(sku: str) -> list[dict]:
+    """Estado actual de la cascada por cuenta+plataforma para un SKU.
+    Filas ausentes = nunca se le aplicó nada (cycle 0, color gray implícito).
+    """
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM stagnation_cascade WHERE sku = ?", (sku,),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def advance_cascade_cycle(
+    sku: str, account_id: str, platform: str, cycle: int,
+    reference_price_mxn: float, price_at_step_mxn: float,
+    notes: str = "", updated_by: str = "",
+) -> dict:
+    """Registra que un HUMANO aprobó aplicar un escalón de la cascada --
+    nunca se llama automáticamente desde el diagnóstico (regla dura del
+    proyecto: cero escritura sin aprobación explícita). El descuento real
+    en ML/Amazon se aplica aparte, vía el mecanismo ya existente
+    (activate_item_promotion / item_deal_modal.html) -- esta tabla es solo
+    la "memoria" de en qué paso va, para poder pintarlo de color y decidir
+    el siguiente paso correcto (ver check_price_drift, caso B1).
+    """
+    cycle = max(0, min(cycle, _CASCADE_MAX_CYCLE + 1))  # tope: 5 = agotada
+    now = datetime.utcnow().timestamp()
+    color = _cascade_color(cycle, gate_active=False)
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            """INSERT INTO stagnation_cascade
+                   (sku, account_id, platform, cycle, color, reference_price_mxn,
+                    price_at_step_mxn, step_started_at, step_expires_at,
+                    notes, updated_by, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(sku, account_id, platform) DO UPDATE SET
+                   cycle=excluded.cycle, color=excluded.color,
+                   reference_price_mxn=excluded.reference_price_mxn,
+                   price_at_step_mxn=excluded.price_at_step_mxn,
+                   step_started_at=excluded.step_started_at,
+                   step_expires_at=excluded.step_expires_at,
+                   notes=excluded.notes, updated_by=excluded.updated_by,
+                   updated_at=excluded.updated_at""",
+            (sku, account_id, platform, cycle, color, reference_price_mxn,
+             price_at_step_mxn, now, now + 14 * 86400, notes, updated_by, now),
+        )
+        await db.commit()
+    return {
+        "sku": sku, "account_id": account_id, "platform": platform,
+        "cycle": cycle, "color": color, "step_expires_at": now + 14 * 86400,
+    }
+
+
+async def check_price_drift(
+    sku: str, max_last_sale_age_days: int = 90,
+) -> list[dict]:
+    """Gate de precio (plan 2026-08-26): compara el precio de la última
+    venta real de cada cuenta contra el precio actual del listing.
+
+    - Sin venta previa -> 'sin_historial' (no hay con qué comparar).
+    - Última venta MUY vieja (> max_last_sale_age_days) -> 'confirmar_manual'
+      -- no se decide solo, comparar contra un precio de hace meses puede
+      estar comparando peras con manzanas (costo BM/FX pudieron cambiar
+      legítimamente desde entonces). Recomendación de marketplace-ads-strategist.
+    - Precio actual > precio de última venta -> 'drift_arriba' (alguien lo
+      subió sin querer -- corregirlo de vuelta, no lanzar cascada).
+    - Precio actual < precio de última venta -> 'drift_abajo' (ya se había
+      bajado antes -- ver cycle en stagnation_cascade para saber si fue
+      nuestra propia cascada o un cambio externo, caso B1 vs B2).
+    - Precio igual (tolerancia 1%) -> 'ok' (candidato real a cascada).
+    """
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        last_sales = await (await db.execute(
+            """SELECT oh.account_id, oh.platform, oh.unit_price, oh.order_date
+               FROM order_history oh
+               WHERE oh.sku = ? AND oh.status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
+                 AND oh.order_date = (
+                     SELECT MAX(oh2.order_date) FROM order_history oh2
+                     WHERE oh2.sku = oh.sku AND oh2.account_id = oh.account_id
+                       AND oh2.platform = oh.platform
+                       AND oh2.status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
+                 )""",
+            (sku,),
+        )).fetchall()
+        ml_current = await (await db.execute(
+            "SELECT account_id, price FROM ml_listings WHERE base_sku = ? AND status = 'active'",
+            (sku,),
+        )).fetchall()
+        amz_current = await (await db.execute(
+            "SELECT seller_id, price FROM amazon_listings WHERE base_sku = ? AND status = 'ACTIVE'",
+            (sku,),
+        )).fetchall()
+
+    _amz_name_to_id = {v: k for k, v in KNOWN_AMAZON_NICKNAMES.items()}
+    last_sale_by_acc = {}
+    for r in last_sales:
+        acc_id = r["account_id"]
+        if r["platform"] == "amazon":
+            acc_id = _amz_name_to_id.get(acc_id, acc_id)
+        last_sale_by_acc[(acc_id, r["platform"])] = (r["unit_price"], r["order_date"])
+
+    current_by_acc = {(r["account_id"], "ml"): r["price"] for r in ml_current}
+    current_by_acc.update({(r["seller_id"], "amazon"): r["price"] for r in amz_current})
+
+    now_date = datetime.utcnow().date()
+    results = []
+    for (acc_id, platform), current_price in current_by_acc.items():
+        last = last_sale_by_acc.get((acc_id, platform))
+        if not last:
+            results.append({"account_id": acc_id, "platform": platform,
+                             "current_price": current_price, "last_sale_price": None,
+                             "gate": "sin_historial"})
+            continue
+        last_price, last_date = last
+        try:
+            age_days = (now_date - datetime.strptime(last_date, "%Y-%m-%d").date()).days
+        except ValueError:
+            age_days = 9999
+        if age_days > max_last_sale_age_days:
+            gate = "confirmar_manual"
+        elif current_price > last_price * 1.01:
+            gate = "drift_arriba"
+        elif current_price < last_price * 0.99:
+            gate = "drift_abajo"
+        else:
+            gate = "ok"
+        results.append({
+            "account_id": acc_id, "platform": platform,
+            "current_price": current_price, "last_sale_price": last_price,
+            "last_sale_age_days": age_days, "gate": gate,
+        })
+    return results
 
 
 # ── Amazon Product Types Cache ────────────────────────────────────────────────

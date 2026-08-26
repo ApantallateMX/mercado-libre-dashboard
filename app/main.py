@@ -17915,8 +17915,11 @@ async def diag_stagnation(sku: str = "", token: str = ""):
 
     NO escribe nada — cero cambios de precio, cero promociones. Corre el
     árbol de decisión (token_store.get_stagnation_diagnosis) contra las 7
-    cuentas y calcula el piso de emergencia (break-even real, con el 7% de
-    comisión socio incluido) usando el costo BM ya cacheado.
+    cuentas, calcula el piso de emergencia (break-even real, con el 7% de
+    comisión socio incluido) usando el costo BM ya cacheado, y agrega
+    (2026-08-26, enriquecido con marketplace-ads-strategist) el gate de
+    precio (¿el precio actual es el mismo que cuando vendió por última
+    vez?) + el color/ciclo de cascada ya registrado en stagnation_cascade.
     """
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
@@ -17927,6 +17930,21 @@ async def diag_stagnation(sku: str = "", token: str = ""):
 
     bm_key = normalize_to_bm_sku(sku.strip().upper())
     diagnosis = await token_store.get_stagnation_diagnosis(bm_key)
+    gate_results = await token_store.check_price_drift(bm_key)
+    cascade_rows = await token_store.get_cascade_state(bm_key)
+
+    gate_by_acc = {(g["account_id"], g["platform"]): g for g in gate_results}
+    cascade_by_acc = {(c["account_id"], c["platform"]): c for c in cascade_rows}
+
+    for acc in diagnosis["accounts"]:
+        key = (acc["account_id"], acc["platform"])
+        gate = gate_by_acc.get(key)
+        cascade = cascade_by_acc.get(key)
+        cycle = cascade["cycle"] if cascade else 0
+        gate_active = bool(gate and gate["gate"] in ("drift_arriba", "drift_abajo"))
+        acc["price_gate"] = gate or {"gate": "sin_listing_activo"}
+        acc["cascade_cycle"] = cycle
+        acc["cascade_color"] = token_store._cascade_color(cycle, gate_active)
 
     cost_mxn = _sku_cost_map.get(bm_key, 0)
     floor = _stagnation_floor_price(cost_mxn) if cost_mxn > 0 else None
@@ -17944,6 +17962,42 @@ async def diag_stagnation(sku: str = "", token: str = ""):
             "confirmar este número a mano antes de aprobar un precio cerca del piso."
         ),
     })
+
+
+@app.post("/api/diag/stagnation/advance-cycle")
+async def diag_stagnation_advance_cycle(token: str = "", payload: dict = Body(...)):
+    """Registra que un HUMANO ya aprobó y aplicó un escalón de la cascada
+    de SKUs estancados (2026-08-26). Esto NO aplica el descuento en ML/Amazon
+    — eso se hace aparte con el mecanismo ya existente (modal de deal). Este
+    endpoint solo guarda la "memoria" (ciclo/color) para que el diagnóstico
+    futuro sepa en qué paso va cada SKU+cuenta y no reinicie desde cero.
+
+    Body: {"sku": "...", "account_id": "...", "platform": "ml"|"amazon",
+           "cycle": 1-5, "reference_price_mxn": N, "price_at_step_mxn": N,
+           "notes": "...", "updated_by": "..."}
+    cycle=5 marca la cascada como agotada (color morado, requiere decisión
+    de negocio distinta a bajar precio -- ver plan).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    sku = (payload.get("sku") or "").strip().upper()
+    account_id = str(payload.get("account_id") or "").strip()
+    platform = (payload.get("platform") or "").strip()
+    cycle = payload.get("cycle")
+    if not sku or not account_id or platform not in ("ml", "amazon") or cycle is None:
+        return JSONResponse(
+            {"error": "sku, account_id, platform (ml|amazon) y cycle son requeridos"},
+            status_code=400,
+        )
+    result = await token_store.advance_cascade_cycle(
+        sku=normalize_to_bm_sku(sku), account_id=account_id, platform=platform,
+        cycle=int(cycle),
+        reference_price_mxn=float(payload.get("reference_price_mxn") or 0),
+        price_at_step_mxn=float(payload.get("price_at_step_mxn") or 0),
+        notes=str(payload.get("notes") or ""),
+        updated_by=str(payload.get("updated_by") or ""),
+    )
+    return JSONResponse(result)
 
 
 @app.post("/api/diag/bulk-sku-lookup")
