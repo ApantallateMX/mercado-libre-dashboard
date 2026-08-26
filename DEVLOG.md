@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-26 — FEAT: diagnóstico de solo lectura para SKUs estancados (piloto SNEE000054)
+
+Plan aprobado por Jovan el mismo día ("Plan - SKUs Estancados (Remate y
+Reasignacion)"): reemplaza la alerta vieja de "sobrestock" (-12% fijo) por
+un diagnóstico que cruza las 7 cuentas (4 ML + 3 Amazon) por igual, sin
+ponderar por reputación, y compara el ritmo reciente (21d) contra el
+histórico propio de cada SKU en esa cuenta (90d) en vez de un umbral fijo
+de unidades.
+
+**Nuevo (commit `8be1efa`, pushed origin+mi2, Railway SUCCESS, verificado
+en producción):**
+- `get_stagnation_diagnosis()` (`token_store.py`) — árbol de decisión:
+  `remate` (0 cuentas venden), `reasignar` (vende en algunas, no en
+  otras), `no_candidato` (vende parejo).
+- `_stagnation_floor_price()` (`items.py`) — piso de emergencia
+  (break-even real), mismo patrón de búsqueda binaria de
+  `_suggest_list_price()`, incluye el 7% de comisión socio DESPUÉS de fees
+  de plataforma (confirmado por Jovan: "siempre debemos descontar después
+  de lo que la plataforma nos deja").
+- `GET /api/diag/stagnation?sku=X&token=` — 100% lectura, cero escritura.
+
+**2 bugs reales de datos encontrados y mitigados (NO corregidos en la
+fuente, fuera de alcance de esta feature):**
+1. `recup_retail_pct` no está confiablemente poblado en `order_history`
+   (0/3,260 filas de Amazon con valor distinto de cero; una ruta de
+   escritura de ML, `main.py` ~5309-5320, mete ceros a propósito). El plan
+   original proponía usarlo para excluir "ventas con deal activo" del
+   diagnóstico — se desactivó ese filtro para esta versión (usarlo tal
+   cual habría sido peor que no filtrar). Pendiente: decidir si se
+   corrige la escritura de origen.
+2. `order_history.account_id` guarda el NOMBRE de cuenta para Amazon
+   ("VECKTOR IMPORTS"), no el `seller_id` real (`A20NFIUQNEYZ1E`) que usa
+   `amazon_listings` — sin esto, el diagnóstico creaba una cuenta fantasma
+   duplicada. Normalizado invirtiendo `KNOWN_AMAZON_NICKNAMES`.
+
+**Piloto real verificado en producción**: `SNEE000054` (Caminadora Sperax,
+`MLM5479436194`, APANTALLATEMX) dio veredicto **`reasignar`**, no
+`remate` — el SKU sí vende a ritmo razonable en APANTALLATEMX (523916436),
+AUTOBOT (292395685) y VECKTOR IMPORTS (Amazon, `A20NFIUQNEYZ1E`); está
+parado en BLOWTECHNOLOGIES, LUTEMAMEXICO y AUTOBOT AMZ MX (Amazon). Sin
+costo BM cacheado para este SKU todavía — el piso de emergencia no se
+pudo calcular en esta corrida (falla con gracia, no rompe el endpoint).
+
+**Pendiente**: extender `products_stock_issues.html` con la UI de revisión
++ aplicar el primer paso a mano usando `item_deal_modal.html` ya
+existente — sigue sin construirse, es el siguiente paso del piloto.
+
+---
+
 ## 2026-08-25 (2) — FIX: reglas de exclusión de reclamos ML — regla oficial completa (no aproximada)
 
 Jovan pidió que las alertas de reputación fueran accionables: no solo
