@@ -17907,6 +17907,45 @@ async def diag_sku(sku: str = "", token: str = ""):
     })
 
 
+@app.get("/api/diag/stagnation")
+async def diag_stagnation(sku: str = "", token: str = ""):
+    """Diagnóstico de solo lectura para el plan "SKUs Estancados" (aprobado
+    por Jovan 2026-08-26, ver "Plan - SKUs Estancados (Remate y Reasignacion)").
+    Piloto: SNEE000054 / MLM5479436194 (APANTALLATEMX).
+
+    NO escribe nada — cero cambios de precio, cero promociones. Corre el
+    árbol de decisión (token_store.get_stagnation_diagnosis) contra las 7
+    cuentas y calcula el piso de emergencia (break-even real, con el 7% de
+    comisión socio incluido) usando el costo BM ya cacheado.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+
+    from app.api.items import _stagnation_floor_price
+
+    bm_key = normalize_to_bm_sku(sku.strip().upper())
+    diagnosis = await token_store.get_stagnation_diagnosis(bm_key)
+
+    cost_mxn = _sku_cost_map.get(bm_key, 0)
+    floor = _stagnation_floor_price(cost_mxn) if cost_mxn > 0 else None
+
+    return JSONResponse({
+        **diagnosis,
+        "cost_source": "bm_avg_cost" if cost_mxn > 0 else None,
+        "cost_mxn_used": round(cost_mxn, 2) if cost_mxn > 0 else None,
+        "floor": floor,
+        "floor_warning": (
+            "Sin costo BM confiable para este SKU — no se puede calcular el piso de "
+            "emergencia. Revisar manualmente antes de aplicar cualquier descuento."
+            if not floor else
+            "El costo BM (AvgCost) tiene incidentes conocidos de confiabilidad — "
+            "confirmar este número a mano antes de aprobar un precio cerca del piso."
+        ),
+    })
+
+
 @app.post("/api/diag/bulk-sku-lookup")
 async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
     """Diagnóstico externo: cruza un set arbitrario de SKUs contra

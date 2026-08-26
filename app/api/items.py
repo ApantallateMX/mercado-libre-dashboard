@@ -1150,6 +1150,52 @@ def _suggest_list_price(retail_mxn: float, is_tv: bool, deal_discount_pct: float
     }
 
 
+def _stagnation_floor_price(cost_mxn: float, shipping_est: float | None = None) -> dict | None:
+    """Piso de emergencia (break-even real) para la cascada de SKUs
+    estancados -- plan aprobado por Jovan 2026-08-26. Mismo patron de
+    busqueda binaria que _suggest_list_price(), pero resolviendo para
+    ganancia_neta = 0 (no un % de recuperacion de retail) e incluyendo el
+    7% de comision socio, confirmado por Jovan: "siempre debemos descontar
+    despues de lo que [la plataforma] nos deja" -- se resta DESPUES del fee
+    de ML y de las retenciones, no del precio bruto.
+
+    Regla dura del plan: nunca vender por debajo de este precio sin una
+    confirmacion separada y explicita (fuera del alcance de esta funcion).
+    """
+    if cost_mxn <= 0:
+        return None
+    if shipping_est is None:
+        if cost_mxn >= 5000:
+            shipping_est = 400
+        elif cost_mxn >= 2500:
+            shipping_est = 250
+        elif cost_mxn >= 1000:
+            shipping_est = 150
+        else:
+            shipping_est = 100
+
+    def _ganancia_at(price: float) -> float:
+        fee_pct = _main_module._ml_fee(price)
+        net_ml = price * (1 - fee_pct - 0.0905) - shipping_est
+        neto = net_ml * (1 - _main_module._PARTNER_COMMISSION_PCT)
+        return neto - cost_mxn
+
+    lo, hi = cost_mxn * 0.5, cost_mxn * 5
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        if _ganancia_at(mid) < 0:
+            lo = mid
+        else:
+            hi = mid
+    floor_price = round(hi, 2)
+    return {
+        "floor_price_mxn": floor_price,
+        "cost_mxn": round(cost_mxn, 2),
+        "shipping_est_mxn": shipping_est,
+        "ganancia_at_floor": round(_ganancia_at(floor_price), 2),
+    }
+
+
 @router.get("/{item_id}/suggested-price")
 async def get_suggested_price(item_id: str, sku: str = Query(..., description="SKU BM del item")):
     """Precio de lista sugerido para que, tras un deal del 20%, se siga

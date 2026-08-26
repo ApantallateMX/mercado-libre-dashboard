@@ -7157,6 +7157,134 @@ async def get_sku_sales_by_account(base_sku: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_stagnation_diagnosis(
+    sku: str, days_recent: int = 21, days_baseline: int = 90, min_ratio: float = 0.3,
+) -> dict:
+    """Diagnostico de 'SKU estancado' -- plan aprobado por Jovan 2026-08-26
+    (ver "Plan - SKUs Estancados (Remate y Reasignacion)"). Revisa las 7
+    cuentas (4 ML + 3 Amazon) por igual, SIN ponderar por reputacion --
+    decision explicita de Jovan, distinto del _REPUTATION_FACTOR que si usa
+    stock_concentrator.py para repartir stock escaso.
+
+    "Vende" no es un umbral fijo de unidades: se compara el ritmo reciente
+    (days_recent) contra el promedio historico PROPIO del SKU en esa misma
+    cuenta (days_baseline) -- un SKU que normalmente vende rapido sigue
+    contando como estancado si cae por debajo de min_ratio de su propio
+    ritmo, aunque tecnicamente haya vendido 1 unidad.
+
+    Filtro de "vendio con deal activo" -- PENDIENTE, no implementado en esta
+    version: el plan original proponia excluir ventas con recup_retail_pct
+    muy por debajo de la meta de categoria como señal de descuento. Probado
+    contra datos reales 2026-08-26: ese campo esta mal poblado (0 de 3,260
+    filas de Amazon tienen valor distinto de cero; una ruta de escritura de
+    ML, main.py ~5309-5320, mete recup_retail_pct=0.0 a proposito). Usar el
+    campo tal cual haria el filtro PEOR que no filtrar (marcaria casi todo
+    como "con descuento" sin serlo) -- se cuenta unidades totales sin
+    filtrar por ahora. Retomar cuando se corrija la escritura de
+    order_history (bug real distinto a este, no arreglado aqui).
+
+    Cuentas donde el SKU esta publicado pero sin NINGUNA fila en
+    order_history (0 ventas en la ventana de baseline) SI cuentan como
+    "no vende" -- se leen de ml_listings/amazon_listings, no solo de
+    order_history, para no excluir en silencio una cuenta sin ventas.
+
+    Retorna {sku, veredicto: 'remate'|'reasignar'|'no_candidato'|'sin_datos',
+    accounts: [{account_id, platform, recent_units, baseline_avg_units,
+    ratio, vende}, ...]}.
+    """
+    is_tv = sku.upper().startswith("SNTV")
+    target_pct = 80.0 if is_tv else 60.0
+
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        hist_rows = await (await db.execute(
+            """SELECT account_id, platform, quantity, order_date
+               FROM order_history
+               WHERE sku = ? AND order_date >= date('now', ?)
+                 AND status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')""",
+            (sku, f"-{days_baseline} days"),
+        )).fetchall()
+        ml_accounts = await (await db.execute(
+            "SELECT DISTINCT account_id FROM ml_listings WHERE base_sku = ? AND status = 'active'",
+            (sku,),
+        )).fetchall()
+        amz_accounts = await (await db.execute(
+            "SELECT DISTINCT seller_id FROM amazon_listings WHERE base_sku = ? AND status = 'ACTIVE'",
+            (sku,),
+        )).fetchall()
+
+    recent_cutoff = (datetime.utcnow() - timedelta(days=days_recent)).strftime("%Y-%m-%d")
+
+    by_account: dict[tuple[str, str], dict] = {}
+    for acc_id, in [(r["account_id"],) for r in ml_accounts]:
+        by_account[(acc_id, "ml")] = {"baseline_qty": 0, "recent_qty": 0}
+    for acc_id, in [(r["seller_id"],) for r in amz_accounts]:
+        by_account[(acc_id, "amazon")] = {"baseline_qty": 0, "recent_qty": 0}
+
+    # order_history guarda el NOMBRE de cuenta para Amazon ("VECKTOR IMPORTS"),
+    # no el seller_id real ("A20NFIUQNEYZ1E") que usa amazon_listings -- hallazgo
+    # real 2026-08-26, sin corregir en la fuente (fuera de alcance de este
+    # diagnóstico). Se normaliza aquí con el mismo mapeo ya usado en
+    # _account_display_name() (main.py), a la inversa, para que ambas fuentes
+    # calcen en la misma cuenta.
+    _amz_name_to_id = {v: k for k, v in KNOWN_AMAZON_NICKNAMES.items()}
+
+    for r in hist_rows:
+        acc_id = r["account_id"]
+        if r["platform"] == "amazon":
+            acc_id = _amz_name_to_id.get(acc_id, acc_id)
+        key = (acc_id, r["platform"])
+        acc = by_account.setdefault(key, {"baseline_qty": 0, "recent_qty": 0})
+        qty = r["quantity"] or 0
+        acc["baseline_qty"] += qty
+        if r["order_date"] >= recent_cutoff:
+            acc["recent_qty"] += qty
+
+    accounts_out = []
+    any_vende = False
+    any_no_vende = False
+    for (account_id, platform), acc in by_account.items():
+        baseline_avg = acc["baseline_qty"] / days_baseline * days_recent
+        if baseline_avg > 0:
+            ratio = acc["recent_qty"] / baseline_avg
+            vende = ratio >= min_ratio
+        else:
+            # sin historial de venta en esta cuenta -- solo importa si vendio
+            # algo reciente (no hay ritmo propio con que comparar)
+            ratio = None
+            vende = acc["recent_qty"] > 0
+        any_vende = any_vende or vende
+        any_no_vende = any_no_vende or (not vende)
+        accounts_out.append({
+            "account_id": account_id, "platform": platform,
+            "recent_units": acc["recent_qty"],
+            "baseline_avg_units": round(baseline_avg, 2),
+            "ratio": round(ratio, 2) if ratio is not None else None,
+            "vende": vende,
+        })
+
+    if not accounts_out:
+        veredicto = "sin_datos"
+    elif any_vende and any_no_vende:
+        veredicto = "reasignar"
+    elif not any_vende:
+        veredicto = "remate"
+    else:
+        veredicto = "no_candidato"  # vende parejo en todas -- no es candidato
+
+    return {
+        "sku": sku, "is_tv": is_tv, "target_recovery_pct": target_pct,
+        "days_recent": days_recent, "days_baseline": days_baseline, "min_ratio": min_ratio,
+        "accounts": accounts_out, "veredicto": veredicto,
+        "known_limitation": (
+            "El filtro de 'excluir ventas con deal activo' no esta implementado en esta "
+            "version -- recup_retail_pct no esta confiablemente poblado en order_history "
+            "(0/3260 filas Amazon, hueco real encontrado 2026-08-26). Se cuentan todas las "
+            "ventas sin distinguir precio normal de descuento."
+        ),
+    }
+
+
 # ── Amazon Product Types Cache ────────────────────────────────────────────────
 
 async def get_product_types_cache(marketplace_id: str) -> tuple:
