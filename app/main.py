@@ -3220,16 +3220,43 @@ async def _save_item_experience_bg() -> None:
             return
         logger.info(f"[ITEM-EXP-BG] {len(items)} listings activos con venta real en scope")
 
-        # 1 cliente por cuenta (reutilizado entre items de la misma cuenta) --
-        # mismo motivo que _save_ml_claims_bg: evitar recrear el MeliClient
-        # (y su manejo de refresh token) por cada item.
+        # FIX 2026-08-27: la primera corrida en producción usó Semaphore(5) y se
+        # frenó en seco tras ~384/1118 items -- el problema real no era el número
+        # (5 concurrente ya era razonable solo), sino que NO hay fila global para
+        # ML en todo el proyecto (~40 loops de fondo, cada uno con su propio
+        # semáforo local, sin coordinación entre ellos): entre todos saturan la
+        # cuenta real y mi feature se sumó a esa carga. `_request()` ya reintenta
+        # 429 internamente (3 intentos), pero bajo contención real hasta eso se
+        # agota -- y el except lo tragaba en `debug` (invisible en logs de
+        # producción), por eso parecía "atorado" sin poder diagnosticar por qué.
+        # Solución para ESTA feature (decidida con Jovan -- migrar los ~40 sitios
+        # existentes a una fila global de ML es un cambio aparte, más grande, NO
+        # incluido aquí): Semaphore(1) real -- una llamada en curso a la vez,
+        # nunca ráfagas -- + 1 reintento largo propio si el retry interno del
+        # cliente también agotó por 429, + errores visibles (info, con
+        # status_code) y contados aparte para poder diagnosticar la próxima vez.
         clients: dict = {}
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(1)
         n_ok = 0
         n_err = 0
+        n_429 = 0
+
+        async def _fetch_with_429_retry(coro_fn):
+            """1 reintento largo (20s) SOLO si el status es 429 y ya se agotaron
+            los 3 reintentos internos de MeliClient._request(). Cualquier otro
+            error (404, item sin user_product_id, etc.) no se reintenta -- no
+            tiene sentido reintentar un error que no es de rate limit."""
+            from app.services.meli_client import MeliApiError
+            try:
+                return await coro_fn()
+            except MeliApiError as e:
+                if e.status_code == 429:
+                    await asyncio.sleep(20)
+                    return await coro_fn()
+                raise
 
         async def _process_item(it):
-            nonlocal n_ok, n_err
+            nonlocal n_ok, n_err, n_429
             async with sem:
                 acc = it["account_id"]
                 client = clients.get(acc)
@@ -3240,13 +3267,13 @@ async def _save_item_experience_bg() -> None:
                     client = MeliClient(tok["access_token"], tok["refresh_token"], acc)
                     clients[acc] = client
                 try:
-                    exp = await client.get_purchase_experience(it["item_id"])
+                    exp = await _fetch_with_429_retry(lambda: client.get_purchase_experience(it["item_id"]))
                     rep = (exp or {}).get("reputation") or {}
                     exp_value = int(rep.get("value", -1)) if rep.get("value") is not None else -1
                     exp_color = rep.get("color", "") or ""
                     exp_text = rep.get("text", "") or ""
 
-                    health = await client.get_item_health(it["item_id"])
+                    health = await _fetch_with_429_retry(lambda: client.get_item_health(it["item_id"]))
                     calidad_score = int(health.get("score", -1)) if health else -1
                     calidad_level = health.get("level_wording", "") if health else ""
 
@@ -3258,12 +3285,19 @@ async def _save_item_experience_bg() -> None:
                     n_ok += 1
                 except Exception as _e:
                     n_err += 1
-                    logger.debug(f"[ITEM-EXP-BG] item {it['item_id']}: {_e}")
+                    from app.services.meli_client import MeliApiError as _MAE
+                    if isinstance(_e, _MAE) and _e.status_code == 429:
+                        n_429 += 1
+                    logger.info(f"[ITEM-EXP-BG] item {it['item_id']} falló: {_e}")
+                # Respiro entre items -- con Semaphore(1) ya son secuenciales,
+                # esto solo evita que uno le pise los talones al siguiente al
+                # mismo milisegundo.
+                await asyncio.sleep(0.3)
 
         await asyncio.gather(*[_process_item(it) for it in items], return_exceptions=True)
         for c in clients.values():
             await c.close()
-        logger.info(f"[ITEM-EXP-BG] snapshot guardado: {n_ok} ok, {n_err} error de {len(items)}")
+        logger.info(f"[ITEM-EXP-BG] snapshot guardado: {n_ok} ok, {n_err} error ({n_429} por rate-limit) de {len(items)}")
         _item_exp_bg_last_run = _time.time()
     except Exception as _e:
         logger.warning(f"[ITEM-EXP-BG] Error general: {_e}")
