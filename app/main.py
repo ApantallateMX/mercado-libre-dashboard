@@ -814,6 +814,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_oversell_alert_loop())
     asyncio.create_task(_reputation_alert_loop())
     asyncio.create_task(_claims_sync_loop())
+    asyncio.create_task(_item_experience_sync_loop())
     start_token_refresh()
     start_supplier_debt_sync()
     start_realtime_alerts_reconcile()
@@ -3182,6 +3183,105 @@ async def _claims_sync_loop():
         except Exception as _e:
             logger.warning(f"[CLAIMS-SYNC-LOOP] Error: {_e}")
         await asyncio.sleep(3 * 3600)
+
+
+# ── Experiencia de Compra + Calidad por listing (snapshot diario) ───────────
+# Decidido con Jovan 2026-08-27: solo 1x/día (el score se calcula sobre
+# ventas/reclamos acumulados, no cambia en horas -- correrlo más seguido no da
+# más señal, solo más riesgo de rate limit) y solo listings activos con >=1
+# venta real alguna vez (get_active_items_with_sales_history), no todo el
+# catálogo -- ML no tiene endpoint bulk para esto.
+_item_exp_bg_running: bool = False
+_item_exp_bg_last_run: float = 0.0
+
+
+async def _save_item_experience_bg() -> None:
+    """Recorre los listings activos con venta real, consulta Experiencia de
+    Compra (get_purchase_experience) y Calidad (get_item_health) reales de ML,
+    guarda 1 snapshot/día en item_experience_snapshots. Guard de 20h entre
+    corridas (deja margen sobre el 1x/día nominal sin duplicar si el loop se
+    reinicia por un redeploy)."""
+    global _item_exp_bg_running, _item_exp_bg_last_run
+    if _item_exp_bg_running:
+        return
+    if _time.time() - _item_exp_bg_last_run < 20 * 3600:
+        return
+    _item_exp_bg_running = True
+    try:
+        from app.services.token_store import (
+            get_active_items_with_sales_history as _get_scope,
+            get_tokens as _get_tok,
+            save_item_experience_snapshot as _save_snap,
+        )
+        from app.services.meli_client import MeliClient
+
+        items = await _get_scope()
+        if not items:
+            return
+        logger.info(f"[ITEM-EXP-BG] {len(items)} listings activos con venta real en scope")
+
+        # 1 cliente por cuenta (reutilizado entre items de la misma cuenta) --
+        # mismo motivo que _save_ml_claims_bg: evitar recrear el MeliClient
+        # (y su manejo de refresh token) por cada item.
+        clients: dict = {}
+        sem = asyncio.Semaphore(5)
+        n_ok = 0
+        n_err = 0
+
+        async def _process_item(it):
+            nonlocal n_ok, n_err
+            async with sem:
+                acc = it["account_id"]
+                client = clients.get(acc)
+                if client is None:
+                    tok = await _get_tok(acc)
+                    if not tok:
+                        return
+                    client = MeliClient(tok["access_token"], tok["refresh_token"], acc)
+                    clients[acc] = client
+                try:
+                    exp = await client.get_purchase_experience(it["item_id"])
+                    rep = (exp or {}).get("reputation") or {}
+                    exp_value = int(rep.get("value", -1)) if rep.get("value") is not None else -1
+                    exp_color = rep.get("color", "") or ""
+                    exp_text = rep.get("text", "") or ""
+
+                    health = await client.get_item_health(it["item_id"])
+                    calidad_score = int(health.get("score", -1)) if health else -1
+                    calidad_level = health.get("level_wording", "") if health else ""
+
+                    await _save_snap(
+                        it["item_id"], acc, it.get("sku", ""),
+                        experience_value=exp_value, experience_color=exp_color, experience_text=exp_text,
+                        calidad_score=calidad_score, calidad_level=calidad_level,
+                    )
+                    n_ok += 1
+                except Exception as _e:
+                    n_err += 1
+                    logger.debug(f"[ITEM-EXP-BG] item {it['item_id']}: {_e}")
+
+        await asyncio.gather(*[_process_item(it) for it in items], return_exceptions=True)
+        for c in clients.values():
+            await c.close()
+        logger.info(f"[ITEM-EXP-BG] snapshot guardado: {n_ok} ok, {n_err} error de {len(items)}")
+        _item_exp_bg_last_run = _time.time()
+    except Exception as _e:
+        logger.warning(f"[ITEM-EXP-BG] Error general: {_e}")
+    finally:
+        _item_exp_bg_running = False
+
+
+async def _item_experience_sync_loop():
+    """1x/día -- ver _save_item_experience_bg para el porqué de la cadencia.
+    Corre de madrugada (sleep inicial largo) para no competir con el tráfico
+    normal de API contra ML durante el día."""
+    await asyncio.sleep(600)  # deja terminar el arranque antes de la primera corrida
+    while True:
+        try:
+            await _save_item_experience_bg()
+        except Exception as _e:
+            logger.warning(f"[ITEM-EXP-SYNC-LOOP] Error: {_e}")
+        await asyncio.sleep(24 * 3600)
 
 
 def _get_item_sku(body: dict) -> str:
@@ -18022,6 +18122,32 @@ async def diag_stagnation_advance_cycle(token: str = "", payload: dict = Body(..
     return JSONResponse(result)
 
 
+@app.get("/api/diag/item-experience")
+async def diag_item_experience(sku: str = "", token: str = ""):
+    """Lectura del último snapshot de Experiencia de Compra + Calidad por
+    listing (item_experience_snapshots, sincronizado 1x/día por
+    _item_experience_sync_loop -- ver ese loop para el scope: solo listings
+    activos con venta real, no todo el catálogo).
+
+    Devuelve un row por item_id del SKU (puede haber varios listings por SKU
+    en la misma cuenta, ej. SNEE000054 tiene 4 en APANTALLATEMX) + la
+    tendencia de 14 días (worsening=True si bajó vs el snapshot más viejo
+    disponible en esa ventana). Si el SKU aún no tiene snapshots (recién
+    entró al scope, o el loop diario todavía no corre por primera vez),
+    devuelve results=[] -- no es un error."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    bm_key = normalize_to_bm_sku(sku.strip().upper())
+    latest = await token_store.get_item_experience_latest_by_sku(bm_key)
+    results = []
+    for row in latest:
+        trend = await token_store.get_item_experience_trend(row["item_id"], days=14)
+        results.append({**row, "trend_14d": trend})
+    return JSONResponse({"sku": bm_key, "results": results})
+
+
 @app.get("/api/diag/sku-sales-profit")
 async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365):
     """Ventas y ganancia real de un SKU (order_history), todas las cuentas/plataformas.
@@ -26348,6 +26474,23 @@ async def planning_sync_claims(days: int = Query(180, ge=1, le=365)):
         "days": days,
         "message": f"Descargando reclamos de {len(ml_accounts)} cuentas ML ({days}d) en background. Puede tardar varios minutos según el volumen.",
     }
+
+
+@app.post("/api/diag/sync-item-experience")
+async def diag_sync_item_experience(token: str = ""):
+    """Fuerza una corrida de _save_item_experience_bg ahora mismo (resetea el
+    guard de 20h). Solo para pruebas/forzar refresco manual -- el loop normal
+    ya corre 1x/día solo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    global _item_exp_bg_running, _item_exp_bg_last_run
+    _item_exp_bg_running = False
+    _item_exp_bg_last_run = 0.0
+    asyncio.create_task(_save_item_experience_bg())
+    return JSONResponse({
+        "status": "iniciado",
+        "message": "Corriendo Experiencia de Compra + Calidad en background sobre listings activos con venta real. Puede tardar varios minutos.",
+    })
 
 
 _ML_ORDER_SEARCH_CAP = 9500  # margen bajo el límite real (~10,000) de ML /orders/search

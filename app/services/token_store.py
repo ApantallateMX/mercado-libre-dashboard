@@ -1166,6 +1166,39 @@ async def init_db():
                 UNIQUE(account_id, captured_date)
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: item_experience_snapshots — foto diaria de Experiencia de
+        # Compra (reputation.value/color real de ML, ver get_purchase_experience)
+        # y Calidad (score real de get_item_health) por LISTING individual.
+        # Mismo patrón que reputation_snapshots pero a nivel item, no cuenta --
+        # objetivo: detectar que un listado se está deteriorando (verde->amarillo
+        # ->rojo) ANTES de que bloquee un deal, no solo cuando ya está en rojo
+        # (caso real que motivó esto: SNEE000054/MLM5479436194, Experiencia en
+        # 30/100 descubierta hasta que PRICE_DISCOUNT/SELLER_CAMPAIGN ya no
+        # tenían candidato). Acotado (ver get_active_items_with_sales_history)
+        # solo a listings activos con >=1 venta real alguna vez -- ML no tiene
+        # endpoint bulk para esto, es 1-2 llamadas por item, correrlo sobre TODO
+        # el catálogo no tiene sentido (SKUs sin venta no tienen candidato de
+        # promoción de todos modos) y arriesga rate limit.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS item_experience_snapshots (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id           TEXT NOT NULL,
+                account_id        TEXT NOT NULL,
+                sku               TEXT NOT NULL DEFAULT '',
+                experience_value  INTEGER NOT NULL DEFAULT -1,
+                experience_color  TEXT NOT NULL DEFAULT '',
+                experience_text   TEXT NOT NULL DEFAULT '',
+                calidad_score     INTEGER NOT NULL DEFAULT -1,
+                calidad_level     TEXT NOT NULL DEFAULT '',
+                captured_date     TEXT NOT NULL,
+                captured_at       REAL NOT NULL DEFAULT 0,
+                UNIQUE(item_id, captured_date)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ies_sku ON item_experience_snapshots(sku)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ies_account ON item_experience_snapshots(account_id, captured_date)")
         # bm_stock_snapshot: congelada y DROP-eada 2026-08-13 (fusionada en
         # bm_sku_master desde antes, ver upsert_bm_stock_snapshot_batch) —
         # respaldo en backups/bm_frozen_tables/. NO recrear el CREATE TABLE aquí.
@@ -6559,6 +6592,106 @@ async def get_reputation_trend(account_id: str, days: int = 14) -> dict | None:
         "old_level": old["level_id"], "new_level": new["level_id"],
         "level_dropped": new_rank < old_rank,
         "delta_claims_pp": delta_claims, "delta_cancel_pp": delta_cancel, "delta_delay_pp": delta_delay,
+        "worsening": worsening,
+    }
+
+
+async def get_active_items_with_sales_history() -> list:
+    """Listings ML activos con al menos 1 venta real alguna vez en order_history
+    (histórico completo, sin ventana de tiempo -- lo que importa es si el
+    listado SIGUE VIVO, no cuándo fue la última venta). Scope para el sync
+    diario de item_experience_snapshots -- ver esa tabla para el porqué."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT DISTINCT l.item_id, l.account_id, l.sku
+            FROM ml_listings l
+            WHERE l.status = 'active'
+              AND EXISTS (
+                  SELECT 1 FROM order_history oh
+                  WHERE oh.item_id = l.item_id AND oh.platform = 'ml'
+              )
+        """)
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def save_item_experience_snapshot(item_id: str, account_id: str, sku: str,
+                                         experience_value: int = -1, experience_color: str = "",
+                                         experience_text: str = "", calidad_score: int = -1,
+                                         calidad_level: str = "") -> None:
+    """Guarda 1 snapshot diario de Experiencia de Compra + Calidad para un listing.
+    INSERT OR IGNORE -- solo la primera corrida del día por item se queda,
+    igual que save_reputation_snapshot."""
+    now = __import__("time").time()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute("""
+            INSERT OR IGNORE INTO item_experience_snapshots
+                (item_id, account_id, sku, experience_value, experience_color, experience_text,
+                 calidad_score, calidad_level, captured_date, captured_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (item_id, account_id, sku, experience_value, experience_color, experience_text,
+              calidad_score, calidad_level, today, now))
+        await db.commit()
+
+
+async def get_item_experience_latest(item_id: str) -> dict | None:
+    """Último snapshot guardado para un item (el semáforo actual)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT * FROM item_experience_snapshots
+            WHERE item_id = ? ORDER BY captured_date DESC LIMIT 1
+        """, (item_id,))
+        row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_item_experience_latest_by_sku(sku: str) -> list:
+    """Último snapshot por cada item_id de un SKU (puede haber varios listings
+    por SKU, ver caso real SNEE000054 con 4 listings en APANTALLATEMX)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT s.* FROM item_experience_snapshots s
+            INNER JOIN (
+                SELECT item_id, MAX(captured_date) AS max_date
+                FROM item_experience_snapshots WHERE sku = ? GROUP BY item_id
+            ) latest ON s.item_id = latest.item_id AND s.captured_date = latest.max_date
+        """, (sku,))
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_item_experience_trend(item_id: str, days: int = 14) -> dict | None:
+    """Compara el snapshot más viejo disponible en la ventana de `days` contra
+    el más reciente para UN listing. None si hay menos de 2 snapshots todavía
+    (item nuevo en el monitoreo). Mismo criterio de 'worsening' que
+    get_reputation_trend: el valor bajó, sin importar cuánto -- a diferencia
+    de reputación de cuenta (tasas con ruido normal), el score de Experiencia/
+    Calidad es un solo número por día, cualquier baja real importa."""
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT experience_value, experience_color, calidad_score, calidad_level, captured_date
+            FROM item_experience_snapshots
+            WHERE item_id = ? AND captured_date >= ?
+            ORDER BY captured_date ASC
+        """, (item_id, cutoff))
+        rows = await cur.fetchall()
+    if len(rows) < 2:
+        return None
+    old, new = rows[0], rows[-1]
+    worsening = (new["experience_value"] != -1 and old["experience_value"] != -1
+                 and new["experience_value"] < old["experience_value"])
+    return {
+        "days_compared": days,
+        "old_date": old["captured_date"], "new_date": new["captured_date"],
+        "old_experience": old["experience_value"], "new_experience": new["experience_value"],
+        "old_color": old["experience_color"], "new_color": new["experience_color"],
+        "old_calidad": old["calidad_score"], "new_calidad": new["calidad_score"],
         "worsening": worsening,
     }
 
