@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-27 — FIX: precio base parejo entre cuentas + ml_listings desactualizado (2 items cerrados en ML seguían "active")
+
+Corrección directa de Jovan al corte de precio de ayer: "todas las cuentas deben ser similares en
+el precio venta" — el corte del 10% se había aplicado sobre el precio VIEJO de cada listing
+($5,999 en LUTEMAMEXICO) en vez de partir del mismo ancla ($4,838, ya calculado con RetailPrice PH)
+con variación chica entre cuentas. Corregido: LUTEMAMEXICO recalculado desde $4,918 (+$80 del
+ancla) → $4,426 (-10%), reemplazando el $5,399 de ayer.
+
+Al intentar alinear también las 3 publicaciones de BLOWTECHNOLOGIES, 2 de 3 fallaron con
+`price is not modifiable` — verificado en vivo (`GET /items/{id}`): esas 2 ya están
+`status: closed, sub_status: deleted` en ML real, pero `ml_listings` local las seguía marcando
+`active`. No eran 3 publicaciones duplicadas compitiendo — es 1 real + 2 filas desactualizadas.
+Nuevo `POST /api/diag/mark-listing-closed` (corrección puntual por item_id ya confirmado, sin
+disparar un sync completo) — aplicado en producción para ambas.
+
+**Decisiones explícitas de Jovan (AskUserQuestion) antes de tocar precio de las 7 publicaciones
+del SKU**: no tocar `MLM2708205591` (la única que de verdad vende, $3,699) aunque quede distinta al
+resto — es la excepción, no la regla; y en BLOWTECHNOLOGIES solo alinear precio por ahora, sin
+resolver todavía si consolidar publicaciones (ya no aplica para las 2 que resultaron eliminadas).
+
+---
+
 ## 2026-08-26 (5) — OPERACION: primer corte de precio directo (cascada) cuando ML bloquea el deal
 
 Solución de Jovan al bloqueo de deal por Experiencia baja: si ML no permite `PRICE_DISCOUNT`/
