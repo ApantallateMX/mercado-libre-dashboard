@@ -6217,30 +6217,69 @@ async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 1
     return [r["order_id"] for r in rows]
 
 
-async def get_orders_missing_buyer(account_id: str, platform: str = "ml", limit: int = 15, days: int = 90) -> list:
+async def get_orders_missing_buyer(account_id: str, platform: str = "ml", limit: int = 30,
+                                    days: int = 90, exclude_ids: set | None = None) -> list:
     """Órdenes ML recientes (últimos `days`, misma ventana que la detección de
     mayoreo) sin buyer_id resuelto aún -- backfill acotado, mismo patrón que
     get_orders_missing_zone (máx N por ciclo, nunca hammering de la API).
     Solo tiene sentido para ML -- Amazon captura buyer_nickname sin llamada
     extra desde _save_amazon_orders_bg, no necesita backfill separado.
 
-    FIX 2026-08-27 (backend-integrations-engineer): `ORDER BY created_at DESC`
-    ordenaba por cuándo se insertó la fila en NUESTRA db (no por order_date
-    real) -- causaba que, en cuentas de alto volumen, siempre se re-trajeran
-    las mismas órdenes recién insertadas mientras el resto del historial
-    nunca avanzaba. Cambiado a `order_date DESC` (lo que de verdad importa
-    para "Oportunidades Mayoreo")."""
+    FIX 2026-08-27 parte 1 (backend-integrations-engineer): `ORDER BY
+    created_at DESC` ordenaba por cuándo se insertó la fila en NUESTRA db, no
+    por order_date real -- corregido a `order_date DESC` en un primer pase.
+
+    FIX 2026-08-27 parte 2 (mismo agente, verificado con datos reales de
+    producción tras 25 min: 0 compradores exclusivos de days=90 vs days=30):
+    ordenar por `order_date DESC` solo no bastaba -- en una cuenta de alto
+    volumen (BLOWTECHNOLOGIES), el `LIMIT` completo se agotaba dentro de los
+    primeros ~30 días, sin que la consulta SQL siquiera trajera una fila del
+    rango 31-90 días. Es starvation real, no solo prioridad: el bucket
+    histórico nunca competía por cupo, la query lo excluía antes de que
+    main.py pudiera filtrar nada. Fix: reparto de cupo FIJO por bucket
+    (mitad para <=30d, mitad para 31-90d) -- ninguno puede monopolizar el
+    ciclo sin importar qué tan grande sea su backlog. `exclude_ids` (órdenes
+    ya marcadas como irresolubles) se filtra AQUÍ, antes de repartir cupo --
+    filtrarlo después (como en el fix anterior) reproduce el mismo bug de
+    crowding a nivel de la lista final."""
     from datetime import datetime as _dt, timedelta as _td
-    cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    exclude_ids = exclude_ids or set()
+    recent_days = min(30, days)
+    cutoff_all = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    cutoff_recent = (_dt.utcnow() - _td(days=recent_days)).strftime("%Y-%m-%d")
+    half = max(1, limit // 2)
+    pool_cap = limit * 3  # margen para descartar exclude_ids sin quedarse corto
+
+    async def _bucket(db, lo, hi_exclusive):
+        if hi_exclusive is None:
+            rows = await (await db.execute(
+                """SELECT DISTINCT order_id FROM order_history
+                   WHERE account_id = ? AND platform = ? AND buyer_id = '' AND order_date >= ?
+                   ORDER BY order_date DESC LIMIT ?""",
+                (account_id, platform, lo, pool_cap),
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                """SELECT DISTINCT order_id FROM order_history
+                   WHERE account_id = ? AND platform = ? AND buyer_id = '' AND order_date >= ? AND order_date < ?
+                   ORDER BY order_date DESC LIMIT ?""",
+                (account_id, platform, lo, hi_exclusive, pool_cap),
+            )).fetchall()
+        return [r["order_id"] for r in rows if r["order_id"] not in exclude_ids]
+
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(
-            """SELECT DISTINCT order_id FROM order_history
-               WHERE account_id = ? AND platform = ? AND buyer_id = '' AND order_date >= ?
-               ORDER BY order_date DESC LIMIT ?""",
-            (account_id, platform, cutoff, limit),
-        )).fetchall()
-    return [r["order_id"] for r in rows]
+        recent_pool = await _bucket(db, cutoff_recent, None)
+        older_pool = await _bucket(db, cutoff_all, cutoff_recent)
+
+    recent_take = recent_pool[:half]
+    older_take = older_pool[:limit - len(recent_take)]
+    leftover = limit - len(recent_take) - len(older_take)
+    if leftover > 0:
+        # El histórico no tuvo suficientes candidatos -- el reciente rellena
+        # (nunca al revés: el histórico es el que hay que proteger de starvation).
+        recent_take += recent_pool[len(recent_take): len(recent_take) + leftover]
+    return recent_take + older_take
 
 
 async def update_order_buyer(order_id: str, buyer_id: str, buyer_nickname: str) -> None:

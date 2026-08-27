@@ -2146,23 +2146,30 @@ _buyer_backfill_failed_ids: set = set()
 
 def _backfill_order_buyer_bg(account_id: str) -> None:
     """Fire-and-forget: resuelve el comprador (buyer_id/nickname) de hasta 30
-    órdenes ML reales por ciclo (de un pool de 90 candidatas, para poder saltar
-    las ya conocidas como irresolubles sin gastar una llamada real) -- feature
-    "Oportunidades Mayoreo" (2026-08-27). Mismo patrón acotado que
-    _backfill_order_zones_bg (nunca todas de golpe, secuencial, sin semáforo
-    adicional -- mismo motivo que hoy obligó a bajar a Semaphore(1) el sync de
-    Experiencia/Calidad: no hay fila global de ML, más concurrencia = más 429).
-    Solo cubre historial de los últimos 90 días. Órdenes NUEVAS ya capturan
-    buyer sin este backfill (ver _save_ml_orders_history_bg)."""
+    órdenes ML reales por ciclo -- feature "Oportunidades Mayoreo" (2026-08-27).
+    Mismo patrón acotado que _backfill_order_zones_bg (nunca todas de golpe,
+    secuencial, sin semáforo adicional -- mismo motivo que hoy obligó a bajar
+    a Semaphore(1) el sync de Experiencia/Calidad: no hay fila global de ML,
+    más concurrencia = más 429). Solo cubre historial de los últimos 90 días.
+    Órdenes NUEVAS ya capturan buyer sin este backfill (ver
+    _save_ml_orders_history_bg).
+
+    FIX 2026-08-27 parte 2: el cupo se reparte con cuota fija por rango de
+    fecha DENTRO de get_orders_missing_buyer (mitad <=30d, mitad 31-90d) --
+    filtrar exclude_ids/limit AQUÍ (como hacía el fix anterior) reproducía
+    el mismo bug de starvation a nivel de lista final. Ver docstring de esa
+    función para el diagnóstico completo (verificado con datos reales:
+    0 compradores exclusivos de days=90 tras 25 min con el fix anterior)."""
     async def _do():
         from app.services import token_store as _ts
+        excluded = {oid for (aid, oid) in _buyer_backfill_failed_ids if aid == account_id}
         try:
-            order_ids = await _ts.get_orders_missing_buyer(account_id, "ml", limit=90, days=90)
+            order_ids = await _ts.get_orders_missing_buyer(
+                account_id, "ml", limit=30, days=90, exclude_ids=excluded,
+            )
         except Exception as _e:
             logger.warning(f"[BUYER-BACKFILL] Error listando pendientes uid={account_id}: {_e}")
             return
-        order_ids = [oid for oid in order_ids
-                     if (account_id, oid) not in _buyer_backfill_failed_ids][:30]
         if not order_ids:
             return
         client = await get_meli_client(user_id=account_id)
