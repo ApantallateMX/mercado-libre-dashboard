@@ -1049,6 +1049,23 @@ async def init_db():
             await db.execute("ALTER TABLE order_history ADD COLUMN shipping_cost_mxn REAL NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Migración 2026-08-27: identidad del comprador (feature "Oportunidades
+        # Mayoreo" -- detectar compradores recurrentes/mayoristas para ofrecerles
+        # combo o descuento por volumen DENTRO de la plataforma). ML: order.buyer
+        # ya viene en las órdenes que se fetchean normalmente (sin llamadas extra) --
+        # ver _save_ml_orders_history_bg. Amazon: BuyerInfo.BuyerName cuando esté
+        # disponible (puede venir vacío/anonimizado sin RDT, ver DEVLOG). buyer_id
+        # queda vacío para Amazon -- no hay un id estable de comprador sin RDT, la
+        # agregación de mayoreo para Amazon cae a agrupar por buyer_nickname.
+        try:
+            await db.execute("ALTER TABLE order_history ADD COLUMN buyer_id TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE order_history ADD COLUMN buyer_nickname TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_buyer ON order_history(account_id, platform, buyer_id)")
         # Migration: zona geográfica del comprador (ship_state_code = "MX-NLE" etc,
         # ship_zone = "MTY"/"CDMX"/"TJ") — para cruzar demanda por zona vs almacén
         # físico (feature de transferencias sugeridas). Solo ML por ahora: Amazon
@@ -6200,6 +6217,35 @@ async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 1
     return [r["order_id"] for r in rows]
 
 
+async def get_orders_missing_buyer(account_id: str, platform: str = "ml", limit: int = 15, days: int = 90) -> list:
+    """Órdenes ML recientes (últimos `days`, misma ventana que la detección de
+    mayoreo) sin buyer_id resuelto aún -- backfill acotado, mismo patrón que
+    get_orders_missing_zone (máx N por ciclo, nunca hammering de la API).
+    Solo tiene sentido para ML -- Amazon captura buyer_nickname sin llamada
+    extra desde _save_amazon_orders_bg, no necesita backfill separado."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT DISTINCT order_id FROM order_history
+               WHERE account_id = ? AND platform = ? AND buyer_id = '' AND order_date >= ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (account_id, platform, cutoff, limit),
+        )).fetchall()
+    return [r["order_id"] for r in rows]
+
+
+async def update_order_buyer(order_id: str, buyer_id: str, buyer_nickname: str) -> None:
+    """Actualiza la identidad del comprador para TODAS las filas de esta orden."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "UPDATE order_history SET buyer_id = ?, buyer_nickname = ? WHERE order_id = ?",
+            (buyer_id, buyer_nickname, order_id),
+        )
+        await db.commit()
+
+
 async def update_order_zone(order_id: str, ship_state_code: str, ship_zone: str) -> None:
     """Actualiza la zona geográfica para TODAS las filas de esta orden
     (una orden puede tener varios item_id, todas van al mismo domicilio)."""
@@ -6224,6 +6270,69 @@ async def get_zone_demand(account_id: str, platform: str = "ml", days: int = 60)
             (account_id, platform, cutoff),
         )).fetchall()
     return {r[0]: r[1] for r in rows if r[0]}
+
+
+async def get_wholesale_candidates(account_id: str, platform: str = "ml", days: int = 90,
+                                    min_orders: int = 3) -> list:
+    """Feature "Oportunidades Mayoreo" (2026-08-27, aprobado por Jovan tras análisis
+    de riesgo con marketplace-strategist): detecta compradores recurrentes/mayoristas
+    para ofrecerles combo o descuento por volumen DENTRO de la plataforma -- NUNCA
+    para exportar su contacto y venderles por fuera (eso viola ToS de ML/Amazon,
+    ver DEVLOG). Por eso esta función NO expone teléfono/RFC/domicilio -- solo
+    nickname (para reconocerlo) + historial de compra, que es lo que hace falta
+    para decidir un combo o mandar un mensaje por el chat de la plataforma.
+
+    Agrupa por buyer_id (ML) o buyer_nickname (Amazon, no tiene buyer_id estable
+    sin RDT). Un comprador califica si tiene >= min_orders órdenes DISTINTAS en
+    la ventana de `days`."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute("""
+            SELECT
+                CASE WHEN buyer_id != '' THEN buyer_id ELSE buyer_nickname END AS buyer_key,
+                buyer_nickname, order_id, sku, quantity, unit_price, ganancia_neta, order_date
+            FROM order_history
+            WHERE account_id = ? AND platform = ? AND order_date >= ?
+              AND (buyer_id != '' OR buyer_nickname != '')
+        """, (account_id, platform, cutoff))).fetchall()
+
+    buyers: dict = {}
+    for r in rows:
+        key = r["buyer_key"]
+        b = buyers.setdefault(key, {
+            "buyer_key": key, "buyer_nickname": r["buyer_nickname"] or "",
+            "order_ids": set(), "total_qty": 0, "total_revenue_mxn": 0.0,
+            "total_ganancia_neta": 0.0, "last_order_date": "", "last_order_id": "", "skus": {},
+        })
+        b["order_ids"].add(r["order_id"])
+        b["total_qty"] += r["quantity"] or 0
+        b["total_revenue_mxn"] += (r["unit_price"] or 0) * (r["quantity"] or 0)
+        b["total_ganancia_neta"] += r["ganancia_neta"] or 0
+        if r["order_date"] and r["order_date"] > b["last_order_date"]:
+            b["last_order_date"] = r["order_date"]
+            b["last_order_id"] = r["order_id"]
+        if r["sku"]:
+            b["skus"][r["sku"]] = b["skus"].get(r["sku"], 0) + (r["quantity"] or 0)
+
+    candidates = []
+    for b in buyers.values():
+        order_count = len(b["order_ids"])
+        if order_count < min_orders:
+            continue
+        candidates.append({
+            "buyer_key": b["buyer_key"], "buyer_nickname": b["buyer_nickname"],
+            "order_count": order_count,
+            "total_qty": b["total_qty"],
+            "total_revenue_mxn": round(b["total_revenue_mxn"], 2),
+            "total_ganancia_neta": round(b["total_ganancia_neta"], 2),
+            "last_order_date": b["last_order_date"],
+            "last_order_id": b["last_order_id"],
+            "skus": [{"sku": s, "qty": q} for s, q in sorted(b["skus"].items(), key=lambda x: -x[1])],
+        })
+    candidates.sort(key=lambda c: (-c["order_count"], -c["total_qty"]))
+    return candidates
 
 
 # Statuses de cancelación que disparan reversa de supplier_debt_ledger.
@@ -6256,8 +6365,9 @@ async def upsert_order_history(rows: list[dict]) -> int:
                      costo_usd, costo_mxn, retail_ph_usd,
                      ganancia_neta, margen_pct, recup_retail_pct,
                      fx_rate, currency, order_date, order_month,
-                     status, data_source, created_at, shipping_cost_mxn)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     status, data_source, created_at, shipping_cost_mxn,
+                     buyer_id, buyer_nickname)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
                     unit_price       = excluded.unit_price,
                     sale_fee         = CASE WHEN excluded.data_source = 'real' THEN excluded.sale_fee ELSE MAX(order_history.sale_fee, excluded.sale_fee) END,
@@ -6270,7 +6380,9 @@ async def upsert_order_history(rows: list[dict]) -> int:
                     recup_retail_pct = excluded.recup_retail_pct,
                     status           = excluded.status,
                     data_source      = CASE WHEN excluded.data_source = 'real' THEN 'real' ELSE order_history.data_source END,
-                    shipping_cost_mxn = CASE WHEN excluded.shipping_cost_mxn > 0 THEN excluded.shipping_cost_mxn ELSE order_history.shipping_cost_mxn END
+                    shipping_cost_mxn = CASE WHEN excluded.shipping_cost_mxn > 0 THEN excluded.shipping_cost_mxn ELSE order_history.shipping_cost_mxn END,
+                    buyer_id         = CASE WHEN excluded.buyer_id != '' THEN excluded.buyer_id ELSE order_history.buyer_id END,
+                    buyer_nickname   = CASE WHEN excluded.buyer_nickname != '' THEN excluded.buyer_nickname ELSE order_history.buyer_nickname END
             """, (
                 r.get("order_id", ""), r.get("account_id", ""), r.get("platform", "ml"),
                 r.get("item_id", ""), r.get("sku", ""),
@@ -6282,6 +6394,7 @@ async def upsert_order_history(rows: list[dict]) -> int:
                 r.get("order_date", ""), r.get("order_month", ""),
                 r.get("status", ""), r.get("data_source", "estimated"),
                 _t.time(), r.get("shipping_cost_mxn", 0),
+                r.get("buyer_id", ""), r.get("buyer_nickname", ""),
             ))
             try:
                 sku = (r.get("sku") or "").upper()

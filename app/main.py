@@ -858,6 +858,7 @@ async def lifespan(app: FastAPI):
                         if uid:
                             await _run_stock_sync_for_user(uid)
                             _backfill_order_zones_bg(uid)  # gradual, no bloquea (fire-and-forget)
+                            _backfill_order_buyer_bg(uid)  # idem, Oportunidades Mayoreo
                             _check_ml_winner_status_bg(uid)  # idem, Vigilancia (Helium10 Alerts)
                             await asyncio.sleep(2)
                 except Exception:
@@ -1051,6 +1052,7 @@ _PATH_TO_SECTION: dict[str, str] = {
     "/ads":              "ads",
     "/health":           "salud",
     "/returns":          "devoluciones",
+    "/mayoreo":          "mayoreo",
     "/planning":         "planning",
     "/facturacion":      "facturacion",
     "/stock-sync":       "sync",
@@ -1064,6 +1066,7 @@ _SECTION_FIRST_URL: dict[str, str] = {
     "ads":          "/ads",
     "salud":        "/health",
     "devoluciones": "/returns",
+    "mayoreo":      "/mayoreo",
     "planning":     "/planning",
     "facturacion":  "/facturacion",
     "sync":         "/stock-sync",
@@ -1089,6 +1092,7 @@ _PATH_TO_TAB: dict[str, tuple[str, str]] = {
     "/ads":              ("ml", "ads"),
     "/health":           ("ml", "salud"),
     "/returns":          ("ml", "devoluciones"),
+    "/mayoreo":          ("ml", "mayoreo"),
     "/planning":         ("ml", "planning"),
     "/facturacion":      ("ml", "facturacion"),
     "/stock-sync":       ("ml", "sync"),
@@ -1100,6 +1104,7 @@ _ML_TAB_URL = {
     "dashboard": "/dashboard", "multidashboard": "/multi-dashboard",
     "ventas": "/orders", "productos": "/items",
     "ads": "/ads", "salud": "/health", "devoluciones": "/returns",
+    "mayoreo": "/mayoreo",
     "planning": "/planning", "facturacion": "/facturacion", "sync": "/stock-sync",
     "deuda": "/deuda-empresa",
 }
@@ -1107,6 +1112,7 @@ _AMZ_TAB_URL = {
     "dashboard": "/amazon?tab=dashboard", "ventas": "/amazon?tab=ventas",
     "productos": "/amazon/products", "salud": "/amazon?tab=salud",
     "fba": "/amazon?tab=fba", "returns": "/amazon/returns",
+    "mayoreo": "/mayoreo",
 }
 
 
@@ -1145,6 +1151,8 @@ def _derive_audit_section(path: str) -> str:
         return "Reclamos"
     if "/returns" in p:
         return "Devoluciones"
+    if "/mayoreo" in p:
+        return "Oportunidades Mayoreo"
     if any(x in p for x in ("/stock", "/inventory", "/distribucion")):
         return "Stock"
     if "/amazon" in p:
@@ -1528,6 +1536,10 @@ _NAV_TAB_DEFS = [
          ml_href="/returns", amz_href="/amazon/returns",
          ml_active=["returns"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab="devoluciones", amz_tab="returns", admin_only=False, badge="returns"),
+    dict(id="mayoreo", label="Mayoreo", icon="🤝",
+         ml_href="/mayoreo", amz_href="/mayoreo",
+         ml_active=["mayoreo"], amz_active=None, amz_uses_dispatcher=False,
+         ml_tab="mayoreo", amz_tab=None, admin_only=False, badge=None),
     dict(id="planning", label="Planeación", icon="⬡",
          ml_href="/planning", amz_href="/planning",
          ml_active=["planning"], amz_active=None, amz_uses_dispatcher=False,
@@ -2022,6 +2034,11 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
             order_id = str(order.get("id", ""))
             order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
             order_month = order_date[:7] if order_date else ""
+            # Feature "Oportunidades Mayoreo" 2026-08-27: order.buyer ya viene en el
+            # objeto de orden que se fetchea normalmente -- sin llamada extra a ML.
+            _buyer = order.get("buyer") or {}
+            buyer_id = str(_buyer.get("id", "") or "")
+            buyer_nickname = _buyer.get("nickname", "") or ""
             for oi in order.get("order_items", []):
                 item_info = oi.get("item", {})
                 item_id = str(item_info.get("id", "") or "")
@@ -2059,6 +2076,7 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
                     "fx_rate": round(usd_to_mxn, 4), "currency": "MXN",
                     "order_date": order_date, "order_month": order_month,
                     "status": order.get("status", ""), "data_source": "estimated",
+                    "buyer_id": buyer_id, "buyer_nickname": buyer_nickname,
                 })
         if rows:
             try:
@@ -2112,6 +2130,51 @@ def _backfill_order_zones_bg(account_id: str) -> None:
                     continue  # una orden problemática no debe tumbar el resto del backfill
             if updated:
                 logger.info(f"[ZONE-BACKFILL] uid={account_id}: {updated}/{len(order_ids)} órdenes resueltas")
+        finally:
+            await client.close()
+    try:
+        asyncio.create_task(_do())
+    except Exception:
+        pass
+
+
+def _backfill_order_buyer_bg(account_id: str) -> None:
+    """Fire-and-forget: resuelve el comprador (buyer_id/nickname) de hasta 15
+    órdenes ML por ciclo que aún no lo tienen -- feature "Oportunidades
+    Mayoreo" (2026-08-27). Mismo patrón acotado que _backfill_order_zones_bg
+    (nunca todas de golpe). Solo cubre historial de los últimos 90 días --
+    ventana de detección de mayoreo, no tiene sentido re-consultar órdenes
+    más viejas para esto. Órdenes NUEVAS ya capturan buyer sin este backfill
+    (ver _save_ml_orders_history_bg) -- esto solo llena el hueco de órdenes
+    guardadas ANTES de que existiera esta columna."""
+    async def _do():
+        from app.services import token_store as _ts
+        try:
+            order_ids = await _ts.get_orders_missing_buyer(account_id, "ml", limit=15, days=90)
+        except Exception as _e:
+            logger.warning(f"[BUYER-BACKFILL] Error listando pendientes uid={account_id}: {_e}")
+            return
+        if not order_ids:
+            return
+        client = await get_meli_client(user_id=account_id)
+        if not client:
+            return
+        try:
+            updated = 0
+            for _oid in order_ids:
+                try:
+                    _order = await client.get_order(_oid)
+                    _buyer = _order.get("buyer") or {}
+                    _bid = str(_buyer.get("id", "") or "")
+                    _bnick = _buyer.get("nickname", "") or ""
+                    if not _bid and not _bnick:
+                        continue
+                    await _ts.update_order_buyer(_oid, _bid, _bnick)
+                    updated += 1
+                except Exception:
+                    continue  # una orden problemática no debe tumbar el resto del backfill
+            if updated:
+                logger.info(f"[BUYER-BACKFILL] uid={account_id}: {updated}/{len(order_ids)} órdenes resueltas")
         finally:
             await client.close()
     try:
@@ -2952,6 +3015,10 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                     order_month = order_date[:7]
                     if not order_id or not order_date:
                         continue
+                    # Feature "Oportunidades Mayoreo" 2026-08-27: BuyerName cuando
+                    # Amazon lo expone (puede venir vacío/anonimizado sin RDT -- ver
+                    # DEVLOG). Sin llamada extra, ya viene en el order fetcheado.
+                    buyer_nickname_amz = ((order.get("BuyerInfo") or {}).get("BuyerName") or "").strip()
                     try:
                         async with _amz_sem:
                             items = await client.get_order_items(order_id)
@@ -2994,6 +3061,8 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                                 "order_month":    order_month,
                                 "status":         status,
                                 "data_source":    "estimated",
+                                "buyer_id":       "",
+                                "buyer_nickname": buyer_nickname_amz,
                             })
                     except Exception as _e_item:
                         # get_order_items es rate-limited (429 frecuente bajo carga) — si
@@ -22882,6 +22951,75 @@ async def returns_page(request: Request):
         "active": "returns",
         **ctx
     })
+
+
+@app.get("/mayoreo", response_class=HTMLResponse)
+async def mayoreo_page(request: Request):
+    """Oportunidades Mayoreo — detecta compradores recurrentes/mayoristas
+    (aprobado por Jovan 2026-08-27, ver análisis de riesgo con
+    marketplace-strategist en DEVLOG). Acción dentro de plataforma solamente
+    -- NUNCA exportar contacto para vender por fuera (viola ToS ML/Amazon)."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "mayoreo.html", {
+        "user": user,
+        "active": "mayoreo",
+        **ctx
+    })
+
+
+@app.get("/api/wholesale/opportunities")
+async def wholesale_opportunities(
+    account_id: str = Query("", description="ML user_id o nickname de cuenta Amazon"),
+    platform: str = Query("ml", description="ml|amazon"),
+    days: int = Query(90, ge=7, le=365),
+    min_orders: int = Query(3, ge=2, le=50),
+):
+    """Compradores recurrentes/mayoristas por cuenta — feature "Oportunidades
+    Mayoreo". Solo lectura, agrega sobre order_history (ya poblado por los
+    loops normales + backfill acotado). NUNCA expone teléfono/RFC/domicilio --
+    solo nickname + historial, para decidir un combo o mandar oferta por el
+    chat de la plataforma (nunca fuera de ella, ver docstring de
+    get_wholesale_candidates)."""
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    if platform not in ("ml", "amazon"):
+        return JSONResponse({"error": "platform debe ser 'ml' o 'amazon'"}, status_code=400)
+    candidates = await token_store.get_wholesale_candidates(
+        account_id=account_id, platform=platform, days=days, min_orders=min_orders,
+    )
+    return JSONResponse({
+        "account_id": account_id, "platform": platform,
+        "days": days, "min_orders": min_orders,
+        "candidates": candidates,
+    })
+
+
+@app.post("/api/wholesale/send-offer")
+async def wholesale_send_offer(payload: dict = Body(...)):
+    """Manda la oferta de descuento por volumen por el CHAT de ML (nunca
+    teléfono/WhatsApp/email) -- única acción de contacto permitida en esta
+    feature, sobre el pack_id de la orden más reciente del comprador.
+    ML-only por ahora (Amazon no tiene un send_message equivalente cableado
+    aquí). Body: {"account_id": "...", "pack_id": "...", "text": "..."}"""
+    account_id = str(payload.get("account_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    text = (payload.get("text") or "").strip()
+    if not account_id or not pack_id or not text:
+        return JSONResponse({"error": "account_id, pack_id y text son requeridos"}, status_code=400)
+    from app.services.meli_client import MeliApiError
+    client = await get_meli_client(user_id=account_id)
+    if not client:
+        return JSONResponse({"error": "cuenta no encontrada"}, status_code=404)
+    try:
+        result = await client.send_message(pack_id, text)
+        return JSONResponse({"ok": True, "result": result})
+    except MeliApiError as e:
+        return JSONResponse({"ok": False, "error": str(e), "status_code": e.status_code}, status_code=200)
+    finally:
+        await client.close()
 
 
 @app.get("/partials/returns-summary", response_class=HTMLResponse)

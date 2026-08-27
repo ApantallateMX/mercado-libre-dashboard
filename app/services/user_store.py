@@ -110,6 +110,7 @@ PERMISSION_TREE = {
             "feedback": "Feedback",
         }},
         "devoluciones": {"label": "Devoluciones",  "subtabs": None},
+        "mayoreo":      {"label": "Mayoreo",       "subtabs": None},
         "planning":     {"label": "Planning",      "subtabs": None},
         "facturacion":  {"label": "Facturación",   "subtabs": None},
         "sync":         {"label": "Sync Stock",    "subtabs": {
@@ -133,6 +134,7 @@ PERMISSION_TREE = {
             "reabastecimiento": "Reabastecimiento", "catalogo": "Catálogo",
         }},
         "returns":      {"label": "Retornos",     "subtabs": None},
+        "mayoreo":      {"label": "Mayoreo",      "subtabs": None},
     },
 }
 
@@ -155,7 +157,7 @@ _LEGACY_AMZ_TAB_MAP = {
 _LEGACY_ML_MAP = {
     "dashboard": "ml.dashboard", "ventas": "ml.ventas", "sku": "ml.ventas",
     "productos": "ml.productos", "ads": "ml.ads", "salud": "ml.salud",
-    "devoluciones": "ml.devoluciones", "planning": "ml.planning",
+    "devoluciones": "ml.devoluciones", "mayoreo": "ml.mayoreo", "planning": "ml.planning",
     "facturacion": "ml.facturacion", "sync": "ml.sync",
 }
 
