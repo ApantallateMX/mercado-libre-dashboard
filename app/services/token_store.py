@@ -6222,7 +6222,14 @@ async def get_orders_missing_buyer(account_id: str, platform: str = "ml", limit:
     mayoreo) sin buyer_id resuelto aún -- backfill acotado, mismo patrón que
     get_orders_missing_zone (máx N por ciclo, nunca hammering de la API).
     Solo tiene sentido para ML -- Amazon captura buyer_nickname sin llamada
-    extra desde _save_amazon_orders_bg, no necesita backfill separado."""
+    extra desde _save_amazon_orders_bg, no necesita backfill separado.
+
+    FIX 2026-08-27 (backend-integrations-engineer): `ORDER BY created_at DESC`
+    ordenaba por cuándo se insertó la fila en NUESTRA db (no por order_date
+    real) -- causaba que, en cuentas de alto volumen, siempre se re-trajeran
+    las mismas órdenes recién insertadas mientras el resto del historial
+    nunca avanzaba. Cambiado a `order_date DESC` (lo que de verdad importa
+    para "Oportunidades Mayoreo")."""
     from datetime import datetime as _dt, timedelta as _td
     cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
@@ -6230,7 +6237,7 @@ async def get_orders_missing_buyer(account_id: str, platform: str = "ml", limit:
         rows = await (await db.execute(
             """SELECT DISTINCT order_id FROM order_history
                WHERE account_id = ? AND platform = ? AND buyer_id = '' AND order_date >= ?
-               ORDER BY created_at DESC LIMIT ?""",
+               ORDER BY order_date DESC LIMIT ?""",
             (account_id, platform, cutoff, limit),
         )).fetchall()
     return [r["order_id"] for r in rows]
