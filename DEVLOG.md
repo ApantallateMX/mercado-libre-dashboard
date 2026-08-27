@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-27 (8) — FIX: starvation real en backfill de comprador (parte 2) + logjam en backfill de zonas
+
+**Parte 2 del backfill de comprador**: verificado con datos reales (0 compradores exclusivos de
+days=90 vs days=30 tras 25 min con el fix de la parte 1), el `ORDER BY order_date DESC` no
+bastaba — en una cuenta de alto volumen (BLOWTECHNOLOGIES) el `LIMIT` se agotaba dentro de los
+primeros ~30 días antes de que la query SQL siquiera trajera una fila del rango 31-90 días
+(exclusión total a nivel SQL, no solo prioridad). Fix (backend-integrations-engineer): reparto
+de cupo FIJO por bucket de fecha (mitad ≤30d, mitad 31-90d) dentro de `get_orders_missing_buyer`,
+con `exclude_ids` filtrado ahí mismo (no después, para no reproducir el mismo crowding). Verificado
+en producción tras el fix: aparecieron los primeros compradores exclusivos de la ventana de 90
+días (prueba directa de que el histórico ya avanza). Números reales de backlog total: APANTALLATEMX
+6,098 · BLOWTECHNOLOGIES 2,908 · AUTOBOT 1,043 · LUTEMAMEXICO 646 órdenes pendientes — decisión de
+Jovan: dejarlo avanzar solo (horas/días) en vez de acelerar y arriesgar otro 429, dado que las
+órdenes recientes (0-30d, lo más accionable) ya están completas desde ahora. Nuevo endpoint de
+solo lectura `GET /api/diag/buyer-backfill-status` para consultar el avance real sin adivinar.
+
+**Logjam en backfill de zonas** (mismo agente, mismo día): `_backfill_order_zones_bg` tenía el
+mismo bug — un `continue` silencioso (sin `shipping.id`, sin `state.id` resoluble, o error
+genérico) nunca marcaba la orden como intentada, así que reaparecía en el tope de
+`ORDER BY created_at DESC` cada ciclo para siempre, bloqueando el avance sobre el resto del
+historial de Transferencias Sugeridas. Fix: mismo patrón (`_zone_backfill_failed_ids` a nivel de
+módulo + `exclude_ids` dentro de `get_orders_missing_zone`) — sin el reparto por rango de fecha
+del caso anterior, porque esta función no tiene ventana `days` (no hay partición que romper,
+razonamiento documentado en el docstring).
+
+**Pendiente, señalado por el mismo agente, NO aplicado sin aprobación**: el mismo patrón de
+logjam existe en `_check_ml_winner_status_bg`/`_check_amazon_buy_box_status_bg` (feature
+Vigilancia, rotación LRU por listing) — requiere decisión de Jovan.
+
+---
+
 ## 2026-08-27 (7) — FIX: SKUs y órdenes de Mayoreo en modal navegable, no alert() sin salida
 
 Reportado por Jovan con captura real: la columna "Top SKUs" mostraba "+6 más" sin ninguna
