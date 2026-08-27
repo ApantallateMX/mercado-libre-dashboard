@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-26 (5) — OPERACION: primer corte de precio directo (cascada) cuando ML bloquea el deal
+
+Solución de Jovan al bloqueo de deal por Experiencia baja: si ML no permite `PRICE_DISCOUNT`/
+`SELLER_CAMPAIGN`, se baja el precio de venta directo ese mismo % (mismo mecanismo `PUT
+/api/items/{id}/price` ya probado), en vez de depender de que ML habilite un candidato. Mismos %
+de la cascada ya diseñada, solo cambia el mecanismo de ejecución.
+
+Antes de ejecutar, se mapearon las 7 publicaciones reales de `SNEE000054` en las 4 cuentas ML
+(`ml_listings` + cruce con `order_history` por `item_id`, no solo por cuenta) — reveló que
+**APANTALLATEMX tiene 2 publicaciones duplicadas del mismo producto** (`MLM2708205591` a $3,699,
+la que de verdad vende — 5 ventas reales, la más reciente 10-ago; y la piloto `MLM5479436194`, casi
+sin ventas). El diagnóstico agregado por cuenta no distinguía esto — hallazgo real que evitó bajarle
+el precio a la publicación equivocada.
+
+**Ejecutado**: `MLM5479436194` (APANTALLATEMX) $4,838→$4,354 (-10%) y `MLM4645669198`
+(LUTEMAMEXICO) $5,999→$5,399 (-10%, 0 ventas históricas). Registrado ciclo 1 en
+`stagnation_cascade` para ambos. **NO tocado**: `MLM2708205591` (ya vende), `MLM4634940362`
+AUTOBOT (venta reciente 14-ago), y las 3 publicaciones de BLOWTECHNOLOGIES (la más barata, $3,599,
+ya está por debajo del primer escalón con 0 ventas — coincide con la crisis de reputación de esa
+cuenta ya documentada, precio no es la causa ahí; decisión de negocio pendiente de Jovan, no
+ejecutada unilateralmente).
+
+**Pendiente**: decidir si consolidar las publicaciones duplicadas de APANTALLATEMX y las 3 de
+BLOWTECHNOLOGIES — no es un fix técnico, es una decisión de negocio.
+
+---
+
 ## 2026-08-26 (4) — FIX: claims_history nunca corría sola + FEAT: reclamos por categoría en Returns
 
 Continuación directa de la investigación de Experiencia de Compra (entrada de arriba). Jovan pidió
