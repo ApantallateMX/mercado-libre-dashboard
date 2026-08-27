@@ -940,6 +940,88 @@ Siempre debe ser menor que `deal_price`.
 
 ---
 
+# EXPERIENCIA DE COMPRA (Purchase Experience) — GATE REAL DE ELEGIBILIDAD
+
+> Investigado en vivo contra la API real de ML 2026-08-26 (caso real: SNEE000054/MLM5479436194,
+> APANTALLATEMX). **Antes de recomendar CUALQUIER promoción (PRICE_DISCOUNT, SELLER_CAMPAIGN, DEAL,
+> etc.), verifica esto primero** — un listing con mala Experiencia de Compra puede no tener NINGÚN
+> candidato de promoción disponible sin importar precio, margen o antigüedad. No asumas que "sin
+> candidato" = "hay que esperar el cooldown de precio" sin descartar esto primero.
+
+## El endpoint real (el que está en la documentación NO es el intuitivo)
+
+```bash
+# Correcto — vive en /reputation, no en /marketplace, y es por user_product_id no item_id
+GET /reputation/user_products/{USER_PRODUCT_ID}/purchase_experience/integrators?locale=es_MX
+Auth: Authorization: Bearer $ACCESS_TOKEN (sin headers especiales, sin X-Caller-Id)
+
+# El endpoint "por item_id" existe pero SIEMPRE redirige (302, con el Location header
+# apuntando al recurso real por user_product_id) — hay que seguir el redirect o resolver
+# el user_product_id primero via GET /items/{item_id} (campo item.user_product_id).
+GET /reputation/items/{ITEM_ID}/purchase_experience/integrators?locale=es_MX  # → 302 redirect
+
+# Sin locale= explícito: 400 "Missing or invalid locale"
+```
+
+⚠️ Existe una ruta que PARECE lógica y NO es real: `/marketplace/items/{item_id}/purchase_experience`
+— da 403 "Invalid caller.id" siempre. Si ves ese error contra esa ruta, es que estás en la ruta
+equivocada, no un problema de permisos de la app. (Este proyecto tenía el bug exacto: `meli_client.py
+get_purchase_experience()`, corregido 2026-08-26.)
+
+## Response real (ejemplo, score bajo)
+
+```json
+{
+  "reputation": {"color": "red", "text": "Mala", "value": 30},
+  "reasoning": {"subtitles": [{"text": "Como no tenemos suficiente información, lo calculamos a
+    partir de tus ventas de productos en la misma categoría. En esta categoría recibiste más
+    reclamos por problemas de producto que el promedio..."}]},
+  "consequence": {"title": {"text": "Tienes muy baja exposición. Podríamos anular tu publicación
+    si sigues brindando mala experiencia."}},
+  "recommendations": {"subtitles": [{"text": "Revisa las unidades antes de enviarlas..."}]}
+}
+```
+
+## 4 cosas que hay que saber ANTES de diagnosticar un score bajo
+
+1. **Puede heredarse de la categoría completa, no del item.** Si el item no tiene suficiente
+   historial propio (pocas ventas, sin reseñas), ML calcula el score a partir del promedio de
+   reclamos de TODOS los productos de esa categoría de la cuenta — un item con 0 reclamos propios
+   puede tener score bajo por lo que pasa en OTROS SKUs de la misma categoría. Antes de intentar
+   arreglar "este producto", revisa toda la categoría (ver metodología abajo).
+2. **La consecuencia real es más grave que "sin promos"**: baja exposición en búsqueda YA, y riesgo
+   de anulación del listing si persiste. No lo trates como un bloqueo cosmético de una feature.
+3. **FULL (Mercado Envíos Full) cambia la atribución de responsabilidad.** Un reclamo de "producto
+   dañado" en un item con `logistic_type: fulfillment` (`is_full: 1`) puede venir marcado
+   explícitamente por ML como "No afecta tu reputación" en el panel del vendedor — el daño se le
+   atribuye a la bodega de ML, no al empaque del vendedor. El mismo SKU vendido `cross_docking`
+   (no-FULL, empaque/envío maneja el vendedor) SÍ cuenta. Si un SKU tiene listings mixtos
+   FULL/no-FULL, hay que separar los reclamos por tipo de fulfillment antes de culpar al vendedor.
+4. **No hay tabla de historial de promociones ni de "Experiencia por fecha"** — no se puede saber
+   retroactivamente con certeza si una venta pasada ocurrió con descuento activo, ni reconstruir el
+   score histórico. Solo el estado ACTUAL es consultable.
+
+## Metodología para encontrar la causa raíz real (no asumir)
+
+`GET /marketplace/v2/claims/search?status=opened|closed` (via `client.get_claims()`) — **el objeto
+del reclamo NO incluye item_id directamente**. Referencia por `resource_id` (casi siempre el
+`order_id`, cuando `resource=="order"`) o por shipment_id (`resource=="shipment"`). Para saber qué
+SKU/item generó cada reclamo:
+1. Traer reclamos recientes (paginar `offset`, ambos status).
+2. Filtrar `resource=="order"`.
+3. Cruzar `resource_id` contra `order_history.order_id` (ya tiene `sku`/`item_id` por fila) — el
+   `claims_history` local de este proyecto puede estar MUY incompleto para SKUs de bajo volumen
+   (caso real: 0 filas locales para una categoría con 2 reclamos reales confirmados vía API en
+   vivo) — **no confiar en `claims_history` para diagnósticos finos, ir a la API real de claims**.
+4. Con el SKU/item real identificado, cruzar contra `ml_listings.logistic_type`/`is_full` para
+   separar responsabilidad FULL vs propia (punto 3 arriba).
+5. Revisar `get_claim_detail`/`get_claim_messages` del reclamo real para ver quién debe la próxima
+   respuesta (`stage`, mensajes) — no asumas que un reclamo "viejo sin cerrar" significa inacción
+   del vendedor; puede estar escalado y en espera de Mercado Libre, con SLA propio de ML visible en
+   el panel del vendedor ("Te escribiremos antes de...").
+
+---
+
 # AMAZON ADVERTISING — FUNDAMENTOS
 
 > ⚠️ **LIMITACIÓN HONESTA (obligatoria, ver BUSINESS_RULES.md):** Este proyecto NO tiene conectada la Amazon Advertising API hoy. `amazon-specialist.md` ya lo marca como módulo pendiente. Todo lo de esta sección es **conocimiento conceptual de plataforma** — sirve para explicar mecánica, asesorar y calcular escenarios con datos que el usuario proporcione manualmente (ej. "gasté $X y vendí $Y"), pero NO hay campañas, keywords, ni métricas reales de Apantallate MX conectadas vía API. Si el usuario pregunta por el desempeño real de una campaña, la respuesta correcta es explicar qué falta conectar, nunca inventar o simular un número.
