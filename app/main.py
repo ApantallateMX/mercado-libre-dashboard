@@ -813,6 +813,7 @@ async def lifespan(app: FastAPI):
     start_multi_stock_sync()
     asyncio.create_task(_oversell_alert_loop())
     asyncio.create_task(_reputation_alert_loop())
+    asyncio.create_task(_claims_sync_loop())
     start_token_refresh()
     start_supplier_debt_sync()
     start_realtime_alerts_reconcile()
@@ -3160,6 +3161,27 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
         logger.warning(f"[CLAIMS-BG] Error general: {_e}")
     finally:
         _ml_claims_bg_running = False
+
+
+async def _claims_sync_loop():
+    """FIX 2026-08-26: claims_history solo se poblaba cuando alguien disparaba a
+    mano POST /api/planning/sync-claims -- sin loop automatico, quedaba MUY
+    desactualizada para SKUs de bajo volumen (hallazgo real: 258 reclamos
+    confirmados via API en vivo vs ~1 fila local para una categoria completa,
+    investigacion SNEE000054/Experiencia de Compra). _save_ml_claims_bg() ya
+    tiene su propio guard interno de 1h (_ml_claims_bg_last_run) -- este loop
+    solo garantiza que se siga llamando periodicamente, nunca se queda huerfano.
+
+    Cadencia 3h (entre el top-categorias de BM cada 15min y el longtail cada
+    4h) -- volumen de reclamos es moderado, no necesita frescura al minuto
+    como las alertas de stock en tiempo real."""
+    await asyncio.sleep(90)  # deja terminar el arranque antes de la primera corrida
+    while True:
+        try:
+            await _save_ml_claims_bg(days=180)
+        except Exception as _e:
+            logger.warning(f"[CLAIMS-SYNC-LOOP] Error: {_e}")
+        await asyncio.sleep(3 * 3600)
 
 
 def _get_item_sku(body: dict) -> str:
@@ -26359,12 +26381,15 @@ async def returns_sku_claim_rate(
     sales_by_sku = await _fetch_live_ml_sales_by_sku(date_from, date_to, account_id=account_id or None)
 
     titles = {}
+    categories = {}
     try:
         import aiosqlite as _aio_rate
         async with _aio_rate.connect(_ts_rate.DATABASE_PATH) as db:
             db.row_factory = _aio_rate.Row
-            cur = await db.execute("SELECT sku, title FROM bm_sku_master")
-            titles = {r["sku"]: r["title"] for r in await cur.fetchall()}
+            cur = await db.execute("SELECT sku, title, category FROM bm_sku_master")
+            for r in await cur.fetchall():
+                titles[r["sku"]] = r["title"]
+                categories[r["sku"]] = r["category"] or ""
     except Exception:
         pass
 
@@ -26378,6 +26403,7 @@ async def returns_sku_claim_rate(
         results.append({
             "sku": sku,
             "title": titles.get(sku, ""),
+            "category": categories.get(sku, ""),
             "claims_count": c["claims_count"],
             "units_claimed": units_claimed,
             "units_sold": units_sold,
@@ -26391,9 +26417,25 @@ async def returns_sku_claim_rate(
         })
     results.sort(key=lambda r: (r["claim_rate_pct"] is None, -(r["claim_rate_pct"] or 0), -r["claims_count"]))
 
+    # Rollup por categoria (2026-08-26, pedido de Jovan tras el caso SNEE000054:
+    # un score de Experiencia de Compra puede heredarse de TODA la categoria, no
+    # del SKU puntual -- ver reference_ml_purchase_experience_api en memoria).
+    # Ayuda a detectar el mismo patron sin tener que cruzar reclamos a mano.
+    by_category: dict = {}
+    for r in results:
+        cat = r["category"] or "(sin categoría)"
+        agg = by_category.setdefault(cat, {"category": cat, "claims_count": 0, "sku_count": 0, "amount_mxn": 0.0})
+        agg["claims_count"] += r["claims_count"]
+        agg["sku_count"] += 1
+        agg["amount_mxn"] += r["amount_mxn"]
+    categories_summary = sorted(by_category.values(), key=lambda a: -a["claims_count"])
+    for a in categories_summary:
+        a["amount_mxn"] = round(a["amount_mxn"], 2)
+
     return {
         "date_from": date_from, "date_to": date_to,
         "total_skus": len(results), "products": results,
+        "categories_summary": categories_summary,
     }
 
 
