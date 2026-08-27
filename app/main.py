@@ -18044,6 +18044,14 @@ async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365)
                GROUP BY platform, account_id""",
             (bm_key, f"-{days} days"),
         )).fetchall()
+        recent_rows = await (await db.execute(
+            """SELECT order_id, platform, account_id, order_date, quantity, unit_price,
+                      ganancia_neta, margen_pct, recup_retail_pct
+               FROM order_history
+               WHERE sku = ? AND status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
+               ORDER BY order_date DESC LIMIT 10""",
+            (bm_key,),
+        )).fetchall()
     by_account = [dict(r) for r in rows]
     totals = {
         "orders": sum(r["n"] for r in by_account),
@@ -18051,7 +18059,10 @@ async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365)
         "revenue_mxn": round(sum(r["revenue"] or 0 for r in by_account), 2),
         "ganancia_neta_mxn": round(sum(r["ganancia"] or 0 for r in by_account), 2),
     }
-    return {"sku": bm_key, "days": days, "totals": totals, "by_account": by_account}
+    return {
+        "sku": bm_key, "days": days, "totals": totals, "by_account": by_account,
+        "recent_orders": [dict(r) for r in recent_rows],
+    }
 
 
 @app.post("/api/diag/bulk-sku-lookup")
