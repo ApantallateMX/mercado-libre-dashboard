@@ -1789,9 +1789,34 @@ class MeliClient:
             return {}
 
     async def get_purchase_experience(self, item_id: str) -> dict:
-        """GET /marketplace/items/{item_id}/purchase_experience — estado de penalización del listing."""
+        """GET /reputation/user_products/{user_product_id}/purchase_experience/integrators?locale=es_MX
+        -- score real de "Experiencia de Compra" (0-100, con color/texto/razonamiento).
+
+        FIX 2026-08-26: la ruta anterior (/marketplace/items/{item_id}/purchase_experience)
+        NO es el endpoint real -- daba 403 "Invalid caller.id" siempre, y el
+        try/except lo escondía como {} (indistinguible de "sin penalización").
+        Investigado contra documentación oficial de MeLi (developers.mercadolibre.com):
+        el recurso real vive en /reputation, no en /marketplace, y es por
+        user_product_id (no item_id) -- /reputation/items/{item_id}/... existe
+        pero redirige (302, con body JSON en vez de header en algunos casos)
+        al recurso real por user_product_id. Requiere locale= explícito (400
+        "Missing or invalid locale" sin él).
+
+        Retorna dict con reputation.value (0-100), reputation.color/text,
+        reasoning (por qué tiene ese score -- a veces heredado de la categoría
+        completa, no del item puntual, ver caso real SNEE000054 2026-08-26),
+        consequence (impacto real: exposición reducida / riesgo de anulación),
+        recommendations. {} si el item no tiene user_product_id o falla la consulta.
+        """
         try:
-            return await self.get(f"/marketplace/items/{item_id}/purchase_experience")
+            item = await self.get_item(item_id)
+            up_id = item.get("user_product_id")
+            if not up_id:
+                return {}
+            return await self.get(
+                f"/reputation/user_products/{up_id}/purchase_experience/integrators",
+                params={"locale": "es_MX"},
+            )
         except Exception:
             return {}
 
