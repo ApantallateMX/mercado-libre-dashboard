@@ -1664,24 +1664,41 @@ class MeliClient:
 
     async def get_item_health(self, item_id: str) -> dict | None:
         """GET /item/{item_id}/performance — score oficial de MeLi (reemplaza /health deprecado).
-        Devuelve dict compatible + campos enriquecidos: score, level_wording, buckets."""
+        Devuelve dict compatible + campos enriquecidos: score, level_wording, buckets.
+
+        FIX 2026-08-27: para publicaciones de catálogo (`catalog_listing: true`), este
+        endpoint responde 400 "Entity not calculated: Product items are not supported"
+        -- no es que no tengan Calidad (ML sí la muestra en su panel), es que el
+        entity_type correcto para catálogo es USER_PRODUCT, no ITEM. Verificado
+        contra documentación oficial: GET /user-product/{user_product_id}/performance.
+        Fallback automático: si falla por item_id, reintenta por user_product_id
+        (requiere 1 llamada extra a GET /items/{id} para resolverlo)."""
+        data = None
         try:
             data = await self.get(f"/item/{item_id}/performance")
-            score = data.get("score", 0) or 0
-            level_wording = data.get("level_wording", "")
-            buckets = data.get("buckets", [])
-            # Mapear level_wording a nivel simple para compatibilidad
-            level_map = {"Profesional": "professional", "Bueno": "good", "Regular": "regular", "Malo": "bad"}
-            level = level_map.get(level_wording, level_wording.lower() if level_wording else "basic")
-            return {
-                "health": round(score / 100, 4),
-                "level": level,
-                "score": score,
-                "level_wording": level_wording,
-                "buckets": buckets,
-            }
         except Exception:
+            try:
+                item = await self.get_item(item_id)
+                up_id = item.get("user_product_id")
+                if up_id:
+                    data = await self.get(f"/user-product/{up_id}/performance")
+            except Exception:
+                return None
+        if not data:
             return None
+        score = data.get("score", 0) or 0
+        level_wording = data.get("level_wording", "")
+        buckets = data.get("buckets", [])
+        # Mapear level_wording a nivel simple para compatibilidad
+        level_map = {"Profesional": "professional", "Bueno": "good", "Regular": "regular", "Malo": "bad"}
+        level = level_map.get(level_wording, level_wording.lower() if level_wording else "basic")
+        return {
+            "health": round(score / 100, 4),
+            "level": level,
+            "score": score,
+            "level_wording": level_wording,
+            "buckets": buckets,
+        }
 
     async def get_item_health_actions(self, item_id: str) -> list:
         """Extrae acciones accionables desde /performance buckets."""
