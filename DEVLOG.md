@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-27 (6) — FIX: "Oportunidades Mayoreo" reubicado — vive dentro de Ventas, no aparte
+
+Corrección de Jovan: el requerimiento original pedía un sub-tab de Ventas (junto a Por Orden/
+Por SKU/Comparativa/Finanzas/Alertas de Stock), no un tab nuevo en el menú principal — se había
+entendido mal como tab de nivel superior. Se eliminó la página standalone `/mayoreo`, su entrada
+en el nav y en `PERMISSION_TREE` (ya cubierto por el permiso existente de "ventas") — el feature
+ahora vive en `orders.html` como sexta sub-vista (`ventas-view-mayoreo`). Los endpoints
+`/api/wholesale/*` no cambiaron.
+
+De paso, reportado por Jovan al probarlo con un caso real (comprador **O.GOOFERTAS**, 85 órdenes
+en BLOWTECHNOLOGIES): la tabla no mostraba la cuenta ni el detalle de órdenes, lo que se leía
+como "el comprador no aparece" cuando en realidad estaba en OTRA cuenta de las 4 (scope correcto,
+solo faltaba visibilidad). Agregado: columna de cuenta activa explícita + botón "Ver órdenes"
+con el listado real de `order_ids` por comprador (antes solo se veía el conteo).
+
+---
+
+## 2026-08-27 (5) — FIX: nav no le daba a admin acceso completo pese a allowed_sections restringido
+
+`_build_nav_tabs()` filtraba tabs por `allowed_sections` sin excepción para `role=="admin"` —
+`AuthMiddleware` ya bypasea esa misma restricción para admin al validar acceso a la PÁGINA
+(línea ~1185), pero el nav no lo hacía. Un admin con `allowed_sections` no vacío (aunque no
+incluyera un tab nuevo) podía entrar por URL directa pero no lo veía en el menú — causó que
+Jovan no viera el tab nuevo de Mayoreo pese a que la página ya funcionaba. Mismo patrón de
+inconsistencia ya documentado para "ml.sync" (ver memoria del proyecto), esta vez entre nav
+y middleware en vez de entre página y árbol de permisos.
+
+---
+
 ## 2026-08-27 (4) — FIX: fila real (Semaphore 1) + reintento 429 en sync de Experiencia/Calidad
 
 Primera corrida en producción del feature anterior se atoró en ~384/1118 items. Causa real:
