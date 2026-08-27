@@ -2087,6 +2087,21 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
         pass
 
 
+# FIX 2026-08-27 parte 3 (backend-integrations-engineer): mismo bug de logjam
+# que _buyer_backfill_failed_ids -- el `continue` cuando el shipment no traía
+# un state.id resoluble (recolección en tienda, dirección incompleta) nunca
+# marcaba la orden como intentada, así que volvía a aparecer en el tope de
+# `ORDER BY created_at DESC` cada ciclo, para siempre, bloqueando el avance
+# sobre el resto del historial real. A diferencia del backfill de comprador,
+# aquí NO hay ventana de días (get_orders_missing_zone trae TODO el histórico
+# en un solo pool) -- no existe la partición recientes/históricos que causó
+# el segundo bug de starvation-por-bucket en comprador, así que ESE fix
+# (reparto de cupo fijo por rango de fecha) no aplica aquí; ver docstring de
+# get_orders_missing_zone para el detalle de por qué. Se reinicia en cada
+# deploy, mismo costo aceptable que el set de comprador (warm-start).
+_zone_backfill_failed_ids: set = set()
+
+
 def _backfill_order_zones_bg(account_id: str) -> None:
     """Fire-and-forget: resuelve la zona geográfica (MTY/CDMX/TJ) de hasta 15
     órdenes por ciclo que aún no la tienen — NUNCA todas de golpe, para no
@@ -2097,8 +2112,9 @@ def _backfill_order_zones_bg(account_id: str) -> None:
     async def _do():
         from app.services import token_store as _ts
         from app.services.mx_zones import zone_for_state_code
+        excluded = {oid for (aid, oid) in _zone_backfill_failed_ids if aid == account_id}
         try:
-            order_ids = await _ts.get_orders_missing_zone(account_id, "ml", limit=15)
+            order_ids = await _ts.get_orders_missing_zone(account_id, "ml", limit=15, exclude_ids=excluded)
         except Exception as _e:
             logger.warning(f"[ZONE-BACKFILL] Error listando pendientes uid={account_id}: {_e}")
             return
@@ -2114,17 +2130,25 @@ def _backfill_order_zones_bg(account_id: str) -> None:
                     _order = await client.get_order(_oid)
                     _ship_id = (_order.get("shipping") or {}).get("id")
                     if not _ship_id:
+                        _zone_backfill_failed_ids.add((account_id, _oid))
+                        logger.info(f"[ZONE-BACKFILL] order_id={_oid} uid={account_id}: "
+                                    f"sin shipping.id, se descarta para este proceso")
                         continue
                     _shipment = await client.get_shipment(str(_ship_id))
                     _state = ((_shipment.get("receiver_address") or {}).get("state") or {})
                     _state_code = _state.get("id", "") if isinstance(_state, dict) else ""
                     if not _state_code:
+                        _zone_backfill_failed_ids.add((account_id, _oid))
+                        logger.info(f"[ZONE-BACKFILL] order_id={_oid} uid={account_id}: "
+                                    f"shipment sin state.id resoluble, se descarta para este proceso")
                         continue
                     _zone = zone_for_state_code(_state_code)
                     await _ts.update_order_zone(_oid, _state_code, _zone)
                     updated += 1
-                except Exception:
-                    continue  # una orden problemática no debe tumbar el resto del backfill
+                except Exception as _e2:
+                    _zone_backfill_failed_ids.add((account_id, _oid))
+                    logger.warning(f"[ZONE-BACKFILL] order_id={_oid} uid={account_id}: {_e2}")
+                    continue
             if updated:
                 logger.info(f"[ZONE-BACKFILL] uid={account_id}: {updated}/{len(order_ids)} órdenes resueltas")
         finally:

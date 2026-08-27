@@ -6199,22 +6199,47 @@ async def set_deal_config(user_id: str, deal_buffer_pct: float, retail_target_pc
         await db.commit()
 
 
-async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 15) -> list:
+async def get_orders_missing_zone(account_id: str, platform: str, limit: int = 15,
+                                   exclude_ids: set | None = None) -> list:
     """Órdenes ML recientes sin ship_zone aún resuelto — para el backfill
     acotado (máx N por ciclo, nunca hammering de la API de ML). Solo el
     order_id/item_id más reciente por SKU no importa aquí, cualquier fila
     sirve para obtener el shipment_id... pero no lo tenemos guardado, así
     que este helper solo identifica QUÉ falta; el shipment_id se resuelve
-    en vivo contra la orden actual en main.py."""
+    en vivo contra la orden actual en main.py.
+
+    FIX 2026-08-27 (backend-integrations-engineer): `exclude_ids` filtra
+    órdenes ya marcadas como irresolubles por el caller -- mismo patrón que
+    get_orders_missing_buyer. Sin esto, una orden sin state.id resoluble
+    (recolección en tienda, dirección incompleta) reaparecía en el tope de
+    `ORDER BY created_at DESC` cada ciclo para siempre, bloqueando el avance
+    sobre el resto del historial (mismo logjam ya corregido para comprador).
+
+    A diferencia de get_orders_missing_buyer, aquí NO hay ventana `days` --
+    esta función siempre trae de TODO el histórico en un solo pool ordenado
+    por created_at. Por eso NO se aplica aquí el reparto de cupo fijo por
+    rango de fecha (mitad recientes / mitad histórico) que sí hizo falta en
+    comprador: ese fix existía para romper una partición dura (<=30d vs
+    31-90d) que la propia ventana `days` creaba y que dejaba al bucket
+    histórico sin competir nunca por cupo. Sin ventana, no hay partición que
+    romper -- una vez que exclude_ids saca del camino a las órdenes ya
+    resueltas o marcadas como fallidas, el mismo LIMIT avanza naturalmente
+    hacia atrás en el histórico ciclo tras ciclo. El filtro se hace en Python
+    sobre un pool con margen (no SQL IN), igual que _bucket() en
+    get_orders_missing_buyer, para evitar placeholders dinámicos de tamaño
+    variable."""
+    exclude_ids = exclude_ids or set()
+    pool_cap = limit + len(exclude_ids) + limit * 2  # margen para descartar exclude_ids sin quedarse corto
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
             """SELECT DISTINCT order_id FROM order_history
                WHERE account_id = ? AND platform = ? AND (ship_zone IS NULL OR ship_zone = '')
                ORDER BY created_at DESC LIMIT ?""",
-            (account_id, platform, limit),
+            (account_id, platform, pool_cap),
         )).fetchall()
-    return [r["order_id"] for r in rows]
+    order_ids = [r["order_id"] for r in rows if r["order_id"] not in exclude_ids]
+    return order_ids[:limit]
 
 
 async def get_orders_missing_buyer(account_id: str, platform: str = "ml", limit: int = 30,
