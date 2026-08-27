@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-27 (7) — FIX: SKUs y órdenes de Mayoreo en modal navegable, no alert() sin salida
+
+Reportado por Jovan con captura real: la columna "Top SKUs" mostraba "+6 más" sin ninguna
+forma de ver esos SKUs — dead-end de UI. Diseño resuelto por el agente `uxui-designer`
+(consultado ANTES de tocar código, por orden explícita de Jovan de siempre verificar un
+experto primero — ver `feedback_usar_agentes_especializados` en memoria, escalada a regla
+dura). Solución: la celda completa de "Top SKUs" es clickeable (target grande, con ícono +
+subrayado punteado que señala interactividad) y abre un modal con la lista completa +
+"Sugerir combo" integrado, reusando el mismo patrón visual que ya existe en
+`substitution-modal`/`zerostock-modal`. Aplicado el mismo tratamiento a "Ver órdenes"
+(mismo problema de `alert()` sin salida, corregido de una vez por la regla del proyecto de
+revisar todos los sitios con el mismo patrón antes de cerrar un fix).
+
+---
+
 ## 2026-08-27 (6) — FIX: "Oportunidades Mayoreo" reubicado — vive dentro de Ventas, no aparte
 
 Corrección de Jovan: el requerimiento original pedía un sub-tab de Ventas (junto a Por Orden/
