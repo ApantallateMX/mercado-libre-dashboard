@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-27 (4) — FIX: fila real (Semaphore 1) + reintento 429 en sync de Experiencia/Calidad
+
+Primera corrida en producción del feature anterior se atoró en ~384/1118 items. Causa real:
+no hay fila global de ML en todo el proyecto (~40 loops de fondo, cada uno con su propio
+semáforo local, sin coordinarse entre sí) — entre todos saturan la cuenta real y esta feature
+se sumó a esa carga. `MeliClient._request()` ya reintenta 429 internamente (3 intentos), pero
+bajo contención real hasta eso se agotaba, y el except lo tragaba en `debug` (invisible en
+logs). Fix para ESTA feature: `Semaphore(1)` real (nunca ráfagas) + 1 reintento largo (20s)
+propio si el retry interno también se agotó por 429 + errores visibles en `info` con
+status_code y conteo de rate-limit aparte. Verificado en producción: corrida completa exitosa
+tras el fix. Migrar los ~40 sitios existentes a una fila global de ML queda como cambio aparte,
+más grande, pendiente de decisión de Jovan (no se toca sin plan y aprobación punto por punto).
+
+---
+
+## 2026-08-27 (3) — FEAT: pestaña "Oportunidades Mayoreo" (compradores recurrentes/mayoristas)
+
+Pedido de Jovan tras ver en la app de ML un comprador que le generó 3 órdenes separadas el
+mismo día (misma cuenta, distintas lámparas) — una de esas órdenes dio pérdida neta (-$30.73
+MXN) por el costo de envío fragmentado en pedidos chicos. Quería una sección para identificar
+compradores mayoristas/recurrentes y "venderles por fuera" de la plataforma.
+
+**Análisis de riesgo (agente marketplace-strategist) antes de construir**: identificar
+compradores de alto volumen es 100% legítimo, pero usar los datos de contacto de una orden
+(dirección/teléfono, dados solo para poder ENVIAR) para reclutar al comprador hacia una venta
+fuera de la plataforma viola los ToS de ML y Amazon — y en México cae además bajo la LFPDPPP.
+Riesgo real de contagio entre las 7 cuentas de la empresa (más agresivo en Amazon vía
+"Related Accounts"). Jovan aprobó el replanteo: identificar sí, pero la única acción de
+contacto permitida es un mensaje real por el CHAT de ML (nunca teléfono/WhatsApp/email),
+sugiriendo combo o descuento por volumen — resuelve el problema real (envío fragmentado)
+sin exponer ninguna cuenta.
+
+**Construido:**
+- `order_history`: nuevas columnas `buyer_id`/`buyer_nickname`. ML captura de `order.buyer`
+  (ya viene en el fetch normal, sin llamada extra a la API). Amazon: `BuyerInfo.BuyerName`
+  cuando ML lo expone (puede venir vacío sin RDT).
+- Backfill acotado para historial ML ya guardado antes de esta migración (15 órdenes/ciclo,
+  ventana de 90 días — mismo patrón ya probado de `_backfill_order_zones_bg`, nunca de golpe).
+- `get_wholesale_candidates()`: agrupa por comprador (buyer_id en ML, buyer_nickname en
+  Amazon por no tener id estable sin RDT), cuenta órdenes distintas, suma piezas/ingreso/
+  ganancia, arma el desglose de SKUs comprados (para sugerir combo).
+- Nueva página `/mayoreo` + tab en el nav (ML y Amazon) — NUNCA muestra teléfono/RFC/domicilio,
+  solo nickname + historial. Botón "Sugerir combo" (informativo) y "Enviar oferta" (manda
+  mensaje real por `send_message`, usando la orden más reciente como pack_id).
+- Verificado en producción (endpoint + página responden 200). Los datos reales tardan unas
+  horas en poblarse conforme corre el backfill — no hay atajo seguro para llenarlo de golpe.
+
+---
+
 ## 2026-08-27 (2) — FEAT: monitoreo diario de Experiencia de Compra + Calidad por listing
 
 Pedido de Jovan tras el caso SNEE000054 (deal bloqueado por Experiencia 30/100 descubierta ya
