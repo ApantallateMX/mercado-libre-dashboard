@@ -26669,6 +26669,24 @@ async def diag_sync_item_experience(token: str = ""):
     })
 
 
+@app.get("/api/diag/buyer-backfill-status")
+async def diag_buyer_backfill_status(account_id: str = "", token: str = ""):
+    """Solo lectura -- cuántas órdenes ML (últimos 90d) todavía no tienen
+    buyer_id resuelto para esta cuenta. 0 = backfill terminado para esa
+    cuenta. Para saber cuándo el backfill de "Oportunidades Mayoreo"
+    (2026-08-27) ya cubrió todo el histórico reciente sin adivinar."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not account_id:
+        return JSONResponse({"error": "account_id requerido"}, status_code=400)
+    pending = await token_store.get_orders_missing_buyer(account_id, "ml", limit=100000, days=90, exclude_ids=set())
+    return JSONResponse({
+        "account_id": account_id,
+        "pending_count": len(pending),
+        "done": len(pending) == 0,
+    })
+
+
 _ML_ORDER_SEARCH_CAP = 9500  # margen bajo el límite real (~10,000) de ML /orders/search
 
 
