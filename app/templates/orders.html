@@ -30,6 +30,10 @@
             class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
         ⚠️ Alertas de Stock
     </button>
+    <button type="button" data-view="mayoreo" onclick="window.setVentasView('mayoreo')"
+            class="ventas-view-btn flex-shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition">
+        🤝 Mayoreo
+    </button>
 </div>
 
 <!-- ═══ VISTA: POR ORDEN ═══ -->
@@ -446,6 +450,70 @@
 </div>
 <!-- /ventas-view-alertas_stock -->
 
+<!-- ═══ VISTA: MAYOREO (compradores recurrentes) ═══ -->
+<div id="ventas-view-mayoreo" {% if view != 'mayoreo' %}class="hidden"{% endif %}>
+    <div class="mb-3 flex items-center gap-2 text-sm">
+        <span class="text-gray-400">Mostrando compradores de la cuenta:</span>
+        {% for acc in accounts %}{% if acc.user_id == active_user_id %}
+        <span class="font-semibold bg-yellow-400 text-gray-800 px-2.5 py-0.5 rounded-full text-xs">{{ acc.nickname or acc.user_id }}</span>
+        {% endif %}{% endfor %}
+        <span class="text-gray-400 text-xs">— cambia de cuenta arriba para ver otra</span>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4 mb-5">
+        <div class="flex flex-wrap items-end gap-4">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Ventana</label>
+                <select id="may-days" class="border rounded px-3 py-1.5 text-sm">
+                    <option value="30">Últimos 30 días</option>
+                    <option value="60">Últimos 60 días</option>
+                    <option value="90" selected>Últimos 90 días</option>
+                    <option value="180">Últimos 180 días</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Mínimo de órdenes</label>
+                <select id="may-min-orders" class="border rounded px-3 py-1.5 text-sm">
+                    <option value="2">2 o más</option>
+                    <option value="3" selected>3 o más</option>
+                    <option value="5">5 o más</option>
+                </select>
+            </div>
+            <button onclick="loadMayoreo()" class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
+                Buscar
+            </button>
+            <span id="may-status" class="text-xs text-gray-400 ml-auto"></span>
+        </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b border-gray-100 text-xs text-gray-500 uppercase">
+                    <tr>
+                        <th class="text-left py-2.5 px-4">Comprador</th>
+                        <th class="text-left py-2.5 px-3">Cuenta</th>
+                        <th class="text-right py-2.5 px-3">Órdenes</th>
+                        <th class="text-right py-2.5 px-3">Piezas</th>
+                        <th class="text-right py-2.5 px-3">Ingreso MXN</th>
+                        <th class="text-right py-2.5 px-3">Ganancia MXN</th>
+                        <th class="text-left py-2.5 px-3">Top SKUs</th>
+                        <th class="text-left py-2.5 px-3">Última compra</th>
+                        <th class="text-center py-2.5 px-3">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="may-tbody"></tbody>
+            </table>
+        </div>
+        <div id="may-paginator"></div>
+    </div>
+
+    <p class="text-xs text-gray-400 mt-3">
+        ⚠️ Esta sección solo muestra nickname + historial de compra — nunca teléfono, RFC o domicilio.
+        La única acción de contacto disponible es un mensaje por el chat de Mercado Libre, dentro de la plataforma.
+    </p>
+</div>
+<!-- /ventas-view-mayoreo -->
+
 <!-- ═══ Modal: registrar sustitución ═══ -->
 <div id="substitution-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-end md:items-center justify-center p-0 md:p-4">
   <div class="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl max-h-[90vh] overflow-y-auto">
@@ -522,7 +590,7 @@ window._ventasHighlightBtn = function(view) {
 };
 
 window.setVentasView = function(view) {
-    ['orders', 'sku', 'compare', 'finanzas', 'alertas_stock'].forEach(function(v) {
+    ['orders', 'sku', 'compare', 'finanzas', 'alertas_stock', 'mayoreo'].forEach(function(v) {
         var el = document.getElementById('ventas-view-' + v);
         if (el) el.classList.toggle('hidden', v !== view);
     });
@@ -542,6 +610,8 @@ window.setVentasView = function(view) {
             loadFinanzas();
         } else if (view === 'alertas_stock') {
             alertasLoadData();
+        } else if (view === 'mayoreo') {
+            loadMayoreo();
         }
     }
 };
@@ -2463,6 +2533,138 @@ window.calcMlSim = function(simId) {
     html += '</tbody></table>';
     html += '<p class="text-[10px] text-gray-400 mt-2">Desglose: ' + _m(sellP) + ' → comisión ' + _m(main.feeAmt) + ' + imp. ' + _m(main.impAmt) + ' + envío ' + _m(ship) + (other>0?' + otros '+_m(other):'') + ' = ML retiene ' + _m(main.mlTotal) + ' → neto ML ' + _m(main.netML) + ' → socio ' + _m(main.socioAmt) + ' → neto final ' + _m(main.netProc) + '</p>';
     res.innerHTML = html;
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Mayoreo (compradores recurrentes) — sub-vista de Ventas (movida de un tab
+// de nivel superior a petición de Jovan 2026-08-27: vive junto a Por Orden/
+// Por SKU/Comparativa/Finanzas/Alertas de Stock, no aparte en el menú).
+// ════════════════════════════════════════════════════════════════════════════
+var _MAY_PAGE_SIZE = 10;
+var _mayRows = [];
+var _mayAccountNickname = '{% for acc in accounts %}{% if acc.user_id == active_user_id %}{{ acc.nickname or acc.user_id }}{% endif %}{% endfor %}';
+
+function loadMayoreo() {
+    var accountId = '{{ active_user_id | default("") }}';
+    var statusEl = document.getElementById('may-status');
+    var tbody = document.getElementById('may-tbody');
+    if (!accountId) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-gray-400 text-sm">Selecciona una cuenta activa</td></tr>';
+        return;
+    }
+    statusEl.textContent = 'Buscando...';
+    var days = document.getElementById('may-days').value;
+    var minOrders = document.getElementById('may-min-orders').value;
+    fetch('/api/wholesale/opportunities?account_id=' + encodeURIComponent(accountId) +
+          '&platform=ml&days=' + days + '&min_orders=' + minOrders)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                statusEl.textContent = '';
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-red-400 text-sm">' + data.error + '</td></tr>';
+                return;
+            }
+            var candidates = data.candidates || [];
+            statusEl.textContent = candidates.length + ' compradores encontrados';
+            _mayRows = candidates.map(function(c) { return _mayRowHtml(c, accountId); });
+            if (!_mayRows.length) {
+                tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-gray-400 text-sm">' +
+                    'Sin compradores recurrentes en esta ventana con ese mínimo de órdenes.</td></tr>';
+                document.getElementById('may-paginator').innerHTML = '';
+                return;
+            }
+            window['may-paginator_go'] = function(p) { _mayRenderPaginated(_mayRows, p); };
+            _mayRenderPaginated(_mayRows, 1);
+        })
+        .catch(function(e) {
+            statusEl.textContent = '';
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-red-400 text-sm">Error: ' + e + '</td></tr>';
+        });
+}
+
+function _mayRenderPaginated(rows, page) {
+    var total = rows.length;
+    var totalPages = Math.max(1, Math.ceil(total / _MAY_PAGE_SIZE));
+    var p = Math.min(Math.max(1, page), totalPages);
+    var start = (p - 1) * _MAY_PAGE_SIZE, end = Math.min(start + _MAY_PAGE_SIZE, total);
+    var tbody = document.getElementById('may-tbody');
+    if (tbody) tbody.innerHTML = rows.slice(start, end).join('');
+    var pag = document.getElementById('may-paginator');
+    if (!pag) return p;
+    if (total <= _MAY_PAGE_SIZE) { pag.innerHTML = ''; return p; }
+    pag.innerHTML =
+        '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">' +
+        '<span class="text-xs text-gray-400">' + (start + 1) + '–' + end + ' de ' + total + '</span>' +
+        '<div class="flex items-center gap-1">' +
+        '<button onclick="window[\'may-paginator_go\'](' + (p - 1) + ')" ' + (p <= 1 ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+        '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
+        '<button onclick="window[\'may-paginator_go\'](' + (p + 1) + ')" ' + (p >= totalPages ? 'disabled' : '') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+        '</div></div>';
+    return p;
+}
+
+function _mayRowHtml(c, accountId) {
+    var skus = c.skus || [];
+    var topSkus = skus.slice(0, 2).map(function(s) { return s.sku + ' (' + s.qty + ')'; }).join(', ');
+    var moreSkus = skus.length > 2 ? ' +' + (skus.length - 2) + ' más' : '';
+    var revenue = (c.total_revenue_mxn || 0).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    var ganancia = c.total_ganancia_neta || 0;
+    var gananciaFmt = ganancia.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    var gananciaColor = ganancia < 0 ? 'text-red-600' : 'text-green-600';
+    var buyerLabel = c.buyer_nickname || c.buyer_key || '(sin nickname)';
+    var orderIds = c.order_ids || [];
+    return '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
+        '<td class="py-2.5 px-4 font-medium text-gray-800">' + buyerLabel + '</td>' +
+        '<td class="py-2.5 px-3 text-gray-600">' + _mayAccountNickname + '</td>' +
+        '<td class="py-2.5 px-3 text-right">' + c.order_count + '</td>' +
+        '<td class="py-2.5 px-3 text-right">' + c.total_qty + '</td>' +
+        '<td class="py-2.5 px-3 text-right">$' + revenue + '</td>' +
+        '<td class="py-2.5 px-3 text-right ' + gananciaColor + ' font-semibold">$' + gananciaFmt + '</td>' +
+        '<td class="py-2.5 px-3 text-gray-600">' + topSkus + moreSkus + '</td>' +
+        '<td class="py-2.5 px-3 text-gray-500">' + (c.last_order_date || '-') + '</td>' +
+        '<td class="py-2.5 px-3 text-center whitespace-nowrap">' +
+        '<button onclick=\'window.showOrderIds(' + JSON.stringify(orderIds) + ', "' + buyerLabel.replace(/"/g, '&quot;') + '")\' ' +
+        'class="text-xs text-gray-500 hover:text-gray-800 font-medium mr-2">Ver órdenes</button>' +
+        '<button onclick=\'window.suggestCombo(' + JSON.stringify(skus).replace(/'/g, "&#39;") + ', "' + buyerLabel.replace(/"/g, '&quot;') + '")\' ' +
+        'class="text-xs text-blue-600 hover:text-blue-800 font-medium mr-2">Sugerir combo</button>' +
+        (c.last_order_id ?
+            '<button onclick=\'window.sendVolumeOffer("' + accountId + '", "' + c.last_order_id + '", "' + buyerLabel.replace(/"/g, '&quot;') + '")\' ' +
+            'class="text-xs text-green-600 hover:text-green-800 font-medium">Enviar oferta</button>'
+            : '<span class="text-xs text-gray-300">—</span>') +
+        '</td></tr>';
+}
+
+window.showOrderIds = function(orderIds, buyerLabel) {
+    if (!orderIds || !orderIds.length) { alert('Sin órdenes registradas para ' + buyerLabel); return; }
+    alert('Órdenes de ' + buyerLabel + ' (' + orderIds.length + '):\n\n' + orderIds.join('\n'));
+};
+
+window.suggestCombo = function(skus, buyerLabel) {
+    if (!skus || !skus.length) { alert('Sin SKUs registrados para ' + buyerLabel); return; }
+    var lines = skus.map(function(s) { return '  • ' + s.sku + ': ' + s.qty + ' unidades compradas'; }).join('\n');
+    alert('Combo sugerido para ' + buyerLabel + ':\n\n' + lines +
+          '\n\nConsidera armar un solo SKU/pack con estas cantidades para que la próxima compra sea una sola etiqueta de envío en vez de varias.');
+};
+
+window.sendVolumeOffer = function(accountId, packId, buyerLabel) {
+    var defaultMsg = 'Hola! Vimos que nos has comprado varias veces, gracias por tu preferencia. ' +
+        'Si juntas tu próximo pedido en una sola compra te podemos ofrecer un descuento por volumen. ¿Te interesa?';
+    var text = prompt('Mensaje para ' + buyerLabel + ' (máx 350 caracteres, se manda por el chat de Mercado Libre):', defaultMsg);
+    if (!text) return;
+    if (text.length > 350) { alert('El mensaje tiene ' + text.length + ' caracteres — el límite de ML es 350.'); return; }
+    fetch('/api/wholesale/send-offer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({account_id: accountId, pack_id: packId, text: text}),
+    })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.ok) { alert('Mensaje enviado.'); }
+            else { alert('No se pudo enviar: ' + (d.error || 'error desconocido')); }
+        })
+        .catch(function(e) { alert('Error: ' + e); });
 };
 </script>
 

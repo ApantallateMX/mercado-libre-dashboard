@@ -6329,6 +6329,7 @@ async def get_wholesale_candidates(account_id: str, platform: str = "ml", days: 
             "total_ganancia_neta": round(b["total_ganancia_neta"], 2),
             "last_order_date": b["last_order_date"],
             "last_order_id": b["last_order_id"],
+            "order_ids": sorted(b["order_ids"], reverse=True),
             "skus": [{"sku": s, "qty": q} for s, q in sorted(b["skus"].items(), key=lambda x: -x[1])],
         })
     candidates.sort(key=lambda c: (-c["order_count"], -c["total_qty"]))

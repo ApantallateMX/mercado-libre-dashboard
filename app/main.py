@@ -1052,7 +1052,6 @@ _PATH_TO_SECTION: dict[str, str] = {
     "/ads":              "ads",
     "/health":           "salud",
     "/returns":          "devoluciones",
-    "/mayoreo":          "mayoreo",
     "/planning":         "planning",
     "/facturacion":      "facturacion",
     "/stock-sync":       "sync",
@@ -1066,7 +1065,6 @@ _SECTION_FIRST_URL: dict[str, str] = {
     "ads":          "/ads",
     "salud":        "/health",
     "devoluciones": "/returns",
-    "mayoreo":      "/mayoreo",
     "planning":     "/planning",
     "facturacion":  "/facturacion",
     "sync":         "/stock-sync",
@@ -1092,7 +1090,6 @@ _PATH_TO_TAB: dict[str, tuple[str, str]] = {
     "/ads":              ("ml", "ads"),
     "/health":           ("ml", "salud"),
     "/returns":          ("ml", "devoluciones"),
-    "/mayoreo":          ("ml", "mayoreo"),
     "/planning":         ("ml", "planning"),
     "/facturacion":      ("ml", "facturacion"),
     "/stock-sync":       ("ml", "sync"),
@@ -1104,7 +1101,6 @@ _ML_TAB_URL = {
     "dashboard": "/dashboard", "multidashboard": "/multi-dashboard",
     "ventas": "/orders", "productos": "/items",
     "ads": "/ads", "salud": "/health", "devoluciones": "/returns",
-    "mayoreo": "/mayoreo",
     "planning": "/planning", "facturacion": "/facturacion", "sync": "/stock-sync",
     "deuda": "/deuda-empresa",
 }
@@ -1112,7 +1108,6 @@ _AMZ_TAB_URL = {
     "dashboard": "/amazon?tab=dashboard", "ventas": "/amazon?tab=ventas",
     "productos": "/amazon/products", "salud": "/amazon?tab=salud",
     "fba": "/amazon?tab=fba", "returns": "/amazon/returns",
-    "mayoreo": "/mayoreo",
 }
 
 
@@ -1151,8 +1146,6 @@ def _derive_audit_section(path: str) -> str:
         return "Reclamos"
     if "/returns" in p:
         return "Devoluciones"
-    if "/mayoreo" in p:
-        return "Oportunidades Mayoreo"
     if any(x in p for x in ("/stock", "/inventory", "/distribucion")):
         return "Stock"
     if "/amazon" in p:
@@ -1536,10 +1529,6 @@ _NAV_TAB_DEFS = [
          ml_href="/returns", amz_href="/amazon/returns",
          ml_active=["returns"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab="devoluciones", amz_tab="returns", admin_only=False, badge="returns"),
-    dict(id="mayoreo", label="Mayoreo", icon="🤝",
-         ml_href="/mayoreo", amz_href="/mayoreo",
-         ml_active=["mayoreo"], amz_active=None, amz_uses_dispatcher=False,
-         ml_tab="mayoreo", amz_tab=None, admin_only=False, badge=None),
     dict(id="planning", label="Planeación", icon="⬡",
          ml_href="/planning", amz_href="/planning",
          ml_active=["planning"], amz_active=None, amz_uses_dispatcher=False,
@@ -22957,23 +22946,6 @@ async def returns_page(request: Request):
     ctx = await _accounts_ctx(request)
     return templates.TemplateResponse(request, "returns.html", {        "user": user,
         "active": "returns",
-        **ctx
-    })
-
-
-@app.get("/mayoreo", response_class=HTMLResponse)
-async def mayoreo_page(request: Request):
-    """Oportunidades Mayoreo — detecta compradores recurrentes/mayoristas
-    (aprobado por Jovan 2026-08-27, ver análisis de riesgo con
-    marketplace-strategist en DEVLOG). Acción dentro de plataforma solamente
-    -- NUNCA exportar contacto para vender por fuera (viola ToS ML/Amazon)."""
-    user = await get_current_user()
-    if not user:
-        return templates.TemplateResponse(request, "no_session.html", {})
-    ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "mayoreo.html", {
-        "user": user,
-        "active": "mayoreo",
         **ctx
     })
 
