@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-26 (4) — FIX: claims_history nunca corría sola + FEAT: reclamos por categoría en Returns
+
+Continuación directa de la investigación de Experiencia de Compra (entrada de arriba). Jovan pidió
+explícitamente no quedarse en resolver un reclamo puntual: "debemos mostrar los problemas,
+reclamos, retornos, etc" de forma permanente en el sistema, no investigar a mano cada vez.
+
+**Root cause real (commit `212bc67`)**: `_save_ml_claims_bg()` (la función que baja reclamos de ML
+y los guarda en `claims_history`) solo se disparaba manualmente desde
+`POST /api/planning/sync-claims` — **nunca tuvo un loop automático de fondo**, a diferencia de casi
+todo lo demás en este proyecto (sync de listings, stock, reputación, etc.). Si nadie apretaba el
+botón de "Actualizar reclamos" en la pantalla de Returns, la tabla se quedaba desactualizada
+indefinidamente — hallazgo real: 258 reclamos confirmados vía API en vivo vs. ~1 fila local para
+una categoría completa.
+
+**Fix**: `_claims_sync_loop()` nuevo, registrado en el arranque junto a los demás loops (`start_up`),
+corre cada 3h y reutiliza el guard interno de 1h que `_save_ml_claims_bg()` ya tenía (nunca se
+duplica trabajo). Verificado en producción tras el deploy: pasó de datos casi vacíos a **311 SKUs
+con reclamos reales** para APANTALLATEMX en el rango de 180 días.
+
+**FEAT — reclamos por categoría en `/api/returns/sku-claim-rate`**: nuevo campo `category` por SKU
+(join contra `bm_sku_master`) + `categories_summary` (rollup: reclamos y SKUs afectados por
+categoría). Motivo: la Experiencia de Compra de ML puede heredarse de TODA la categoría cuando un
+SKU puntual no tiene suficiente historial propio (ver
+`.claude/memory/reference_ml_purchase_experience_api.md`) — verlo agrupado hace visible el patrón
+sin cruzar reclamos a mano. Verificado con datos reales de producción: APANTALLATEMX tiene 1,215
+reclamos concentrados en Televisions (144 SKUs, $7.4M MXN) y LUTEMAMEXICO tiene 21 reclamos en solo
+2 SKUs de Air Conditioners — señales que antes eran invisibles en la vista por SKU individual.
+UI actualizada en `returns.html` (columna Categoría + chips de resumen arriba de la tabla).
+
+---
+
 ## 2026-08-26 (3) — FIX + INVESTIGACIÓN: endpoint real de Experiencia de Compra ML + causa raíz del bloqueo de deal en el piloto
 
 Al intentar activar el deal del 10% en el piloto de SKUs Estancados (`MLM5479436194`), ni
