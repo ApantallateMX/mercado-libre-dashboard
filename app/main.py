@@ -18022,6 +18022,38 @@ async def diag_stagnation_advance_cycle(token: str = "", payload: dict = Body(..
     return JSONResponse(result)
 
 
+@app.get("/api/diag/sku-sales-profit")
+async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365):
+    """Ventas y ganancia real de un SKU (order_history), todas las cuentas/plataformas.
+    Solo lectura. Respuesta rápida para preguntas directas tipo '¿cuánto vendimos de X?'."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    bm_key = normalize_to_bm_sku(sku.strip().upper())
+    import aiosqlite as _aio_ssp
+    async with _aio_ssp.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_ssp.Row
+        rows = await (await db.execute(
+            """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
+                      SUM(unit_price*quantity) revenue, SUM(ganancia_neta) ganancia,
+                      MIN(order_date) d1, MAX(order_date) d2
+               FROM order_history
+               WHERE sku = ? AND order_date >= date('now', ?)
+                 AND status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
+               GROUP BY platform, account_id""",
+            (bm_key, f"-{days} days"),
+        )).fetchall()
+    by_account = [dict(r) for r in rows]
+    totals = {
+        "orders": sum(r["n"] for r in by_account),
+        "qty": sum(r["qty"] or 0 for r in by_account),
+        "revenue_mxn": round(sum(r["revenue"] or 0 for r in by_account), 2),
+        "ganancia_neta_mxn": round(sum(r["ganancia"] or 0 for r in by_account), 2),
+    }
+    return {"sku": bm_key, "days": days, "totals": totals, "by_account": by_account}
+
+
 @app.post("/api/diag/bulk-sku-lookup")
 async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
     """Diagnóstico externo: cruza un set arbitrario de SKUs contra
