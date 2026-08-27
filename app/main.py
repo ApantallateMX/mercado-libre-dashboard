@@ -1613,7 +1613,15 @@ def _build_nav_tabs(active_platform: str, dashboard_user) -> list:
         if hidden_here:
             continue
         tab_key = t.get("amz_tab") if active_platform == "amz" else t.get("ml_tab")
-        if tab_key and _sec and not user_store.has_tab_access(_sec, active_platform, tab_key):
+        # FIX 2026-08-27: admin nunca debía filtrarse por allowed_sections aquí --
+        # AuthMiddleware (línea ~1185) ya bypasea esta misma restricción para
+        # role=="admin" al validar acceso a la PÁGINA, pero este filtro de nav no
+        # lo hacía -- un admin con allowed_sections no vacío (aunque no incluyera
+        # el tab nuevo) podía entrar por URL directa pero no lo veía en el menú.
+        # Mismo patrón de inconsistencia ya documentado para "ml.sync" (ver
+        # project_permission_tree_vs_page_admin_check_inconsistency), esta vez
+        # entre nav y middleware en vez de entre página y árbol de permisos.
+        if tab_key and _sec and not is_admin and not user_store.has_tab_access(_sec, active_platform, tab_key):
             continue
         href = t["amz_href"] if active_platform == "amz" else t["ml_href"]
         out.append({**t, "href": href, "available": href is not None})
