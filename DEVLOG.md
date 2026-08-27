@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-26 (3) — FIX + INVESTIGACIÓN: endpoint real de Experiencia de Compra ML + causa raíz del bloqueo de deal en el piloto
+
+Al intentar activar el deal del 10% en el piloto de SKUs Estancados (`MLM5479436194`), ni
+`PRICE_DISCOUNT` ni `SELLER_CAMPAIGN` tenían candidato disponible. Jovan reportó (con captura) que
+el panel de ML mostraba "Experiencia: 30, Con problemas" para ese listing — el código existente
+(`meli_client.get_purchase_experience()`) llamaba `/marketplace/items/{id}/purchase_experience` y
+regresaba 403 "Invalid caller.id" siempre, escondido por un `try/except` que lo devolvía como `{}`
+(indistinguible de "sin penalización").
+
+**Root cause real (commit `9d11186`)**: esa ruta nunca existió como recurso real de la API de ML.
+Investigado contra `developers.mercadolibre.com` (WebSearch + curl directo, la doc bloqueaba
+WebFetch): el endpoint correcto es `/reputation/user_products/{user_product_id}/purchase_experience/
+integrators?locale=es_MX` — por `user_product_id`, no `item_id` (la ruta por item_id existe pero
+siempre redirige 302 al recurso real). Corregido y verificado en vivo: `reputation.value=30,
+color=red`, con `reasoning`/`consequence`/`recommendations` reales.
+
+**Hallazgo clave del `reasoning`**: el score puede heredarse de TODA la categoría de la cuenta
+("como no tenemos suficiente información, lo calculamos a partir de tus ventas de productos en la
+misma categoría"), no del item puntual — confirmado: 0 reclamos/reseñas reales en `SNEE000054`
+específicamente (verificado vía API en vivo, 3 fuentes: reviews, claims v2, claims_history local).
+
+**Causa raíz real, encontrada cruzando 258 reclamos reales de la cuenta (API en vivo) contra
+`order_history`**: solo 2 reclamos de toda la categoría "Exercise Equipment", ambos de `SNEE000029`
+(no del SKU piloto). Uno es de un listing FULL → "No afecta tu reputación" (ML se atribuye el
+daño a sí mismo). El otro es `cross_docking` (envío propio) → cerrado con reembolso por producto
+dañado — este es el que probablemente sí pesa contra la reputación de la categoría completa.
+
+**Bug adicional encontrado en el camino**: `claims_history` (tabla local) tenía 0 filas para esta
+categoría completa pese a 258 reclamos reales confirmados vía API — la tabla local está muy
+incompleta para SKUs de bajo volumen. No corregido en esta sesión (fuera de alcance), documentado
+como pendiente.
+
+**Conocimiento capitalizado**: sección nueva completa en `.claude/agents/marketplace-ads-strategist.md`
+(commit `7ffc1bf`) con el endpoint real, la metodología de cruce de reclamos, y la distinción
+FULL/no-FULL — para que el agente ya no dé recomendaciones de promociones ciego a este gate real.
+También memorias nuevas: `reference_ml_purchase_experience_api`, `project_skus_estancados_feature`,
+`feedback_no_rendirse_investigar_a_fondo`.
+
+**Pendiente real**: revisar empaque/manejo de envíos `cross_docking` de `SNEE000029` (causa con
+evidencia directa); construir el gate de Experiencia dentro de `get_stagnation_diagnosis()`
+(propuesto, no implementado); reintentar el deal del piloto una vez mejore la categoría; y decidir
+si vale la pena arreglar el gap de sync de `claims_history`.
+
+---
+
 ## 2026-08-26 (2) — FEAT: gate de precio + memoria de ciclo/color para la cascada de SKUs estancados
 
 Continuación directa de la entrada de abajo (mismo día). Se enriqueció el
