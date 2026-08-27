@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-27 (2) — FEAT: monitoreo diario de Experiencia de Compra + Calidad por listing
+
+Pedido de Jovan tras el caso SNEE000054 (deal bloqueado por Experiencia 30/100 descubierta ya
+tarde): agregar Calidad/Experiencia de Compra al dashboard para reaccionar antes, no solo cuando ya
+truena. ML no tiene endpoint bulk para esto (1-2 llamadas por item vía `get_purchase_experience` /
+`get_item_health`) — correrlo sobre todo el catálogo (~9,600 SKUs) arriesgaba rate limit sin
+aportar señal real, así que se acotó con 2 decisiones explícitas de Jovan:
+
+- **Scope**: solo listings `status='active'` con **al menos 1 venta real alguna vez** en
+  `order_history` (histórico completo, sin ventana de tiempo — lo que importa es si el listado
+  sigue vivo, no cuándo fue la última venta). 1,118 items en scope vs ~9,600 del catálogo completo.
+- **Cadencia**: 1x al día (`_item_experience_sync_loop`, madrugada). El score se calcula sobre
+  ventas/reclamos acumulados — no cambia en horas, correrlo más seguido no da más señal.
+
+Nueva tabla `item_experience_snapshots` (histórico diario, mismo patrón que `reputation_snapshots`
+pero a nivel item) + `GET /api/diag/item-experience?sku=X` (último valor por item_id + tendencia de
+14 días). Verificado con el piloto real: `MLM5479436194` → Experiencia 30/100 roja ("Mala") vs
+Calidad 80/100 ("Profesional") — confirma que son señales distintas, ambas necesarias.
+
+De paso, revisados los 4 listings activos de SNEE000054 en APANTALLATEMX: 2 tienen título casi
+idéntico (`MLM2708205591` y `MLM5479436194`, ambas "Sperax Portátil Vibratoria...159kg") — decisión
+de Jovan: no cerrarlos, son oportunidades de venta separadas, se quedan como están.
+
+Pendiente: capa visual en el dashboard (semáforo por SKU en `products_stock_issues.html`).
+
+---
+
 ## 2026-08-27 — FIX: precio base parejo entre cuentas + ml_listings desactualizado (2 items cerrados en ML seguían "active")
 
 Corrección directa de Jovan al corte de precio de ayer: "todas las cuentas deben ser similares en
