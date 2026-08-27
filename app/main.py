@@ -19647,6 +19647,33 @@ async def diag_inspect_claim(token: str = "", claim_id: str = Query(""), account
     }
 
 
+@app.post("/api/diag/mark-listing-closed")
+async def diag_mark_listing_closed(token: str = "", payload: dict = Body(...)):
+    """Corrige ml_listings.status para item_ids confirmados como cerrados/eliminados
+    en ML en vivo -- caso real 2026-08-26: 2 de 3 publicaciones de un SKU en
+    BLOWTECHNOLOGIES seguían como 'active' en nuestra tabla pero ML ya las tenía
+    'closed'/sub_status 'deleted' (confirmado vía GET /items/{id} antes de este
+    fix, no se asume nada). No dispara ningún sync completo -- corrección puntual,
+    solo lectura previa + 1 UPDATE por item_id confirmado.
+
+    Body: {"item_ids": ["MLM...", "MLM..."]}
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    item_ids = payload.get("item_ids") or []
+    if not isinstance(item_ids, list) or not item_ids:
+        return JSONResponse({"error": "item_ids (lista) requerido"}, status_code=400)
+
+    import aiosqlite as _aio_mlc
+    updated = []
+    async with _aio_mlc.connect(DATABASE_PATH) as db:
+        for iid in item_ids:
+            await db.execute("UPDATE ml_listings SET status = 'closed' WHERE item_id = ?", (iid,))
+            updated.append(iid)
+        await db.commit()
+    return {"updated": updated}
+
+
 @app.get("/api/diag/reset-claim-comments")
 async def diag_reset_claim_comments(token: str = ""):
     """One-time cleanup: limpia buyer_comment en claims_history. Antes se guardaban
