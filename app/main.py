@@ -16263,6 +16263,13 @@ async def diag_upload_recovered_db(token: str = "", file: UploadFile = File(...)
     import os as _os_upl
     db_path = Path(DATABASE_PATH)
     tmp_path = db_path.with_suffix(".db.incoming")
+    # El tokens.db corrupto (~410MB) + el nuevo (~422MB) no caben juntos en un
+    # volumen de 500MB -- hay que liberar el viejo ANTES de recibir la subida
+    # (ya está respaldado en S3 crudo, no se pierde nada real al borrarlo).
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        p = Path(str(db_path) + suffix)
+        if p.exists():
+            p.unlink()
     written = 0
     with open(tmp_path, "wb") as f:
         while True:
