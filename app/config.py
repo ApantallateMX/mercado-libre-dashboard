@@ -180,6 +180,16 @@ HIGGSFIELD_SECRET  = os.getenv("HIGGSFIELD_SECRET", "")
 # API Key externa — para el planeador de flujo de caja y otros sistemas externos
 CASHFLOW_API_KEY = os.getenv("CASHFLOW_API_KEY", "")
 
+# ── Replicación tokens.db Railway → Coolify (2026-08-27) ──────────────────
+# Railway y Coolify corren el mismo código pero cada uno con SU PROPIO
+# tokens.db en su propio volumen -- nunca se sincronizaban (confirmado
+# 2026-08-27: 403MB vs 186MB, completamente desincronizados). "primary" sube
+# snapshots a S3 periódicamente, "standby" los descarga y reemplaza su copia
+# local. Vacío = deshabilitado (default seguro para cualquier ambiente nuevo).
+DB_REPLICA_ROLE = os.getenv("DB_REPLICA_ROLE", "").strip().lower()
+DB_SNAPSHOT_INTERVAL_MIN = int(os.getenv("DB_SNAPSHOT_INTERVAL_MIN", "20"))
+DB_SNAPSHOT_KEEP_LAST = int(os.getenv("DB_SNAPSHOT_KEEP_LAST", "6"))
+
 # Anthropic Claude API (for AI features)
 import base64 as _b64
 

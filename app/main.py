@@ -827,6 +827,11 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_ml_messages_wide_backfill_loop())
     asyncio.create_task(_ml_messages_unread_poll_loop())
     asyncio.create_task(token_store.feedback_sync_loop())
+    from app.config import DB_REPLICA_ROLE as _DB_REPLICA_ROLE
+    if _DB_REPLICA_ROLE == "primary":
+        asyncio.create_task(_db_replication_push_loop())
+    elif _DB_REPLICA_ROLE == "standby":
+        asyncio.create_task(_db_replication_pull_loop())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 5 min (bajado de 10 min 2026-08-18) para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
@@ -16494,6 +16499,79 @@ async def diag_wal_checkpoint(token: str = ""):
         })
     except Exception as _e:
         return JSONResponse({"error": str(_e), "type": type(_e).__name__}, status_code=500)
+
+
+@app.post("/api/diag/db-replication-push-now")
+async def diag_db_replication_push_now(token: str = ""):
+    """Fuerza un snapshot+subida a S3 ahora mismo (mismo código que corre
+    cada DB_SNAPSHOT_INTERVAL_MIN en el rol "primary") -- para probar el
+    mecanismo sin esperar al loop."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import db_replication as _dbrepl
+    from app.config import DB_SNAPSHOT_KEEP_LAST as _KEEP
+    result = await asyncio.to_thread(_dbrepl.push_snapshot_sync, _KEEP)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 500)
+
+
+@app.post("/api/diag/db-replication-pull-now")
+async def diag_db_replication_pull_now(token: str = ""):
+    """Fuerza descargar el snapshot más reciente de S3 y reemplazar tokens.db
+    local (mismo código que corre cada DB_SNAPSHOT_INTERVAL_MIN en el rol
+    "standby") -- DESCARTA cualquier dato escrito localmente desde el último
+    pull. Ver app/services/db_replication.py para el detalle de la decisión."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import db_replication as _dbrepl
+    result = await asyncio.to_thread(_dbrepl.pull_latest_and_replace_sync)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 500)
+
+
+@app.get("/api/diag/db-replication-status")
+async def diag_db_replication_status(token: str = ""):
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import db_replication as _dbrepl
+    from app.config import DB_REPLICA_ROLE as _ROLE, DB_SNAPSHOT_INTERVAL_MIN as _INTERVAL
+    return JSONResponse({"role": _ROLE or "(deshabilitado)", "interval_min": _INTERVAL, **_dbrepl.get_status()})
+
+
+async def _db_replication_push_loop():
+    """Rol "primary" (Railway): sube un snapshot consistente de tokens.db a
+    S3 cada DB_SNAPSHOT_INTERVAL_MIN minutos, para que el rol "standby"
+    (Coolify) lo descargue y deje de estar desincronizado (ver
+    app/services/db_replication.py -- incidente 2026-08-27, 403MB vs 186MB
+    sin sincronizar nunca)."""
+    from app.config import DB_SNAPSHOT_INTERVAL_MIN as _INTERVAL, DB_SNAPSHOT_KEEP_LAST as _KEEP
+    from app.services import db_replication as _dbrepl
+    await asyncio.sleep(120)  # dejar que el arranque termine antes del primer snapshot
+    while True:
+        try:
+            result = await asyncio.to_thread(_dbrepl.push_snapshot_sync, _KEEP)
+            if not result.get("ok"):
+                logger.warning("[DB-REPLICATION] push falló: %s", result.get("error"))
+        except Exception as _e:
+            logger.warning("[DB-REPLICATION] push loop excepción: %s", _e)
+        await asyncio.sleep(_INTERVAL * 60)
+
+
+async def _db_replication_pull_loop():
+    """Rol "standby" (Coolify): descarga el snapshot más reciente subido por
+    "primary" y reemplaza tokens.db local cada DB_SNAPSHOT_INTERVAL_MIN
+    minutos. Decisión explícita de Jovan (2026-08-27): Coolify no se usa como
+    app viva hoy -- aceptable descartar cualquier escritura local propia en
+    cada ciclo."""
+    from app.config import DB_SNAPSHOT_INTERVAL_MIN as _INTERVAL
+    from app.services import db_replication as _dbrepl
+    await asyncio.sleep(180)  # esperar un poco más que el primary al arrancar juntos
+    while True:
+        try:
+            result = await asyncio.to_thread(_dbrepl.pull_latest_and_replace_sync)
+            if not result.get("ok"):
+                logger.warning("[DB-REPLICATION] pull falló: %s", result.get("error"))
+        except Exception as _e:
+            logger.warning("[DB-REPLICATION] pull loop excepción: %s", _e)
+        await asyncio.sleep(_INTERVAL * 60)
 
 
 @app.get("/api/system/disk-usage")
