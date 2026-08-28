@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 — FEAT: replicación tokens.db Railway → Coolify (failover real)
+
+Coolify corría el mismo código que Railway (`git push mi2 main`) pero con su propia
+base de datos, nunca sincronizada desde el deploy inicial (confirmado: 403MB en
+Railway vs 186MB en Coolify — meses de desincronización sin que nadie lo notara).
+Si Railway se caía, Coolify no servía como failover real: tenía datos viejos.
+
+Diseño investigado por el especialista backend-integrations-engineer, implementado
+tras aprobación explícita de Jovan (aceptando que Coolify, al no usarse como app
+viva hoy, puede descartar cualquier escritura local propia en cada ciclo):
+
+- `app/services/db_replication.py` — `push_snapshot_sync()` (rol `primary`,
+  Railway): serializa tokens.db en memoria (`sqlite3.Connection.serialize()`, sin
+  tocar disco local) y sube a S3 con verificación byte a byte. `pull_latest_and_replace_sync()`
+  (rol `standby`, Coolify): descarga el snapshot más reciente y reemplaza la copia
+  local con el mismo patrón `quick_check` → `os.replace()` atómico usado en la
+  recuperación de la corrupción de `tokens.db` ese mismo día (ver entrada anterior).
+- `DB_REPLICA_ROLE` / `DB_SNAPSHOT_INTERVAL_MIN` (20min) / `DB_SNAPSHOT_KEEP_LAST` (6).
+- Endpoints diag manuales: `db-replication-status/push-now/pull-now`.
+
+Verificado en producción real (no solo local): Railway hizo su primer push
+automático solo; Coolify, tras un deploy manual (el primer intento vía "redeploy
+after saving" del panel de secrets solo reinició el contenedor con código viejo,
+hubo que disparar un deploy explícito), pasó de 186.5MB a 403.3MB en un pull
+manual — la app siguió respondiendo 200 después del reemplazo en vivo del archivo.
+
+De paso, Jovan generó un "Agent app token" nuevo en `status-dashboard.mi2.com.mx`
+(logs + deploy status + set secrets sin pasar por la UI) — guardado en
+`.claude/memory/reference_coolify_app_token.md` (gitignored), mismo trato que el
+token de Railway ya existente.
+
+---
+
 ## 2026-08-27 (8) — FIX: starvation real en backfill de comprador (parte 2) + logjam en backfill de zonas
 
 **Parte 2 del backfill de comprador**: verificado con datos reales (0 compradores exclusivos de
