@@ -7,6 +7,42 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (6) — FIX: auditoría completa de Deals — permisos, margen, VOLUME
+
+Auditoría fresca de la Central de Promociones ML (2 especialistas en paralelo, código
++ negocio, verificados en vivo contra las 4 cuentas reales) — no repite lo ya arreglado
+el 2026-08-12, encuentra 8 hallazgos nuevos:
+
+1. **Permisos** — los 3 endpoints de escritura (activar/cancelar promoción,
+   deal-config) no revisaban `PERMISSION_TREE`. Un usuario sin acceso a Deals podía
+   escribirlos directo por API aunque la UI le ocultara el botón. Ahora usan
+   `_require_subtab("ml","productos","deals")`, mismo patrón ya usado en 17 endpoints
+   más. Verificado con usuario restringido real: 403 en los 3.
+2. **Guardrail de margen** — "activar deal en 1 clic" no revisaba costo/margen real
+   antes de escribir a ML, solo la ventana de precio de ML. Nuevo endpoint responde
+   409 con el margen real calculado si sale negativo; requiere `confirm_negative_margin`
+   explícito para forzar (liquidación deliberada). Verificado con ítem real.
+3. **Editar precio de un deal activo** estaba roto para `SELLER_CAMPAIGN`/`LIGHTNING`/
+   `MARKETPLACE_CAMPAIGN`/`VOLUME` — usaba el PUT real de ML que existía sin usarse.
+4. Reintentos + aviso de datos parciales cuando ML corta la paginación de una campaña
+   grande a medio camino (confirmado en vivo).
+5. El DELETE de promoción ahora resuelve la cuenta igual que sus endpoints hermanos.
+6. Semáforo compartido — antes hasta 20+ requests concurrentes a ML por un solo clic.
+7. **VOLUME visible** — confirmado en vivo: campañas activas reales en APANTALLATEMX y
+   BLOWTECHNOLOGIES con 1,500+ items, hasta 60% off no combinable, completamente
+   invisibles antes. Ahora se muestran como informativo y se excluyen del pool de
+   candidatos a deal nuevo.
+8. El score de candidatos ahora penaliza si no se gana el catálogo (señal
+   is_winner/total_competitors ya existente, solo faltaba conectarla).
+
+De paso se armó un playbook de estrategia (cuándo usar cada tipo de promoción, cómo
+decidir el % correcto, cómo usar la señal de buy-box, rutina operativa) — publicado
+como artifact para Jovan.
+
+Verificado en producción: Railway y Coolify sanos tras el deploy.
+
+---
+
 ## 2026-08-28 (5) — FEAT: Developer Manual + User Manual — conformance MI2 §14d/§17a
 
 Cierra los últimos 2 checks de documentación pendientes del gate de conformance MI2
