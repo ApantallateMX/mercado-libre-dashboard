@@ -580,6 +580,27 @@ async def init_db():
                 created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # FEATURE 2026-08-28 (Fix 3 de la auditoría de concentración de stock,
+        # aprobado por Jovan): persiste "quién ganó este SKU" para que (a) la
+        # histéresis de stock_winner.resolve_winner() tenga con qué comparar
+        # de un ciclo al siguiente (evita que el ganador "voltee" por ruido de
+        # una corrida a otra), y (b) una UI pueda mostrar el ganador actual sin
+        # disparar llamadas nuevas a ML/BM por request (mismo riesgo de 429 en
+        # cascada ya documentado, DEVLOG 2026-08-27). winner_account_id es
+        # user_id (ML) o seller_id (Amazon) según winner_platform -- no se
+        # llama "winner_user_id" porque también puede ganar una cuenta Amazon.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_winner_cache (
+                base_sku          TEXT PRIMARY KEY,
+                winner_platform   TEXT NOT NULL DEFAULT '',
+                winner_account_id TEXT NOT NULL DEFAULT '',
+                winner_nickname   TEXT NOT NULL DEFAULT '',
+                score             REAL NOT NULL DEFAULT 0,
+                method            TEXT NOT NULL DEFAULT '',
+                period_used       TEXT NOT NULL DEFAULT '',
+                computed_at       REAL NOT NULL DEFAULT 0
+            )
+        """)
         # ─────────────────────────────────────────────────────────────────
         # TABLA: ml_listings — caché local de listings ML
         # Sincronizado en background; permite leer Stock tab sin llamar API
@@ -4832,6 +4853,28 @@ async def get_all_sku_platform_rules(user_id: str = "") -> dict:
     return result
 
 
+async def get_sku_platform_rules_for_sku(sku: str) -> dict[str, bool]:
+    """{platform_id: enabled_bool} de TODAS las reglas existentes para un SKU
+    (de cualquier user_id que las haya creado) -- usado por la UI de
+    'Concentrar' (Fix 4) para saber si un SKU ya está 'fijado' y en qué cuenta."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT platform_id, enabled FROM sku_platform_rules WHERE sku=?",
+            (sku.upper(),),
+        )).fetchall()
+        return {r["platform_id"]: bool(r["enabled"]) for r in rows}
+
+
+async def delete_sku_platform_rules_for_sku(sku: str) -> None:
+    """Borra TODAS las reglas de un SKU (de cualquier user_id) -- 'des-fijar'
+    un ganador (Fix 4): vuelve a dejar todas las plataformas habilitadas para
+    ese SKU, en vez de dejar filas enabled=0 huérfanas."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute("DELETE FROM sku_platform_rules WHERE sku=?", (sku.upper(),))
+        await db.commit()
+
+
 async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enabled: bool) -> None:
     """Habilita o deshabilita una plataforma para un SKU específico, por cuenta."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
@@ -4840,6 +4883,54 @@ async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enable
                VALUES (?, ?, ?, ?)
                ON CONFLICT(user_id, sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
             (user_id, sku.upper(), platform_id, 1 if enabled else 0),
+        )
+        await db.commit()
+
+
+async def get_stock_winner_cache_one(base_sku: str) -> dict | None:
+    """Ganador persistido de un SKU (o None si nunca se calculó). Usado por
+    stock_winner.resolve_winner() para la histéresis (Fix 1/3 auditoría
+    concentración 2026-08-28)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM stock_winner_cache WHERE base_sku=?", (base_sku.upper(),)
+        )).fetchone()
+        return dict(row) if row else None
+
+
+async def get_all_stock_winner_cache() -> dict[str, dict]:
+    """{base_sku: row} de todos los ganadores persistidos -- para la UI de
+    'Concentrar' (Fix 4) sin tener que consultar 1 por 1."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute("SELECT * FROM stock_winner_cache")).fetchall()
+        return {r["base_sku"]: dict(r) for r in rows}
+
+
+async def upsert_stock_winner_cache(
+    base_sku: str, winner_platform: str, winner_account_id: str,
+    winner_nickname: str, score: float, method: str, period_used: str,
+) -> None:
+    """Guarda/actualiza el ganador calculado para un SKU. Llamado desde
+    stock_winner.resolve_winner() cuando persist=True (solo en corridas
+    reales de sync, nunca en previews/dry-run -- ver docstring del módulo)."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            """INSERT INTO stock_winner_cache
+               (base_sku, winner_platform, winner_account_id, winner_nickname, score, method, period_used, computed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(base_sku) DO UPDATE SET
+                 winner_platform=excluded.winner_platform,
+                 winner_account_id=excluded.winner_account_id,
+                 winner_nickname=excluded.winner_nickname,
+                 score=excluded.score,
+                 method=excluded.method,
+                 period_used=excluded.period_used,
+                 computed_at=excluded.computed_at""",
+            (base_sku.upper(), winner_platform, winner_account_id, winner_nickname,
+             float(score), method, period_used, _t.time()),
         )
         await db.commit()
 

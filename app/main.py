@@ -15370,6 +15370,126 @@ async def stock_concentration_processed_skus_api(
     return {"skus": skus, "days": days, "count": len(skus)}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FIJAR GANADOR DE CONCENTRACIÓN (Fix 4 — auditoría stock 2026-08-28)
+# ═══════════════════════════════════════════════════════════════════════════
+# Reusa el mecanismo REAL ya existente (sku_platform_rules, el mismo que
+# consume _plan() en stock_sync_multi.py) en vez de inventar un estado nuevo:
+# "fijar" un ganador = dejar habilitado (enabled=1) SOLO su platform_id para
+# ese SKU y enabled=0 el resto de cuentas conocidas -- así _plan() nunca
+# vuelve a escribir cantidad > 0 en las demás cuentas para ese SKU, aunque el
+# score cambie en corridas futuras. NO existe hoy separación entre "sync de
+# cantidad" y "sync de metadata/título/fotos" en el proyecto -- este
+# mecanismo (y el sync automático en general) solo toca available_quantity,
+# nunca título/fotos, así que no hay nada que "seguir sincronizando" aparte.
+
+@app.post("/api/stock/concentration/fix-winner")
+async def stock_concentration_fix_winner_api(request: Request):
+    """Fija un SKU para que SOLO una cuenta reciba cantidad > 0 de aquí en
+    adelante (hasta que se quite con /unfix-winner).
+
+    Body: {"sku": "SNFN000941", "winner_platform": "ml"|"amazon", "winner_account_id": "123456"}
+    """
+    _require_subtab(request, "ml", "productos", "stock")
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+
+    sku = (body.get("sku") or "").strip().upper()
+    sku = sku.split("/")[0].strip()  # SKU combo "SNTV003363 / SNWM000001" -- solo el primero
+    winner_platform = (body.get("winner_platform") or "").strip().lower()
+    winner_account_id = (body.get("winner_account_id") or "").strip()
+
+    if not sku or not winner_platform or not winner_account_id:
+        return JSONResponse({"detail": "sku, winner_platform y winner_account_id son requeridos"}, status_code=400)
+    if winner_platform not in ("ml", "amazon"):
+        return JSONResponse({"detail": "winner_platform debe ser 'ml' o 'amazon'"}, status_code=400)
+
+    winner_pid = f"{'ml' if winner_platform == 'ml' else 'amz'}_{winner_account_id}"
+
+    from app.services.meli_client import _active_user_id as _ctx_uid
+    _setter_uid = str(_ctx_uid.get() or "")
+
+    all_ml  = await token_store.get_all_tokens()
+    all_amz = await token_store.get_all_amazon_accounts()
+    all_pids = (
+        [f"ml_{a.get('user_id', '')}" for a in all_ml if a.get("user_id")]
+        + [f"amz_{a.get('seller_id', '')}" for a in all_amz if a.get("seller_id")]
+    )
+    if winner_pid not in all_pids:
+        return JSONResponse({"detail": f"La cuenta {winner_pid} no está conectada"}, status_code=400)
+
+    for pid in all_pids:
+        await token_store.set_sku_platform_rule(_setter_uid, sku, pid, enabled=(pid == winner_pid))
+
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du:
+        try:
+            await user_store.log_action(
+                username=du["username"], user_id=du.get("id"),
+                action="fix_stock_winner", item_id=sku,
+                detail={"winner_platform": winner_platform, "winner_account_id": winner_account_id},
+                ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                section="Stock",
+            )
+        except Exception as e:
+            logger.warning(f"log_action falló para fix_stock_winner (sku={sku}) — {e}")
+
+    return {"ok": True, "sku": sku, "fixed_platform_id": winner_pid, "disabled_count": len(all_pids) - 1}
+
+
+@app.post("/api/stock/concentration/unfix-winner")
+async def stock_concentration_unfix_winner_api(request: Request):
+    """Quita la fijación de un SKU -- borra sus reglas de sku_platform_rules
+    (vuelve a dejar todas las plataformas habilitadas, en vez de dejar filas
+    enabled=0 huérfanas). Body: {"sku": "SNFN000941"}"""
+    _require_subtab(request, "ml", "productos", "stock")
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    sku = (body.get("sku") or "").strip().upper().split("/")[0].strip()
+    if not sku:
+        return JSONResponse({"detail": "sku es requerido"}, status_code=400)
+    await token_store.delete_sku_platform_rules_for_sku(sku)
+
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du:
+        try:
+            await user_store.log_action(
+                username=du["username"], user_id=du.get("id"),
+                action="unfix_stock_winner", item_id=sku, detail={},
+                ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                section="Stock",
+            )
+        except Exception as e:
+            logger.warning(f"log_action falló para unfix_stock_winner (sku={sku}) — {e}")
+
+    return {"ok": True, "sku": sku}
+
+
+@app.get("/api/stock/concentration/winner-status")
+async def stock_concentration_winner_status_api(
+    request: Request,
+    sku: str = Query(..., description="SKU base a consultar"),
+):
+    """Estado actual de 'fijación' de un SKU -- para que la UI muestre si ya
+    está fijado y en qué cuenta, sin recalcular nada (solo lee
+    sku_platform_rules, sin llamadas a ML/BM)."""
+    _require_subtab(request, "ml", "productos", "stock")
+    sku = sku.strip().upper().split("/")[0].strip()
+    rules = await token_store.get_sku_platform_rules_for_sku(sku)
+    enabled_pids = [pid for pid, en in rules.items() if en]
+    is_fixed = len(enabled_pids) == 1 and any(not en for pid, en in rules.items() if pid != enabled_pids[0])
+    return {
+        "sku": sku,
+        "fixed": is_fixed,
+        "fixed_platform_id": enabled_pids[0] if is_fixed else None,
+        "rules": rules,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DISTRIBUCIÓN DE STOCK — Reglas por cuenta + umbrales globales
 # ─────────────────────────────────────────────────────────────────────────────

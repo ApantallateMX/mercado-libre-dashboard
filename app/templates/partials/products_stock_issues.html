@@ -2359,16 +2359,24 @@ function concentrateItem(sku, title, bmAvail, btn) {
     btn.disabled = true;
     var origText = btn.textContent;
     btn.textContent = 'Analizando...';
-    fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
-        headers: {'ngrok-skip-browser-warning': 'true'}
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
+    // Preview + estado de fijación en paralelo -- winner-status es de solo
+    // lectura (sku_platform_rules), no dispara llamadas a ML/BM (Fix 4,
+    // auditoría de concentración 2026-08-28).
+    Promise.all([
+        fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        }).then(function(r) { return r.json(); }),
+        fetch('/api/stock/concentration/winner-status?sku=' + encodeURIComponent(sku), {
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        }).then(function(r) { return r.json(); }).catch(function() { return {fixed: false}; }),
+    ])
+    .then(function(results) {
+        var d = results[0];
+        var winnerStatus = results[1] || {};
         btn.disabled = false;
         btn.textContent = origText;
         if (d.error) { alert('Error al analizar SKU ' + sku + ':\n' + d.error); return; }
         var winner = d.winner || {};
-        var accounts = d.accounts || [];
         var stockDisp = bmAvail || d.total_stock || 0;
         var lines = ['SKU: ' + sku + ' — BM Disponible: ' + stockDisp];
         lines.push('');
@@ -2380,6 +2388,19 @@ function concentrateItem(sku, title, bmAvail, btn) {
             var repNote = (a.rep_factor && a.rep_factor !== 1.0) ? ' · rep=' + a.rep_factor.toFixed(2) + 'x' : '';
             lines.push(marker + '  ' + (a.nickname || a.user_id) + ': ' + (a.sold_30d||0) + ' v/30d · MeLi=' + (a.available_quantity||0) + repNote);
         });
+        if (d.manual_selection) {
+            lines.push('');
+            lines.push('⚠ Sin ventas confirmadas -- sugerencia basada en margen×reputación estimado, no en ventas reales.');
+        }
+        if (winner.margen_u !== undefined && winner.margen_u !== null) {
+            lines.push('Margen estimado del ganador: $' + Math.round(winner.margen_u) + ' MXN/u');
+        } else if (winner.user_id) {
+            lines.push('(margen no disponible -- sin costo BM confiable para este SKU, se usó solo velocidad×reputación)');
+        }
+        if (winnerStatus.fixed) {
+            lines.push('');
+            lines.push('🔒 Este SKU YA está fijado en ' + winnerStatus.fixed_platform_id + ' (las demás cuentas no reciben cantidad).');
+        }
         if (!winner.user_id) {
             lines.push('');
             lines.push('Sin ganador claro (producto nuevo o sin ventas en todas las cuentas)');
@@ -2428,6 +2449,27 @@ function concentrateItem(sku, title, bmAvail, btn) {
             if (zeroedSelf.length)   msg += '\nDuplicados zeoreados en ' + winnerNick + ': ' + zeroedSelf.join(', ');
             if (!zeroedOthers.length && !zeroedSelf.length) msg += '\n(No se encontraron otras cuentas con este SKU activo)';
             alert(msg);
+            // Fix 4 (auditoría concentración 2026-08-28): ofrecer fijar esta
+            // cuenta como única habilitada -- si no se fija, el próximo ciclo
+            // automático (o el score×margen del momento) podría reasignar el
+            // ganador a otra cuenta. Reusa sku_platform_rules (mismo
+            // mecanismo real que ya usa _plan()), no un estado nuevo.
+            var fixWinnerUid = (res.data.winner && res.data.winner.user_id) || winner.user_id;
+            if (winnerStatus && !winnerStatus.fixed && fixWinnerUid
+                && confirm('¿Fijar "' + winnerNick + '" como la ÚNICA cuenta habilitada para el SKU ' + sku + '?\n\n'
+                    + 'Las demás cuentas no volverán a recibir cantidad de este SKU hasta que quites la fijación manualmente '
+                    + '(vista Stock Sync → Configurar).')) {
+                fetch('/api/stock/concentration/fix-winner', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                    body: JSON.stringify({ sku: sku, winner_platform: 'ml', winner_account_id: fixWinnerUid })
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(fd) {
+                    if (fd.ok && typeof showToast === 'function') showToast('SKU ' + sku + ' fijado en ' + winnerNick, 'success');
+                })
+                .catch(function() {});
+            }
         })
         .catch(function(e) {
             btn.disabled = false;

@@ -34,6 +34,13 @@ import httpx
 
 from app.services.sku_utils import base_sku as _base_sku, extract_item_sku
 from app.services import token_store
+# NOTA: stock_winner se importa de forma diferida (dentro de las funciones que
+# lo usan) porque stock_winner.py importa constantes de ESTE módulo
+# (_REPUTATION_FACTOR, _ml_fee, _AMZ_FEE, _bm_base_for_key) -- un import a
+# nivel de módulo aquí crearía un ciclo real (este archivo no habría
+# terminado de definir esas constantes todavía cuando stock_winner intenta
+# leerlas). En tiempo de llamada ambos módulos ya están completamente
+# cargados.
 
 logger = logging.getLogger(__name__)
 
@@ -464,16 +471,75 @@ def _score(listing: dict) -> float:
     return net_price * max(1.0, velocity) * rep_factor
 
 
+def _listing_to_candidate(lst: dict) -> dict:
+    """Normaliza un listing de _collect_ml_listings/_collect_amz_listings al
+    candidato común de stock_winner.build_candidate().
+
+    OJO ventas 30d en ML: este loop automático NO tiene un "sold_30d" real
+    (a diferencia de stock_concentrator, que sí consulta órdenes reales de
+    los últimos 30 días por SKU). Fetch de órdenes reales por listing en un
+    loop que corre cada 5 min multiplicaría llamadas a la API de ML sobre
+    ~40 semáforos independientes ya existentes -- mismo patrón que causó el
+    incidente de 429 en cascada documentado en DEVLOG 2026-08-27. Se usa la
+    misma aproximación que ya usaba _score(): sold_quantity histórico del
+    item / (días activo / 30), igual que antes de esta consolidación.
+    Amazon sí trae sold_qty_30d real (viene de _sku_sales_cache, ya cacheado)."""
+    if lst["platform"] == "ml":
+        sold_qty = int(lst.get("sold_qty") or 0)
+        date_str = lst.get("date_created", "")
+        days_active = 30
+        if date_str:
+            try:
+                dt = datetime.fromisoformat(
+                    date_str.replace("Z", "").replace("T", " ").split(".")[0]
+                )
+                days_active = max(1, (datetime.utcnow() - dt).days)
+            except Exception:
+                pass
+        approx_30d = int(round(sold_qty / max(1.0, days_active / 30)))
+        return _winner_mod().build_candidate(
+            platform="ml", account_id=lst["account_id"], nickname=lst["account_id"],
+            ref=lst.get("item_id", ""), price=lst.get("price", 0),
+            sold_30d=approx_30d, sold_total=sold_qty,
+            rep_factor=lst.get("rep_factor", 1.0),
+            can_update=lst.get("can_update", True), status=lst.get("status", "active"),
+            extra=lst,
+        )
+    else:
+        return _winner_mod().build_candidate(
+            platform="amazon", account_id=lst["account_id"], nickname=lst["account_id"],
+            ref=lst.get("sku", ""), price=lst.get("price", 0),
+            sold_30d=lst.get("sold_qty_30d", 0), sold_total=lst.get("sold_qty_30d", 0),
+            rep_factor=1.0, can_update=lst.get("can_update", True),
+            status="active", extra=lst,
+        )
+
+
+def _winner_mod():
+    """Import diferido de stock_winner (ver nota al inicio del archivo)."""
+    from app.services import stock_winner
+    return stock_winner
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PLANIFICACIÓN DE DISTRIBUCIÓN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set, reduce_only: bool = False) -> list[dict]:
+async def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set, reduce_only: bool = False,
+                 cost_mxn: float | None = None, ship_cost_maps: dict | None = None,
+                 persist_winner: bool = True) -> list[dict]:
     """
     Calcula las actualizaciones necesarias para un SKU base.
 
     enabled_ids: set de "ml_{user_id}" o "amz_{seller_id}" habilitados para este SKU.
                  Si está vacío → todas las plataformas habilitadas.
+
+    cost_mxn/ship_cost_maps: pasados por el caller (batch, 1 query por ciclo
+    completo -- ver stock_winner.get_cost_map/get_shipping_cost_maps) para
+    que la función única de ganador (Fix 1 auditoría 2026-08-28) pueda usar
+    margen de contribución real en vez de solo velocidad×reputación.
+    persist_winner: False en previews/dry-run -- no debe pisar la histéresis
+    persistida solo por mostrar "qué pasaría".
 
     Retorna lista de {listing, new_qty, reason}.
     Solo incluye entradas donde new_qty != qty actual (evita API calls innecesarios).
@@ -513,9 +579,30 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set, reduce
                 updates.append({"listing": lst, "new_qty": 0, "reason": "bm_zero"})
 
     elif bm_avail < _threshold_for(updatable):
-        # Concentrar en la cuenta ganadora (mayor score) entre los updatable
-        scored  = sorted(updatable, key=_score, reverse=True)
-        winner  = scored[0]
+        # Concentrar en la cuenta ganadora -- función única de ganador (Fix 1
+        # auditoría 2026-08-28): margen de contribución real × unidades
+        # esperadas × reputación, con histéresis contra stock_winner_cache.
+        # Ver app/services/stock_winner.py para la fórmula completa y los
+        # fallbacks (sin costo confiable / sin ventas en ninguna cuenta).
+        candidates = [_listing_to_candidate(lst) for lst in updatable]
+        _wresult = await _winner_mod().resolve_winner(
+            base_sku, candidates, bm_avail, cost_mxn, ship_cost_maps,
+            persist=persist_winner,
+        )
+        _wcand = _wresult.get("winner")
+        winner = None
+        if _wcand is not None:
+            winner = next(
+                (lst for lst in updatable
+                 if lst["platform"] == _wcand["platform"] and lst["account_id"] == _wcand["account_id"]),
+                None,
+            )
+        if winner is None:
+            # No debería pasar si updatable no está vacío -- fallback defensivo
+            # para no dejar el SKU sin resolver (protege contra un bug futuro
+            # en el mapeo de candidatos).
+            logger.warning(f"[MULTI-SYNC] {base_sku}: stock_winner no devolvió candidato mapeable, fallback a _score()")
+            winner = sorted(updatable, key=_score, reverse=True)[0]
         for lst in updatable:
             new_qty = bm_avail if lst is winner else 0
             # Pausado con new_qty=0 → ya está apagado, skip
@@ -786,6 +873,21 @@ async def run_multi_stock_sync() -> dict:
         except Exception:
             all_rules = {}
 
+        # Costo BM + envío estimado real -- batch, 1 query para todo el ciclo
+        # (función única de ganador, Fix 1 auditoría 2026-08-28). Un fallo aquí
+        # no debe abortar el sync completo: _plan()/stock_winner ya manejan
+        # cost_mxn=None como "sin costo confiable" (fallback a velocidad).
+        try:
+            cost_map = await _winner_mod().get_cost_map(list(all_bases))
+        except Exception as e:
+            logger.warning(f"[MULTI-SYNC] Error obteniendo cost_map: {e}")
+            cost_map = {}
+        try:
+            ship_maps = await _winner_mod().get_shipping_cost_maps(list(all_bases))
+        except Exception as e:
+            logger.warning(f"[MULTI-SYNC] Error obteniendo ship_cost_maps: {e}")
+            ship_maps = {}
+
         # Pre-instanciar clientes (reutilizados por todos los SKUs)
         ml_clients: dict = {}
         for acc in ml_accounts:
@@ -840,7 +942,11 @@ async def run_multi_stock_sync() -> dict:
             listings  = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
             enabled   = set(all_rules.get(base, []))
 
-            updates = _plan(base, bm_avail, listings, enabled, reduce_only=ro)
+            updates = await _plan(
+                base, bm_avail, listings, enabled, reduce_only=ro,
+                cost_mxn=cost_map.get(base), ship_cost_maps=ship_maps,
+                persist_winner=True,
+            )
             if not updates:
                 _sync_progress["skus_done"] += 1
                 continue
@@ -977,22 +1083,31 @@ async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
             summary["status"] = "bm_down"
             return summary
 
-        # ── Recopilar listings solo de la cuenta seleccionada ─────────────────
+        # ── Recopilar listings de TODAS las cuentas (ML + Amazon) ─────────────
+        # FIX SOBREVENTA CROSS-CUENTA (2026-08-28, auditoría aprobada por Jovan):
+        # antes esta función solo recolectaba listings de la cuenta clickeada
+        # (_collect_ml_listings([acc])), así que _plan() siempre "ganaba" con
+        # un solo candidato -- si se clickeaba "Sync" en 2+ cuentas para el
+        # mismo SKU escaso, AMBAS terminaban escribiendo el pool completo de
+        # BM (sobreventa real). Ahora se recolecta TODO el universo (igual que
+        # run_multi_stock_sync) para calcular el score/plan real, pero la
+        # EJECUCIÓN (update_item_stock) se filtra más abajo a solo los
+        # listings que pertenecen a la cuenta que el usuario clickeó.
+        all_ml  = await token_store.get_all_tokens()
+        all_amz = await token_store.get_all_amazon_accounts()
+
         acc = None
         if platform == "ml":
-            all_ml = await token_store.get_all_tokens()
             acc = next((a for a in all_ml if a.get("user_id") == account_id), None)
-            if not acc:
-                return {"status": "account_not_found"}
-            ml_by_sku  = await _collect_ml_listings([acc])
-            amz_by_sku = {}
         else:  # amz
-            all_amz = await token_store.get_all_amazon_accounts()
             acc = next((a for a in all_amz if a.get("seller_id") == account_id), None)
-            if not acc:
-                return {"status": "account_not_found"}
-            ml_by_sku  = {}
-            amz_by_sku = await _collect_amz_listings([acc])
+        if not acc:
+            return {"status": "account_not_found"}
+
+        ml_by_sku, amz_by_sku = await asyncio.gather(
+            _collect_ml_listings(all_ml),
+            _collect_amz_listings(all_amz),
+        )
 
         all_bases = set(ml_by_sku.keys()) | set(amz_by_sku.keys())
         if not all_bases:
@@ -1009,7 +1124,21 @@ async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
         except Exception:
             all_rules = {}
 
-        # ── Clientes ──────────────────────────────────────────────────────────
+        # ── Costo BM + envío estimado real (función única de ganador, Fix 1) ──
+        try:
+            cost_map = await _winner_mod().get_cost_map(list(all_bases))
+        except Exception as e:
+            logger.warning(f"[SINGLE-SYNC] Error obteniendo cost_map: {e}")
+            cost_map = {}
+        try:
+            ship_maps = await _winner_mod().get_shipping_cost_maps(list(all_bases))
+        except Exception as e:
+            logger.warning(f"[SINGLE-SYNC] Error obteniendo ship_cost_maps: {e}")
+            ship_maps = {}
+
+        # ── Clientes: solo se instancia el de la cuenta que el usuario clickeó
+        # -- las demás cuentas se recolectaron solo para calcular el plan/score
+        # real, nunca se les va a escribir nada desde esta llamada.
         if platform == "ml":
             try:
                 c = await get_meli_client(user_id=account_id)
@@ -1027,6 +1156,9 @@ async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
 
         ro = _is_reduce_only_mode()
         all_results: list = []
+        # Los listings ML usan platform="ml", los de Amazon usan platform="amazon"
+        # (no "amz") -- ver _collect_amz_listings.
+        _target_platform = "ml" if platform == "ml" else "amazon"
 
         for base in sorted(all_bases):
             if base not in bm_stock:
@@ -1034,10 +1166,26 @@ async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
             bm_avail = bm_stock[base]
             listings = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
             enabled  = set(all_rules.get(base, []))
-            updates  = _plan(base, bm_avail, listings, enabled, reduce_only=ro)
+            updates  = await _plan(
+                base, bm_avail, listings, enabled, reduce_only=ro,
+                cost_mxn=cost_map.get(base), ship_cost_maps=ship_maps,
+                persist_winner=True,
+            )
             if not updates:
                 continue
-            res = await _execute(updates, ml_clients, amz_clients)
+            # FIX SOBREVENTA: el plan se calculó sobre TODAS las cuentas
+            # (necesario para saber quién es el ganador real), pero solo se
+            # EJECUTA lo que le corresponde a la cuenta clickeada. Si es la
+            # ganadora → escribe bm_avail real. Si es perdedora → escribe 0.
+            # Si ni siquiera tiene el SKU → no aparece aquí, no-op para ella.
+            my_updates = [
+                u for u in updates
+                if u["listing"]["platform"] == _target_platform
+                and u["listing"]["account_id"] == account_id
+            ]
+            if not my_updates:
+                continue
+            res = await _execute(my_updates, ml_clients, amz_clients)
             all_results.extend(res)
             summary["updates"] += sum(1 for r in res if r["ok"])
             summary["errors"]  += sum(1 for r in res if not r["ok"])
@@ -1137,6 +1285,19 @@ async def preview_multi_stock_sync() -> dict:
         except Exception:
             all_rules = {}
 
+        # Costo BM + envío estimado real -- igual que run_multi_stock_sync,
+        # para que la preview muestre el MISMO ganador que produciría una
+        # corrida real (función única de ganador, Fix 1). persist_winner=False
+        # más abajo: una preview no debe pisar la histéresis persistida.
+        try:
+            cost_map = await _winner_mod().get_cost_map(list(all_bases))
+        except Exception:
+            cost_map = {}
+        try:
+            ship_maps = await _winner_mod().get_shipping_cost_maps(list(all_bases))
+        except Exception:
+            ship_maps = {}
+
         ro = _is_reduce_only_mode()
         changes = []
 
@@ -1146,7 +1307,11 @@ async def preview_multi_stock_sync() -> dict:
             bm_avail = bm_stock[base]
             listings = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
             enabled  = set(all_rules.get(base, []))
-            updates  = _plan(base, bm_avail, listings, enabled, reduce_only=ro)
+            updates  = await _plan(
+                base, bm_avail, listings, enabled, reduce_only=ro,
+                cost_mxn=cost_map.get(base), ship_cost_maps=ship_maps,
+                persist_winner=False,
+            )
 
             for u in updates:
                 lst = u["listing"]
@@ -1154,9 +1319,9 @@ async def preview_multi_stock_sync() -> dict:
                     "sku":         base,
                     "platform":    lst["platform"],
                     "account_id":  lst["account_id"],
-                    "item_id":     lst["item_id"],
+                    "item_id":     lst.get("item_id") or lst.get("sku", ""),
                     "title":       lst.get("title", ""),
-                    "status":      lst["status"],
+                    "status":      lst.get("status", "active"),
                     "current_qty": lst["qty"],
                     "bm_avail":    bm_avail,
                     "new_qty":     u["new_qty"],

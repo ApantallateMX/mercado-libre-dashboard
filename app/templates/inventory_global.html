@@ -475,6 +475,8 @@ function renderTable(rows, threshold) {
 }
 
 var _selectedWinnerUid = null;
+var _suggestedWinnerUid = null;   // ganador sugerido por stock_winner (Fix 1) -- para explicar overrides
+var _fixWinnerChecked = false;
 var _concExecuted = false;
 var _bulkRunning = false;
 
@@ -502,19 +504,28 @@ function openConcModal(sku, bmAvail) {
     document.getElementById('conc-modal').classList.remove('hidden');
     _pendingConc = null;
     _selectedWinnerUid = null;
+    _suggestedWinnerUid = null;
+    _fixWinnerChecked = false;
 
-    fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
-        headers: {'ngrok-skip-browser-warning': 'true'}
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
+    Promise.all([
+        fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        }).then(function(r) { return r.json(); }),
+        fetch('/api/stock/concentration/winner-status?sku=' + encodeURIComponent(sku), {
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        }).then(function(r) { return r.json(); }).catch(function() { return {fixed: false}; }),
+    ])
+    .then(function(results) {
+        var d = results[0];
         _pendingConc = d;
         _pendingConc._bmAvail = totalBmAvail;
+        _pendingConc._winnerStatus = results[1] || {};
         document.getElementById('conc-modal-sku').textContent = 'SKU: ' + sku + ' — BM Disponible: ' + totalBmAvail;
 
         var details = d.details || [];
         var winner = d.winner || {};
         _selectedWinnerUid = winner.user_id || null;
+        _suggestedWinnerUid = winner.user_id || null;
 
         if (d.action === 'no_items_found') {
             document.getElementById('conc-modal-body').innerHTML =
@@ -551,6 +562,34 @@ function _renderConcDetails(details, totalBmAvail, d) {
     var msgCls = d.manual_selection ? 'text-yellow-700 bg-yellow-50 border border-yellow-200' : 'text-gray-600 bg-gray-50';
     var msgHtml = '<div class="text-xs ' + msgCls + ' rounded p-2 mb-2 flex items-center gap-1">'
         + periodBadge + ' <span>' + (d.message || '') + '</span></div>';
+
+    // Override manual (Fix 4, auditoría concentración 2026-08-28): nunca
+    // ocultar en silencio que el usuario está eligiendo una cuenta distinta
+    // a la sugerida por el algoritmo -- explicar cuál es la sugerida y por qué.
+    if (_selectedWinnerUid && _suggestedWinnerUid && _selectedWinnerUid !== _suggestedWinnerUid) {
+        var suggested = details.find(function(a) { return a.user_id === _suggestedWinnerUid; });
+        var suggestedNick = (suggested && (suggested.nickname || suggested.user_id)) || _suggestedWinnerUid;
+        msgHtml += '<div class="text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded p-2 mb-2">'
+            + '⚠ Estás sobre-escribiendo la sugerencia del sistema. El algoritmo sugiere <b>' + suggestedNick
+            + '</b> (mayor margen de contribución estimado × reputación). Puedes continuar si tienes una razón '
+            + 'válida (ej. la cuenta sugerida tiene un problema operativo puntual), pero revisa antes de confirmar.'
+            + '</div>';
+    }
+
+    // "Fijar ganador" (Fix 4): reusa sku_platform_rules -- mismo mecanismo
+    // real que ya consume _plan() en stock_sync_multi.py.
+    var winnerStatus = d._winnerStatus || {};
+    if (winnerStatus.fixed) {
+        msgHtml += '<div class="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-2 mb-2">'
+            + '🔒 Este SKU ya está fijado en <b>' + winnerStatus.fixed_platform_id + '</b>. '
+            + 'Quítalo en Stock Sync → Configurar si quieres que vuelva a repartirse automáticamente.</div>';
+    } else {
+        msgHtml += '<label class="flex items-center gap-1.5 text-xs text-gray-600 mb-2 cursor-pointer">'
+            + '<input type="checkbox" id="conc-fix-winner-chk" class="accent-indigo-600"'
+            + (_fixWinnerChecked ? ' checked' : '') + ' onchange="_fixWinnerChecked = this.checked;">'
+            + 'Fijar la cuenta ganadora como única habilitada para este SKU (las demás no volverán a recibir cantidad hasta que lo quites manualmente)'
+            + '</label>';
+    }
 
     // Tabla resumen de acciones
     var tableHtml = '<table class="w-full text-xs mb-3 border-collapse">'
@@ -676,6 +715,17 @@ function executeConcentration() {
         msgEl.className = data.ok
             ? 'text-xs block text-center mt-2 text-green-700 font-semibold'
             : 'text-xs block text-center mt-2 text-orange-600 font-semibold';
+
+        // Fix 4 (auditoría concentración 2026-08-28): si el usuario marcó
+        // "Fijar ganador", reusar sku_platform_rules para que la cuenta
+        // ganadora quede como única habilitada de aquí en adelante.
+        if (_fixWinnerChecked && data.ok) {
+            fetch('/api/stock/concentration/fix-winner', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                body: JSON.stringify({ sku: _pendingConc.sku, winner_platform: 'ml', winner_account_id: _selectedWinnerUid })
+            }).catch(function() {});
+        }
 
         // Cambiar botón a "Siguiente" que cierra el modal
         btn.disabled = false;

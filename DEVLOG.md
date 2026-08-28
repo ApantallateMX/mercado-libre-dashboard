@@ -7,6 +7,60 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (9) — FEAT/FIX: consolidación de concentración de stock multi-cuenta (4 fixes)
+
+Auditoría de 2 rondas (marketplace-strategist + backend-integrations-engineer) sobre el
+sistema de sincronización/concentración de stock ML entre las 4 cuentas. Aprobado por
+Jovan implementar la solución completa de una vez. **NO se hizo commit/push** — todo
+queda en el working directory para revisión.
+
+1. **Función única de ganador** (`app/services/stock_winner.py`, nuevo): consolida las
+   3 fórmulas que existían separadas (`stock_sync_multi._score()`,
+   `stock_concentrator.preview_concentration()`, y la fórmula de margen de contribución
+   diseñada por el especialista de negocio). Fórmula: `unidades_esperadas × margen_u ×
+   rep_factor`, con exclusión dura de reputación roja, fallback a ventas históricas, a
+   solo-velocidad si no hay costo BM confiable (nunca el centinela `>=9000`), y a
+   `margen×reputación` si no hay ventas en ninguna cuenta (ya no "mayor stock"). Costo de
+   envío estimado: usa `get_avg_shipping_cost_map()` real (90d) con fallback a 150 MXN.
+   Ambos servicios (`stock_sync_multi.py`, `stock_concentrator.py`) ahora consumen esta
+   función en vez de su cálculo propio.
+2. **Sobreventa cross-cuenta en sync individual** — `run_single_account_stock_sync()`
+   solo recolectaba listings de la cuenta clickeada, así que 2 clicks en 2 cuentas para
+   el mismo SKU escaso ambas terminaban con el pool completo. Ahora recolecta TODAS las
+   cuentas (ML+Amazon) para el score real, pero solo EJECUTA lo que corresponde a la
+   cuenta clickeada. Verificado contra datos reales de producción (SNTV001764): el
+   reparto total sigue sumando exactamente el stock BM disponible, sin duplicar.
+3. **Persistencia del ganador** — tabla nueva `stock_winner_cache` (SQLite) +
+   histéresis: un ganador ya persistido solo se reemplaza si el candidato nuevo supera
+   su score recalculado por >15%, evitando que el "ganador" voltee por ruido de una
+   corrida a otra. Se actualiza dentro de `run_multi_stock_sync`/
+   `run_single_account_stock_sync` (nunca en previews/dry-run).
+4. **UI "Concentrar" + fijar ganador** — `products_stock_issues.html` e
+   `inventory_global.html` ahora muestran margen estimado y ofrecen "fijar como única
+   habilitada" (reusa `sku_platform_rules`, el mismo mecanismo real que ya consumía
+   `_plan()` — no se inventó estado nuevo). Endpoints nuevos con gate
+   `_require_subtab("ml","productos","stock")`: `/api/stock/concentration/fix-winner`,
+   `/unfix-winner`, `/winner-status`. Override manual con aviso explícito de por qué se
+   está ignorando la sugerencia del algoritmo.
+
+**Decisiones que Jovan debe revisar**: (a) costo de envío Amazon usa el mismo fallback
+150 MXN que ML por falta de dato propio; (b) no existe hoy separación entre "sync de
+cantidad" y "sync de metadata/fotos/título" en el proyecto — `sku_platform_rules` solo
+controla cantidad, no hay nada más que "seguir sincronizando"; (c) caso patológico "todas
+las cuentas en reputación roja" no bloquea el sync, reparte igual (documentado en
+`stock_winner.py`).
+
+Verificado localmente (re-verificado por el hilo principal, no solo por el agente):
+`/api/stock/concentration/preview` end-to-end contra ML real (SNTV001764, margen
+$2,264 MXN/u calculado correctamente), `fix-winner`/`unfix-winner`/`winner-status`
+end-to-end con un SKU de prueba inexistente en catálogo (sin riesgo real) — incluyendo
+403 real con usuario restringido, admin sin bloqueo, y confirmación de que `unfix`
+limpia `sku_platform_rules` por completo. **Corrección adicional post-implementación**:
+`winner-status` (GET) no tenía `_require_subtab` a diferencia de los otros 2 endpoints
+nuevos -- agregado para consistencia con el resto de las auditorías de hoy. Regresión
+en `/stock-sync`, `/partials/products-stock-issues`, `/dashboard`. No se ejecutó
+ninguna escritura real a ML en ningún momento de esta verificación.
+
 ## 2026-08-28 (8) — FIX: auditoría completa de tab Productos — pausar bloqueado, permisos, margen
 
 Tercera auditoría del día (mismo patrón que Deals y Salud): Resumen, Inventario, Stock,

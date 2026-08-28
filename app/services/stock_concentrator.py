@@ -28,6 +28,7 @@ from typing import Optional
 from app.services import token_store
 from app.services.meli_client import get_meli_client
 from app.services.stock_sync_multi import _REPUTATION_FACTOR
+from app.services import stock_winner
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,9 @@ async def preview_concentration(base_sku: str) -> dict:
                 "title": item.get("title", ""),
                 "status": item.get("status", ""),
                 "available_quantity": avail,
+                # price agregado 2026-08-28 -- necesario para calcular margen de
+                # contribución real (función única de ganador, ver stock_winner.py)
+                "price": float(item.get("price") or 0),
                 "sold_30d": sold_30d,
                 "sold_total": sold_total,
                 "has_variations": bool(item.get("variations")),
@@ -238,23 +242,61 @@ async def preview_concentration(base_sku: str) -> dict:
     # Para la selección de ganador, solo usar Merchant si hay alguno disponible
     candidate_pool = merchant_items if merchant_items else details
 
-    has_30d_sales = any(d["sold_30d"] > 0 for d in candidate_pool)
-    has_any_sales = any(d["sold_total"] > 0 for d in candidate_pool)
-
     total_meli_stock = sum(d["available_quantity"] for d in details)
 
-    if has_30d_sales:
-        winner = max(candidate_pool, key=lambda d: (d["sold_30d_weighted"], d["sold_total_weighted"]))
-        period_label = "30 días"
-        manual_selection = False
-    elif has_any_sales:
-        winner = max(candidate_pool, key=lambda d: d["sold_total_weighted"])
-        period_label = "histórico"
-        manual_selection = False
+    # FUNCIÓN ÚNICA DE GANADOR (Fix 1, auditoría de concentración 2026-08-28):
+    # antes esta función tenía su propia fórmula (sold_30d_weighted, sin
+    # margen) separada de stock_sync_multi._score() -- ahora ambas consumen
+    # stock_winner.resolve_winner(), que usa margen de contribución real
+    # (precio − costo BM − comisión×1.16 − envío×1.16) en vez de solo
+    # velocidad. persist=False: esto es una PREVIEW (GET, sin ejecutar nada
+    # todavía) -- no debe pisar la histéresis persistida por el sync real.
+    candidates = [
+        stock_winner.build_candidate(
+            platform="ml", account_id=d["user_id"], nickname=d["nickname"],
+            ref=d["item_id"], price=d.get("price", 0),
+            sold_30d=d["sold_30d"], sold_total=d["sold_total"],
+            rep_factor=d["rep_factor"], can_update=True, status=d.get("status", "active"),
+            extra=d,
+        )
+        for d in candidate_pool
+    ]
+    try:
+        cost_mxn = (await stock_winner.get_cost_map([base_sku])).get(base_sku.upper())
+    except Exception as e:
+        logger.warning(f"[CONC] Error obteniendo costo BM de {base_sku}: {e}")
+        cost_mxn = None
+    try:
+        ship_maps = await stock_winner.get_shipping_cost_maps([base_sku])
+    except Exception as e:
+        logger.warning(f"[CONC] Error obteniendo costo de envío de {base_sku}: {e}")
+        ship_maps = {}
+
+    wresult = await stock_winner.resolve_winner(
+        base_sku, candidates, total_meli_stock, cost_mxn, ship_maps, persist=False,
+    )
+    wcand = wresult.get("winner")
+    if wcand is not None:
+        winner = dict(wcand["extra"])  # preserva la forma original (user_id, nickname, item_id, ...)
+        winner["score"] = wcand["score"]
+        winner["margen_u"] = wcand.get("margen_u")
     else:
+        # No debería pasar si candidate_pool no está vacío -- fallback defensivo.
         winner = max(candidate_pool, key=lambda d: (d["available_quantity"], d["sold_30d"]))
+
+    manual_selection = wresult["manual_selection"]
+    # period_used mantiene los 3 valores históricos ("30 días"/"histórico"/
+    # "sin_ventas") -- inventory_global.html tiene un mapeo de badges por
+    # estos strings EXACTOS (_renderConcDetails, periodLabels), así que los
+    # nuevos métodos de stock_winner (margin/margin_fallback_total/
+    # velocity_only_no_cost/no_sales_manual*) se colapsan a ese mismo
+    # vocabulario en vez de introducir strings nuevos que romperían esa UI.
+    if wresult["method"] in ("margin", "velocity_only_no_cost") and not manual_selection:
+        period_label = "30 días"
+    elif wresult["method"] == "margin_fallback_total" or (wresult["method"] == "velocity_only_no_cost" and not manual_selection):
+        period_label = "histórico"
+    else:
         period_label = "sin_ventas"
-        manual_selection = True
 
     # Los perdedores son: todos los items que NO son el ganador
     # FULL items: se listan aparte, no se zeroan (su stock lo gestiona MeLi)
@@ -266,22 +308,23 @@ async def preview_concentration(base_sku: str) -> dict:
     # Construir mensaje
     full_note = f" · {len(full_items)} FULL (sin cambio de stock)" if has_full else ""
     rep_note = f" · reputación {winner['rep_factor']:.2f}x" if winner.get("rep_factor", 1.0) != 1.0 else ""
+    margin_note = f" · margen/u ${winner['margen_u']:,.0f} MXN" if winner.get("margen_u") is not None else " · margen no disponible (sin costo BM confiable)"
     if period_label == "30 días":
         message = (
             f"GANADOR: {winner['nickname']} · {winner['item_id']} "
-            f"({winner['sold_30d']} v/30d · {winner['sold_total']} hist.){rep_note}"
+            f"({winner['sold_30d']} v/30d · {winner['sold_total']} hist.){rep_note}{margin_note}"
             f"{full_note}"
         )
     elif period_label == "histórico":
         message = (
             f"GANADOR (histórico): {winner['nickname']} · {winner['item_id']} "
-            f"({winner['sold_total']} ventas acumuladas){rep_note}"
+            f"({winner['sold_total']} ventas acumuladas){rep_note}{margin_note}"
             f"{full_note}"
         )
     else:
         message = (
             f"Sin ventas registradas. Sugerencia: {winner['nickname']} · {winner['item_id']} "
-            f"(mayor stock MeLi). Puedes cambiar manualmente."
+            f"(mejor margen×reputación estimado){margin_note}. Puedes cambiar manualmente."
             f"{full_note}"
         )
 
@@ -298,6 +341,7 @@ async def preview_concentration(base_sku: str) -> dict:
         "has_full": has_full,
         "details": details,          # un representante por cuenta
         "secondary_items": secondary_items,  # publicaciones extra del mismo SKU/cuenta
+        "winner_method": wresult["method"],   # detalle real del método (para UI que quiera mostrarlo)
     }
 
 
