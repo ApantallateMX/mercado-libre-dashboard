@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (8) — FIX: auditoría completa de tab Productos — pausar bloqueado, permisos, margen
+
+Tercera auditoría del día (mismo patrón que Deals y Salud): Resumen, Inventario, Stock,
+Listings, Candidatos FULL (Deals ya cubierto por separado).
+
+1. **CRÍTICO**: se podía pausar un listing sano desde el modal de edición — viola la
+   regla dura del proyecto (nunca pausar, penaliza el algoritmo de ML). Hallazgo
+   técnico real: el handler que de verdad corre es `app/api/items.py::update_status`
+   (`main.py` tenía una ruta duplicada muerta por orden de registro de FastAPI,
+   first-match-wins). Ahora valida el estado real en ML antes de permitir la
+   transición a "paused" — solo si el item está `closed` (paso intermedio obligatorio
+   de ML para reactivar). Verificado con item real activo: bloqueado correctamente.
+2. Bypass de permisos en `app/api/productos.py` y `app/api/sku_inventory.py` (cero
+   checks) — creaba/optimizaba/reactivaba listings y escribía stock sin control de
+   sección. Gate agregado a 7 endpoints, más uno adicional encontrado en la propia
+   verificación post-fix (`PUT /api/items/{id}/status`, fuera de la lista original).
+3. 5 de 6 subtabs de Productos en `main.py` sin `_require_subtab` — corregido.
+4. Otras escrituras sin gate (close, close-batch, suppress-activate,
+   sync-variation-stocks) — corregido.
+5. Llamada cruda `httpx` con Bearer directo reemplazada por `client.get()` de
+   `MeliClient` (recupera el retry/backoff de 429).
+6. Investigado el hallazgo de negocio de "sync de costo BM 8 días sin refrescar" —
+   resultó ser una métrica de un caché abandonado desde 2026-08-20, no el sync real.
+   Agregado `catalog_sync_last_age_h` a `/api/diag/cache-health` para diagnosticar el
+   sync real sin sesión.
+7. Candidatos FULL ahora penaliza (no oculta) candidatos de categoría pesada
+   (TVs/Monitores) con margen bajo, en vez de ordenar solo por unidades vendidas —
+   no existe campo de peso/dimensión en BM, se usó margen+categoría como proxy.
+8. Tarjeta "Acción Requerida" agregada a Resumen (antes solo dentro de Inventario).
+9. `/bm/unlaunched` sin gate de tab — corregido.
+
+Verificado en producción: Railway y Coolify sanos tras el deploy.
+
+---
+
 ## 2026-08-28 (7) — FIX: auditoría completa de sección Salud + Novedades a notificación
 
 Auditoría fresca de Salud (ML: Reclamos/Preguntas/Mensajes/Reputación/Vigilancia/
