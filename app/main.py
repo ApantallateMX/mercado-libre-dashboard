@@ -16270,6 +16270,37 @@ async def diag_db_file_sizes(token: str = ""):
     return JSONResponse(out)
 
 
+@app.get("/api/diag/data-dir-listing")
+async def diag_data_dir_listing(token: str = ""):
+    """EMERGENCIA 2026-08-27: solo lectura (os.listdir + os.path.getsize),
+    nunca abre SQLite. tokens.db (410MB) + -wal (9.6MB) + -shm no explican
+    el 495.7/500MB reportado por Railway -- falta ver qué más vive en
+    /app/data."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import os as _os_ls
+    vol_dir = str(Path(DATABASE_PATH).resolve().parent)
+    try:
+        entries = []
+        for name in _os_ls.listdir(vol_dir):
+            full = _os_ls.path.join(vol_dir, name)
+            try:
+                if _os_ls.path.isdir(full):
+                    size = sum(
+                        _os_ls.path.getsize(_os_ls.path.join(dp, f))
+                        for dp, _, fs in _os_ls.walk(full) for f in fs
+                    )
+                    entries.append({"name": name + "/", "size_mb": round(size / 1024 / 1024, 3)})
+                else:
+                    entries.append({"name": name, "size_mb": round(_os_ls.path.getsize(full) / 1024 / 1024, 3)})
+            except Exception as _e:
+                entries.append({"name": name, "error": str(_e)})
+        entries.sort(key=lambda e: e.get("size_mb", 0), reverse=True)
+        return JSONResponse({"dir": vol_dir, "entries": entries})
+    except Exception as _e:
+        return JSONResponse({"error": str(_e)}, status_code=500)
+
+
 @app.post("/api/diag/wal-checkpoint")
 async def diag_wal_checkpoint(token: str = ""):
     """EMERGENCIA 2026-08-27: volumen de Railway al 99%+ (495.7/500MB),
