@@ -16247,6 +16247,45 @@ async def multi_sync_status():
     return status
 
 
+@app.post("/api/diag/backup-raw-db-to-s3")
+async def diag_backup_raw_db_to_s3(token: str = ""):
+    """EMERGENCIA 2026-08-27: sube tokens.db TAL CUAL (bytes crudos, sea cual
+    sea su estado -- corrupto o no) a S3, ANTES de cualquier intento de
+    reparación. Lee el archivo directo con open()/read() -- no abre ninguna
+    conexión SQLite, así que funciona sin importar si la DB está corrupta."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import s3_storage as _s3_rawbak
+    import time as _time_rawbak
+    if not _s3_rawbak.is_configured():
+        return JSONResponse({"error": "S3 no está configurado"}, status_code=500)
+    db_path = Path(DATABASE_PATH)
+    if not db_path.is_file():
+        return JSONResponse({"error": "tokens.db no existe"}, status_code=404)
+    content = db_path.read_bytes()
+    s3_key = f"emergency_db_backup/tokens.db.{int(_time_rawbak.time())}"
+    # tokens.db es ~410MB -- el cliente default de s3_storage.py tiene
+    # connect_timeout=5/read_timeout=5 (pensado para adjuntos chicos), muy
+    # corto para un archivo de este tamaño. Cliente propio con timeouts
+    # generosos solo para esta subida de emergencia.
+    import boto3 as _boto3_rawbak
+    from botocore.client import Config as _BConfig_rawbak
+    client = _boto3_rawbak.client(
+        "s3",
+        endpoint_url=__import__("os").environ["AWS_ENDPOINT_URL_S3"],
+        aws_access_key_id=__import__("os").environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=__import__("os").environ["AWS_SECRET_ACCESS_KEY"],
+        region_name=__import__("os").environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+        config=_BConfig_rawbak(signature_version="s3v4", connect_timeout=30, read_timeout=300),
+    )
+    bucket = __import__("os").environ.get("AWS_STORAGE_BUCKET_NAME", "")
+    client.put_object(Bucket=bucket, Key=s3_key, Body=content, ContentType="application/octet-stream")
+    verify_obj = client.get_object(Bucket=bucket, Key=s3_key)
+    verify = verify_obj["Body"].read()
+    ok = len(verify) == len(content)
+    return JSONResponse({"ok": ok, "backed_up_to": s3_key, "bytes": len(content)})
+
+
 @app.get("/api/diag/db-integrity-check")
 async def diag_db_integrity_check(token: str = "", quick: bool = True):
     """EMERGENCIA 2026-08-27: tras truncar el WAL, tokens.db empezó a dar
