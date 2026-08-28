@@ -2233,6 +2233,16 @@ def _backfill_order_buyer_bg(account_id: str) -> None:
         pass
 
 
+# FIX 2026-08-28 (backend-integrations-engineer): mismo bug de logjam que
+# zone/buyer backfill, aplicado a Vigilancia -- el `continue` cuando un item
+# da 404/sin permiso o rompe get_catalog_winner_status nunca marcaba el item
+# como intentado, así que siempre caía en el grupo 'never_checked' de
+# get_snapshot_check_candidates (máxima prioridad), ocupando cupo cada ciclo
+# para siempre. Se reinicia en cada deploy, mismo patrón warm-start ya
+# aceptado en los otros dos fixes de hoy.
+_ml_winner_check_failed_ids: set = set()
+
+
 def _check_ml_winner_status_bg(account_id: str) -> None:
     """Fire-and-forget: revisa hasta 20 listings por ciclo (rotación LRU) si
     somos la publicación ganadora del catálogo — nunca todo el catálogo de
@@ -2248,7 +2258,10 @@ def _check_ml_winner_status_bg(account_id: str) -> None:
                 all_ids = await client.get_all_active_item_ids()
             except Exception:
                 return
-            candidates = await _ts.get_snapshot_check_candidates("ml", account_id, all_ids, limit=20)
+            excluded = {iid for (aid, iid) in _ml_winner_check_failed_ids if aid == account_id}
+            candidates = await _ts.get_snapshot_check_candidates(
+                "ml", account_id, all_ids, limit=20, exclude_ids=excluded,
+            )
             checked = 0
             for iid in candidates:
                 try:
@@ -2268,7 +2281,9 @@ def _check_ml_winner_status_bg(account_id: str) -> None:
                         status["is_winner"], status["total_competitors"],
                     )
                     checked += 1
-                except Exception:
+                except Exception as _e:
+                    _ml_winner_check_failed_ids.add((account_id, iid))
+                    logger.warning(f"[VIGILANCIA-ML] item_id={iid} uid={account_id}: {_e}")
                     continue
             if checked:
                 logger.info(f"[VIGILANCIA-ML] uid={account_id}: {checked} listings revisados")
@@ -2278,6 +2293,12 @@ def _check_ml_winner_status_bg(account_id: str) -> None:
         asyncio.create_task(_do())
     except Exception:
         pass
+
+
+# FIX 2026-08-28 (backend-integrations-engineer): mismo bug que el fix ML de
+# arriba -- keyed por sku (no por asin, porque el fallo puede ocurrir ANTES
+# de resolver el ASIN).
+_amazon_buybox_check_failed_ids: set = set()
 
 
 def _check_amazon_buy_box_status_bg(seller_id: str) -> None:
@@ -2313,7 +2334,10 @@ def _check_amazon_buy_box_status_bg(seller_id: str) -> None:
                 if not items:
                     return
             all_ids = [it.get("sku", "") for it in items if it.get("sku")]
-            candidates = set(await _ts.get_snapshot_check_candidates("amazon", seller_id, all_ids, limit=20))
+            excluded = {sku for (sid, sku) in _amazon_buybox_check_failed_ids if sid == seller_id}
+            candidates = set(await _ts.get_snapshot_check_candidates(
+                "amazon", seller_id, all_ids, limit=20, exclude_ids=excluded,
+            ))
             checked = 0
             for it in items:
                 sku = it.get("sku", "")
@@ -2324,6 +2348,9 @@ def _check_amazon_buy_box_status_bg(seller_id: str) -> None:
                     asin = (summaries[0].get("asin") if summaries else None) or ""
                     title = (summaries[0].get("itemName") if summaries else "") or ""
                     if not asin:
+                        _amazon_buybox_check_failed_ids.add((seller_id, sku))
+                        logger.info(f"[VIGILANCIA-AMZ] sku={sku} seller={seller_id}: "
+                                    f"sin ASIN resoluble, se descarta para este proceso")
                         continue
                     status = await client.get_buy_box_status(asin, client.marketplace_id)
                     price = status.get("buy_box_price") or 0
@@ -2332,7 +2359,9 @@ def _check_amazon_buy_box_status_bg(seller_id: str) -> None:
                         status["is_winner"], status["total_competitors"],
                     )
                     checked += 1
-                except Exception:
+                except Exception as _e2:
+                    _amazon_buybox_check_failed_ids.add((seller_id, sku))
+                    logger.warning(f"[VIGILANCIA-AMZ] sku={sku} seller={seller_id}: {_e2}")
                     continue
             if checked:
                 logger.info(f"[VIGILANCIA-AMZ] seller={seller_id}: {checked} ASINs revisados")

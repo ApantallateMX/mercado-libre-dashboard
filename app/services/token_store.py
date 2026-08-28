@@ -6219,11 +6219,25 @@ async def get_coverage_price_alerts(user_id: str) -> list:
     return [dict(r) for r in rows]
 
 
-async def get_snapshot_check_candidates(platform: str, account_id: str, all_ids: list, limit: int = 20) -> list:
+async def get_snapshot_check_candidates(
+    platform: str, account_id: str, all_ids: list, limit: int = 20,
+    exclude_ids: set | None = None,
+) -> list:
     """De all_ids (todos los listings activos), prioriza cuáles revisar este
     ciclo para Vigilancia: primero los que nunca se han revisado, luego los
     de last_checked más antiguo (rotación tipo LRU) — nunca revisa todo el
-    catálogo de un jalón, mismo cuidado de rate-limit que el resto de la app."""
+    catálogo de un jalón, mismo cuidado de rate-limit que el resto de la app.
+
+    FIX 2026-08-28 (backend-integrations-engineer): exclude_ids son los
+    item_id/sku que fallaron en el ciclo actual (o ciclos previos desde el
+    último deploy) del caller -- ver _ml_winner_check_failed_ids /
+    _amazon_buybox_check_failed_ids en main.py. Sin esto, un item roto de
+    forma permanente (404, sin catalog_product_id resoluble, ASIN
+    inexistente) nunca llega a tener fila en listing_snapshots, así que
+    SIEMPRE cae en 'never_checked' (la prioridad más alta) y ocupa cupo
+    cada ciclo para siempre -- mismo logjam ya visto hoy en zone/buyer
+    backfill, aquí aplicado al filtro LRU en vez de a un ORDER BY SQL."""
+    exclude_ids = exclude_ids or set()
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute(
@@ -6231,8 +6245,9 @@ async def get_snapshot_check_candidates(platform: str, account_id: str, all_ids:
             (platform, account_id),
         )).fetchall()
     checked = {r["item_id"]: r["last_checked"] for r in rows}
-    never_checked = [i for i in all_ids if i not in checked]
-    already_checked_sorted = sorted((i for i in all_ids if i in checked), key=lambda i: checked[i])
+    pending_ids = [i for i in all_ids if i not in exclude_ids]
+    never_checked = [i for i in pending_ids if i not in checked]
+    already_checked_sorted = sorted((i for i in pending_ids if i in checked), key=lambda i: checked[i])
     return (never_checked + already_checked_sorted)[:limit]
 
 
