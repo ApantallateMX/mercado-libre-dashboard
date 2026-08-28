@@ -3409,10 +3409,12 @@ function _renderAmzBuyerMessages(data) {
         var priorHandler = (th.view_info && th.view_info.viewed_by) ? th.view_info.viewed_by : '';
         var u = urgencyOf(th);
         var borderColor = u ? { urgent: 'border-red-400', warn: 'border-orange-400', ok: 'border-teal-300' }[u.tier] : 'border-gray-200';
+        var hasAttachment = th.messages.some(function(m) { return (m.attachments || []).length > 0; });
 
         var head = '<div class="flex items-center gap-2 flex-wrap">' +
                 '<span class="font-semibold text-sm text-gray-800">' + _amzMsgsEscHtml(th.buyer_name || 'Comprador') + '</span>' +
                 (th.seller_nickname ? '<span class="px-2 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-700 font-semibold">' + _amzMsgsEscHtml(th.seller_nickname) + '</span>' : '') +
+                (hasAttachment ? '<span class="text-xs" title="Este hilo tiene una imagen adjunta">📎</span>' : '') +
                 urgencyChip(u) +
                 statusBadge(th, domId) +
                 (th.unread > 0 ? '<span class="text-[10px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">' + th.unread + ' nuevo(s)</span>' : '') +
@@ -3442,11 +3444,25 @@ function _renderAmzBuyerMessages(data) {
         var messages = '<div id="amz-thread-messages-' + domId + '" class="hidden mt-2 space-y-1.5 max-h-64 overflow-y-auto">' +
             th.messages.map(function(m) {
                 var isOut = m.direction === 'outbound';
+                // FIX 2026-08-27: el comprador puede adjuntar una imagen (ej.
+                // captura de un error) -- antes se descartaba en silencio al
+                // parsear el correo reenviado, el equipo no tenía forma de
+                // verla sin entrar directo a Seller Central real (justo lo
+                // que este dashboard existe para evitar). Se sirve on-demand
+                // desde el BLOB guardado, nunca se persiste a disco.
+                var attachmentsHtml = (m.attachments || []).map(function(a) {
+                    var url = '/api/amazon/buyer-messages/' + m.id + '/attachments/' + a.id;
+                    return '<a href="' + url + '" target="_blank" rel="noopener" class="block mt-1.5">' +
+                        '<img src="' + url + '" alt="' + _amzMsgsEscAttr(a.filename) + '" ' +
+                        'class="max-w-[220px] max-h-[220px] rounded border border-gray-200 object-contain bg-white" loading="lazy">' +
+                        '</a>';
+                }).join('');
                 return '<div class="flex ' + (isOut ? 'justify-end' : 'justify-start') + '">' +
                     '<div class="max-w-[85%] rounded-lg px-2.5 py-2 text-sm ' + (isOut ? 'bg-blue-500 text-white' : 'bg-teal-50 text-gray-800 border border-teal-100') + ' whitespace-pre-line"' +
                         ' data-msg-role="' + (isOut ? 'seller' : 'buyer') + '" data-msg-text="' + _amzMsgsEscAttr(m.body_text) + '">' +
                         '<p class="text-[10px] font-medium ' + (isOut ? 'text-blue-100' : 'text-gray-400') + ' mb-0.5">' + (isOut ? 'Tú' : 'Comprador') + ' &middot; ' + _amzMsgsFmtDate(m.ts) + '</p>' +
                         _amzMsgsEscHtml(m.body_text) +
+                        attachmentsHtml +
                     '</div>' +
                 '</div>';
             }).join('') +

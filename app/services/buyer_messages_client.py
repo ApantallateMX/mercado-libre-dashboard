@@ -117,6 +117,43 @@ def _get_text_body(msg: email.message.Message) -> str | None:
     return payload.decode(charset, errors="replace") if payload else None
 
 
+_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024  # 5MB — son capturas de pantalla, no debería pasar
+
+
+def _get_attachments(msg: email.message.Message) -> list[dict]:
+    """Recolecta partes MIME de imagen (adjuntas o inline) del correo
+    reenviado por Amazon. FIX 2026-08-27: hasta ahora se descartaban en
+    silencio -- _get_text_body() solo mira text/plain y hace return en
+    cuanto encuentra la primera, sin recorrer el resto de las partes.
+    Confirmado con un caso real (comprador adjuntó una captura de pantalla
+    de un error de feed, orden 702-6149854-7649051): Amazon SÍ reenvía el
+    adjunto real como parte MIME normal (verificado por Jovan viendo el
+    correo crudo en Gmail: "One attachment"), no solo un link a Seller
+    Central. NUNCA se persiste a disco -- los bytes viven en memoria hasta
+    que se insertan como BLOB en SQLite (mismo criterio que _build_mime_message
+    para adjuntos salientes, y misma razón: este proyecto ya tuvo 2
+    incidentes reales de disco lleno en Railway)."""
+    out = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        if not ctype.startswith("image/"):
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        if len(payload) > _ATTACHMENT_MAX_BYTES:
+            logger.warning(f"[BUYER-MSG] adjunto descartado por tamaño ({len(payload)}B): {part.get_filename()}")
+            continue
+        out.append({
+            "filename": part.get_filename() or "adjunto",
+            "content_type": ctype,
+            "data": payload,
+        })
+    return out
+
+
 def parse_buyer_message_email(raw_bytes: bytes) -> dict | None:
     """Parsea un correo crudo del buzón dedicado. Retorna None si no es un
     mensaje real de comprador (otras notificaciones del mismo dominio no
@@ -159,6 +196,7 @@ def parse_buyer_message_email(raw_bytes: bytes) -> dict | None:
         "message_id": (msg.get("Message-ID") or "").strip(),
         "in_reply_to": (msg.get("In-Reply-To") or "").strip(),
         "ts": ts,
+        "attachments": _get_attachments(msg),
     }
 
 
@@ -318,6 +356,8 @@ async def poll_account_inbox(cfg: dict) -> int:
         row_id = await token_store.insert_buyer_message(m)
         if row_id:
             inserted += 1
+            if m.get("attachments"):
+                await token_store.insert_buyer_message_attachments(row_id, m["attachments"])
     if max_uid > last_uid:
         await token_store.set_buyer_inbox_watermark(cfg["seller_id"], max_uid)
     return inserted
@@ -347,6 +387,7 @@ async def poll_loop() -> None:
     que el índice se quedaba con mensajes de hasta 4 días de antigüedad sin
     que hubiera ningún error visible, y sin heartbeat no había forma de saber
     si el loop seguía corriendo o simplemente dejó de ejecutarse."""
+    last_purge_day = -1
     while True:
         if AMAZON_BUYER_INBOX_ACCOUNTS:
             try:
@@ -358,6 +399,18 @@ async def poll_loop() -> None:
                     logger.warning(f"[BUYER-MSG-POLL] Error en {len(errors)} cuenta(s): {errors}")
             except Exception as _e:
                 logger.warning(f"[BUYER-MSG-POLL] Error en poll_all_accounts: {_e}")
+        # Purga de retención de adjuntos (2026-08-27) — 1x/día, no cada 5 min.
+        # Borra solo el BLOB (>6 meses), conserva la fila con metadata. Ver
+        # token_store.purge_old_buyer_message_attachments para el porqué.
+        _today = int(time.time() // 86400)
+        if _today != last_purge_day:
+            last_purge_day = _today
+            try:
+                purged = await token_store.purge_old_buyer_message_attachments(months=6)
+                if purged:
+                    logger.info(f"[BUYER-MSG-POLL] {purged} adjunto(s) purgado(s) por retención (>6 meses)")
+            except Exception as _e:
+                logger.warning(f"[BUYER-MSG-POLL] Error purgando adjuntos: {_e}")
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
 

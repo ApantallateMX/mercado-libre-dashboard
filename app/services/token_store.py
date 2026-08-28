@@ -1493,6 +1493,26 @@ async def init_db():
         await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_abm_message_id ON amazon_buyer_messages(message_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_seller_ts ON amazon_buyer_messages(seller_id, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_order ON amazon_buyer_messages(order_id)")
+        # TABLA: amazon_buyer_message_attachments (2026-08-27) — imágenes que el
+        # comprador adjunta en Buyer Messages (Amazon SÍ las reenvía como parte
+        # MIME real, confirmado con un caso real). BLOB nativo de SQLite (no
+        # base64 en TEXT -- ~33% menos espacio, sin encode/decode en cada
+        # lectura). NUNCA se escribe a disco Railway (2 incidentes reales de
+        # disco lleno en este proyecto) -- se sirve on-demand desde este BLOB.
+        # Retención: purge_old_buyer_message_attachments() borra el binario
+        # (no la fila del mensaje) de adjuntos con más de 6 meses.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_buyer_message_attachments (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_row_id  INTEGER NOT NULL REFERENCES amazon_buyer_messages(id),
+                filename        TEXT NOT NULL DEFAULT '',
+                content_type    TEXT NOT NULL DEFAULT '',
+                size_bytes      INTEGER NOT NULL DEFAULT 0,
+                data            BLOB,
+                created_at      REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_abma_message ON amazon_buyer_message_attachments(message_row_id)")
         # Watermark de IMAP UID por cuenta (2026-08-04) — antes cada ciclo de poll
         # (5 min) volvía a descargar por completo los últimos 200 correos de cada
         # buzón, sin importar si ya se habían visto — 60-80s por cuenta, secuencial
@@ -3440,6 +3460,94 @@ async def insert_buyer_message(msg: dict) -> int | None:
         ))
         await db.commit()
         return cur.lastrowid if cur.rowcount else None
+
+
+async def insert_buyer_message_attachments(message_row_id: int, attachments: list[dict]) -> None:
+    """Guarda los adjuntos de imagen de un mensaje ya insertado (ver
+    buyer_messages_client._get_attachments). Un mensaje solo se inserta una
+    vez (INSERT OR IGNORE por message_id), así que esto solo corre la
+    primera vez que se ve ese correo."""
+    if not attachments:
+        return
+    now = __import__("time").time()
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        for a in attachments:
+            await db.execute("""
+                INSERT INTO amazon_buyer_message_attachments
+                    (message_row_id, filename, content_type, size_bytes, data, created_at)
+                VALUES (?,?,?,?,?,?)
+            """, (message_row_id, a.get("filename", ""), a.get("content_type", ""),
+                  len(a.get("data") or b""), a.get("data"), now))
+        await db.commit()
+
+
+async def get_buyer_message_attachment_meta(message_row_id: int) -> list[dict]:
+    """Metadata (sin el BLOB) de los adjuntos de un mensaje — para mostrar el
+    ícono/miniatura sin traer el binario completo hasta que se pida uno en
+    específico."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT id, filename, content_type, size_bytes FROM amazon_buyer_message_attachments
+               WHERE message_row_id = ? ORDER BY id""",
+            (message_row_id,),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_buyer_message_attachments_for_rows(message_row_ids: list[int]) -> dict:
+    """Metadata (sin BLOB) de adjuntos para varios mensajes de una sola vez --
+    evita 1 query por fila al pintar la lista de hilos. Retorna
+    {message_row_id: [{"id", "filename", "content_type", "size_bytes"}, ...]}."""
+    if not message_row_ids:
+        return {}
+    placeholders = ",".join("?" * len(message_row_ids))
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"SELECT id, message_row_id, filename, content_type, size_bytes "
+            f"FROM amazon_buyer_message_attachments WHERE message_row_id IN ({placeholders})",
+            message_row_ids,
+        )).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["message_row_id"], []).append({
+            "id": r["id"], "filename": r["filename"],
+            "content_type": r["content_type"], "size_bytes": r["size_bytes"],
+        })
+    return out
+
+
+async def get_buyer_message_attachment(message_row_id: int, attachment_id: int) -> dict | None:
+    """El BLOB completo de un adjunto -- solo se llama on-demand cuando el
+    frontend pide ver esa imagen específica."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            """SELECT id, filename, content_type, data FROM amazon_buyer_message_attachments
+               WHERE id = ? AND message_row_id = ?""",
+            (attachment_id, message_row_id),
+        )).fetchone()
+    return dict(row) if row and row["data"] is not None else None
+
+
+async def purge_old_buyer_message_attachments(months: int = 6) -> int:
+    """Borra el BINARIO (no la fila -- conserva filename/content_type/size_bytes
+    como registro histórico) de adjuntos con más de `months` meses. Este
+    proyecto ya tuvo 2 incidentes reales de disco/DB casi llena en Railway
+    (ver project_disk_crisis_2026-07-31) -- guardar imágenes como BLOB es
+    exactamente el tipo de crecimiento que causó eso, así que la purga se
+    construye desde el día uno, no como parche después."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.utcnow() - _td(days=months * 30)).timestamp()
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "UPDATE amazon_buyer_message_attachments SET data = NULL "
+            "WHERE created_at < ? AND data IS NOT NULL",
+            (cutoff,),
+        )
+        await db.commit()
+        return cur.rowcount
 
 
 async def backfill_buyer_message_product_title(seller_id: str, asin: str, product_title: str) -> None:

@@ -24919,6 +24919,14 @@ async def _fetch_amazon_threads_for_seller(sid: str, days: int, oid: str = "", n
     if oid:
         rows = [r for r in rows if r["order_id"] == oid]
 
+    # FIX 2026-08-27: adjuntos de imagen del comprador (ver
+    # buyer_messages_client._get_attachments) -- antes se descartaban en
+    # silencio, un caso real (orden 702-6149854-7649051) confirmó que Amazon
+    # sí reenvía el adjunto como parte MIME real, no solo un link.
+    _attachments_by_row = await token_store.get_buyer_message_attachments_for_rows([r["id"] for r in rows])
+    for r in rows:
+        r["attachments"] = _attachments_by_row.get(r["id"], [])
+
     by_thread: dict = {}
     for r in rows:
         key = r["reply_to_addr"] or r["order_id"] or str(r["id"])
@@ -25099,6 +25107,18 @@ async def amazon_buyer_messages_list(
         return {"days": days, "threads": threads, "total": total_rows, "unread": unread, "stats": stats}
     except Exception as e:
         return {"error": str(e), "threads": [], "total": 0, "unread": 0}
+
+
+@app.get("/api/amazon/buyer-messages/{message_id}/attachments/{attachment_id}")
+async def amazon_buyer_message_attachment(request: Request, message_id: int, attachment_id: int):
+    """Sirve el BLOB de una imagen adjunta que el comprador mandó -- on-demand,
+    nunca se escribe a disco (ver amazon_buyer_message_attachments en
+    token_store.py). Mismo gate que el resto de esta feature."""
+    _require_subtab(request, "amz", "salud", "mensajes")
+    row = await token_store.get_buyer_message_attachment(message_id, attachment_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado (o ya fue purgado por retención)")
+    return Response(content=row["data"], media_type=row["content_type"] or "application/octet-stream")
 
 
 @app.get("/api/amazon/buyer-messages-unified")
