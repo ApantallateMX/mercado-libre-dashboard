@@ -4,15 +4,34 @@ import io
 import csv
 import json
 from typing import Optional
-from fastapi import APIRouter, Query, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Query, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 
 from app.services.meli_client import get_meli_client
 from app.services.product_researcher import research_product
 from app.services.sku_utils import base_sku as _bm_base_sku
+from app.services import user_store as _us
 
 router = APIRouter(prefix="/api/sku-inventory", tags=["sku-inventory"])
+
+
+def _require_subtab(request: Request, platform: str, tab: str, subtab: str) -> None:
+    """Gate de subtab, mismo criterio que main.py:_require_subtab. Se duplica
+    aquí (en vez de importar) porque main.py importa este router -- importar
+    de vuelta crearía un ciclo. AuthMiddleware SOLO filtra rutas de página (no
+    /api/*), así que sin este check cualquier usuario con sesión válida podía
+    crear/optimizar/reactivar listings de ML o correr la mejora con IA vía
+    fetch() directo aunque no tuviera el subtab "Productos" asignado
+    (encontrado en la auditoría de Productos, 2026-08-28)."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") == "admin":
+        return
+    sections = du.get("allowed_sections") or []
+    if not sections:
+        return
+    if not _us.has_subtab_access(sections, platform, tab, subtab):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
 
 # BinManager API endpoints
 BINMANAGER_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
@@ -626,8 +645,9 @@ async def get_category_attributes(category_id: str):
 
 
 @router.post("/validate-item")
-async def validate_item(payload: dict):
+async def validate_item(payload: dict, request: Request):
     """Valida un item sin publicarlo."""
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return {"error": "No autenticado"}
@@ -640,8 +660,9 @@ async def validate_item(payload: dict):
 
 
 @router.post("/create-item")
-async def create_item(payload: dict):
+async def create_item(payload: dict, request: Request):
     """Crea un nuevo item en Mercado Libre."""
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return {"error": "No autenticado"}
@@ -703,8 +724,9 @@ async def get_listing_types():
 
 
 @router.put("/reactivate/{item_id}")
-async def reactivate_item(item_id: str):
+async def reactivate_item(item_id: str, request: Request):
     """Reactiva un item pausado."""
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return {"error": "No autenticado"}
@@ -785,8 +807,9 @@ async def get_item_details(item_id: str):
 
 
 @router.put("/optimize/{item_id}")
-async def optimize_item(item_id: str, body: dict):
+async def optimize_item(item_id: str, body: dict, request: Request):
     """Actualiza campos de un item existente para optimizarlo."""
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return JSONResponse({"error": "No autenticado"}, status_code=401)
@@ -850,8 +873,9 @@ async def optimize_item(item_id: str, body: dict):
 
 
 @router.put("/update-stock/{item_id}")
-async def update_meli_stock(item_id: str, body: dict):
+async def update_meli_stock(item_id: str, body: dict, request: Request):
     """Actualiza el stock disponible de un item en MeLi."""
+    _require_subtab(request, "ml", "productos", "listings")
     quantity = body.get("quantity")
     if quantity is None or not isinstance(quantity, int) or quantity < 0:
         return JSONResponse({"error": "Cantidad invalida"}, status_code=400)
@@ -934,11 +958,12 @@ def _strip_markdown_noise(text: str) -> str:
 
 
 @router.post("/ai-improve")
-async def ai_improve(body: dict):
+async def ai_improve(body: dict, request: Request):
     """
     AI-powered improvement for title, description, or attributes.
     Supports streaming for title and description.
     """
+    _require_subtab(request, "ml", "productos", "listings")
     from app.services import openrouter_client as _or_client
 
     if not _or_client.is_available():

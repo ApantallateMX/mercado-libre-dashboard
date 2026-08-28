@@ -742,12 +742,45 @@ async def update_description(item_id: str, data: DescriptionUpdate, request: Req
 @router.put("/{item_id}/status")
 async def update_status(item_id: str, data: StatusUpdate, request: Request):
     """Cambia el estado de un item (active/paused)."""
+    # FIX 2026-08-28 (auditoría de Productos, hueco encontrado en verificación
+    # manual post-fix): este endpoint es el que de verdad corre en producción
+    # (ver comentario más abajo sobre app.include_router) y no tenía NINGÚN
+    # gate de permisos -- quedó fuera de la lista original de la auditoría.
+    # Reusa _require_subtab de main.py (ya importado como _main_module en
+    # este archivo, mismo patrón que el resto de este archivo) en vez de
+    # duplicarlo una tercera vez.
+    _main_module._require_subtab(request, "ml", "productos", "listings")
     if data.status not in ("active", "paused"):
         raise HTTPException(status_code=400, detail="Status debe ser 'active' o 'paused'")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
+        if data.status == "paused":
+            # REGLA DURA DEL PROYECTO (CLAUDE.md): nunca pausar un listing sano
+            # -- pausar penaliza el algoritmo de ML, siempre usar
+            # available_quantity=0. La ÚNICA transición legítima a "paused" es
+            # el paso intermedio obligatorio que exige la propia API de ML
+            # para reactivar un item "closed" (ML no permite closed→active
+            # directo, ver reactivateItem() en items.html). Se valida el
+            # estado REAL en ML (no el que mande el body) antes de permitir
+            # la transición -- encontrado en la auditoría de Productos
+            # 2026-08-28: ESTE es el handler real que corre en producción
+            # (app/main.py define un @app.put("/api/items/{item_id}/status")
+            # con la misma ruta, pero app.include_router(items.router) se
+            # registra antes -- FastAPI hace first-match-wins, así que esa
+            # versión de main.py nunca se ejecuta; se corrigió también por
+            # consistencia/si algún día se limpia la duplicación, pero el fix
+            # que de verdad importa es este).
+            try:
+                current = await client.get_item(item_id)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"No se pudo verificar el estado actual en ML: {e}")
+            if current.get("status") != "closed":
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se puede pausar un listing activo -- usa available_quantity=0 en su lugar (pausar penaliza el algoritmo de ML).",
+                )
         result = await client.update_item_status(item_id, data.status)
         _invalidate_user_products_cache(str(client.user_id))
         await _audit(request, "ml_status_update", item_id, {"status": data.status})
@@ -762,6 +795,11 @@ async def update_status(item_id: str, data: StatusUpdate, request: Request):
         else:
             detail = str(body)
         raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
+    except HTTPException:
+        # No re-envolver los 400 de validación de "paused" de arriba -- el
+        # except Exception genérico de abajo los mangla (HTTPException es
+        # subclase de Exception) y pierde el status_code/detail reales.
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:

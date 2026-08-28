@@ -1066,6 +1066,14 @@ _PATH_TO_SECTION: dict[str, str] = {
     "/sku-compare":      "ventas",
     "/alertas-stock":    "ventas",
     "/sku-inventory":    "productos",
+    # FIX 2026-08-28 (auditoría Productos, Fix 9): faltaba por completo de este
+    # mapeo -- AuthMiddleware solo gatea rutas de página presentes en
+    # _PATH_TO_TAB/_PATH_TO_SECTION, así que /bm/unlaunched cargaba para
+    # cualquier usuario con sesión válida sin importar allowed_sections
+    # (bypass de gate de TAB completo, no solo de subtab). Mismo tab que su
+    # hermana /sku-inventory (ambas son herramientas de "gap" dentro de
+    # Productos).
+    "/bm/unlaunched":    "productos",
     "/ads":              "ads",
     "/health":           "salud",
     "/returns":          "devoluciones",
@@ -1104,6 +1112,7 @@ _PATH_TO_TAB: dict[str, tuple[str, str]] = {
     "/items-health":     ("ml", "productos"),
     "/productos":        ("ml", "productos"),
     "/sku-inventory":    ("ml", "productos"),
+    "/bm/unlaunched":    ("ml", "productos"),
     "/ads":              ("ml", "ads"),
     "/health":           ("ml", "salud"),
     "/returns":          ("ml", "devoluciones"),
@@ -6412,6 +6421,7 @@ def _refresh_bm_avail_live(ctx: dict) -> None:
 @app.get("/partials/products-stock-issues", response_class=HTMLResponse)
 async def products_stock_issues_partial(request: Request, threshold: int = 10):
     """Stock tab: Reabastecer + Riesgo + Activar. Resultado cacheado 5 min."""
+    _require_subtab(request, "ml", "productos", "stock")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -9050,6 +9060,12 @@ async def products_inventory_partial(
     alert_days: int = 30,
 ):
     """Tab Inventario unificado: reemplaza all/top/stock/low/full."""
+    # FIX 2026-08-28 (auditoría Productos): esta misma ruta física sirve tanto
+    # el subtab "Inventario" (preset=all/accion/etc.) como -- vía el wrapper
+    # /partials/products-full-candidates -- el subtab "Candidatos FULL"
+    # (preset=full_candidates). Un usuario con acceso a uno pero no al otro
+    # necesita el gate correcto según qué vista está pidiendo en realidad.
+    _require_subtab(request, "ml", "productos", "full-candidates" if preset == "full_candidates" else "inventory")
     from datetime import datetime, timedelta
     client = await get_meli_client()
     if not client:
@@ -9132,7 +9148,48 @@ async def products_inventory_partial(
                 and p.get("units", 0) > 2
                 and p.get("sku")
             ]
-            products.sort(key=lambda x: x.get("units", 0), reverse=True)
+            # FIX 2026-08-28 (auditoría Productos, Fix 7): antes ordenaba SOLO
+            # por unidades vendidas -- un candidato de alta rotación pero
+            # categoría pesada (TVs/Monitores: FULL cobra fee extra real por
+            # peso/dimensión) con margen ya ajustado podía salir primero aunque
+            # migrarlo a FULL fuera mal negocio (el fee adicional se come el
+            # margen restante). No existe en este proyecto un campo de
+            # peso/dimensión por SKU en BM (se investigó bm_sku_master y el
+            # payload de ConfColumns_Conditions_Excel -- no lo traen), así que
+            # se usa el proxy que SÍ está disponible sin ninguna llamada nueva
+            # (lectura DB pura, ya cacheada por el loop de categorías): margen
+            # real (bm_sku_master.cost_usd/retail_ph, misma fórmula que
+            # _margin_pct_simple usa para Ads) + categoría BM conocida como
+            # pesada (bm_sku_master.category, ej. "Televisions"/"Monitors").
+            # Unidades sigue siendo el criterio primario -- es la señal real
+            # de que vale la pena migrarlo -- pero un candidato pesado con
+            # margen <20% (mismo corte "rojo" que ya usa el resto del
+            # dashboard para margen, ver _margin_pct_simple callers) se
+            # penaliza hacia abajo en vez de competir en igualdad con uno
+            # liviano o de margen sano. Nunca se filtra/oculta, solo se reordena.
+            _fc_skus = [normalize_to_bm_sku(p["sku"]) for p in products if p.get("sku")]
+            _fc_master = await token_store.get_bm_master_rows_for_skus(_fc_skus) if _fc_skus else {}
+            _fc_fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
+            _FC_HEAVY_CATEGORY_HINTS = ("television", "monitor", "tv")  # match parcial, case-insensitive
+            for p in products:
+                _fc_row = _fc_master.get(normalize_to_bm_sku(p.get("sku", "")))
+                _fc_cost_usd = (_fc_row.get("cost_usd") or 0) if _fc_row else 0
+                _fc_cat = ((_fc_row.get("category") or "") if _fc_row else "").lower()
+                _fc_price = p.get("price") or 0
+                p["_fc_margin_pct"] = (
+                    _margin_pct_simple(_fc_price, _fc_cost_usd, _fc_fx)
+                    if (_fc_price and _fc_cost_usd) else None
+                )
+                p["_fc_heavy_category"] = any(h in _fc_cat for h in _FC_HEAVY_CATEGORY_HINTS)
+
+            def _fc_score(p):
+                _units = p.get("units", 0) or 0
+                _margin = p.get("_fc_margin_pct")
+                if p.get("_fc_heavy_category") and (_margin is None or _margin < 20):
+                    return _units * 0.5
+                return _units
+
+            products.sort(key=_fc_score, reverse=True)
         elif preset == "no_stock":
             products = [p for p in products if p.get("available_quantity", 0) == 0]
         elif preset == "accion":
@@ -9443,6 +9500,7 @@ async def products_all_partial(request: Request):
 @app.get("/partials/products-summary", response_class=HTMLResponse)
 async def products_summary_partial(request: Request):
     """KPIs — ultra rapido: solo ordenes (cached) + item count."""
+    _require_subtab(request, "ml", "productos", "summary")
     from datetime import datetime, timedelta
     client = await get_meli_client()
     if not client:
@@ -9502,6 +9560,27 @@ async def products_summary_partial(request: Request):
             })
 
         daily_goal = await token_store.get_daily_goal(client.user_id)
+
+        # FIX 2026-08-28 (auditoría Productos, Fix 8): "Acción Req." (preset
+        # accion de Inventario -- sobreventa + sin stock con BM disponible +
+        # stock crítico) no tenía ninguna señal de urgencia en Resumen, solo
+        # KPIs de venta. Se lee el mismo _stock_issues_cache ya calculado por
+        # el prewarm (misma llave que usa el preset "accion", threshold=10)
+        # en vez de recalcular nada aquí -- este endpoint es deliberadamente
+        # "ultra rápido" (ver docstring), no debe forzar un cómputo pesado.
+        # Si el caché aún está frío (primer ciclo tras un deploy), la tarjeta
+        # simplemente no se muestra en vez de mentir con un 0.
+        _sic_entry = _stock_issues_cache.get(f"stock_issues:{client.user_id}:t10")
+        accion_count = None
+        if _sic_entry:
+            _sic = _sic_entry[1]
+            _accion_ids = (
+                {p["id"] for p in _sic.get("oversell_risk", []) if p.get("id")}
+                | {p["id"] for p in _sic.get("restock", []) if p.get("id")}
+                | {p["id"] for p in _sic.get("critical", []) if p.get("id")}
+            )
+            accion_count = len(_accion_ids)
+
         return templates.TemplateResponse(request, "partials/products_summary.html", {            "revenue_30d": revenue_30d,
             "total_units": total_units,
             "total_orders": total_orders,
@@ -9512,6 +9591,7 @@ async def products_summary_partial(request: Request):
             "avg_ticket": avg_ticket,
             "top_products": top_products,
             "daily_goal": daily_goal,
+            "accion_count": accion_count,
         })
     finally:
         await client.close()
@@ -9981,6 +10061,7 @@ async def products_deals_partial(request: Request):
 @app.get("/partials/products-listings", response_class=HTMLResponse)
 async def products_listings_partial(request: Request):
     """Listings: Quality Score A-D — pestaña de Productos, mismo dato que /api/ml/listing-quality (sin cambios)."""
+    _require_subtab(request, "ml", "productos", "listings")
     return templates.TemplateResponse(request, "partials/products_listings.html", {})
 
 
@@ -11903,6 +11984,7 @@ async def health_feedback_partial(request: Request, status: str = Query("pending
 
 @app.get("/partials/item-edit/{item_id}", response_class=HTMLResponse)
 async def item_edit_partial(request: Request, item_id: str):
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -13940,6 +14022,7 @@ def _evict_item_from_alerts(uid: str, item_id: str):
 async def suppress_activate_item(item_id: str, request: Request):
     """Oculta permanentemente un item de la sección Activar para este usuario.
     Persiste en DB — sobrevive deploys y reinicios. No afecta BM ni ML."""
+    _require_subtab(request, "ml", "productos", "stock")
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
@@ -13982,7 +14065,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
     Body (optional): { "pct": 1.0 }  — porcentaje del stock BM DISPONIBLE a usar (default 100%)
     Returns: { ok, item_id, results: [{variation_id, sku, combo, bm_total, bm_avail, meli_qty, updated}] }
     """
-    import httpx
+    _require_subtab(request, "ml", "productos", "stock")
     BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
     BM_AVAIL_URL_SYNC = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 
@@ -14013,25 +14096,23 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
 
         # Fetch detalle de cada variacion via /items/{id}/variations/{var_id}
         # Este endpoint devuelve seller_custom_field por variacion (el batch no lo hace)
-        access_token = client.access_token
-
-        async def _fetch_variation_detail(var_id, http_client):
+        # FIX 2026-08-28 (auditoría Productos, Fix 5): antes usaba httpx.AsyncClient()
+        # crudo con Bearer directo -- se saltaba el retry/backoff de 429 que
+        # MeliClient._request() ya implementa (3 intentos, respeta Retry-After).
+        # Bajo contención real de los ~40 semáforos locales de ML (ninguna fila
+        # global coordina entre ellos, ver Hallazgo #2), una llamada cruda sin
+        # ese reintento es justo lo que puede disparar un 429 en cascada.
+        # client.get() usa el mismo _client (mismo token, mismo refresh
+        # automático) y aplica el retry real.
+        async def _fetch_variation_detail(var_id):
             try:
-                resp = await http_client.get(
-                    f"https://api.mercadolibre.com/items/{item_id}/variations/{var_id}",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    return resp.json()
+                return await client.get(f"/items/{item_id}/variations/{var_id}")
             except Exception:
-                pass
-            return None
+                return None
 
-        async with httpx.AsyncClient() as http_pre:
-            var_details = await asyncio.gather(
-                *[_fetch_variation_detail(v.get("id"), http_pre) for v in raw_vars_base]
-            )
+        var_details = await asyncio.gather(
+            *[_fetch_variation_detail(v.get("id")) for v in raw_vars_base]
+        )
 
         # Construir raw_vars enriquecidas: SKU real del detail + combo/stock del cliente
         raw_vars = []
@@ -14311,6 +14392,17 @@ async def debug_item_variations(item_id: str, request: Request):
         await client.close()
 
 
+# FIX 2026-08-28 (auditoría Productos, Fix 1): CÓDIGO MUERTO -- misma colisión
+# ya documentada arriba para `/stock` (barrido 2026-08-08): `app.include_router(items_router)`
+# (línea ~1462, PREFIX="/api/items") se registra ANTES de este decorador, y
+# `app/api/items.py::update_status` define la MISMA ruta
+# (PUT /{item_id}/status → /api/items/{item_id}/status). FastAPI hace
+# first-match-wins por orden de registro, así que ESTA versión NUNCA corre en
+# producción -- confirmado en vivo (curl local devuelve el formato de error
+# exacto de items.py, no el de aquí). El fix real de "no pausar un listing
+# activo" se aplicó en app/api/items.py::update_status (la versión viva). Se
+# aplicó la MISMA validación aquí también por si algún día se limpia la
+# duplicación -- no se borra, mismo criterio que el comentario de `/stock`.
 @app.put("/api/items/{item_id}/status")
 async def update_item_status_api(item_id: str, request: Request):
     """Cambia el estado de un item (active/paused)."""
@@ -14322,6 +14414,27 @@ async def update_item_status_api(item_id: str, request: Request):
         status = body.get("status", "active")
         if status not in ("active", "paused"):
             return JSONResponse({"detail": "Status invalido"}, status_code=400)
+        if status == "paused":
+            # REGLA DURA DEL PROYECTO (CLAUDE.md): nunca pausar un listing sano
+            # -- pausar penaliza el algoritmo de ML, siempre usar
+            # available_quantity=0. La ÚNICA transición legítima a "paused" es
+            # el paso intermedio obligatorio que exige la propia API de ML para
+            # reactivar un item "closed" (ML no permite closed→active directo,
+            # ver reactivateItem() en items.html). Se valida el estado REAL en
+            # ML (no el que mande el body) antes de permitir la transición --
+            # encontrado en la auditoría de Productos 2026-08-28: el <select>
+            # del modal de edición permitía mandar "paused" sobre cualquier
+            # item activo sin ninguna validación.
+            try:
+                current = await client.get_item(item_id)
+            except Exception as e:
+                return JSONResponse({"detail": f"No se pudo verificar el estado actual en ML: {e}"}, status_code=400)
+            current_status = current.get("status")
+            if current_status != "closed":
+                return JSONResponse(
+                    {"detail": "No se puede pausar un listing activo -- usa available_quantity=0 en su lugar (pausar penaliza el algoritmo de ML)."},
+                    status_code=400,
+                )
         result = await client.update_item_status(item_id, status)
         return {"ok": True, "status": status}
     except Exception as e:
@@ -14333,6 +14446,7 @@ async def update_item_status_api(item_id: str, request: Request):
 @app.post("/api/items/{item_id}/close")
 async def close_item_api(item_id: str, request: Request):
     """Elimina un listing de ML: status=closed (única opción via API de ML)."""
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
@@ -14348,6 +14462,7 @@ async def close_item_api(item_id: str, request: Request):
 @app.post("/api/items/close-batch")
 async def close_items_batch_api(request: Request):
     """Elimina múltiples listings de ML: status=closed en secuencia. body: {item_ids: [...]}"""
+    _require_subtab(request, "ml", "productos", "listings")
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
@@ -22654,6 +22769,24 @@ async def diag_cache_health(token: str = ""):
     gr_age_s  = round(now - _bm_bulk_gr_cache[0])  if _bm_bulk_gr_cache  else None
     all_age_s = round(now - _bm_bulk_all_cache[0]) if _bm_bulk_all_cache else None
 
+    # FIX 2026-08-28 (auditoría Productos, Fix 6 -- investigación de "sync de
+    # costo/margen lleva 8+ días sin refrescarse"): bulk_gr_age_s/bulk_all_age_s
+    # de arriba NO miden ese sync. Miden _bm_bulk_gr_cache/_bm_bulk_all_cache,
+    # que quedaron INALCANZABLES (nunca se repueblan) desde el fix del
+    # 2026-08-20 que migró todo a bm_sku_master -- ver el comentario en
+    # _get_bm_stock_cached() y en /api/diag/sku. Confirmado en vivo el
+    # 2026-08-28: bulk_gr_age_s marcaba ~707,000s (8.2 días) en producción
+    # incluso en un proceso recién redesplegado -- es exactamente el
+    # comportamiento esperado de un caché muerto, no un loop roto. El sync
+    # real de costo/margen (_sync_bm_product_catalog, corre 1x/día vía
+    # ConfColumns_Conditions_Excel) escribe en bm_sku_master.catalog_updated_at,
+    # que es una fuente TOTALMENTE distinta -- se agrega aquí para que este
+    # mismo endpoint (sin sesión, solo DIAG_TOKEN) pueda diagnosticarlo
+    # directamente en vez de necesitar /api/catalog/status (requiere sesión
+    # admin, no disponible para diagnóstico externo).
+    _catalog_last_sync = await token_store.get_bm_catalog_last_sync()
+    _catalog_sync_age_h = round((now - _catalog_last_sync) / 3600, 1) if _catalog_last_sync else None
+
     return JSONResponse({
         "cache_total_skus": total,
         "cache_expired": expired,
@@ -22664,6 +22797,9 @@ async def diag_cache_health(token: str = ""):
         "bulk_gr_rows":    len(_bm_bulk_gr_cache[1])  if _bm_bulk_gr_cache  else 0,
         "bulk_all_age_s":  all_age_s,
         "bulk_all_rows":   len(_bm_bulk_all_cache[1]) if _bm_bulk_all_cache else 0,
+        "bulk_gr_all_deprecated_note": "bulk_gr_age_s/bulk_all_age_s son de un caché en desuso desde 2026-08-20 (ver comentario) -- no reflejan el sync de costo/margen. Usar catalog_sync_last_age_h para eso.",
+        "catalog_sync_last_age_h": _catalog_sync_age_h,
+        "catalog_sync_running": _catalog_sync_running,
     })
 
 

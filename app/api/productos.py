@@ -13,7 +13,7 @@ import math
 import aiosqlite
 import httpx
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -23,10 +23,28 @@ from app.services.token_store import (
     DATABASE_PATH, save_product_video, update_clip_status, get_videos_for_items,
     get_bm_catalog_all,
 )
+from app.services import user_store as _us
 
 router = APIRouter(prefix="/api/productos", tags=["productos"])
 logger = logging.getLogger(__name__)
 _templates = Jinja2Templates(directory="app/templates")
+
+
+def _require_subtab(request: Request, platform: str, tab: str, subtab: str) -> None:
+    """Gate de subtab, mismo criterio que main.py:_require_subtab. Se duplica
+    aquí (en vez de importar) porque main.py importa este router -- importar
+    de vuelta crearía un ciclo. AuthMiddleware SOLO filtra rutas de página (no
+    /api/*), así que sin este check cualquier usuario con sesión válida podía
+    subir un clip de video a CUALQUIER item de ML aunque no tuviera el subtab
+    "Productos" asignado (encontrado en la auditoría de Productos, 2026-08-28)."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") == "admin":
+        return
+    sections = du.get("allowed_sections") or []
+    if not sections:
+        return
+    if not _us.has_subtab_access(sections, platform, tab, subtab):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
 
 # ── BM endpoints ───────────────────────────────────────────────────────────────
 _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
@@ -668,6 +686,7 @@ async def upload_clip(item_id: str, request: Request):
     Body: {"video_id": "uuid", "sku": "SNTV007"}
     El video debe estar en _video_cache de lanzar.py.
     """
+    _require_subtab(request, "ml", "productos", "listings")
     from app.api.lanzar import _video_cache
 
     user_id = _ctx.get()

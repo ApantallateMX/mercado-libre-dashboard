@@ -456,9 +456,19 @@
             <div class="flex gap-2">
                 <select id="edit-status" class="flex-1 border rounded px-3 py-2 text-sm tracked-field"
                         data-field="status" data-original="{{ item.status }}"
-                        onchange="checkModified(this)">
+                        onchange="checkModified(this)" {% if item.status != 'paused' %}disabled{% endif %}>
                     <option value="active" {% if item.status == 'active' %}selected{% endif %}>Activo</option>
-                    <option value="paused" {% if item.status == 'paused' %}selected{% endif %}>Pausado</option>
+                    {# FIX 2026-08-28 (auditoría Productos): "Pausado" quitado como opción
+                       elegible -- CLAUDE.md prohíbe pausar listings (penaliza el algoritmo,
+                       usar available_quantity=0). Este select ya NO es el flujo de
+                       reactivación (ese vive en reactivateItem(), items.html, que llama
+                       PUT /api/items/{id}/status con status=paused directo, sin pasar por
+                       aquí) -- si el item YA está paused se deja visible/seleccionado nada
+                       más para que quede claro en pantalla, pero el select se deshabilita
+                       (no se puede reelegir "paused" desde este modal). #}
+                    {% if item.status == 'paused' %}
+                    <option value="paused" selected>Pausado</option>
+                    {% endif %}
                 </select>
                 <button id="btn-save-status"
                         onclick="saveField('{{ item.id }}', 'status', {status: document.getElementById('edit-status').value}, 'btn-save-status', 'msg-status')"

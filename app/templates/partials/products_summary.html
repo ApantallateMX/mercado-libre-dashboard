@@ -1,5 +1,23 @@
 <!-- KPIs principales -->
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    {# FIX 2026-08-28 (auditoría Productos, Fix 8): tarjeta de "Acción Req." --
+       mismo dato que ya calcula/cachea el preset "accion" de Inventario
+       (sobreventa + sin stock con BM disponible + stock crítico), ahora
+       visible también en Resumen en vez de solo dentro de Inventario. Mismo
+       patrón visual (clickable, hover, color de urgencia) que las demás
+       tarjetas de esta fila. accion_count es None si el caché de alertas
+       todavía está frío (primer ciclo tras un deploy) -- se oculta en vez de
+       mostrar un 0 engañoso. #}
+    {% if accion_count is not none %}
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition kpi-card"
+         onclick="window.switchProductTab('inventory', '/partials/products-inventory?preset=accion&enrich=full')">
+        <p class="text-sm text-gray-500 mb-1">Acción requerida</p>
+        <p class="text-2xl font-bold {{ 'text-red-600' if accion_count > 0 else 'text-green-600' }}">{{ accion_count }}</p>
+        <p class="text-sm {{ 'text-red-500' if accion_count > 0 else 'text-gray-400' }} mt-1">
+            {% if accion_count > 0 %}sobreventa, sin stock o stock crítico &rarr;{% else %}sin pendientes ahora mismo{% endif %}
+        </p>
+    </div>
+    {% endif %}
     <!-- Revenue 30d -->
     <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition kpi-card"
          onclick="window.switchProductTab('inventory', '/partials/products-inventory?preset=top&enrich=full')">
@@ -89,6 +107,12 @@
     <div class="bg-white rounded-lg shadow p-5">
         <h3 class="text-sm font-semibold text-gray-700 mb-3">Acciones rapidas</h3>
         <div class="space-y-2">
+            {% if accion_count and accion_count > 0 %}
+            <button onclick="window.switchProductTab('inventory', '/partials/products-inventory?preset=accion&enrich=full')"
+                    class="w-full text-left px-3 py-2 rounded bg-red-50 hover:bg-red-100 text-sm text-red-700 transition font-semibold">
+                {{ accion_count }} con acción requerida &rarr;
+            </button>
+            {% endif %}
             {% if products_no_sales > 0 %}
             <button onclick="window.switchProductTab('inventory', '/partials/products-inventory?preset=low')"
                     class="w-full text-left px-3 py-2 rounded bg-red-50 hover:bg-red-100 text-sm text-red-700 transition">
