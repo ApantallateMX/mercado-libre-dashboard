@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (3) — FIX: logjam en Vigilancia (ML winner / Amazon Buy Box)
+
+Tercer caso del mismo bug detectado hoy (zonas, comprador, ahora Vigilancia).
+`get_snapshot_check_candidates()` prioriza items sin fila en `listing_snapshots`
+("never_checked") sobre la rotación LRU normal — un item que rompe
+`get_catalog_winner_status`, da 404, o no resuelve ASIN, nunca llegaba a tener
+esa fila (el `continue` no persistía el intento), así que quedaba
+PERMANENTEMENTE en el grupo de máxima prioridad, ocupando cupo de 20 cada
+ciclo para siempre.
+
+Fix (backend-integrations-engineer): mismo patrón — sets en memoria
+(`_ml_winner_check_failed_ids` / `_amazon_buybox_check_failed_ids`, keyed por
+cuenta) + nuevo parámetro `exclude_ids` en `get_snapshot_check_candidates()`.
+Se excluye en cualquier fallo (incluye errores transitorios de red/rate-limit,
+mismo trade-off ya aceptado en los otros dos fixes) — se resetea en cada
+deploy. Verificado con test unitario directo de la función.
+
+---
+
 ## 2026-08-28 (2) — FIX: constancia_data fiscal (billing_fiscal_data) migrada a S3
 
 Segundo caso del mismo riesgo detectado el mismo día en `amazon_buyer_message_attachments`:
