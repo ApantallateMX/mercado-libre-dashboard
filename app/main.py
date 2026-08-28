@@ -16247,6 +16247,27 @@ async def multi_sync_status():
     return status
 
 
+@app.get("/api/diag/db-integrity-check")
+async def diag_db_integrity_check(token: str = "", quick: bool = True):
+    """EMERGENCIA 2026-08-27: tras truncar el WAL, tokens.db empezó a dar
+    "database disk image is malformed" -- este endpoint corre
+    PRAGMA integrity_check (o quick_check si quick=True, más rápido, menos
+    exhaustivo) para saber el ALCANCE real del daño antes de decidir qué
+    hacer. Solo lectura (integrity_check no modifica nada)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_ic
+    try:
+        async with _aio_ic.connect(DATABASE_PATH, timeout=30) as db:
+            pragma = "quick_check" if quick else "integrity_check"
+            cur = await db.execute(f"PRAGMA {pragma}")
+            rows = await cur.fetchall()
+        results = [r[0] for r in rows]
+        return JSONResponse({"pragma": pragma, "ok": results == ["ok"], "results": results[:50], "total_issues": len(results)})
+    except Exception as _e:
+        return JSONResponse({"error": str(_e), "type": type(_e).__name__}, status_code=500)
+
+
 @app.post("/api/diag/wal-backup-and-truncate")
 async def diag_wal_backup_and_truncate(token: str = ""):
     """ÚLTIMO RECURSO (2026-08-27, aprobado explícitamente por Jovan): sube
