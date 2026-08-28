@@ -16247,6 +16247,45 @@ async def multi_sync_status():
     return status
 
 
+@app.post("/api/diag/wal-backup-and-truncate")
+async def diag_wal_backup_and_truncate(token: str = ""):
+    """ÚLTIMO RECURSO (2026-08-27, aprobado explícitamente por Jovan): sube
+    tokens.db-wal a S3 tal cual (bytes crudos, sin parsear) ANTES de
+    truncarlo -- el checkpoint normal (wal-checkpoint) ya falló por falta de
+    espacio (backend-integrations-engineer confirmó: con 9.6MB de WAL y el
+    checkpoint fallando, el disco tiene MENOS de 9.6MB libres reales). Esta
+    es la única red de seguridad posible: preserva los frames
+    confirmados-no-fusionados fuera del disco (subir a S3 no necesita
+    espacio libre local) por si hace falta reconstruir manualmente después.
+    Trunca (no borra el archivo) el -wal a 0 bytes -- SQLite lo reinicia
+    limpio en la siguiente conexión.
+
+    PÉRDIDA DE DATOS ESPERADA Y ACEPTADA: todo commit que solo vivía en el
+    WAL desde el último checkpoint exitoso deja de estar en tokens.db
+    (sesiones recientes, filas de audit_log, tokens ML/Amazon refrescados,
+    posiblemente algunos de los adjuntos de compradores insertados hoy).
+    El respaldo en S3 (bytes crudos del WAL) es la vía para recuperar
+    manualmente después lo que se pueda -- no es recuperación automática."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import s3_storage as _s3_wal
+    import time as _time_wal
+    wal_path = Path(DATABASE_PATH + "-wal")
+    if not wal_path.is_file():
+        return JSONResponse({"error": "no hay -wal, nada que respaldar"}, status_code=404)
+    if not _s3_wal.is_configured():
+        return JSONResponse({"error": "S3 no está configurado -- no hay dónde respaldar, abortado por seguridad"}, status_code=500)
+    content = wal_path.read_bytes()
+    s3_key = f"emergency_wal_backup/tokens.db-wal.{int(_time_wal.time())}"
+    _s3_wal.upload_bytes(s3_key, content, "application/octet-stream")
+    verify = _s3_wal.get_object_bytes(s3_key)
+    if verify is None or len(verify) != len(content):
+        return JSONResponse({"error": "verificación de backup falló, NO se truncó nada"}, status_code=500)
+    with open(wal_path, "r+b") as f:
+        f.truncate(0)
+    return JSONResponse({"ok": True, "backed_up_to": s3_key, "wal_bytes_freed": len(content)})
+
+
 @app.get("/api/diag/db-file-sizes")
 async def diag_db_file_sizes(token: str = ""):
     """EMERGENCIA 2026-08-27: solo lectura de tamaños de archivo (os.path.getsize,
