@@ -332,7 +332,7 @@ function _renderScores(data) {
         '<th class="pb-2 text-right pr-3">Stock BM</th>' +
         '<th class="pb-2 text-right pr-3">Stock ML</th>' +
         '<th class="pb-2 text-right pr-3">CVR%</th>' +
-        '<th class="pb-2 text-left pl-3">Desglose (V·B·M·C·S)</th>' +
+        '<th class="pb-2 text-left pl-3">Desglose (V·B·M·C·S·P)</th>' +
         '</tr></thead><tbody>';
     items.forEach(function(item, idx) {
         var s = item.score;
@@ -344,7 +344,12 @@ function _renderScores(data) {
             '<span class="' + (d.stock_bm > 0 ? 'text-green-600' : 'text-gray-300') + '" title="Stock BM">B' + (d.stock_bm||0) + '</span> ' +
             '<span class="' + (d.stock_ml > 0 ? 'text-green-600' : 'text-gray-300') + '" title="Stock ML">M' + (d.stock_ml||0) + '</span> ' +
             '<span class="' + (d.cvr > 0 ? 'text-green-600' : 'text-gray-300') + '" title="CVR">C' + (d.cvr||0) + '</span> ' +
-            '<span class="' + (d.sku > 0 ? 'text-green-600' : 'text-gray-300') + '" title="Tiene SKU">S' + (d.sku||0) + '</span>';
+            '<span class="' + (d.sku > 0 ? 'text-green-600' : 'text-gray-300') + '" title="Tiene SKU">S' + (d.sku||0) + '</span> ' +
+            // FIX 2026-08-28 (auditoria de Salud, Fix 8): precio_vs_competencia
+            // es una PENALIZACION (0 o -12), nunca positiva -- por eso el color
+            // se invierte (rojo cuando SI penaliza) en vez del criterio "verde
+            // si > 0" que usan las otras 5 señales.
+            '<span class="' + (d.precio_vs_competencia < 0 ? 'text-red-600' : 'text-gray-300') + '" title="Precio vs competencia (listing_snapshots -- negativo si no gana el catálogo)">P' + (d.precio_vs_competencia||0) + '</span>';
         var thumb = item.thumbnail
             ? '<img src="' + item.thumbnail.replace('http://', 'https://') + '" class="w-8 h-8 object-contain rounded flex-shrink-0" loading="lazy">'
             : '<div class="w-8 h-8 bg-gray-100 rounded flex-shrink-0"></div>';

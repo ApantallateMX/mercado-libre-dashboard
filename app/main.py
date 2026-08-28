@@ -1554,13 +1554,11 @@ _NAV_TAB_DEFS = [
          ml_href="/facturacion", amz_href="/facturacion",
          ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab="facturacion", amz_tab=None, admin_only=False, badge=None),
-    # ml_tab/amz_tab=None a propósito -- MI2 §17b (changelog) es visible para
-    # CUALQUIER usuario logueado, sin pasar por PERMISSION_TREE (línea 1618:
-    # el filtro de allowed_sections solo aplica si tab_key no es None).
-    dict(id="changelog", label="Novedades", icon="🆕",
-         ml_href="/changelog", amz_href="/changelog",
-         ml_active=["changelog"], amz_active=None, amz_uses_dispatcher=False,
-         ml_tab=None, amz_tab=None, admin_only=False, badge=None),
+    # Novedades (changelog) -- 2026-08-28: Jovan pidió que NO sea un tab fijo
+    # -- vive como popup al cargar + entrada en la campana de notificaciones
+    # (ver base.html), igual que el resto de alertas del sistema. /changelog
+    # sigue siendo una ruta real (accesible desde el popup/campana, "Ver
+    # todas"), solo se quitó de _NAV_TAB_DEFS.
     # ml_tab/amz_tab=None a propósito -- MI2 §17a (Manual de Usuario) es
     # visible para CUALQUIER usuario logueado, mismo patrón que Novedades.
     dict(id="manual", label="Manual", icon="📖",
@@ -10010,9 +10008,19 @@ _STATUS_LABELS = {"green": "Excelente", "yellow": "Atencion", "orange": "Riesgo"
 
 
 def _compute_health_score(claims_rate: float, cancel_rate: float, delay_rate: float,
-                           open_claims: int, unanswered_q: int) -> int:
+                           open_claims: int, unanswered_q: int,
+                           unread_messages: int = 0, pending_feedback: int = 0) -> int:
     """Compute a composite health score 0-100.
-    Weights: claims 30%, cancellations 20%, delays 20%, open_claims 15%, questions 15%.
+    Weights: claims 25%, cancellations 17%, delays 17%, open_claims 13%,
+    questions 13%, messages 9%, feedback 6%.
+
+    FIX 2026-08-28 (auditoria de Salud): los pesos originales (30/20/20/15/15,
+    sin mensajes ni feedback) hacian que el score pudiera marcar "Excelente"
+    con decenas de mensajes sin responder o reseñas negativas sin atender --
+    ninguna de las 2 señales entraba al calculo. Se reparten los pesos
+    nuevos proporcionalmente desde los originales (mismo orden relativo,
+    ninguna señal existente pierde peso relativo entre si) para dejar
+    9%+6% a las señales nuevas.
     Each sub-score is 100 when perfect and 0 when at/above red threshold."""
     t = _MELI_THRESHOLDS
     def _rate_score(rate, key):
@@ -10030,8 +10038,18 @@ def _compute_health_score(claims_rate: float, cancel_rate: float, delay_rate: fl
     s_open = max(0, round((1 - min(open_claims, 5) / 5) * 100))
     # Unanswered questions: 0 = 100, 10+ = 0
     s_unans = max(0, round((1 - min(unanswered_q, 10) / 10) * 100))
+    # Mensajes pendientes: 0 = 100, 15+ = 0 -- umbral mas alto que reclamos/
+    # preguntas porque el volumen normal de mensajes suele ser mayor y no
+    # todos representan el mismo riesgo (a diferencia de un reclamo abierto).
+    s_msgs = max(0, round((1 - min(unread_messages, 15) / 15) * 100))
+    # Feedback negativo/neutro sin revisar: 0 = 100, 5+ = 0 -- umbral bajo
+    # (mismo criterio que reclamos), cada reseña negativa pesa por si sola.
+    s_fb = max(0, round((1 - min(pending_feedback, 5) / 5) * 100))
 
-    score = round(s_claims * 0.30 + s_cancel * 0.20 + s_delays * 0.20 + s_open * 0.15 + s_unans * 0.15)
+    score = round(
+        s_claims * 0.25 + s_cancel * 0.17 + s_delays * 0.17 +
+        s_open * 0.13 + s_unans * 0.13 + s_msgs * 0.09 + s_fb * 0.06
+    )
     return max(0, min(100, score))
 
 
@@ -10166,6 +10184,19 @@ async def health_scores(request: Request):
     _scored: list = []
     _products = (_health_products_cache.get(uid) or (0, []))[1]
 
+    # FIX 2026-08-28 (auditoria de Salud, Fix 8): precio vs competencia --
+    # antes el score no consideraba si el listing esta ganando el catalogo.
+    # NO se hace una llamada nueva a ML por cada score (eso dispararia N
+    # llamadas por sync, mismo riesgo de 429 en cascada del Hallazgo #2) --
+    # se reusa listing_snapshots (poblado por el loop de Vigilancia en
+    # segundo plano, _check_ml_winner_status_bg) via get_listing_snapshots_map,
+    # exactamente la misma fuente ya usada hoy en el fix de Deals.
+    try:
+        _snap_ids = [p["id"] for p in _products if p.get("id")]
+        _snapshots_map = await token_store.get_listing_snapshots_map("ml", uid, _snap_ids)
+    except Exception:
+        _snapshots_map = {}
+
     def _calc_score(p: dict) -> dict:
         score = 0
         detail = {}
@@ -10208,13 +10239,27 @@ async def health_scores(request: Request):
         score += ss
         detail["sku"] = ss
 
+        # Precio vs competencia (penalizacion, no suma): -12 pts si
+        # listing_snapshots confirma que NO estamos ganando el catalogo.
+        # is_winner se guarda en SQLite como INTEGER (0/1/NULL) -- aiosqlite
+        # lo entrega como int 0/1 o None, NUNCA como bool de Python, asi que
+        # comparar con "is False" jamas coincide (0 is False -> False). Se
+        # compara con == 0 explicitamente. None significa "sin dato todavia"
+        # (el loop de Vigilancia es gradual, 20 listings/cuenta/ciclo de 15
+        # min) -- nunca se penaliza por falta de dato, solo por señal
+        # confirmada, mismo criterio que get_listing_snapshots_map.
+        snap = _snapshots_map.get(p.get("id")) or {}
+        sp = -12 if snap.get("is_winner") == 0 else 0
+        score += sp
+        detail["precio_vs_competencia"] = sp
+
         return {
             "id": p.get("id"),
             "title": p.get("title", ""),
             "sku": p.get("sku", ""),
             "thumbnail": p.get("thumbnail", ""),
             "permalink": p.get("permalink", ""),
-            "score": score,
+            "score": max(0, score),
             "detail": detail,
             "units_30d": u,
             "bm_avail": bm,
@@ -10411,14 +10456,26 @@ async def health_summary_partial(
             except Exception:
                 return 0
 
+        async def _fetch_vigilancia():
+            # FIX 2026-08-28 (auditoria de Salud): Vigilancia (health_vigilancia.html)
+            # ya calcula publicaciones sin ganar el catalogo hace >=24h, pero eso
+            # nunca llegaba a la barra de "Alertas Activas" de este Resumen --
+            # mismo umbral (min_hours=24.0) que usa el partial de Vigilancia.
+            try:
+                rows = await token_store.get_not_winning_listings("ml", str(client.user_id), min_hours=24.0)
+                return len(rows)
+            except Exception:
+                return 0
+
         user_task = asyncio.ensure_future(client.get_user_info())
         q_task = asyncio.ensure_future(_fetch_questions())
         c_task = asyncio.ensure_future(_fetch_claims())
         m_task = asyncio.ensure_future(_fetch_messages())
         f_task = asyncio.ensure_future(_fetch_pending_feedback())
+        v_task = asyncio.ensure_future(_fetch_vigilancia())
 
-        user, unanswered_questions, open_claims, unread_messages, pending_feedback = await asyncio.gather(
-            user_task, q_task, c_task, m_task, f_task
+        user, unanswered_questions, open_claims, unread_messages, pending_feedback, not_winning_count = await asyncio.gather(
+            user_task, q_task, c_task, m_task, f_task, v_task
         )
 
         reputation = user.get("seller_reputation", {})
@@ -10444,10 +10501,15 @@ async def health_summary_partial(
         cancel_value = metrics.get("cancellations", {}).get("value", 0) or 0
         delay_value = metrics.get("delayed_handling_time", {}).get("value", 0) or 0
 
-        urgent_count = open_claims + unanswered_questions
+        # FIX 2026-08-28 (auditoria de Salud): antes solo sumaba claims+questions
+        # -- mensajes pendientes y feedback negativo sin revisar no elevaban el
+        # conteo de "urgentes" ni tumbaban el banner "Todo en orden" (ver
+        # health_summary.html), aunque hubiera decenas de cada uno.
+        urgent_count = open_claims + unanswered_questions + unread_messages + pending_feedback
 
         health_score = _compute_health_score(claims_rate, cancel_rate, delay_rate,
-                                              open_claims, unanswered_questions)
+                                              open_claims, unanswered_questions,
+                                              unread_messages, pending_feedback)
 
         sales_period = metrics.get("claims", {}).get("period", "60 days")
         claims_margin = _compute_metric_margin(claims_rate, "claims")
@@ -10461,6 +10523,7 @@ async def health_summary_partial(
             unanswered_questions=unanswered_questions,
             unread_messages=unread_messages,
             pending_feedback=pending_feedback,
+            not_winning_count=not_winning_count,
             urgent_count=urgent_count,
             health_score=health_score,
             sales_period=sales_period,
@@ -11678,27 +11741,49 @@ async def health_reputation_partial(request: Request):
         cancel_margin = _compute_metric_margin(cancel_rate, "cancellations")
         delay_margin = _compute_metric_margin(delay_rate, "delays")
 
-        # Sales count for context
+        # Sales count for context (informativo -- ver nota de _margin_count
+        # sobre por que esto YA NO se usa como denominador de margen)
         total_sales = metrics.get("claims", {}).get("value", 0) or 0
         period = metrics.get("claims", {}).get("period", "60 days")
 
-        # Compute how many more incidents before next threshold
-        def _margin_count(rate, key, total):
+        # FIX 2026-08-28 (auditoria de Salud) -- 2 bugs reales corregidos aqui:
+        #
+        # 1) Denominador incorrecto: antes se llamaba con total=total_sales,
+        #    pero total_sales = metrics.claims.value, que es el CONTEO DE
+        #    RECLAMOS, no el total de ventas -- el calculo terminaba siendo
+        #    reclamos/reclamos (siempre ~1) en vez de reclamos/ventas. Ademas
+        #    ese mismo valor (de claims) se reusaba para cancelaciones y
+        #    demoras, que tienen su propio conteo. El total de ventas del
+        #    periodo no viene directo en la respuesta de ML, pero rate ya es
+        #    value/total (ambos del MISMO periodo que metrics.<x>.period) ->
+        #    total = value/rate se puede derivar sin otra llamada a la API.
+        #
+        # 2) "Proxima zona" corrida un escalon: devolvia "naranja" al estar en
+        #    verde, "rojo" al estar en amarillo, etc -- un escalon mas grave
+        #    que la zona real siguiente (_compute_metric_margin, la funcion
+        #    hermana usada en el gauge de arriba, ya tenia la secuencia
+        #    correcta verde->amarillo->naranja->rojo->critico; se alinea aqui
+        #    a la misma secuencia en vez de tener 2 fuentes de verdad distintas).
+        def _margin_count(rate, value, key):
             t = _MELI_THRESHOLDS[key]
+            total = (value / rate) if rate > 0 else 0
             if rate < t["green"]:
-                remaining = (t["green"] - rate) * max(total, 100)
-                return int(remaining), "verde"
+                remaining = (t["green"] - rate) * total if total > 0 else 0
+                return int(remaining), "amarillo"
             elif rate < t["yellow"]:
-                remaining = (t["yellow"] - rate) * max(total, 100)
+                remaining = (t["yellow"] - rate) * total if total > 0 else 0
                 return int(remaining), "naranja"
             elif rate < t["red"]:
-                remaining = (t["red"] - rate) * max(total, 100)
+                remaining = (t["red"] - rate) * total if total > 0 else 0
                 return int(remaining), "rojo"
             return 0, "critico"
 
-        claims_remaining, claims_next_zone = _margin_count(claims_rate, "claims", total_sales)
-        cancel_remaining, cancel_next_zone = _margin_count(cancel_rate, "cancellations", total_sales)
-        delay_remaining, delay_next_zone = _margin_count(delay_rate, "delays", total_sales)
+        claims_value = metrics.get("claims", {}).get("value", 0) or 0
+        cancel_value = metrics.get("cancellations", {}).get("value", 0) or 0
+        delay_value = metrics.get("delayed_handling_time", {}).get("value", 0) or 0
+        claims_remaining, claims_next_zone = _margin_count(claims_rate, claims_value, "claims")
+        cancel_remaining, cancel_next_zone = _margin_count(cancel_rate, cancel_value, "cancellations")
+        delay_remaining, delay_next_zone = _margin_count(delay_rate, delay_value, "delays")
 
         tips = []
         if claims_rate >= 0.02:
@@ -26036,6 +26121,47 @@ async def amazon_buyer_messages_unified(
     return {"days": days, "threads": all_threads[:100], "total": total_rows, "unread": unread, "stats": stats}
 
 
+@app.get("/api/amazon/health-counts")
+async def amazon_health_counts():
+    """Conteo ligero para el badge global de nav 'Salud' (Amazon) -- agrega
+    mensajes de compradores pendientes + feedback negativo/neutro sin
+    revisar de TODAS las cuentas Amazon configuradas.
+
+    FIX 2026-08-28 (auditoria de Salud): Amazon nunca tuvo un badge de nav
+    para Salud, a diferencia de ML (#health-badge en base.html) -- mismo
+    criterio ahora. Solo lee SQLite local (token_store), sin disparar poll
+    IMAP ni llamadas SP-API nuevas -- se llama cada 60s desde el nav, no se
+    puede darse el lujo de sumar carga (ver Hallazgo #2 de rate-limits:
+    ~40 semáforos locales sin fila global, un feature nuevo con polling
+    frecuente puede sumarse a un 429 en cascada)."""
+    try:
+        accounts = await token_store.get_all_amazon_accounts()
+    except Exception:
+        accounts = []
+    messages_total = 0
+    feedback_total = 0
+    for acc in accounts:
+        sid = acc.get("seller_id", "")
+        if not sid:
+            continue
+        try:
+            threads, _total = await _fetch_amazon_threads_for_seller(sid, days=30, oid="")
+            messages_total += sum(1 for t in threads if t["needs_response"])
+        except Exception:
+            pass
+        try:
+            rows = await token_store.get_amazon_feedback_tab(sid, "pending")
+            feedback_total += len(rows)
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "messages": messages_total,
+        "feedback": feedback_total,
+        "total": messages_total + feedback_total,
+    }
+
+
 @app.post("/api/amazon/buyer-messages/mark-read")
 async def amazon_buyer_messages_mark_read(request: Request):
     """Marca varios mensajes como leídos de una sola vez — el frontend llama
@@ -26044,6 +26170,7 @@ async def amazon_buyer_messages_mark_read(request: Request):
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    _require_subtab(request, "amz", "salud", "mensajes")
     try:
         body = await request.json()
         ids = [int(x) for x in (body.get("ids") or [])]
@@ -26060,6 +26187,7 @@ async def amazon_buyer_messages_take(request: Request):
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    _require_subtab(request, "amz", "salud", "mensajes")
     try:
         body = await request.json()
         seller_id = (body.get("seller_id") or "").strip()
@@ -26089,6 +26217,7 @@ async def amazon_buyer_messages_status(request: Request):
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    _require_subtab(request, "amz", "salud", "mensajes")
     try:
         body = await request.json()
         seller_id = (body.get("seller_id") or "").strip()
@@ -26124,6 +26253,7 @@ async def amazon_buyer_messages_followup(request: Request):
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    _require_subtab(request, "amz", "salud", "mensajes")
     try:
         body = await request.json()
         seller_id = (body.get("seller_id") or "").strip()
@@ -26201,6 +26331,7 @@ async def amazon_buyer_message_reply(
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    _require_subtab(request, "amz", "salud", "mensajes")
     text = (text or "").strip()
     if not text:
         return JSONResponse({"detail": "El texto de la respuesta es requerido"}, status_code=400)

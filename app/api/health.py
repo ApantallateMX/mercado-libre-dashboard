@@ -7,6 +7,25 @@ from app.services import token_store as _ts
 from app.services import user_store as _us
 
 
+def _require_subtab(request: Request, platform: str, tab: str, subtab: str) -> None:
+    """Gate de subtab, mismo criterio que main.py:_require_subtab. Se
+    duplica aquí (en vez de importar) porque main.py importa este router
+    (`from app.api.health import router as health_router`) -- importar de
+    vuelta crearía un ciclo. AuthMiddleware (main.py) SOLO filtra rutas de
+    página (no /api/*), así que sin este check cualquier usuario con sesión
+    válida podía responder reclamos/preguntas/mensajes vía fetch() directo
+    aunque no tuviera el subtab "Salud" asignado (encontrado en la auditoría
+    de Salud, 2026-08-28 -- igual que ya se corrigió para Deals ese mismo día)."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") == "admin":
+        return
+    sections = du.get("allowed_sections") or []
+    if not sections:
+        return
+    if not _us.has_subtab_access(sections, platform, tab, subtab):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
+
+
 async def _log_history(request: Request, username: str, action: str, item_id: str, detail: dict, section: str = "Salud") -> None:
     """Registro best-effort en audit_log — nunca debe tumbar la acción principal."""
     try:
@@ -108,13 +127,25 @@ async def health_counts():
             except Exception:
                 return 0
 
-        questions, claims, messages = await asyncio.gather(_q(), _c(), _m())
+        async def _f():
+            # FIX 2026-08-28 (auditoria de Salud): este conteo nunca incluyo
+            # feedback -- el badge global de "Salud" (base.html) nunca sumaba
+            # reseñas negativas/neutras pendientes, igual que el bug historico
+            # de Mensajes (2026-08-12, ver project_health_badge_messages_gap.md).
+            try:
+                rows = await _ts.get_ml_feedback_tab(str(client.user_id), "pending")
+                return len(rows)
+            except Exception:
+                return 0
+
+        questions, claims, messages, feedback = await asyncio.gather(_q(), _c(), _m(), _f())
         return {
             "ok": True,
             "unanswered_questions": questions,
             "open_claims": claims,
             "unread_messages": messages,
-            "total": questions + claims + messages,
+            "pending_feedback": feedback,
+            "total": questions + claims + messages + feedback,
             # FIX 2026-08-08 (barrido final de fuentes duplicadas): este
             # endpoint colisionaba con otro `GET /api/health/counts` en
             # main.py (código muerto, nunca corría por first-match-wins de
@@ -129,6 +160,7 @@ async def health_counts():
             "claims": claims,
             "questions": questions,
             "messages": messages,
+            "feedback": feedback,
         }
     finally:
         await client.close()
@@ -215,6 +247,7 @@ async def health_summary():
 
 @router.get("/claims")
 async def list_claims(
+    request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=50),
     status: str = Query("", description="Filter by status"),
@@ -222,6 +255,7 @@ async def list_claims(
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
     """Lista reclamos con paginacion."""
+    _require_subtab(request, "ml", "salud", "claims")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -237,8 +271,9 @@ async def list_claims(
 
 
 @router.get("/claims/{claim_id}")
-async def get_claim(claim_id: str):
+async def get_claim(claim_id: str, request: Request):
     """Detalle de un reclamo."""
+    _require_subtab(request, "ml", "salud", "claims")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -250,8 +285,9 @@ async def get_claim(claim_id: str):
 
 
 @router.post("/claims/{claim_id}/respond")
-async def respond_claim(claim_id: str, body: ClaimResponse):
+async def respond_claim(claim_id: str, body: ClaimResponse, request: Request):
     """Responder a un reclamo."""
+    _require_subtab(request, "ml", "salud", "claims")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -266,6 +302,7 @@ async def respond_claim(claim_id: str, body: ClaimResponse):
 
 @router.get("/questions")
 async def list_questions(
+    request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=50),
     status: str = Query("UNANSWERED"),
@@ -273,6 +310,7 @@ async def list_questions(
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
     """Lista preguntas."""
+    _require_subtab(request, "ml", "salud", "questions")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -287,8 +325,9 @@ async def list_questions(
 
 
 @router.post("/questions/{question_id}/answer")
-async def answer_question(question_id: int, body: AnswerRequest):
+async def answer_question(question_id: int, body: AnswerRequest, request: Request):
     """Responder una pregunta."""
+    _require_subtab(request, "ml", "salud", "questions")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -302,8 +341,9 @@ async def answer_question(question_id: int, body: AnswerRequest):
 
 
 @router.delete("/questions/{question_id}")
-async def delete_question(question_id: int):
+async def delete_question(question_id: int, request: Request):
     """Eliminar una pregunta."""
+    _require_subtab(request, "ml", "salud", "questions")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -318,12 +358,14 @@ async def delete_question(question_id: int):
 
 @router.get("/messages")
 async def list_messages(
+    request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=50),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
     """Lista conversaciones/mensajes."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -340,6 +382,7 @@ async def list_messages(
 @router.post("/messages/{pack_id}/take")
 async def take_message(pack_id: str, request: Request, account_id: str = Query("", description="Solo lo manda la bandeja unificada")):
     """Asigna explícitamente esta conversación al usuario actual."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client(user_id=account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -362,6 +405,7 @@ class MessageStatusRequest(BaseModel):
 @router.post("/messages/{pack_id}/status")
 async def update_message_status(pack_id: str, body: MessageStatusRequest, request: Request):
     """Actualiza el estado interno de una conversación."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client(user_id=body.account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -389,6 +433,7 @@ async def update_message_followup(pack_id: str, body: MessageFollowupRequest, re
     """Marca/desmarca una conversación para 'Seguimiento' — ya se respondió
     pero falta enviar algo después (guía, foto, dato que no se tenía a la
     mano). Independiente del status (pending/in_progress/resolved)."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client(user_id=body.account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -407,6 +452,7 @@ async def update_message_followup(pack_id: str, body: MessageFollowupRequest, re
 @router.post("/claims/{claim_id}/take")
 async def take_claim(claim_id: str, request: Request):
     """Asigna explícitamente este reclamo al usuario actual."""
+    _require_subtab(request, "ml", "salud", "claims")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -428,6 +474,7 @@ class ClaimStatusRequest(BaseModel):
 @router.post("/claims/{claim_id}/status")
 async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: Request):
     """Actualiza el estado interno de seguimiento de un reclamo."""
+    _require_subtab(request, "ml", "salud", "claims")
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -445,11 +492,12 @@ async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: 
 
 
 @router.post("/messages/{pack_id}/upload-attachment")
-async def upload_message_attachment(pack_id: str, account_id: str = Query(""), file: UploadFile = File(...)):
+async def upload_message_attachment(pack_id: str, request: Request, account_id: str = Query(""), file: UploadFile = File(...)):
     """Sube una foto o guía de devolución para adjuntarla a un mensaje --
     pedido de Jovan 2026-08-11. Solo sube el archivo a ML (no le llega a
     ningún comprador todavía); devuelve el id que /send debe mandar en
     attachments=[...]. No se persiste en disco, solo vive en memoria."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client(user_id=account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -475,6 +523,7 @@ async def send_message(pack_id: str, body: MessageRequest, request: Request):
     responder desde la bandeja unificada sin depender de cuál cuenta esté
     'activa' en el navegador — sin él, se comporta exactamente igual que
     antes (cuenta activa vía cookie)."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client(user_id=body.account_id or None)
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
@@ -506,7 +555,7 @@ async def send_message(pack_id: str, body: MessageRequest, request: Request):
 
 
 @router.get("/messages/attachment/{filename}")
-async def get_message_attachment(filename: str, account_id: str = Query("")):
+async def get_message_attachment(filename: str, request: Request, account_id: str = Query("")):
     """Proxy de un adjunto de mensaje (foto que manda el comprador) -- el
     navegador no puede pedirle esto directo a ML (requiere Bearer token de
     la cuenta), así que lo bajamos nosotros y lo servimos. Encontrado
@@ -514,6 +563,7 @@ async def get_message_attachment(filename: str, account_id: str = Query("")):
     screenshot de un error) no se veían en el hilo -- solo mostrábamos
     text.plain, y un mensaje que es solo una imagen no trae texto. El campo
     real es message_attachments[].filename (no "attachments")."""
+    _require_subtab(request, "ml", "salud", "messages")
     client = await get_meli_client(user_id=account_id or None)
     if not client:
         return Response(status_code=401)
@@ -538,6 +588,7 @@ async def get_feedback(request: Request, status: str = Query("pending")):
     """Reseñas ML negativas/neutras de la cuenta ML ACTIVA — nunca mezcladas
     con otras cuentas (regla del proyecto). El feedback de Amazon vive en su
     propio endpoint (ver amazon_products.py), acotado por seller_id."""
+    _require_subtab(request, "ml", "salud", "feedback")
     if status not in ("pending", "handled"):
         raise HTTPException(status_code=400, detail="status inválido")
     client = await get_meli_client()
@@ -560,6 +611,9 @@ async def update_feedback_status(feedback_id: int, body: FeedbackStatusRequest, 
         raise HTTPException(status_code=400, detail="platform inválido")
     if body.status not in ("pending", "handled"):
         raise HTTPException(status_code=400, detail="status inválido")
+    # Este endpoint sirve a ambas plataformas -- el subtab a exigir depende
+    # de cuál mandó el body, no se puede fijar de antemano como en el resto.
+    _require_subtab(request, "ml" if body.platform == "ml" else "amz", "salud", "feedback")
     ok = await _ts.set_feedback_status(body.platform, feedback_id, body.status)
     if not ok:
         raise HTTPException(status_code=404, detail="No encontrado")

@@ -251,6 +251,25 @@
             </div>
             {% endif %}
 
+            {% if summary.not_winning_count and summary.not_winning_count > 0 %}
+            <!-- FIX 2026-08-28 (auditoria de Salud): Vigilancia (>=24h sin ganar
+                 el catalogo/Buy Box) ya se calculaba pero nunca aparecia aqui --
+                 mismo peso visual (rojo, punto animado) que un reclamo abierto,
+                 porque perder el catalogo de forma prolongada tiene el mismo
+                 tipo de impacto directo en ventas. -->
+            <div class="flex items-start gap-2 p-2 bg-red-50 rounded text-xs cursor-pointer hover:bg-red-100"
+                 onclick="if(window.loadTab) window.loadTab('vigilancia')">
+                <span class="flex h-2 w-2 relative mt-1 flex-shrink-0">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
+                <div>
+                    <span class="font-semibold text-red-700">{{ summary.not_winning_count }} publicacion{{ 'es' if summary.not_winning_count != 1 else '' }} sin ganar el catalogo hace &ge;24h</span>
+                    <p class="text-red-600 text-[10px]">Revisar precio/stock vs competencia</p>
+                </div>
+            </div>
+            {% endif %}
+
             {% if summary.unanswered_questions > 0 %}
             <div class="flex items-start gap-2 p-2 bg-yellow-50 rounded text-xs cursor-pointer hover:bg-yellow-100"
                  onclick="if(window.loadTab) window.loadTab('questions')">
@@ -258,6 +277,17 @@
                 <div>
                     <span class="font-semibold text-yellow-700">{{ summary.unanswered_questions }} pregunta{{ 's' if summary.unanswered_questions != 1 else '' }} sin responder</span>
                     <p class="text-yellow-600 text-[10px]">Responder rapido mejora la conversion</p>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if summary.unread_messages and summary.unread_messages > 0 %}
+            <div class="flex items-start gap-2 p-2 bg-blue-50 rounded text-xs cursor-pointer hover:bg-blue-100"
+                 onclick="if(window.loadTab) window.loadTab('messages')">
+                <span class="w-2 h-2 rounded-full bg-blue-500 mt-1 flex-shrink-0"></span>
+                <div>
+                    <span class="font-semibold text-blue-700">{{ summary.unread_messages }} mensaje{{ 's' if summary.unread_messages != 1 else '' }} pendiente{{ 's' if summary.unread_messages != 1 else '' }}</span>
+                    <p class="text-blue-600 text-[10px]">Responder rapido mejora la experiencia del comprador</p>
                 </div>
             </div>
             {% endif %}
@@ -305,7 +335,7 @@
             </div>
             {% endif %}
 
-            {% if summary.open_claims == 0 and summary.unanswered_questions == 0 and (not summary.pending_feedback) and summary.claims_margin.status == 'green' and summary.cancel_margin.status == 'green' and summary.delay_margin.status == 'green' %}
+            {% if summary.open_claims == 0 and summary.unanswered_questions == 0 and (not summary.unread_messages) and (not summary.pending_feedback) and (not summary.not_winning_count) and summary.claims_margin.status == 'green' and summary.cancel_margin.status == 'green' and summary.delay_margin.status == 'green' %}
             <div class="flex items-start gap-2 p-2 bg-green-50 rounded text-xs">
                 <svg class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 <span class="font-semibold text-green-700">Todo en orden — sin alertas activas</span>

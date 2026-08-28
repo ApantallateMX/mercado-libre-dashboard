@@ -3,6 +3,14 @@
         <h3 class="text-sm font-bold text-gray-800">Reseñas negativas/neutras</h3>
         <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">rate &le;3 &middot; sync 1x/día</span>
     </div>
+    <!-- FIX 2026-08-28 (auditoria de Salud): sync_ml_item_reviews (token_store.py)
+         limita a top_n_items=150 por ventas, sin ningun aviso visible -- un SKU
+         fuera de ese top 150 podia tener reseñas negativas reales que nunca
+         aparecen aqui, sin que se notara la diferencia entre "sin reseñas" y
+         "no se revisaron". No se cambia el limite (podria tener razones de
+         rate-limit/volumen que no se conocen sin aprobacion explicita de Jovan),
+         solo se hace visible. -->
+    <p class="text-[11px] text-gray-400 mb-3">Cobertura: top 150 SKUs por ventas &mdash; reseñas de productos fuera de este grupo no se muestran aquí.</p>
     {% if not items %}
     <p class="text-sm text-gray-400">Sin reseñas negativas/neutras pendientes por revisar. 🎉</p>
     {% else %}

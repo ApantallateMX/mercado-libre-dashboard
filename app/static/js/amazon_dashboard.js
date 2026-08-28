@@ -1056,6 +1056,14 @@ function renderAmzHealth(d, cont) {
         '</div>' +
     '</div>' +
 
+    '<!-- Aviso: este score es un proxy interno, no el Account Health Rating -->' +
+    '<!-- oficial de Amazon (ODR/VTR requieren SP-API Seller Performance, sin -->' +
+    '<!-- acceso hoy con los scopes OAuth actuales -- auditoria Salud 2026-08-28) -->' +
+    '<div class="flex items-start gap-2 p-3 mb-4 bg-blue-50 border border-blue-200 rounded-lg">' +
+        '<span class="text-blue-500 text-lg shrink-0">&#8505;</span>' +
+        '<p class="text-xs text-blue-800"><b>Este score es un proxy interno</b> (cancelaciones + envíos sin salir a tiempo + inventario FBA no vendible) &mdash; <b>NO es el Account Health Rating oficial de Amazon</b> (Order Defect Rate, Valid Tracking Rate, Policy Compliance). Revisa <a href="https://sellercentral.amazon.com.mx/performance/dashboard" target="_blank" rel="noopener" class="underline font-semibold">Seller Central &rarr; Account Health</a> para la métrica real que puede suspender la cuenta.</p>' +
+    '</div>' +
+
     '<!-- Alertas -->' +
     '<div class="space-y-2 mb-4">' + alertsHtml + '</div>' +
 

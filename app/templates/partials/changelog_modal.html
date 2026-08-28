@@ -4,6 +4,13 @@
    /api/changelog/latest; solo se muestra si hay entradas no descartadas
    por el usuario actual. "Entendido" descarta las que se mostraron aquí
    (no afecta entradas futuras). Ver /changelog para el historial completo.
+
+   2026-08-28: Jovan pidió que Novedades NO sea un tab fijo del nav -- se
+   quitó de _NAV_TAB_DEFS (main.py). Este mismo fetch ahora también llena
+   la campana de notificaciones (#notif-list-changelog en base.html) y
+   suma al contador unificado (window._changelogPendingCount), igual que
+   las alertas de sistema y sugerencias cruzadas -- el popup sigue
+   apareciendo igual que antes, esto solo agrega la segunda vía.
 ────────────────────────────────────────────────────────────────────────── #}
 
 <div id="changelog-modal"
@@ -45,6 +52,16 @@
 
 var _clShownIds = [];
 
+function _clMarkDismissed() {
+    // Limpia también la campana -- mismo lote de ids que se mostró en el
+    // popup y en el resumen de notificaciones (son las mismas entradas).
+    window._changelogPendingCount = 0;
+    var clBox = document.getElementById('notif-list-changelog');
+    if (clBox) clBox.innerHTML = '';
+    if (window._updateNotifBadge) window._updateNotifBadge();
+    if (window._notifCheckEmpty) window._notifCheckEmpty();
+}
+
 window.closeChangelogModal = function(dismiss) {
     document.getElementById('changelog-modal').classList.add('hidden');
     if (dismiss && _clShownIds.length) {
@@ -52,7 +69,18 @@ window.closeChangelogModal = function(dismiss) {
             fetch('/api/changelog/' + id + '/dismiss', { method: 'POST' }).catch(function() {});
         });
         _clShownIds = [];
+        _clMarkDismissed();
     }
+};
+
+// Descartar desde la campana sin abrir el modal completo (ej. usuario solo
+// quiere quitar el aviso, no leer el detalle ahora).
+window._dismissChangelogFromBell = function(ids) {
+    ids.forEach(function(id) {
+        fetch('/api/changelog/' + id + '/dismiss', { method: 'POST' }).catch(function() {});
+    });
+    _clShownIds = [];
+    _clMarkDismissed();
 };
 
 var CL_CAT_CLS = {
@@ -69,14 +97,16 @@ function _clEsc(s) {
     return d.innerHTML;
 }
 
-// Fire-and-forget: si falla (red, 401 por sesión expirada, etc.) el modal
-// simplemente no aparece -- nunca debe romper la carga de la página.
+// Fire-and-forget: si falla (red, 401 por sesión expirada, etc.) ni el modal
+// ni la campana se llenan -- nunca debe romper la carga de la página.
 fetch('/api/changelog/latest')
     .then(function(r) { return r.ok ? r.json() : { entries: [] }; })
     .then(function(data) {
         var entries = data.entries || [];
         if (!entries.length) return;
         _clShownIds = entries.map(function(e) { return e.id; });
+
+        // Popup completo (comportamiento ya existente, sin cambios)
         var body = document.getElementById('changelog-modal-body');
         body.innerHTML = entries.map(function(e) {
             var cls = CL_CAT_CLS[e.category] || 'bg-gray-100 text-gray-600';
@@ -91,6 +121,32 @@ fetch('/api/changelog/latest')
             '</div>';
         }).join('');
         document.getElementById('changelog-modal').classList.remove('hidden');
+
+        // Campana de notificaciones (2026-08-28) -- resumen compacto, mismo
+        // lote de ids que el popup. "Ver todas" va a /changelog (no
+        // descarta), "Descartar" limpia sin abrir el popup.
+        var clBox = document.getElementById('notif-list-changelog');
+        if (clBox) {
+            var first = entries[0];
+            clBox.innerHTML =
+                '<div class="px-3 pt-2 pb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400 bg-gray-50">Novedades</div>' +
+                '<div class="flex gap-2 px-3 py-2.5 hover:bg-gray-50 border-b border-gray-50">' +
+                    '<div class="w-[3px] rounded flex-shrink-0" style="background:#eab308"></div>' +
+                    '<div class="flex-1 min-w-0">' +
+                        '<div class="text-xs font-semibold text-gray-800 truncate">' + _clEsc(first.title) + '</div>' +
+                        '<div class="text-[11px] text-gray-500 mt-0.5">' +
+                            (entries.length > 1 ? (entries.length + ' novedades sin ver') : '1 novedad sin ver') +
+                        '</div>' +
+                        '<div class="flex gap-3 mt-1.5">' +
+                            '<a href="/changelog" class="text-[10px] font-semibold text-yellow-700 hover:text-yellow-800">Ver todas</a>' +
+                            '<button onclick="window._dismissChangelogFromBell(' + JSON.stringify(_clShownIds) + ')" class="text-[10px] font-semibold text-gray-400 hover:text-gray-600">Descartar</button>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+        }
+        window._changelogPendingCount = entries.length;
+        if (window._updateNotifBadge) window._updateNotifBadge();
+        if (window._notifCheckEmpty) window._notifCheckEmpty();
     })
     .catch(function() { /* silencioso a propósito -- ver comentario arriba */ });
 

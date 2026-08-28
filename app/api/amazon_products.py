@@ -46,6 +46,21 @@ from app.services.sku_utils import target_coverage_days_for_sku as _target_cover
 logger = logging.getLogger(__name__)
 
 
+def _require_subtab(request: Request, platform: str, tab: str, subtab: str) -> None:
+    """Gate de subtab -- mismo criterio que main.py:_require_subtab (duplicado
+    aquí por el mismo motivo que en app/api/health.py: este router se importa
+    DESDE main.py, importar _require_subtab de vuelta crearía un ciclo).
+    AuthMiddleware solo filtra rutas de página, nunca /api/*."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") == "admin":
+        return
+    sections = du.get("allowed_sections") or []
+    if not sections:
+        return
+    if not _user_store.has_subtab_access(sections, platform, tab, subtab):
+        raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
+
+
 async def _audit(request: Request, action: str, item_id: str = None, detail: dict = None):
     """Fire-and-forget audit log. Nunca interrumpe la respuesta principal."""
     try:
@@ -5182,11 +5197,13 @@ class RepricingApplyIn(BaseModel):
 
 @router.get("/products/feedback", response_class=JSONResponse)
 async def amazon_products_feedback(
+    request: Request,
     seller_id: Optional[str] = Query(None),
     status: str = Query("pending"),
 ):
     """Feedback de vendedor (GET_SELLER_FEEDBACK_DATA) de la cuenta Amazon
     ACTIVA — acotado por seller_id, nunca mezclado con otras cuentas."""
+    _require_subtab(request, "amz", "salud", "feedback")
     if status not in ("pending", "handled"):
         return JSONResponse({"error": "status inválido"}, status_code=400)
     client = await get_amazon_client(seller_id=seller_id)

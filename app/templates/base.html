@@ -47,11 +47,16 @@
 window._sysAlerts = {};
 window._sysAlertCount = 0;
 window._suggPendingCount = 0;
+// Novedades (changelog) -- 2026-08-28: Jovan pidió que no sea un tab fijo del
+// nav, sino que viva aquí (campana) + el popup que ya existía al cargar
+// (partials/changelog_modal.html, que llena notif-list-changelog y actualiza
+// este contador -- mismo patrón que sugerencias/alertas de sistema).
+window._changelogPendingCount = 0;
 
 window._updateNotifBadge = function() {
     var b = document.getElementById('notif-bell-badge');
     if (!b) return;
-    var total = (window._sysAlertCount || 0) + (window._suggPendingCount || 0);
+    var total = (window._sysAlertCount || 0) + (window._suggPendingCount || 0) + (window._changelogPendingCount || 0);
     if (total > 0) { b.textContent = total > 9 ? '9+' : total; b.classList.remove('hidden'); }
     else { b.classList.add('hidden'); }
 };
@@ -61,9 +66,11 @@ window._notifCheckEmpty = function() {
     if (!empty) return;
     var sysBox = document.getElementById('notif-list-system');
     var suggBox = document.getElementById('notif-list');
+    var clBox = document.getElementById('notif-list-changelog');
     var sysEmpty = !sysBox || sysBox.innerHTML.trim() === '';
     var suggEmpty = !suggBox || suggBox.innerHTML.trim() === '';
-    empty.classList.toggle('hidden', !(sysEmpty && suggEmpty));
+    var clEmpty = !clBox || clBox.innerHTML.trim() === '';
+    empty.classList.toggle('hidden', !(sysEmpty && suggEmpty && clEmpty));
 };
 
 window._setSysAlert = function(key, item) {
@@ -132,6 +139,7 @@ window._setSysAlert = function(key, item) {
                     <span>{{ tab.icon }}</span> {{ tab.label }}
                     {% if tab.badge == 'orphans' and active_platform != 'amz' %}<span id="orphans-nav-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
                     {% if tab.badge == 'health' and active_platform != 'amz' %}<span id="health-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
+                    {% if tab.badge == 'health' and active_platform == 'amz' %}<span id="amz-health-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
                     {% if tab.badge == 'returns' and active_platform != 'amz' %}<span id="returns-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>{% endif %}
                     {% if tab.badge == 'bm_sync' %}<span id="bm-health-dot" title="BinManager: verificando..." class="inline-block w-2 h-2 rounded-full bg-gray-300 ml-1 flex-shrink-0"></span><span id="bm-cache-age" class="text-[10px] text-gray-400 ml-0.5 font-mono hidden"></span>{% endif %}
                 </a>
@@ -170,7 +178,9 @@ window._setSysAlert = function(key, item) {
             // reportó un mensaje real de comprador sin verse en ningún lado
             // visible -- la cuenta correcta sí lo tenía indexado, pero el
             // badge global nunca lo habría mostrado de todos modos.
-            var n = (d.questions || 0) + (d.claims || 0) + (d.messages || 0);
+            // FIX 2026-08-28 (auditoria de Salud): tampoco sumaba d.feedback
+            // (reseñas negativas/neutras sin revisar) -- mismo bug, otra señal.
+            var n = (d.questions || 0) + (d.claims || 0) + (d.messages || 0) + (d.feedback || 0);
             if (n > 0) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
             else { b.classList.add('hidden'); }
         }).catch(function(){});
@@ -178,6 +188,25 @@ window._setSysAlert = function(key, item) {
     _refreshHealthBadge();
     setInterval(_refreshHealthBadge, 60000);
 })();
+{% if active_platform == 'amz' %}
+(function() {
+    // FIX 2026-08-28 (auditoria de Salud): Amazon nunca tuvo badge de nav
+    // para Salud -- mismo criterio que el de ML de arriba (#health-badge),
+    // pero leyendo /api/amazon/health-counts (mensajes de compradores
+    // pendientes + feedback negativo/neutro sin revisar, todas las cuentas).
+    function _refreshAmzHealthBadge() {
+        fetch('/api/amazon/health-counts').then(function(r){ return r.json(); }).then(function(d) {
+            var b = document.getElementById('amz-health-badge');
+            if (!b) return;
+            var n = (d.messages || 0) + (d.feedback || 0);
+            if (n > 0) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
+            else { b.classList.add('hidden'); }
+        }).catch(function(){});
+    }
+    _refreshAmzHealthBadge();
+    setInterval(_refreshAmzHealthBadge, 60000);
+})();
+{% endif %}
 (function() {
     function _refreshOrphansBadge() {
         fetch('/api/listings/orphans').then(function(r){ return r.json(); }).then(function(d) {
@@ -671,6 +700,7 @@ document.addEventListener('click', function(e) {
     </div>
     <div class="flex-1 overflow-y-auto">
         <div id="notif-list-system"></div>
+        <div id="notif-list-changelog"></div>
         {% if active_platform != "amz" %}
         <div id="notif-list" class="divide-y divide-gray-50"></div>
         {% endif %}
