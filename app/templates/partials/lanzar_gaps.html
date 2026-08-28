@@ -4133,6 +4133,33 @@
     }
   };
 
+  // Fix 2026-08-28 (auditoría Deals): el backend valida margen antes de
+  // escribir a ML -- si da negativo responde 409 (negative_margin:true) en
+  // vez de bloquear de plano. Pide confirmación y reintenta con
+  // confirm_negative_margin:true. Retorna {ok, d} igual que antes.
+  function _gapsPostActivate(body) {
+    function _doFetch(b) {
+      return fetch('/api/items/' + encodeURIComponent(_dealState.itemId) + '/promotions/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(b)
+      }).then(function(r) { return r.json().then(function(d) { return {ok: r.ok, status: r.status, d: d}; }); });
+    }
+    return _doFetch(body).then(function(res) {
+      if (res.status === 409 && res.d.negative_margin) {
+        var pctTxt = (res.d.margen_pct !== null && res.d.margen_pct !== undefined) ? res.d.margen_pct.toFixed(1) + '%' : 'desconocido';
+        var mxnTxt = (res.d.margen_mxn !== null && res.d.margen_mxn !== undefined) ? '$' + Math.round(res.d.margen_mxn).toLocaleString('es-MX') : '?';
+        var ask = 'Este deal daria un margen NEGATIVO: ' + mxnTxt + ' (' + pctTxt + ').\n\n' +
+          'Puede ser valido si estas liquidando stock estancado.\n\n¿Activar de todas formas?';
+        if (confirm(ask)) {
+          var body2 = Object.assign({}, body, { confirm_negative_margin: true });
+          return _doFetch(body2);
+        }
+      }
+      return res;
+    });
+  }
+
   window._applyDeal = function() {
     var deal = parseFloat(document.getElementById('deal-price-input').value) || 0;
     var curr = _dealState.currentPrice || 0;
@@ -4155,12 +4182,7 @@
     var fin = document.getElementById('deal-finish-date').value;
     if (fin) body.finish_date = fin;
 
-    fetch('/api/items/' + encodeURIComponent(_dealState.itemId) + '/promotions/activate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+    _gapsPostActivate(body)
     .then(function(res) {
       btn.disabled = false;
       btn.textContent = 'Aplicar deal';

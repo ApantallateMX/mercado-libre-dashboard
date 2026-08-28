@@ -1881,37 +1881,88 @@ class MeliClient:
             logging.getLogger("meli").warning(f"get_item_promotions({item_id}) error: {e}")
             return []
 
-    async def get_promotion_items(self, promotion_id: str, promotion_type: str) -> list:
-        """GET /seller-promotions/promotions/{promotion_id}/items — todos los items de una promo (paginado)."""
+    async def get_promotion_items(self, promotion_id: str, promotion_type: str,
+                                   max_pages: "int | None" = None) -> tuple[list, bool]:
+        """GET /seller-promotions/promotions/{promotion_id}/items — todos los items de una promo (paginado).
+
+        Retorna (items, is_partial). is_partial=True significa que la
+        paginación se cortó por error tras agotar los reintentos -- el
+        llamador debe tratar `items` como INCOMPLETO (no como "la campaña no
+        tiene más items"), porque antes de este fix un error a mitad de
+        paginación se tragaba en silencio y devolvía una lista truncada
+        indistinguible de una lista completa (fix 2026-08-28, auditoría Deals).
+
+        max_pages: tope opcional de páginas (50 items/página) a traer. Usado
+        por campañas VOLUME (main.py, products_deals_partial) que pueden
+        traer 1,500+ items -- paginar TODOS para solo mostrar un badge
+        informativo de hasta 20 sería el mismo tipo de carga de "trabajo de
+        volumen" que ya disparó 429 en cascada en producción antes
+        (Hallazgo #2). is_partial se deja en False aquí porque es un corte
+        deliberado, no un error -- no es "datos incompletos por falla".
+        """
         import logging
         endpoint = f"/seller-promotions/promotions/{promotion_id}/items"
         all_items = []
         offset = 0
         limit = 50
-        try:
+        max_retries = 2
+        pages_fetched = 0
+        while True:
+            data = None
+            attempt = 0
             while True:
-                data = await self.get(endpoint, params={
-                    "app_version": "v2",
-                    "promotion_type": promotion_type,
-                    "offset": offset,
-                    "limit": limit,
-                })
-                results = data.get("results", [])
-                all_items.extend(results)
-                paging = data.get("paging", {})
-                total = paging.get("total", 0)
-                if not results or offset + limit >= total:
+                try:
+                    data = await self.get(endpoint, params={
+                        "app_version": "v2",
+                        "promotion_type": promotion_type,
+                        "offset": offset,
+                        "limit": limit,
+                    })
                     break
-                offset += limit
-        except Exception as e:
-            logging.getLogger("meli").warning(f"get_promotion_items({promotion_id}) error: {e}")
-        return all_items
+                except Exception as e:
+                    attempt += 1
+                    if attempt > max_retries:
+                        logging.getLogger("meli").warning(
+                            f"get_promotion_items({promotion_id}) error tras {max_retries} reintentos "
+                            f"(offset={offset}): {e} — resultado marcado como parcial"
+                        )
+                        return all_items, True
+                    await asyncio.sleep(1)
+            results = data.get("results", [])
+            all_items.extend(results)
+            pages_fetched += 1
+            paging = data.get("paging", {})
+            total = paging.get("total", 0)
+            if not results or offset + limit >= total:
+                break
+            if max_pages is not None and pages_fetched >= max_pages:
+                break
+            offset += limit
+        return all_items, False
+
+    # Tipos gestionados por ML como "campaña" (no como oferta simple
+    # PRICE_DISCOUNT/DEAL) -- para estos, borrar+recrear (el fallback de
+    # abajo) no aplica: son campañas administradas por ML, no ofertas del
+    # vendedor que se puedan borrar y recrear a mano. Confirmado en la
+    # auditoría 2026-08-28: modify_item_promotion (PUT) ya existía en este
+    # archivo pero nunca se llamaba desde activate_item_promotion.
+    _PUT_ONLY_PROMO_TYPES = {"SELLER_CAMPAIGN", "LIGHTNING", "MARKETPLACE_CAMPAIGN", "VOLUME"}
 
     async def activate_item_promotion(self, item_id: str, deal_price: float,
                                        promotion_type: str, **kwargs) -> dict:
-        """Activa promocion via POST. Borra oferta existente si hay conflicto."""
+        """Activa promocion via POST. Si hay conflicto OFFER_ALREADY_EXISTS:
+        - PRICE_DISCOUNT/DEAL: borra la oferta existente y reintenta el POST
+          (funciona porque son ofertas simples del vendedor).
+        - SELLER_CAMPAIGN/LIGHTNING/MARKETPLACE_CAMPAIGN/VOLUME: usa el PUT
+          real (modify_item_promotion) en vez de borrar+recrear -- son
+          campañas, no ofertas borrables. `is_modification=True` (mandado
+          por el frontend cuando el usuario está modificando una promo que
+          YA está "started") salta directo al PUT sin intentar el POST
+          primero, para no gastar una llamada que sabemos que va a fallar.
+        """
         endpoint = f"/seller-promotions/items/{item_id}"
         params = {"app_version": "v2"}
+        is_modification = bool(kwargs.get("is_modification"))
 
         # Build body
         body = {"deal_price": deal_price, "promotion_type": promotion_type}
@@ -1925,6 +1976,9 @@ class MeliClient:
             body["finish_date"] = kwargs["finish_date"]
         if kwargs.get("stock") is not None:
             body["stock"] = int(kwargs["stock"])
+
+        if is_modification and promotion_type in self._PUT_ONLY_PROMO_TYPES:
+            return await self.modify_item_promotion(item_id, deal_price, promotion_type)
 
         # Try POST; if OFFER_ALREADY_EXISTS, delete existing and retry
         try:
@@ -1941,12 +1995,24 @@ class MeliClient:
             if not is_exists:
                 raise  # Not a conflict error, re-raise
 
-            # Delete existing offer(s) and retry
+            if promotion_type in self._PUT_ONLY_PROMO_TYPES:
+                # Confirmado el conflicto sobre un tipo "campaña" -- el
+                # fallback delete+recreate de abajo no funciona para estos
+                # (solo probado y funcional para PRICE_DISCOUNT/DEAL), usar
+                # el PUT real.
+                return await self.modify_item_promotion(item_id, deal_price, promotion_type)
+
+            # Delete existing offer(s) and retry -- solo confirmado funcional
+            # para PRICE_DISCOUNT/DEAL.
             for ptype in ("PRICE_DISCOUNT", "DEAL"):
                 try:
                     await self.delete(endpoint, params={"app_version": "v2", "promotion_type": ptype})
-                except Exception:
-                    pass
+                except Exception as _del_exc:
+                    # No silenciar sin rastro (hallazgo real del proyecto: un
+                    # except/pass mudo escondió un bug de 6 días) -- es
+                    # normal que uno de los 2 tipos no tenga oferta activa,
+                    # por eso queda en info y no warning.
+                    logger.info(f"activate_item_promotion({item_id}): delete {ptype} no aplico (probablemente no habia oferta de ese tipo) - {_del_exc}")
             await asyncio.sleep(0.5)
             return await self.post(endpoint, params=params, json=body)
 

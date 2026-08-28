@@ -6430,6 +6430,27 @@ async def get_not_winning_listings(platform: str, account_id: str, min_hours: fl
     ]
 
 
+async def get_listing_snapshots_map(platform: str, account_id: str, item_ids: list) -> dict:
+    """item_id -> {is_winner, total_competitors} para el set de ids dado, leyendo
+    SOLO de listing_snapshots (Vigilancia) -- ninguna llamada nueva a ML/BM.
+    Un item sin snapshot (Vigilancia solo revisa ~20 por ciclo, rotación LRU)
+    simplemente no aparece en el dict -- el llamador debe tratar eso como
+    'sin dato', nunca como is_winner=False (fix 2026-08-28, señal de buy-box
+    para el score de candidatos a deal)."""
+    ids = [i for i in (item_ids or []) if i]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"""SELECT item_id, is_winner, total_competitors FROM listing_snapshots
+                WHERE platform=? AND account_id=? AND item_id IN ({placeholders})""",
+            (platform, account_id, *ids),
+        )).fetchall()
+    return {r["item_id"]: {"is_winner": r["is_winner"], "total_competitors": r["total_competitors"]} for r in rows}
+
+
 async def delete_coverage_price_alert(user_id: str, item_id: str) -> None:
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(

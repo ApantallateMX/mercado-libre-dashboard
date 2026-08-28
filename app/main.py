@@ -1824,9 +1824,17 @@ async def _enrich_with_meli_health(client, products: list, id_key="id"):
             p["_meli_perf_buckets"] = h.get("buckets", [])
 
 
-async def _enrich_with_promotions(client, products: list, id_key="id"):
-    """Consulta /seller-promotions/items/{id} en paralelo."""
-    sem = asyncio.Semaphore(10)
+async def _enrich_with_promotions(client, products: list, id_key="id", sem: "asyncio.Semaphore | None" = None):
+    """Consulta /seller-promotions/items/{id} en paralelo.
+
+    sem: semáforo compartido opcional -- si el llamador ya tiene otras
+    llamadas concurrentes a la API de promos en el mismo request (ej.
+    products_deals_partial, que también pagina get_promotion_items por
+    campaña), pasar el MISMO semáforo evita que la concurrencia real sea
+    "10 por cada rama" en vez de "10 total" (fix 2026-08-28, auditoría
+    Deals -- ~40 semáforos locales independientes ya han disparado 429 en
+    cascada en producción antes, ver DEVLOG 2026-08-27)."""
+    sem = sem or asyncio.Semaphore(10)
 
     async def _fetch(item_id):
         async with sem:
@@ -9573,14 +9581,19 @@ async def products_deals_partial(request: Request):
         # los 3 tipos que faltaban reconocer (auditoría 2026-08-12).
         _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN",
                        "PRICE_MATCHING", "UNHEALTHY_STOCK"}
-        # VOLUME (descuento por cantidad: buy_quantity/discount_percentage) y
-        # SELLER_COUPON_CAMPAIGN (cupón: fixed_amount) NO tienen un campo
+        # SELLER_COUPON_CAMPAIGN (cupón: fixed_amount) NO tiene un campo
         # "price" simple como el resto -- verificado en vivo 2026-08-12 contra
-        # datos reales de las 4 cuentas. Incluirlos en promo_items_map con
+        # datos reales de las 4 cuentas. Incluirlo en promo_items_map con
         # deal_price=None generaba filas "Deal activo" con precio en blanco.
-        # Se excluyen de este flujo (precio único); si algún día se quiere
-        # mostrarlos, necesitan su propia columna (cantidad/cupón), no precio.
-        _NO_SIMPLE_PRICE_TYPES = {"VOLUME", "SELLER_COUPON_CAMPAIGN"}
+        # Se excluye de este flujo (precio único); si algún día se quiere
+        # mostrar, necesita su propia columna (cupón), no precio.
+        # VOLUME (descuento por cantidad: buy_quantity/discount_percentage)
+        # se sacó de este set 2026-08-28 (auditoría Deals) -- confirmado en
+        # vivo que APANTALLATEMX y BLOWTECHNOLOGIES tienen campañas VOLUME
+        # activas con 1,500+ items. Antes quedaba invisible del todo; ahora
+        # se trae por separado (volume_items_map, más abajo) como
+        # informativo -- sin precio único, sin escritura.
+        _NO_SIMPLE_PRICE_TYPES = {"SELLER_COUPON_CAMPAIGN"}
         _skip_statuses = {"finished", "expired", "cancelled", "paused"}
         all_promos = [
             p for p in user_promos
@@ -9588,8 +9601,28 @@ async def products_deals_partial(request: Request):
             and p.get("status") not in _skip_statuses
             and p.get("type") not in _NO_SIMPLE_PRICE_TYPES
         ]
+        # Semáforo compartido para TODA la concurrencia hacia la API de
+        # promos de ML en este request (paginación por campaña aquí +
+        # _enrich_with_promotions más abajo, 2 veces) -- antes cada rama
+        # tenía su propio Semaphore(10) independiente, pudiendo sumar 20+
+        # requests simultáneas a ML por un solo click en Deals (fix
+        # 2026-08-28, auditoría Deals; mismo tipo de incidente 429 en
+        # cascada que ya pasó en producción el 2026-08-27, ver DEVLOG).
+        _deals_ml_sem = asyncio.Semaphore(10)
+
+        async def _get_promo_items_sem(pid, ptype):
+            async with _deals_ml_sem:
+                # VOLUME: tope de 4 páginas (200 items) -- campañas VOLUME
+                # confirmadas con 1,500+ items (APANTALLATEMX/BLOWTECHNOLOGIES),
+                # y aquí solo se necesita marcar/excluir, no el listado
+                # completo. Paginar todo sería "trabajo de volumen" nuevo sin
+                # cola global (Hallazgo #2) por un dato que no se muestra
+                # completo de todas formas (solo top 20 informativo).
+                _mp = 4 if ptype == "VOLUME" else None
+                return await client.get_promotion_items(pid, ptype, max_pages=_mp)
+
         promo_item_tasks = [
-            client.get_promotion_items(p["id"], p["type"])
+            _get_promo_items_sem(p["id"], p["type"])
             for p in all_promos
         ]
         promo_items_lists = await asyncio.gather(*promo_item_tasks, return_exceptions=True)
@@ -9608,12 +9641,48 @@ async def products_deals_partial(request: Request):
         # mostraban en "Deals Activos" con precio/margen calculados sobre datos
         # de una oferta que el vendedor nunca aceptó.
         promo_items_map: dict = {}
+        volume_items_map: dict = {}
+        _partial_promo_names: list = []
         for promo, result in zip(all_promos, promo_items_lists):
-            if isinstance(result, Exception) or not result:
+            if isinstance(result, Exception):
                 continue
-            for item in result:
+            items, is_partial = result
+            if is_partial:
+                _partial_promo_names.append(promo.get("name") or promo.get("id") or "")
+            if not items:
+                continue
+            _is_auto = promo.get("type") in _auto_types
+            for item in items:
                 iid = item.get("id")
                 if not iid or item.get("status") != "started":
+                    continue
+                if promo.get("type") == "VOLUME":
+                    # Informativo únicamente (Fix 2026-08-28) -- VOLUME no
+                    # tiene un precio único (es %off en la 2da+ unidad), así
+                    # que no participa del modelo de promo_items_map de
+                    # abajo. Se marca en el producto más adelante y se
+                    # excluye del pool de candidatos a un deal nuevo.
+                    _pct = item.get("discount_percentage")
+                    _sub = item.get("sub_type") or item.get("promotion_sub_type") or ""
+                    if _pct:
+                        _vtext = f"{_pct}% off en {_sub}" if _sub else f"{_pct}% off por volumen"
+                    else:
+                        _vtext = "Descuento por volumen activo"
+                    volume_items_map[iid] = {
+                        "text": _vtext,
+                        "_promo_name": promo.get("name", ""),
+                        "allow_combination": item.get("allow_combination"),
+                    }
+                    continue
+                # Prioridad seller > auto -- mismo criterio que
+                # _enrich_with_promotions (más abajo, ~1870). Antes, si un
+                # item aparecía en 2 campañas (ej. PRICE_DISCOUNT del seller
+                # + SMART automática de ML), el último promo iterado pisaba
+                # al anterior sin importar cuál era "el que manda" -- podía
+                # mezclar precio/fechas de una campaña con el tipo de la
+                # otra (fix 2026-08-28, auditoría Deals).
+                _existing = promo_items_map.get(iid)
+                if _existing and not _existing.get("_promo_is_auto") and _is_auto:
                     continue
                 promo_items_map[iid] = {
                     "original_price": item.get("original_price"),
@@ -9625,7 +9694,7 @@ async def products_deals_partial(request: Request):
                     "_promo_type": promo.get("type"),
                     "_promo_id": promo.get("id"),
                     "_promo_name": promo.get("name", ""),
-                    "_promo_is_auto": promo.get("type") in _auto_types,
+                    "_promo_is_auto": _is_auto,
                 }
 
         # ── Paso 3: clasificar productos ──────────────────────────────────
@@ -9643,8 +9712,18 @@ async def products_deals_partial(request: Request):
 
         active_deals = []
         candidates = []
+        volume_deals_display = []
         for p in products:
             iid = p.get("id", "")
+            _vol = volume_items_map.get(iid)
+            if _vol:
+                p["_has_volume_deal"] = True
+                p["_volume_deal_text"] = _vol["text"]
+                if len(volume_deals_display) < 20:
+                    volume_deals_display.append({
+                        "id": iid, "title": (p.get("title") or "")[:50],
+                        "sku": p.get("sku", ""), "text": _vol["text"],
+                    })
             # Deal activo = en mapa de promos O tiene original_price > price en body ML
             promo_data = promo_items_map.get(iid)
             op = p.get("original_price")
@@ -9680,6 +9759,13 @@ async def products_deals_partial(request: Request):
                         or p.get("_meli_promo_pct", 0) > 0
                     )
                 active_deals.append(p)
+            elif _vol:
+                # Tiene VOLUME activo (normalmente allow_combination=False) --
+                # no se ofrece como candidato a un deal nuevo: se encimaría
+                # sobre un descuento que ya corre y que no combina con otro
+                # (Fix 2026-08-28, auditoría Deals). Se muestra aparte, solo
+                # informativo, vía volume_deals_display.
+                continue
             elif p.get("available_quantity", 0) > 0 and p.get("status", "active") != "closed":
                 candidates.append(p)
 
@@ -9701,9 +9787,9 @@ async def products_deals_partial(request: Request):
         top25 = candidates_pre[:25]
         _enrich_tasks = []
         if active_deals:
-            _enrich_tasks.append(_enrich_with_promotions(client, active_deals[:100], id_key="id"))
+            _enrich_tasks.append(_enrich_with_promotions(client, active_deals[:100], id_key="id", sem=_deals_ml_sem))
         if top25:
-            _enrich_tasks.append(_enrich_with_promotions(client, top25, id_key="id"))
+            _enrich_tasks.append(_enrich_with_promotions(client, top25, id_key="id", sem=_deals_ml_sem))
         if _enrich_tasks:
             await asyncio.gather(*_enrich_tasks, return_exceptions=True)
         newly_found = [p for p in top25 if p.get("_has_deal")]
@@ -9757,12 +9843,33 @@ async def products_deals_partial(request: Request):
                     except Exception:
                         pass
 
-        # Score de oportunidad para candidatos (ventas × peso + margen disponible + stock BM)
+        # Señal de buy-box (Fix 2026-08-28, auditoría Deals): leer SOLO de
+        # listing_snapshots (poblado en background por Vigilancia, ver
+        # _check_ml_winner_status_bg ~línea 2280) -- nunca una llamada ML
+        # nueva aquí, esto ya corre bajo el semáforo compartido de arriba y
+        # sumar más requests por candidato dispararía 429 en cascada (mismo
+        # tipo de incidente real del 2026-08-27). La mayoría de candidatos
+        # no tendrán snapshot todavía (Vigilancia solo revisa ~20/ciclo) --
+        # sin dato, no se penaliza ni se premia.
+        _snap_map = await token_store.get_listing_snapshots_map(
+            "ml", str(client.user_id), [p.get("id") for p in candidates]
+        )
+
+        # Score de oportunidad para candidatos (ventas × peso + margen disponible + stock BM +
+        # penalización si hoy no ganamos el catálogo contra competencia real)
         for p in candidates:
             ventas = p.get("units_30d", 0) or 0
             margen = p.get("_margen_pct") or 0
             bm_stock = p.get("_bm_avail", 0) or 0
             score = (ventas * 3.0) + (max(0.0, margen - 10.0) * 0.8) + (min(bm_stock, 60) * 0.25)
+            # Recomendar un deal agresivo no ayuda si de todos modos no se
+            # gana el catálogo -- penalización proporcional a competidores
+            # reales (tope en 10): -2 por 1 rival, hasta -20 con 10+.
+            snap = _snap_map.get(p.get("id", ""))
+            if snap and snap.get("is_winner") == 0:
+                competitors = snap.get("total_competitors") or 0
+                if competitors >= 1:
+                    score -= min(10, competitors) * 2.0
             p["_opp_score"] = round(score, 1)
 
         recs = []
@@ -9819,6 +9926,26 @@ async def products_deals_partial(request: Request):
                 "title": f"{len(bm_available)} producto(s) con stock BM disponible alto pero poco en MeLi",
                 "desc": "Reabastecer MeLi y activar deal para impulsar rotacion.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"BM disp: {p['_bm_avail']}, MeLi: {p['available_quantity']}"} for p in bm_available[:5]],
+            })
+        # Datos parciales (Fix 2026-08-28): get_promotion_items ya reintenta
+        # 2 veces con backoff -- si tras eso sigue incompleta la paginación
+        # de una campaña, avisar en vez de mostrar silenciosamente una lista
+        # truncada como si fuera la campaña completa.
+        if _partial_promo_names:
+            recs.append({
+                "type": "warning", "icon": "!",
+                "title": f"Datos incompletos de {len(_partial_promo_names)} campaña(s) tras reintentos",
+                "desc": "La paginación de items de estas campañas de ML falló repetidamente. Los deals mostrados de esas campañas pueden estar incompletos -- actualiza en unos minutos.",
+                "products": [{"id": n, "title": "", "detail": ""} for n in _partial_promo_names[:5]],
+            })
+        # VOLUME activo (Fix 2026-08-28): informativo -- no participa del
+        # modelo de precio único y no se puede activar/editar desde aquí.
+        if volume_deals_display:
+            recs.append({
+                "type": "info", "icon": "V",
+                "title": f"{len(volume_items_map)} producto(s) con campaña VOLUME activa",
+                "desc": "Descuento por cantidad ya corriendo (normalmente no combina con otro deal) -- se excluyen del pool de candidatos para no encimar una oferta.",
+                "products": [{"id": v["id"], "title": v["title"], "detail": v["text"]} for v in volume_deals_display[:5]],
             })
 
         cat_counts = {}
@@ -13505,9 +13632,58 @@ async def get_item_promotions_api(item_id: str, account_id: str = None):
         await client.close()
 
 
+async def _check_deal_negative_margin(item_id: str, deal_price: float, client) -> dict | None:
+    """Calcula el margen resultante de activar `deal_price` en `item_id`,
+    reutilizando _calc_margins (misma lógica y misma fuente de datos BM que
+    el resto de la pestaña Deals -- NO duplica el cálculo).
+
+    Retorna None si el margen es aceptable, o si no se pudo determinar (SKU
+    no encontrado en ml_listings, sin datos BM, deal_price inválido -- en
+    esos casos NO se bloquea la escritura por falta de dato, solo cuando SÍ
+    se sabe con certeza que pierde dinero). Retorna un dict con el detalle
+    si el margen calculado da negativo (fix 2026-08-28, auditoría Deals)."""
+    import aiosqlite as _aio
+    if not deal_price or deal_price <= 0:
+        return None
+    try:
+        async with _aio.connect(token_store.DATABASE_PATH) as _db:
+            _row = await (await _db.execute(
+                "SELECT sku, price FROM ml_listings WHERE item_id=? LIMIT 1", (item_id,)
+            )).fetchone()
+    except Exception:
+        _row = None
+    sku = (_row[0] if _row else "") or ""
+    if not sku:
+        return None
+    list_price = (_row[1] if _row else 0) or 0
+
+    product = {"id": item_id, "sku": sku, "price": list_price, "_promo_deal_price": deal_price}
+    await _enrich_with_bm_product_info([product])
+    usd_to_mxn = await _get_usd_to_mxn(client)
+    _deal_cfg = await token_store.get_deal_config(str(client.user_id))
+    _ship_map = await token_store.get_avg_shipping_cost_map([sku], "ml")
+    _calc_margins([product], usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"],
+                  shipping_avg_map=_ship_map)
+
+    # Preferir margen real contra costo BM (_ganancia_est) -- es lo que pide
+    # la auditoría explícitamente. Sin costo BM confiable, cae a
+    # _neto_ml_negative (mismo fallback ya usado en la alerta "deal por
+    # debajo de la meta de recuperación", FIX 2026-08-20 más arriba) --
+    # pierde dinero de plano después de fee ML/retenciones/envío, sin
+    # siquiera contar el costo del producto.
+    if product.get("_ganancia_est") is not None:
+        if product["_ganancia_est"] < 0:
+            return {"margen_mxn": product["_ganancia_est"], "margen_pct": product.get("_margen_pct")}
+        return None
+    if product.get("_neto_ml_negative"):
+        return {"margen_mxn": product.get("_neto_ml"), "margen_pct": None}
+    return None
+
+
 @app.post("/api/items/{item_id}/promotions/activate")
 async def activate_item_promotion_api(item_id: str, request: Request):
     """Activa una promocion para un item."""
+    _require_subtab(request, "ml", "productos", "deals")
     body_preview = None
     try:
         body_preview = await request.json()
@@ -13523,6 +13699,23 @@ async def activate_item_promotion_api(item_id: str, request: Request):
         promotion_type = body.get("promotion_type")
         if not deal_price or not promotion_type:
             return JSONResponse({"detail": "deal_price y promotion_type requeridos"}, status_code=400)
+        # Guardrail de margen (fix 2026-08-28, auditoría Deals -- "activar
+        # deal en 1 clic" solo validaba la ventana de credibilidad de ML,
+        # nunca el margen/costo real). No bloquea de plano -- un margen
+        # negativo puede ser una decisión de negocio válida (liquidar stock
+        # estancado), pero exige confirmación explícita del frontend.
+        if not body.get("confirm_negative_margin"):
+            _neg = await _check_deal_negative_margin(item_id, float(deal_price), client)
+            if _neg:
+                return JSONResponse({
+                    "ok": False, "negative_margin": True,
+                    "margen_mxn": _neg["margen_mxn"], "margen_pct": _neg["margen_pct"],
+                    "detail": (
+                        f"Este deal daria margen negativo (${_neg['margen_mxn']:.0f} MXN"
+                        + (f", {_neg['margen_pct']:.1f}%" if _neg["margen_pct"] is not None else "")
+                        + "). Si es una liquidacion de stock deliberada, reintenta confirmando."
+                    ),
+                }, status_code=409)
         kwargs = {}
         if body.get("start_date"):
             kwargs["start_date"] = body["start_date"]
@@ -13570,9 +13763,15 @@ async def activate_item_promotion_api(item_id: str, request: Request):
 
 
 @app.delete("/api/items/{item_id}/promotions/{promotion_type}")
-async def delete_item_promotion_api(item_id: str, promotion_type: str):
+async def delete_item_promotion_api(item_id: str, promotion_type: str, request: Request, account_id: str = None):
     """Desactiva una promocion de un item."""
-    client = await get_meli_client()
+    _require_subtab(request, "ml", "productos", "deals")
+    # Fix 2026-08-28 (auditoría Deals): usar _get_client_for_item igual que
+    # activate/listar promociones (mismo flujo, mismos 3 endpoints) en vez
+    # de get_meli_client() a secas -- ese resolvía siempre la cuenta ACTIVA
+    # del contexto, pudiendo borrar la promo de un item que pertenece a otra
+    # cuenta si el usuario tenía otra cuenta seleccionada al hacer click.
+    client = await _get_client_for_item(item_id, account_id=account_id)
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:
@@ -15297,6 +15496,7 @@ async def get_deal_config_api(request: Request, user_id: str = Query("", descrip
 @app.post("/api/deal-config")
 async def set_deal_config_api(request: Request, user_id: str = Query("", description="user_id de la cuenta (vacío = cuenta activa)")):
     """Guarda la config de precios deal. Body: {deal_buffer_pct: 0.18, retail_target_pct: 0.99}"""
+    _require_subtab(request, "ml", "productos", "deals")
     if not user_id:
         client = await get_meli_client()
         if not client:

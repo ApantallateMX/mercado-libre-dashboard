@@ -1550,6 +1550,39 @@ function updateDealCalc() {
     }
 }
 
+// Fix 2026-08-28 (auditoría Deals): el backend valida margen antes de
+// escribir a ML (guardrail de dinero real) -- si el deal_price propuesto da
+// margen negativo, responde 409 con negative_margin:true en vez de
+// escribir. Esto NO bloquea de plano (puede ser liquidacion de stock
+// deliberada); pide confirmacion explicita y reintenta con
+// confirm_negative_margin:true. Usada por los 4 flujos de activacion de
+// este archivo (modal dm-*, panel pd-*, boton rapido, quick %) para que
+// ninguno quede bloqueado sin salida por el guardrail nuevo.
+async function _postDealActivate(itemId, body) {
+    var resp = await fetch('/api/items/' + itemId + '/promotions/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+        body: JSON.stringify(body)
+    });
+    var data = await resp.json();
+    if (resp.status === 409 && data.negative_margin) {
+        var pctTxt = (data.margen_pct !== null && data.margen_pct !== undefined) ? data.margen_pct.toFixed(1) + '%' : 'desconocido';
+        var mxnTxt = (data.margen_mxn !== null && data.margen_mxn !== undefined) ? fmt(data.margen_mxn) : '?';
+        var ask = 'Este deal daria un margen NEGATIVO: ' + mxnTxt + ' (' + pctTxt + ').\n\n' +
+            'Puede ser valido si estas liquidando stock estancado.\n\n¿Activar de todas formas?';
+        if (confirm(ask)) {
+            var body2 = Object.assign({}, body, { confirm_negative_margin: true });
+            resp = await fetch('/api/items/' + itemId + '/promotions/activate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+                body: JSON.stringify(body2)
+            });
+            data = await resp.json();
+        }
+    }
+    return { resp: resp, data: data };
+}
+
 async function activateDeal() {
     var btn = document.getElementById('dm-activate-btn');
     btn.disabled = true;
@@ -1583,12 +1616,8 @@ async function activateDeal() {
     }
 
     try {
-        var resp = await fetch('/api/items/' + _modalState.itemId + '/promotions/activate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-            body: JSON.stringify(body)
-        });
-        var data = await resp.json();
+        var res = await _postDealActivate(_modalState.itemId, body);
+        var resp = res.resp, data = res.data;
         if (resp.ok && data.ok) {
             showResult(true, 'Deal activado exitosamente!');
             btn.textContent = 'Hecho!';
@@ -2044,12 +2073,8 @@ async function submitPromoAction(idx, promoType, originalPrice, promotionId, min
     }
 
     try {
-        var resp = await fetch('/api/items/' + _pdState.itemId + '/promotions/activate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-            body: JSON.stringify(body)
-        });
-        var data = await resp.json();
+        var res = await _postDealActivate(_pdState.itemId, body);
+        var resp = res.resp, data = res.data;
         if (resp.ok && data.ok) {
             msgEl.textContent = 'Promocion actualizada!';
             msgEl.className = 'mt-2 text-xs text-green-600 font-semibold bg-green-50 p-2 rounded';
@@ -2321,19 +2346,15 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
         btn.textContent = 'Activando...';
 
         // Step 3: Activate with ML-credible price
-        var r = await fetch('/api/items/' + itemId + '/promotions/activate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                deal_price: dealPrice,
-                promotion_type: 'PRICE_DISCOUNT',
-                original_price: mlOriginal,
-                start_date: start,
-                finish_date: finish,
-                account_id: accountId
-            })
+        var res = await _postDealActivate(itemId, {
+            deal_price: dealPrice,
+            promotion_type: 'PRICE_DISCOUNT',
+            original_price: mlOriginal,
+            start_date: start,
+            finish_date: finish,
+            account_id: accountId
         });
-        var data = await r.json();
+        var r = res.resp, data = res.data;
         if (r.ok && data.ok) {
             var actualPct = mlOriginal > 0 ? Math.round((1 - dealPrice / mlOriginal) * 100) : Math.round(bufferPct * 100);
             showToast('success', 'Deal −' + actualPct + '% activo · $' + Math.round(dealPrice).toLocaleString('es-MX') + ' hasta ' + finish.slice(0, 10));
@@ -2401,19 +2422,15 @@ async function quickDealByPct(itemId, basePrice, btn) {
         var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
 
         btn.textContent = 'Activando...';
-        var r = await fetch('/api/items/' + itemId + '/promotions/activate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                deal_price: dealPrice,
-                promotion_type: 'PRICE_DISCOUNT',
-                original_price: mlOriginal,
-                start_date: start,
-                finish_date: finish,
-                account_id: accountId
-            })
+        var res = await _postDealActivate(itemId, {
+            deal_price: dealPrice,
+            promotion_type: 'PRICE_DISCOUNT',
+            original_price: mlOriginal,
+            start_date: start,
+            finish_date: finish,
+            account_id: accountId
         });
-        var data = await r.json();
+        var r = res.resp, data = res.data;
         if (r.ok && data.ok) {
             var actualPct = mlOriginal > 0 ? Math.round((1 - dealPrice / mlOriginal) * 100) : pct;
             showToast('success', 'Deal −' + actualPct + '% activo · $' + Math.round(dealPrice).toLocaleString('es-MX') + ' hasta ' + finish.slice(0, 10));
