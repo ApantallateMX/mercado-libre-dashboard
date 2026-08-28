@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (4) — FEAT: sección Novedades (changelog) — conformance MI2 §17b
+
+Nueva página `/changelog` + modal "qué hay de nuevo" (auto-check en cada carga de
+página), respaldados por tablas nuevas (`changelog_entries` + `changelog_dismissals`
+por usuario), sembradas con 14 hitos reales curados desde este mismo DEVLOG (últimos
+~3 meses). No reemplaza este archivo — es el subconjunto user-facing, sin el detalle
+técnico.
+
+`package.json` agregado en la raíz **solo** para satisfacer el requisito de semver
+del check MI2 §17b (`version: "1.0.0"`, primera vez que este proyecto usa semver) —
+NO es una migración a Node. `nixpacks.toml` fija `providers = ["python"]`
+explícitamente para que Nixpacks nunca autodetecte un provider Node por la sola
+presencia del archivo. Verificado en producción: Railway y Coolify sanos después del
+deploy, el cambio de config no rompió el build.
+
+Corrido el validador real de conformance (`apps.mi2.com.mx/launch/check-stack`):
+`Changelog+versioning` pasó de FAIL a PASS. Quedan pendientes (fuera de alcance de
+este cambio): §14d Developer Manual y §17a User Manual `/manual` — requieren
+recopilación real de contenido, y el resto del gate de 12 checks exige adoptar un
+stack Node completo (React/Vite/Express/Drizzle/Postgres/PM2), que este proyecto no
+va a adoptar solo por conformance.
+
+---
+
 ## 2026-08-28 (3) — FIX: logjam en Vigilancia (ML winner / Amazon Buy Box)
 
 Tercer caso del mismo bug detectado hoy (zonas, comprador, ahora Vigilancia).
