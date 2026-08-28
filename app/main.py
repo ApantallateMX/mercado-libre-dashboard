@@ -16247,6 +16247,29 @@ async def multi_sync_status():
     return status
 
 
+@app.get("/api/diag/db-file-sizes")
+async def diag_db_file_sizes(token: str = ""):
+    """EMERGENCIA 2026-08-27: solo lectura de tamaños de archivo (os.path.getsize,
+    NUNCA abre una conexión SQLite) -- para saber si el bloat real está en
+    tokens.db, tokens.db-wal o tokens.db-shm antes de decidir qué tan
+    arriesgado es cualquier siguiente paso. Cero riesgo de "disk I/O error"
+    porque no escribe nada ni toca SQLite."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import os as _os_dbsize
+    base = DATABASE_PATH
+    out = {}
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        p = base + suffix
+        try:
+            out[p] = round(_os_dbsize.path.getsize(p) / 1024 / 1024, 3)
+        except FileNotFoundError:
+            out[p] = None
+        except Exception as _e:
+            out[p] = f"error: {_e}"
+    return JSONResponse(out)
+
+
 @app.post("/api/diag/wal-checkpoint")
 async def diag_wal_checkpoint(token: str = ""):
     """EMERGENCIA 2026-08-27: volumen de Railway al 99%+ (495.7/500MB),
