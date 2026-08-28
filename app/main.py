@@ -25110,16 +25110,22 @@ async def amazon_buyer_messages_list(
 
 
 @app.post("/api/diag/backfill-buyer-attachments")
-async def diag_backfill_buyer_attachments(token: str = "", seller_id: str = ""):
+async def diag_backfill_buyer_attachments(token: str = "", seller_id: str = "", limit: int = Query(500, ge=10, le=2000)):
     """Backfill puntual (2026-08-27, aprobado por Jovan): re-consulta por IMAP
     (solo lectura) los mensajes de compradores guardados ANTES del fix de
     adjuntos, para recuperar imágenes que el parser viejo descartaba en
     silencio. seller_id vacío = todas las cuentas configuradas. Caso real que
-    lo motivó: orden 702-6149854-7649051 (AUTOBOT AMZ MX)."""
+    lo motivó: orden 702-6149854-7649051 (AUTOBOT AMZ MX).
+
+    `limit` acota cuántos mensajes se re-consultan en ESTA llamada (cuentas
+    con mucho historial, ej. VECKTOR, pueden tardar más que el timeout de un
+    solo request HTTP) -- llamar varias veces con el mismo seller_id sigue
+    avanzando sobre lo que falta (attachments_checked=0), nunca repite un
+    mensaje ya revisado."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     from app.services import buyer_messages_client as _bmc_backfill
-    result = await _bmc_backfill.backfill_attachments_for_seller(seller_id)
+    result = await _bmc_backfill.backfill_attachments_for_seller(seller_id, limit=limit)
     return JSONResponse(result)
 
 
