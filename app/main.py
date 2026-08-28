@@ -16247,6 +16247,39 @@ async def multi_sync_status():
     return status
 
 
+@app.post("/api/diag/wal-checkpoint")
+async def diag_wal_checkpoint(token: str = ""):
+    """EMERGENCIA 2026-08-27: volumen de Railway al 99%+ (495.7/500MB),
+    "disk I/O error" en TODA la app (confirmado: incluso /api/system/disk-usage,
+    que no toca la DB, fallaba -- AuthMiddleware hace una escritura de sesión/
+    auditoría en CADA request autenticado, y esa escritura es la que fallaba).
+    Este endpoint NO depende de sesión (solo DIAG_TOKEN) para tener la mejor
+    chance de ejecutarse incluso con el disco casi lleno. PRAGMA
+    wal_checkpoint(TRUNCATE) fusiona el archivo -wal al .db principal y lo
+    trunca a 0 -- si el WAL había crecido mucho (checkpoints normales
+    bloqueados por el mismo disco lleno, un ciclo que se retroalimenta), esto
+    puede liberar espacio real sin necesitar espacio extra para crecer nada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import shutil as _shutil_wal
+    import aiosqlite as _aio_wal
+    try:
+        vol_path = Path(DATABASE_PATH).resolve().parent
+        before = _shutil_wal.disk_usage(vol_path)
+        async with _aio_wal.connect(DATABASE_PATH, timeout=30) as db:
+            cur = await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            checkpoint_result = await cur.fetchone()
+        after = _shutil_wal.disk_usage(vol_path)
+        return JSONResponse({
+            "checkpoint_result": list(checkpoint_result) if checkpoint_result else None,
+            "free_mb_before": round(before.free / 1024 / 1024, 2),
+            "free_mb_after": round(after.free / 1024 / 1024, 2),
+            "pct_used_after": round(after.used / after.total * 100, 2) if after.total else None,
+        })
+    except Exception as _e:
+        return JSONResponse({"error": str(_e), "type": type(_e).__name__}, status_code=500)
+
+
 @app.get("/api/system/disk-usage")
 async def system_disk_usage():
     """Espacio en disco del volumen donde vive tokens.db — sin esto, los 2
