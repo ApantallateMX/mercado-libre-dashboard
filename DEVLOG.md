@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (7) — FIX: auditoría completa de sección Salud + Novedades a notificación
+
+Auditoría fresca de Salud (ML: Reclamos/Preguntas/Mensajes/Reputación/Vigilancia/
+Score/Feedback; Amazon: Resumen/Mensajes/Vigilancia/Feedback), 2 especialistas en
+paralelo, mismo patrón que la auditoría de Deals de hoy:
+
+1. **Permisos (crítico, confirmado explotable)** — ningún endpoint real de escritura
+   en Salud revisaba `PERMISSION_TREE` (`AuthMiddleware` solo filtra rutas HTML, nunca
+   `/api/*`). Afectaba responder reclamos/preguntas/mensajes ML **y el envío de
+   correos reales a compradores de Amazon**. Agregado `_require_subtab()` a 16
+   endpoints de `health.py` + 5 en `main.py` + 1 en `amazon_products.py`. Verificado
+   con usuario restringido real: 403 en reclamo ML y correo Amazon; admin sin bloqueo.
+2. Amazon "Resumen" ahora avisa honestamente que su score es un proxy interno, no el
+   Account Health Rating oficial (sin acceso a ODR real vía SP-API).
+3. `urgent_count`/banner "Todo en orden" ya consideran mensajes y feedback pendientes.
+4. Badge de nav ML ahora suma feedback; nuevo badge de Salud para Amazon (no existía).
+5. Reputación ML: corregidos 2 bugs reales en la fórmula de "margen restante"
+   (denominador incorrecto, "próxima zona" mal etiquetada en zona óptima).
+6. Vigilancia (SKUs sin ganar catálogo/Buy Box ≥24h) ahora aparece en Alertas Activas.
+7. Aviso de cobertura parcial (top-150 SKUs) agregado a Feedback ML.
+8. Score de listing ML ahora penaliza si no se gana el catálogo (reusa
+   `listing_snapshots`, sin llamada nueva a ML).
+
+De paso: **Novedades (changelog) deja de ser un tab fijo del nav** — a petición de
+Jovan, ahora vive como el popup que ya existía + una entrada en la campana de
+notificaciones (mismo patrón que alertas de sistema/sugerencias cruzadas). `/changelog`
+sigue siendo una ruta real, accesible desde ahí.
+
+Verificado en producción: Railway y Coolify sanos tras el deploy.
+
+---
+
 ## 2026-08-28 (6) — FIX: auditoría completa de Deals — permisos, margen, VOLUME
 
 Auditoría fresca de la Central de Promociones ML (2 especialistas en paralelo, código
