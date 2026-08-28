@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (2) — FIX: constancia_data fiscal (billing_fiscal_data) migrada a S3
+
+Segundo caso del mismo riesgo detectado el mismo día en `amazon_buyer_message_attachments`:
+`billing_fiscal_data.constancia_data` guardaba PDFs (hasta 5MB) como BLOB en SQLite,
+nunca migrado a S3 a diferencia de `billing_invoices`. Mismo patrón aplicado:
+`save_billing_fiscal_data()` sube a S3 y guarda solo `s3_key`, `get_billing_constancia()`
+lee de S3 primero (BLOB legacy como fallback), `get_billing_fiscal_data()` no expone
+`s3_key` al panel admin. Diferencia clave respecto al caso de mensajes: es un documento
+con valor fiscal — **sin ninguna purga/retención automática**. También se corrigió
+`delete_billing_request()`, que no limpiaba nada en S3 para esta tabla (hubiera dejado
+huérfanos en el bucket).
+
+Migración histórica en producción vía el mismo endpoint (`kind=fiscal_data`): **570
+registros migrados, 0 fallos**, ~123MB liberados del archivo `.db`. Verificado también
+que Coolify (ahora en replicación automática, ver entrada anterior) tomó el commit
+correctamente vía webhook de git push sin intervención manual.
+
+---
+
 ## 2026-08-28 — FEAT: replicación tokens.db Railway → Coolify (failover real)
 
 Coolify corría el mismo código que Railway (`git push mi2 main`) pero con su propia
