@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Developer Manual{% endblock %}
+{% block content %}
+<div class="px-4 py-6 max-w-4xl mx-auto">
+
+  <div class="mb-6">
+    <h1 class="text-xl font-bold text-gray-800">Developer Manual</h1>
+    <p class="text-xs text-gray-500 mt-0.5">
+      Diccionario de datos técnico -- fuente real: <code class="bg-gray-100 px-1 rounded">docs/developer-manual.md</code>
+      (versionado en git, editable directamente ahí). Admin-only.
+    </p>
+  </div>
+
+  {% if error %}
+  <div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+    No se pudo cargar el manual: {{ error }}
+  </div>
+  {% else %}
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    <div class="dev-manual-content">
+      {{ rendered|safe }}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

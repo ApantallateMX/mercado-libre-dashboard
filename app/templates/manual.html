@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Manual{% endblock %}
+{% block content %}
+<div class="px-4 py-6 max-w-5xl mx-auto">
+
+  <div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">Manual</h1>
+      <p class="text-xs text-gray-500 mt-0.5">Qué hace cada pantalla del dashboard y cómo usarla.</p>
+    </div>
+    <form method="get" action="/manual" class="flex items-center gap-2">
+      <input type="text" name="q" value="{{ q }}" placeholder="Buscar en el manual..."
+             class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-56 focus:outline-none focus:ring-2 focus:ring-indigo-200">
+      <button type="submit" class="text-sm bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg">Buscar</button>
+    </form>
+  </div>
+
+  {% if not_found_slug is defined %}
+  <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800 mb-6">
+    No existe una página de manual con el identificador "{{ not_found_slug }}".
+  </div>
+  {% endif %}
+
+  {% if results is not none %}
+  <div class="mb-6">
+    <p class="text-xs text-gray-500 mb-2">{{ results|length }} resultado(s) para "{{ q }}"</p>
+    {% if not results %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6 text-center text-sm text-gray-400">
+      Sin resultados. Prueba con otra palabra.
+    </div>
+    {% else %}
+    <div class="space-y-2">
+      {% for r in results %}
+      <a href="/manual/{{ r.slug }}" class="block bg-white rounded-xl border border-gray-100 shadow-sm p-3 hover:border-indigo-200 transition">
+        <p class="text-sm font-semibold text-gray-800">{{ r.title }}</p>
+        <p class="text-[11px] text-gray-400">{{ r.category_name }}</p>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="grid md:grid-cols-2 gap-5">
+    {% for cat in categories %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+      <h2 class="text-sm font-bold text-gray-700 mb-2">{{ cat.name }}</h2>
+      {% if not cat.pages %}
+      <p class="text-xs text-gray-400">Sin páginas todavía.</p>
+      {% else %}
+      <ul class="space-y-1.5">
+        {% for p in cat.pages %}
+        <li>
+          <a href="/manual/{{ p.slug }}" class="text-sm text-indigo-600 hover:text-indigo-800 hover:underline">{{ p.title }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+</div>
+{% endblock %}

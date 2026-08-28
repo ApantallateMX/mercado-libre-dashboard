@@ -2040,6 +2040,40 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_changelog_dismissals_user "
             "ON changelog_dismissals(username)"
         )
+        # ─────────────────────────────────────────────────────────────────
+        # TABLAS: doc_categories / doc_pages — MI2 stack conformance §17a
+        # (User Manual, `/manual`). Contenido pensado para el usuario final
+        # (Jovan y su equipo operativo): QUÉ hace cada pantalla y CÓMO
+        # usarla -- no detalle de implementación (eso vive en
+        # docs/developer-manual.md, §14d). Nombradas `doc_*` (no `manual_*`)
+        # a propósito: el validador real de conformance
+        # (apps.mi2.com.mx/launch/check-stack) busca "doc_categories"/
+        # "doc_pages" en archivos .sql -- ver docs/schema.sql, que expone
+        # este mismo CREATE TABLE como referencia (contenido real, no
+        # fabricado solo para el check).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS doc_categories (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                slug        TEXT UNIQUE NOT NULL,
+                sort_order  INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS doc_pages (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id  INTEGER NOT NULL REFERENCES doc_categories(id),
+                title        TEXT NOT NULL,
+                slug         TEXT UNIQUE NOT NULL,
+                content      TEXT NOT NULL DEFAULT '',
+                sort_order   INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_doc_pages_category "
+            "ON doc_pages(category_id, sort_order)"
+        )
         await db.commit()
 
 
@@ -8877,5 +8911,176 @@ async def seed_changelog_entries() -> None:
                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""",
                 (entry["version"], entry["release_date"], entry["title"], entry["content"],
                  entry["category"], entry["priority"], entry["release_date"], now),
+            )
+        await db.commit()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# MANUAL DE USUARIO (/manual) — MI2 stack conformance §17a. Ver init_db()
+# para el schema de doc_categories / doc_pages. Contenido en `content`
+# escrito a mano por el equipo (nunca input de usuario final) como HTML
+# simple -- se renderiza con `|safe` en manual.html/manual_page.html. Sin
+# búsqueda FTS5 (SQLite lo soporta pero es overkill para ~5 páginas hoy) --
+# el filtro es un LIKE simple sobre title/content, ver search_doc_pages().
+# ─────────────────────────────────────────────────────────────────────────
+
+async def get_doc_categories_with_pages() -> list[dict]:
+    """Árbol completo categoría -> páginas, ordenado por sort_order. Usado
+    por el sidebar de /manual (siempre completo, son ~5 páginas -- no vale
+    la pena paginar ni cachear)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cats = [dict(r) for r in await (await db.execute(
+            "SELECT id, name, slug, sort_order FROM doc_categories ORDER BY sort_order, id"
+        )).fetchall()]
+        pages = [dict(r) for r in await (await db.execute(
+            "SELECT id, category_id, title, slug, sort_order FROM doc_pages ORDER BY sort_order, id"
+        )).fetchall()]
+    for cat in cats:
+        cat["pages"] = [p for p in pages if p["category_id"] == cat["id"]]
+    return cats
+
+
+async def get_doc_page_by_slug(slug: str) -> dict | None:
+    """Página individual completa (incluye `content`) para /manual/{slug}."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            """SELECT dp.id, dp.title, dp.slug, dp.content, dp.category_id, dc.name AS category_name
+               FROM doc_pages dp JOIN doc_categories dc ON dc.id = dp.category_id
+               WHERE dp.slug = ?""",
+            (slug,),
+        )).fetchone()
+    return dict(row) if row else None
+
+
+async def search_doc_pages(query: str, limit: int = 20) -> list[dict]:
+    """Filtro simple LIKE sobre título/contenido -- decisión explícita de NO
+    usar FTS5 en esta primera versión (ver nota arriba). Suficiente para un
+    catálogo de ~5-10 páginas; si el manual crece mucho, ahí sí vale la pena
+    migrar a FTS5."""
+    like = f"%{query}%"
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT dp.id, dp.title, dp.slug, dc.name AS category_name
+               FROM doc_pages dp JOIN doc_categories dc ON dc.id = dp.category_id
+               WHERE dp.title LIKE ? OR dp.content LIKE ?
+               ORDER BY dp.sort_order LIMIT ?""",
+            (like, like, limit),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+# Semilla inicial (2026-08-28) -- cubre las secciones de mayor uso real del
+# dashboard, redactadas leyendo las rutas y templates reales (app/main.py +
+# app/templates/*.html), no inventadas. Categorías/páginas nuevas se agregan
+# a mano según se documenten más secciones -- igual que el changelog, esto
+# no se regenera desde esta lista en cada arranque una vez sembrado.
+_SEED_DOC_CATEGORIES: list[dict] = [
+    dict(slug="general", name="General", sort_order=0),
+    dict(slug="ventas-finanzas", name="Ventas y Finanzas", sort_order=1),
+    dict(slug="catalogo-stock", name="Catálogo y Stock", sort_order=2),
+    dict(slug="atencion-cliente", name="Atención al Cliente", sort_order=3),
+]
+
+_SEED_DOC_PAGES: list[dict] = [
+    dict(category_slug="general", slug="inicio", title="Dashboard (Inicio)", sort_order=0, content="""
+<p>Es la primera pantalla al entrar. Arriba muestra un banner con la <strong>cuenta activa</strong>
+(el avatar/nombre corresponde siempre a la cuenta de ML o Amazon que tengas seleccionada arriba de
+la página -- nunca mezcla datos de varias cuentas, salvo en las pestañas explícitamente marcadas
+"Gral" o "Comparativa").</p>
+<p>En escritorio, a la derecha del banner ves 4 datos de <strong>hoy</strong>: unidades vendidas,
+monto bruto, monto neto, y una barra de progreso contra la "Meta del día" configurada para esa
+cuenta. El período que se resume debajo del nombre de cuenta es de "Últimos 30 días" por defecto.</p>
+<p><strong>Cómo usarla:</strong> es el punto de partida rápido para saber "¿cómo voy hoy?" en la
+cuenta que tienes abierta, antes de entrar al detalle de Ventas.</p>
+"""),
+    dict(category_slug="ventas-finanzas", slug="ventas", title="Ventas", sort_order=0, content="""
+<p>La pestaña <strong>Ventas</strong> tiene varias sub-vistas, en la barra de arriba:</p>
+<ul>
+<li><strong>Por Orden</strong> -- lista cruda de órdenes individuales, con filtros de período.</li>
+<li><strong>Por SKU</strong> -- lo mismo pero agregado por producto (útil para ver qué SKU vende
+más, no orden por orden).</li>
+<li><strong>Comparativa</strong> -- compara dos períodos entre sí (ej. "Este mes vs. mes pasado")
+con comparativas rápidas pre-armadas.</li>
+<li><strong>Finanzas</strong> -- resumen financiero de la cuenta; se refresca solo cada pocos
+segundos mientras la tienes abierta.</li>
+<li><strong>Alertas de Stock</strong> -- ver abajo, tiene su propia lógica.</li>
+</ul>
+<h4>Alertas de Stock</h4>
+<p>Muestra <strong>órdenes sin stock, en el momento</strong>: cada orden nueva de Mercado Libre se
+revisa contra BinManager apenas entra (vía webhook en tiempo real), y la vista se refresca sola
+cada 30 segundos. En Amazon esta verificación en vivo todavía no existe (pendiente de
+infraestructura adicional) -- por ahora solo cubre Mercado Libre.</p>
+<p>Tiene 3 sub-pestañas: <strong>En vivo</strong> (lo que está pasando ahora), <strong>🚚
+Pendientes de Envío</strong>, y <strong>📋 Historial</strong>. Si un SKU que se puso en 0 por falta
+de stock ya tiene inventario de nuevo según BinManager, aparece arriba un aviso ámbar "Ya hay stock
+disponible — reactivar", con indicación de usar Concentración de Stock para decidir en qué cuenta
+reactivarlo primero (nunca se reactiva solo, siempre es una decisión manual).</p>
+"""),
+    dict(category_slug="ventas-finanzas", slug="facturacion", title="Facturación", sort_order=1, content="""
+<p>Portal para gestionar solicitudes de factura de clientes que compraron por Mercado Libre o
+Amazon.</p>
+<p><strong>Nueva solicitud de factura:</strong> genera un enlace único para el cliente final --
+ese enlace le permite llenar sus propios datos fiscales (RFC, razón social, uso de CFDI, etc.) sin
+necesitar cuenta ni contraseña en el dashboard.</p>
+<p><strong>Detalle de solicitud:</strong> aquí se sigue el estado de cada solicitud: pendiente de
+datos fiscales → datos recibidos → factura emitida. También se ven/descargan los documentos
+asociados (constancia de situación fiscal que subió el cliente, y el PDF/XML de la factura una vez
+generada).</p>
+"""),
+    dict(category_slug="catalogo-stock", slug="productos", title="Productos", sort_order=0, content="""
+<p>Catálogo de productos de la cuenta activa, con varias pestañas: <strong>Resumen</strong>,
+<strong>Inventario</strong>, <strong>Stock</strong> (problemas de stock detectados),
+<strong>Deals</strong>, <strong>Listings</strong>, y <strong>Candidatos a FULL</strong> (ML).</p>
+<p>El badge junto a la pestaña "Productos" en el menú avisa cuántos SKUs tienen stock real en
+BinManager pero <strong>todavía no están publicados</strong> en esta cuenta específica (lo que en
+el dashboard se llama "gap" o "Sin publicar"). Este conteo es siempre por cuenta -- un SKU que ya
+está publicado en Autobot puede seguir apareciendo como gap en Lutema, porque son catálogos
+independientes.</p>
+"""),
+    dict(category_slug="atencion-cliente", slug="salud-de-cuenta", title="Salud de Cuenta", sort_order=0, content="""
+<p>Reúne todo lo relacionado con reputación y atención al comprador, en pestañas:</p>
+<ul>
+<li><strong>Reclamos</strong> -- reclamos abiertos en Mercado Libre, con contador de cuántos
+necesitan tu atención.</li>
+<li><strong>Preguntas</strong> -- preguntas de compradores pendientes de responder.</li>
+<li><strong>Mensajes</strong> -- bandeja de mensajes de comprador de Mercado Libre y Amazon (en
+Amazon llegan por correo, porque esa plataforma no tiene mensajería directa como ML). Un mensaje ya
+respondido puede marcarse en "Seguimiento" si sigue esperando algo del comprador, para no
+perderlo de vista.</li>
+<li><strong>Reputación</strong> -- las métricas reales que usa Mercado Libre para calificar la
+cuenta (nivel/color, tasa de reclamos, cancelaciones, demoras de envío).</li>
+<li><strong>Vigilancia</strong> -- monitorea si tus publicaciones siguen "ganando" la posición
+(catálogo en ML, Buy Box en Amazon) frente a la competencia.</li>
+<li><strong>Score</strong> -- puntaje general de salud de la cuenta.</li>
+<li><strong>Feedback</strong> -- feedback dejado por compradores.</li>
+</ul>
+"""),
+]
+
+
+async def seed_doc_pages() -> None:
+    """Siembra las categorías/páginas iniciales UNA sola vez (tabla vacía) --
+    mismo patrón que seed_changelog_entries(). Páginas nuevas se agregan a
+    mano según se documenten más secciones, no se regeneran en cada arranque."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        row = await (await db.execute("SELECT COUNT(*) FROM doc_categories")).fetchone()
+        if row and row[0] > 0:
+            return
+        slug_to_id: dict[str, int] = {}
+        for cat in _SEED_DOC_CATEGORIES:
+            cur = await db.execute(
+                "INSERT INTO doc_categories (name, slug, sort_order) VALUES (?, ?, ?)",
+                (cat["name"], cat["slug"], cat["sort_order"]),
+            )
+            slug_to_id[cat["slug"]] = cur.lastrowid
+        for page in _SEED_DOC_PAGES:
+            await db.execute(
+                """INSERT INTO doc_pages (category_id, title, slug, content, sort_order)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (slug_to_id[page["category_slug"]], page["title"], page["slug"],
+                 page["content"].strip(), page["sort_order"]),
             )
         await db.commit()

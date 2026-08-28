@@ -697,6 +697,12 @@ async def lifespan(app: FastAPI):
     except Exception as _e_cl_seed:
         logger.error(f"[STARTUP] seed_changelog_entries() falló (¿disco lleno?): {_e_cl_seed}")
 
+    # Seed Manual de Usuario (/manual) -- una sola vez, MI2 §17a
+    try:
+        await token_store.seed_doc_pages()
+    except Exception as _e_doc_seed:
+        logger.error(f"[STARTUP] seed_doc_pages() falló (¿disco lleno?): {_e_doc_seed}")
+
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
     # no recibe SIGKILL por timeout (exit 137).
@@ -1555,9 +1561,22 @@ _NAV_TAB_DEFS = [
          ml_href="/changelog", amz_href="/changelog",
          ml_active=["changelog"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab=None, amz_tab=None, admin_only=False, badge=None),
+    # ml_tab/amz_tab=None a propósito -- MI2 §17a (Manual de Usuario) es
+    # visible para CUALQUIER usuario logueado, mismo patrón que Novedades.
+    dict(id="manual", label="Manual", icon="📖",
+         ml_href="/manual", amz_href="/manual",
+         ml_active=["manual"], amz_active=None, amz_uses_dispatcher=False,
+         ml_tab=None, amz_tab=None, admin_only=False, badge=None),
     dict(id="deuda", label="Deuda", icon="🏦",
          ml_href="/deuda-empresa", amz_href="/deuda-empresa",
          ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,
+         ml_tab=None, amz_tab=None, admin_only=True, badge=None),
+    # Developer Manual (§14d) -- diccionario de datos técnico, admin-only
+    # (equipo operativo no lo necesita; el Manual de Usuario de arriba sí
+    # es para todos).
+    dict(id="developer_manual", label="Dev Manual", icon="🛠️",
+         ml_href="/developer-manual", amz_href="/developer-manual",
+         ml_active=["developer_manual"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab=None, amz_tab=None, admin_only=True, badge=None),
     # Finanzas, Listings y Deals dejaron de ser tabs de nivel superior
     # (consolidación 2026-07-24) — fusionados como subtabs de Ventas/
@@ -3921,6 +3940,153 @@ async def api_changelog_dismiss(changelog_id: int, request: Request):
         return JSONResponse({"error": "Sin sesión"}, status_code=401)
     await token_store.dismiss_changelog_entry(du["username"], changelog_id)
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# MANUAL DE USUARIO (/manual) — MI2 stack conformance §17a. Visible para
+# cualquier usuario logueado (ml_tab=None en _NAV_TAB_DEFS, mismo patrón que
+# /changelog). Contenido en app/services/token_store.py (doc_categories /
+# doc_pages), sembrado por seed_doc_pages() al arrancar.
+# ─────────────────────────────────────────────────────────────────────────
+
+@app.get("/manual", response_class=HTMLResponse)
+async def manual_index_page(request: Request, q: str = Query("", description="Búsqueda simple LIKE en título/contenido")):
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    categories = await token_store.get_doc_categories_with_pages()
+    results = await token_store.search_doc_pages(q) if q else None
+    return templates.TemplateResponse(request, "manual.html", {
+        "user": user,
+        "active": "manual",
+        "categories": categories,
+        "results": results,
+        "q": q,
+        **ctx,
+    })
+
+
+@app.get("/manual/{slug}", response_class=HTMLResponse)
+async def manual_page_detail(slug: str, request: Request):
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    page = await token_store.get_doc_page_by_slug(slug)
+    if not page:
+        return templates.TemplateResponse(request, "manual.html", {
+            "user": user, "active": "manual",
+            "categories": await token_store.get_doc_categories_with_pages(),
+            "results": None, "q": "", "not_found_slug": slug,
+            **ctx,
+        }, status_code=404)
+    categories = await token_store.get_doc_categories_with_pages()
+    return templates.TemplateResponse(request, "manual_page.html", {
+        "user": user, "active": "manual",
+        "page": page, "categories": categories,
+        **ctx,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# DEVELOPER MANUAL (/developer-manual) — MI2 stack conformance §14d.
+# Admin-only (mismo patrón que /deuda-empresa): es un diccionario de datos
+# técnico para quien mantiene el código, no contenido operativo del equipo.
+# Contenido real vive en docs/developer-manual.md (Markdown, versionado en
+# git) -- esta ruta solo lo lee y lo renderiza con un conversor mínimo
+# (_render_simple_markdown), sin agregar una dependencia nueva de Markdown.
+# ─────────────────────────────────────────────────────────────────────────
+
+def _render_simple_markdown(md_text: str) -> str:
+    """Conversor deliberadamente mínimo (headers #/##/###, listas '- ',
+    negritas **texto**, párrafos) -- suficiente para un documento de
+    referencia interno, sin agregar la dependencia `markdown` solo para
+    esta única página. Escapa HTML antes de aplicar las reglas (el
+    contenido es un archivo del repo, pero igual nunca se confía texto
+    crudo a innerHTML sin escapar)."""
+    import html as _html
+    lines = md_text.replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    in_list = False
+    in_code = False
+    for raw in lines:
+        line = _html.escape(raw)
+        if raw.strip().startswith("```"):
+            if in_code:
+                out.append("</pre>")
+            else:
+                out.append('<pre class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto">')
+            in_code = not in_code
+            continue
+        if in_code:
+            out.append(line)
+            continue
+        stripped = raw.strip()
+        if stripped.startswith("### "):
+            if in_list:
+                out.append("</ul>"); in_list = False
+            out.append(f'<h4 class="text-sm font-bold text-gray-800 mt-4 mb-1">{_html.escape(stripped[4:])}</h4>')
+        elif stripped.startswith("## "):
+            if in_list:
+                out.append("</ul>"); in_list = False
+            out.append(f'<h3 class="text-base font-bold text-gray-800 mt-5 mb-2">{_html.escape(stripped[3:])}</h3>')
+        elif stripped.startswith("# "):
+            if in_list:
+                out.append("</ul>"); in_list = False
+            out.append(f'<h2 class="text-lg font-bold text-gray-800 mt-6 mb-2">{_html.escape(stripped[2:])}</h2>')
+        elif stripped.startswith("---"):
+            if in_list:
+                out.append("</ul>"); in_list = False
+            out.append('<hr class="my-4 border-gray-200">')
+        elif stripped.startswith("- "):
+            if not in_list:
+                out.append('<ul class="list-disc pl-5 space-y-0.5 text-sm text-gray-700">')
+                in_list = True
+            out.append(f"<li>{_html.escape(stripped[2:])}</li>")
+        elif stripped == "":
+            if in_list:
+                out.append("</ul>"); in_list = False
+            out.append("")
+        else:
+            if in_list:
+                out.append("</ul>"); in_list = False
+            out.append(f'<p class="text-sm text-gray-700 leading-relaxed">{_html.escape(stripped)}</p>')
+        # Negritas **texto** -- aplicado sobre la última línea agregada (simple, no anidado)
+        if out and "**" in raw:
+            import re as _re
+            out[-1] = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out[-1])
+    if in_list:
+        out.append("</ul>")
+    return "\n".join(out)
+
+
+@app.get("/developer-manual", response_class=HTMLResponse)
+async def developer_manual_page(request: Request):
+    """Diccionario de datos técnico -- MI2 §14d. Admin-only."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    _du_devman = getattr(request.state, "dashboard_user", None) or {}
+    if _du_devman.get("role") != "admin":
+        return RedirectResponse("/dashboard", status_code=302)
+    ctx = await _accounts_ctx(request)
+    import os as _os_devman
+    _md_path = _os_devman.path.join(_os_devman.path.dirname(__file__), "..", "docs", "developer-manual.md")
+    try:
+        with open(_md_path, "r", encoding="utf-8") as f:
+            _md_raw = f.read()
+        rendered = _render_simple_markdown(_md_raw)
+        error = None
+    except Exception as _e_devman:
+        rendered = ""
+        error = str(_e_devman)
+        logger.error(f"[DEVELOPER-MANUAL] no se pudo leer docs/developer-manual.md: {_e_devman}")
+    return templates.TemplateResponse(request, "developer_manual.html", {
+        "user": user, "active": "developer_manual",
+        "rendered": rendered, "error": error,
+        **ctx,
+    })
 
 
 # ── Rutas públicas del portal de facturación (sin autenticación) ──────────────
