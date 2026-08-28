@@ -1493,6 +1493,17 @@ async def init_db():
         await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_abm_message_id ON amazon_buyer_messages(message_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_seller_ts ON amazon_buyer_messages(seller_id, ts)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abm_order ON amazon_buyer_messages(order_id)")
+        # Migración 2026-08-27: backfill puntual de adjuntos para mensajes ya
+        # guardados ANTES del fix de _get_attachments() (ver
+        # amazon_buyer_message_attachments arriba) -- el parser viejo los
+        # descartaba en silencio. attachments_checked marca que YA se
+        # re-consultó ese correo por IMAP para buscar adjuntos (haya
+        # encontrado alguno o no), para no volver a re-consultarlo si el
+        # backfill se corre más de una vez.
+        try:
+            await db.execute("ALTER TABLE amazon_buyer_messages ADD COLUMN attachments_checked INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
         # TABLA: amazon_buyer_message_attachments (2026-08-27) — imágenes que el
         # comprador adjunta en Buyer Messages (Amazon SÍ las reenvía como parte
         # MIME real, confirmado con un caso real). BLOB nativo de SQLite (no
@@ -3449,8 +3460,9 @@ async def insert_buyer_message(msg: dict) -> int | None:
         cur = await db.execute("""
             INSERT OR IGNORE INTO amazon_buyer_messages
                 (seller_id, direction, order_id, asin, product_title, buyer_name,
-                 subject, body_text, reply_to_addr, message_id, in_reply_to, ts)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 subject, body_text, reply_to_addr, message_id, in_reply_to, ts,
+                 attachments_checked)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
         """, (
             msg["seller_id"], msg.get("direction", "inbound"),
             msg.get("order_id", ""), msg.get("asin", ""), msg.get("product_title", ""),
@@ -3529,6 +3541,41 @@ async def get_buyer_message_attachment(message_row_id: int, attachment_id: int) 
             (attachment_id, message_row_id),
         )).fetchone()
     return dict(row) if row and row["data"] is not None else None
+
+
+async def get_inbound_messages_needing_attachment_check(seller_id: str = "", limit: int = 500) -> list:
+    """Mensajes inbound guardados ANTES del fix de adjuntos (attachments_checked=0)
+    -- backfill puntual 2026-08-27, ver amazon_buyer_message_attachments.
+    seller_id vacío = todas las cuentas configuradas."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        if seller_id:
+            rows = await (await db.execute(
+                """SELECT id, seller_id, message_id FROM amazon_buyer_messages
+                   WHERE seller_id = ? AND direction = 'inbound' AND attachments_checked = 0
+                   ORDER BY ts DESC LIMIT ?""",
+                (seller_id, limit),
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                """SELECT id, seller_id, message_id FROM amazon_buyer_messages
+                   WHERE direction = 'inbound' AND attachments_checked = 0
+                   ORDER BY ts DESC LIMIT ?""",
+                (limit,),
+            )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def mark_attachments_checked(message_row_ids: list) -> None:
+    if not message_row_ids:
+        return
+    placeholders = ",".join("?" * len(message_row_ids))
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            f"UPDATE amazon_buyer_messages SET attachments_checked = 1 WHERE id IN ({placeholders})",
+            message_row_ids,
+        )
+        await db.commit()
 
 
 async def purge_old_buyer_message_attachments(months: int = 6) -> int:

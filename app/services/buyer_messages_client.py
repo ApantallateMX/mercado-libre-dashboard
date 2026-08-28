@@ -345,6 +345,93 @@ def _inspect_account_sync(cfg: dict, sample_n: int = 5) -> dict:
             pass
 
 
+def _backfill_attachments_sync(cfg: dict, pending: list[dict]) -> dict:
+    """Bloqueante — se llama envuelta en asyncio.to_thread. Re-consulta por
+    Message-ID (una sola conexión IMAP para todo el lote, no una por
+    mensaje) los correos ya guardados ANTES del fix de adjuntos, y extrae
+    cualquier imagen que el parser viejo haya descartado en silencio.
+    Solo lectura (readonly=True) -- mismo patrón que _inspect_account_sync."""
+    checked_ids: list[int] = []
+    found_total = 0
+    M = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, timeout=20)
+    try:
+        M.login(cfg["email"], cfg["app_password"])
+        all_mail_folder = _find_all_mail_folder(M)
+        M.select(f'"{all_mail_folder}"', readonly=True)
+        for row in pending:
+            message_id = row["message_id"]
+            checked_ids.append(row["id"])
+            if not message_id:
+                continue
+            try:
+                # HEADER Message-ID busca substring -- el valor guardado ya
+                # incluye los < > del header real, sirve como match exacto.
+                typ, data = M.search(None, f'(HEADER Message-ID "{message_id}")')
+                if typ != "OK" or not data or not data[0]:
+                    continue
+                uid = data[0].split()[0]
+                typ2, msg_data = M.fetch(uid, "(RFC822)")
+                if typ2 != "OK" or not msg_data or not msg_data[0]:
+                    continue
+                msg = email.message_from_bytes(msg_data[0][1])
+                attachments = _get_attachments(msg)
+                if attachments:
+                    found_total += len(attachments)
+                    row["_recovered"] = {"message_row_id": row["id"], "attachments": attachments}
+            except Exception as _e:
+                logger.warning(f"[BUYER-MSG-BACKFILL] error message_id={message_id}: {_e}")
+                continue
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+    return {"checked_ids": checked_ids, "found_total": found_total,
+            "recovered": [row["_recovered"] for row in pending if row.get("_recovered")]}
+
+
+async def backfill_attachments_for_seller(seller_id: str = "", limit: int = 500) -> dict:
+    """Backfill puntual (2026-08-27): recorre mensajes guardados ANTES del fix
+    de adjuntos (attachments_checked=0), re-consulta el correo real por
+    Message-ID en el buzón dedicado, y recupera cualquier imagen que el
+    parser viejo haya descartado en silencio. Solo lectura contra IMAP --
+    nunca escribe nada al buzón. Se marca attachments_checked=1 para TODOS
+    los revisados (haya encontrado adjunto o no), para que una segunda
+    corrida no repita trabajo ya hecho."""
+    pending = await token_store.get_inbound_messages_needing_attachment_check(seller_id, limit=limit)
+    if not pending:
+        return {"checked": 0, "recovered_messages": 0, "recovered_attachments": 0, "by_account": {}}
+
+    by_account: dict = {}
+    for row in pending:
+        by_account.setdefault(row["seller_id"], []).append(row)
+
+    summary_by_account = {}
+    total_checked = 0
+    total_recovered_msgs = 0
+    total_recovered_atts = 0
+    for sid, rows in by_account.items():
+        cfg = next((c for c in AMAZON_BUYER_INBOX_ACCOUNTS if c["seller_id"] == sid), None)
+        if not cfg:
+            continue
+        result = await asyncio.to_thread(_backfill_attachments_sync, cfg, rows)
+        for rec in result["recovered"]:
+            await token_store.insert_buyer_message_attachments(rec["message_row_id"], rec["attachments"])
+        await token_store.mark_attachments_checked(result["checked_ids"])
+        summary_by_account[sid] = {
+            "checked": len(result["checked_ids"]),
+            "recovered_messages": len(result["recovered"]),
+            "recovered_attachments": result["found_total"],
+        }
+        total_checked += len(result["checked_ids"])
+        total_recovered_msgs += len(result["recovered"])
+        total_recovered_atts += result["found_total"]
+    return {
+        "checked": total_checked, "recovered_messages": total_recovered_msgs,
+        "recovered_attachments": total_recovered_atts, "by_account": summary_by_account,
+    }
+
+
 async def poll_account_inbox(cfg: dict) -> int:
     """Poll de una cuenta — retorna cuántos mensajes nuevos se insertaron.
     Usa el watermark de UID persistido (token_store) para no re-descargar
