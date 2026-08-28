@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-28 (5) — FEAT: Developer Manual + User Manual — conformance MI2 §14d/§17a
+
+Cierra los últimos 2 checks de documentación pendientes del gate de conformance MI2
+(los 3 juntos son HARD RULE desde 2026-06-25).
+
+`/developer-manual` (admin-only): diccionario de datos real -- 32 tablas de
+`tokens.db` documentadas a mano (propósito, columnas clave, reglas de negocio),
+extraídas leyendo el `CREATE TABLE` real en `token_store.py`/`user_store.py`
+(`docs/developer-manual.md`). Las ~57 tablas restantes (cachés/colas internas de
+menor relevancia operativa) quedan listadas por nombre en "Pendiente de documentar"
+en vez de inventar contenido.
+
+`/manual` + `/manual/{slug}` (cualquier usuario logueado): manual de usuario real,
+4 categorías / 5 páginas iniciales (Dashboard, Ventas, Facturación, Productos, Salud
+de Cuenta), redactadas leyendo las rutas y templates reales -- qué hace cada pantalla
+y cómo usarla, no detalle técnico. Búsqueda simple `LIKE` (FTS5 quedaría
+sobre-dimensionado para este volumen).
+
+Validador real (`apps.mi2.com.mx/launch/check-stack`) corrido contra el repo: score
+subió a 4/12 -- Changelog, Developer Manual y User Manual los 3 en PASS. Los 8 checks
+restantes exigen adoptar el stack Node completo de MI2 (React/Vite/Express/Drizzle/
+Postgres/PM2/TypeScript) -- fuera de alcance, este proyecto se queda en Python/
+FastAPI (grandfathered, decisión ya tomada).
+
+Verificado en producción tras el deploy: Railway y Coolify sanos, `/manual`,
+`/manual/ventas`, `/manual/no-existe` (404 correcto), búsqueda y `/developer-manual`
+respondiendo con contenido real en ambos ambientes.
+
+---
+
 ## 2026-08-28 (4) — FEAT: sección Novedades (changelog) — conformance MI2 §17b
 
 Nueva página `/changelog` + modal "qué hay de nuevo" (auto-check en cada carga de
