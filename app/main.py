@@ -16247,6 +16247,19 @@ async def multi_sync_status():
     return status
 
 
+@app.get("/api/diag/download-raw-db")
+async def diag_download_raw_db(token: str = ""):
+    """EMERGENCIA 2026-08-27: descarga tokens.db tal cual (410MB) para
+    inspeccionar/reparar localmente con herramientas de sqlite3 que no
+    existen en el contenedor de Railway. Solo lectura del archivo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from fastapi.responses import FileResponse as _FileResponse_dl
+    if not Path(DATABASE_PATH).is_file():
+        return JSONResponse({"error": "tokens.db no existe"}, status_code=404)
+    return _FileResponse_dl(DATABASE_PATH, media_type="application/octet-stream", filename="tokens_emergency.db")
+
+
 @app.post("/api/diag/backup-raw-db-to-s3")
 async def diag_backup_raw_db_to_s3(token: str = ""):
     """EMERGENCIA 2026-08-27: sube tokens.db TAL CUAL (bytes crudos, sea cual
