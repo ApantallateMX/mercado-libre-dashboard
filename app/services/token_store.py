@@ -1520,9 +1520,20 @@ async def init_db():
                 content_type    TEXT NOT NULL DEFAULT '',
                 size_bytes      INTEGER NOT NULL DEFAULT 0,
                 data            BLOB,
+                s3_key          TEXT NOT NULL DEFAULT '',
                 created_at      REAL NOT NULL DEFAULT 0
             )
         """)
+        # Migración 2026-08-27 (incidente real de disco lleno el mismo día que
+        # se creó esta tabla, ver DEVLOG): BLOB en SQLite para imágenes fue el
+        # error -- ahora se sube a S3/MinIO (ya configurado en s3_storage.py
+        # desde la crisis de 2026-08-03) y solo se guarda la key. `data` queda
+        # nullable solo por compatibilidad con filas legacy ya insertadas
+        # antes de este fix.
+        try:
+            await db.execute("ALTER TABLE amazon_buyer_message_attachments ADD COLUMN s3_key TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         await db.execute("CREATE INDEX IF NOT EXISTS idx_abma_message ON amazon_buyer_message_attachments(message_row_id)")
         # Watermark de IMAP UID por cuenta (2026-08-04) — antes cada ciclo de poll
         # (5 min) volvía a descargar por completo los últimos 200 correos de cada
@@ -3478,18 +3489,34 @@ async def insert_buyer_message_attachments(message_row_id: int, attachments: lis
     """Guarda los adjuntos de imagen de un mensaje ya insertado (ver
     buyer_messages_client._get_attachments). Un mensaje solo se inserta una
     vez (INSERT OR IGNORE por message_id), así que esto solo corre la
-    primera vez que se ve ese correo."""
+    primera vez que se ve ese correo.
+
+    FIX 2026-08-27 (incidente real de disco lleno -> DB corrupta el mismo día
+    que se creó esta tabla, ver DEVLOG): sube a S3/MinIO en vez de guardar el
+    BLOB en SQLite -- nunca más disco de Railway para esto. Si S3 no está
+    configurado, cae al BLOB legacy (nunca debería pasar en producción, pero
+    mejor eso que perder el adjunto)."""
     if not attachments:
         return
+    from app.services import s3_storage
     now = __import__("time").time()
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for a in attachments:
+            data = a.get("data") or b""
+            s3_key = ""
+            blob_fallback = None
+            if s3_storage.is_configured():
+                s3_key = f"buyer_message_attachments/{message_row_id}/{now}_{a.get('filename', 'adjunto')}"
+                s3_storage.upload_bytes(s3_key, data, a.get("content_type", "application/octet-stream"))
+            else:
+                logger.warning(f"[BUYER-MSG] S3 no configurado -- guardando adjunto como BLOB legacy (mensaje {message_row_id})")
+                blob_fallback = data
             await db.execute("""
                 INSERT INTO amazon_buyer_message_attachments
-                    (message_row_id, filename, content_type, size_bytes, data, created_at)
-                VALUES (?,?,?,?,?,?)
+                    (message_row_id, filename, content_type, size_bytes, data, s3_key, created_at)
+                VALUES (?,?,?,?,?,?,?)
             """, (message_row_id, a.get("filename", ""), a.get("content_type", ""),
-                  len(a.get("data") or b""), a.get("data"), now))
+                  len(data), blob_fallback, s3_key, now))
         await db.commit()
 
 
@@ -3531,16 +3558,28 @@ async def get_buyer_message_attachments_for_rows(message_row_ids: list[int]) -> 
 
 
 async def get_buyer_message_attachment(message_row_id: int, attachment_id: int) -> dict | None:
-    """El BLOB completo de un adjunto -- solo se llama on-demand cuando el
-    frontend pide ver esa imagen específica."""
+    """El adjunto completo de un adjunto -- solo se llama on-demand cuando el
+    frontend pide ver esa imagen específica. Lee de S3 si hay s3_key; cae al
+    BLOB legacy (filas insertadas antes de la migración a S3) solo si
+    s3_key está vacío."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(
-            """SELECT id, filename, content_type, data FROM amazon_buyer_message_attachments
+            """SELECT id, filename, content_type, data, s3_key FROM amazon_buyer_message_attachments
                WHERE id = ? AND message_row_id = ?""",
             (attachment_id, message_row_id),
         )).fetchone()
-    return dict(row) if row and row["data"] is not None else None
+    if not row:
+        return None
+    if row["s3_key"]:
+        from app.services import s3_storage
+        data = s3_storage.get_object_bytes(row["s3_key"])
+        if data is None:
+            return None
+        return {"id": row["id"], "filename": row["filename"], "content_type": row["content_type"], "data": data}
+    if row["data"] is not None:
+        return {"id": row["id"], "filename": row["filename"], "content_type": row["content_type"], "data": row["data"]}
+    return None
 
 
 async def get_inbound_messages_needing_attachment_check(seller_id: str = "", limit: int = 500) -> list:

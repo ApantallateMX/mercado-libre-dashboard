@@ -20424,8 +20424,40 @@ async def diag_migrate_historical_to_s3(kind: str = "photos", limit: int = 50, t
             await db.commit()
             remaining = total_remaining - migrated
 
+        elif kind == "buyer_attachments":
+            # FIX 2026-08-27 (mismo día del incidente de disco lleno que
+            # corrompió tokens.db, ver DEVLOG): estos ya insertados como BLOB
+            # ANTES del cutover a S3 en insert_buyer_message_attachments().
+            rows = await (await db.execute(
+                "SELECT id, message_row_id, filename, content_type, data FROM amazon_buyer_message_attachments "
+                "WHERE (s3_key='' OR s3_key IS NULL) AND data IS NOT NULL LIMIT ?", (limit,)
+            )).fetchall()
+            total_remaining = (await (await db.execute(
+                "SELECT COUNT(*) FROM amazon_buyer_message_attachments WHERE (s3_key='' OR s3_key IS NULL) AND data IS NOT NULL"
+            )).fetchone())[0]
+
+            for row in rows:
+                try:
+                    content = bytes(row["data"])
+                    s3_key = f"buyer_message_attachments/{row['message_row_id']}/{row['id']}_{row['filename']}"
+                    _s3_mig.upload_bytes(s3_key, content, row["content_type"] or "application/octet-stream")
+                    verify = _s3_mig.get_object_bytes(s3_key)
+                    if verify is None or len(verify) != len(content):
+                        failed.append({"id": row["id"], "error": "verificación falló tras subir"})
+                        continue
+                    freed_bytes += len(content)
+                    await db.execute(
+                        "UPDATE amazon_buyer_message_attachments SET data=NULL, s3_key=? WHERE id=?",
+                        (s3_key, row["id"]),
+                    )
+                    migrated += 1
+                except Exception as _e:
+                    failed.append({"id": row["id"], "error": str(_e)[:200]})
+            await db.commit()
+            remaining = total_remaining - migrated
+
         else:
-            return JSONResponse({"error": "kind debe ser 'photos' o 'invoices'"}, status_code=400)
+            return JSONResponse({"error": "kind debe ser 'photos', 'invoices' o 'buyer_attachments'"}, status_code=400)
 
     return JSONResponse({
         "ok": True, "kind": kind, "migrated": migrated, "failed": failed,
