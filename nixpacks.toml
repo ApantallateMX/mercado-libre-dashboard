@@ -1,3 +1,12 @@
+# providers = ["python"] fijado explícitamente (2026-08-27): se agregó un
+# package.json en la raíz SOLO para satisfacer el check de conformance MI2
+# §17b (semver) -- ver comentario dentro de ese archivo. Sin este pin,
+# Nixpacks podría autodetectar un provider Node por la sola presencia de
+# package.json y mezclar sus fases con las nuestras (ej. intentar "npm ci"),
+# rompiendo el build/deploy real de esta app Python. No quitar este pin
+# mientras exista package.json en la raíz.
+providers = ["python"]
+
 [phases.setup]
 nixPkgs = ["python311Full", "gcc"]
 aptPkgs = ["curl", "wget"]

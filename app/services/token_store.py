@@ -1984,6 +1984,62 @@ async def init_db():
             await db.execute("ALTER TABLE ml_item_reviews ADD COLUMN permalink TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: changelog_entries — MI2 stack conformance §17b (Changelog +
+        # versioning). Fuente de verdad para /changelog y el modal "qué hay
+        # de nuevo" -- NO reemplaza DEVLOG.md (ese sigue siendo el log técnico
+        # completo para desarrollo); esta tabla es un subconjunto curado y
+        # user-facing, pensado para que Jovan/el equipo vean qué cambió sin
+        # leer las 14k+ líneas de DEVLOG. Sin columnas bilingües (dashboard
+        # 100% interno en español, simplificación aprobada).
+        # category: 'feature' | 'improvement' | 'bugfix' | 'security'
+        # priority: 0 normal, 1 destacado (usado solo para orden/badge, no
+        # oculta nada -- "menos show" ya se resuelve con paginación/orden).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS changelog_entries (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                version       TEXT NOT NULL,
+                release_date  TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                content       TEXT NOT NULL,
+                category      TEXT NOT NULL DEFAULT 'improvement',
+                priority      INTEGER NOT NULL DEFAULT 0,
+                is_published  INTEGER NOT NULL DEFAULT 1,
+                published_at  TEXT NOT NULL DEFAULT '',
+                created_at    REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # Índice para la query real de ambos consumidores (/changelog y
+        # /api/changelog/latest): "entradas publicadas, más nuevas primero".
+        # Sin esto es un full scan + sort en cada carga de página/modal --
+        # barato hoy (pocas filas) pero esta tabla solo crece con el tiempo
+        # y el modal se consulta en CADA página del dashboard.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_changelog_published "
+            "ON changelog_entries(is_published, release_date DESC)"
+        )
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: changelog_dismissals — qué entradas ya vio/descartó cada
+        # usuario del dashboard (username, NO user_id de ML -- ese campo en
+        # este proyecto siempre significa "cuenta de Mercado Libre", habría
+        # sido un bug de scope real usarlo aquí para identidad de usuario).
+        # UNIQUE(username, changelog_id) hace el dismiss idempotente (mismo
+        # patrón que otras tablas de este archivo con INSERT OR IGNORE).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS changelog_dismissals (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT NOT NULL,
+                changelog_id  INTEGER NOT NULL,
+                dismissed_at  REAL NOT NULL DEFAULT 0,
+                UNIQUE(username, changelog_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_changelog_dismissals_user "
+            "ON changelog_dismissals(username)"
+        )
         await db.commit()
 
 
@@ -8697,3 +8753,129 @@ async def get_item_history(item_id: str, limit: int = 50) -> list:
             (item_id, limit),
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# == Changelog (MI2 stack conformance §17b) ===================================
+# Ver init_db() para el schema de changelog_entries / changelog_dismissals.
+
+async def get_published_changelog(limit: int = 100) -> list[dict]:
+    """Entradas publicadas para la página completa /changelog, más nuevas primero."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT id, version, release_date, title, content, category, priority, published_at
+               FROM changelog_entries
+               WHERE is_published = 1
+               ORDER BY release_date DESC, id DESC
+               LIMIT ?""",
+            (limit,),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_latest_changelog_for_user(username: str, limit: int = 10) -> list[dict]:
+    """Entradas publicadas que este usuario aún NO ha descartado -- para el
+    modal "qué hay de nuevo". Vacío significa "nada nuevo que mostrar", no
+    "sin entradas" (pueden existir, solo ya las vio)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT ce.id, ce.version, ce.release_date, ce.title, ce.content, ce.category, ce.priority
+               FROM changelog_entries ce
+               WHERE ce.is_published = 1
+                 AND ce.id NOT IN (
+                     SELECT changelog_id FROM changelog_dismissals WHERE username = ?
+                 )
+               ORDER BY ce.release_date DESC, ce.id DESC
+               LIMIT ?""",
+            (username, limit),
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def dismiss_changelog_entry(username: str, changelog_id: int) -> None:
+    """Marca una entrada como vista/descartada para este usuario. Idempotente
+    (UNIQUE(username, changelog_id) + OR IGNORE) -- reintentos de red desde el
+    modal no deben fallar ni duplicar filas."""
+    import time as _time
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO changelog_dismissals (username, changelog_id, dismissed_at) VALUES (?, ?, ?)",
+            (username, changelog_id, _time.time()),
+        )
+        await db.commit()
+
+
+# Semilla histórica curada desde DEVLOG.md al introducir este changelog
+# (2026-08-27) -- NO es un registro retroactivo real de versiones (este
+# proyecto nunca usó semver antes de hoy). "1.0.0" es la línea base elegida:
+# primera versión formalmente etiquetada, con estos hitos reales de los
+# últimos ~3 meses como contenido de referencia. Cambios futuros suben de
+# versión a partir de aquí (1.1.0, 1.2.0, ...), curados a mano -- no cada
+# micro-fix de DEVLOG.md, solo features/fixes con impacto real para el equipo.
+_SEED_CHANGELOG: list[dict] = [
+    dict(version="1.0.0", release_date="2026-08-27", category="feature", priority=0,
+         title="Nuevo: sección de Novedades (este changelog)",
+         content="Se agrega esta sección para ver qué cambió en el dashboard sin leer el log técnico completo -- accesible desde el menú principal, con aviso automático de novedades no vistas."),
+    dict(version="1.0.0", release_date="2026-08-28", category="improvement", priority=1,
+         title="Respaldo en Coolify ahora se mantiene sincronizado de verdad",
+         content="Coolify (nuestro respaldo si Railway falla) llevaba meses con datos desactualizados sin que nadie lo notara. Ahora Railway sube una copia de la base de datos automáticamente cada 20 minutos y Coolify la toma como propia -- si Railway se cae, el respaldo sirve datos reales, no viejos."),
+    dict(version="1.0.0", release_date="2026-08-27", category="feature", priority=1,
+         title="Nueva sección: Oportunidades Mayoreo",
+         content="Identifica compradores recurrentes/mayoristas dentro de Ventas -- antes, un mismo comprador podía generar varias órdenes fragmentadas el mismo día y perder dinero en envío sin que se notara. Permite ver su historial y ofrecerle un combo o descuento por volumen, siempre por el chat oficial de la plataforma."),
+    dict(version="1.0.0", release_date="2026-08-26", category="feature", priority=0,
+         title="Alertas de reputación ML con métricas reales",
+         content="El aviso de reputación en Mattermost ahora incluye la tabla completa de métricas reales (reclamos, cancelaciones, demoras) en vez de un mensaje genérico, y respeta el color/nivel real que usa Mercado Libre."),
+    dict(version="1.0.0", release_date="2026-08-24", category="bugfix", priority=0,
+         title="Corregido ciclo infinito en validación de Seller Flex (Amazon)",
+         content="Un flujo de verificación se quedaba dando vueltas sin terminar, por 3 causas distintas encontradas y corregidas a la vez. De paso, se agregó exportar a CSV el reporte del portal Seller Flex."),
+    dict(version="1.0.0", release_date="2026-08-22", category="improvement", priority=0,
+         title="Auditoría completa de alertas de stock",
+         content="Se revisaron los 4 mecanismos reales que generan alertas de stock (no 2, como se pensaba) para asegurar que no se dupliquen ni se contradigan entre sí."),
+    dict(version="1.0.0", release_date="2026-08-21", category="bugfix", priority=0,
+         title="Corregido: sesión de BinManager colgada mostraba stock falso en cero",
+         content="Una sesión de BinManager atascada hacía que miles de SKUs mostraran 0 unidades disponibles cuando sí había stock real. Ahora una respuesta sospechosamente rápida y vacía dispara un reintento de sesión automático."),
+    dict(version="1.0.0", release_date="2026-08-20", category="improvement", priority=0,
+         title="BinManager: fuente única de stock",
+         content="Todas las consultas de stock del dashboard ahora pasan por un solo mecanismo consolidado y una sola fila de acceso, en vez de rutas independientes que competían entre sí por el acceso a BinManager."),
+    dict(version="1.0.0", release_date="2026-08-14", category="bugfix", priority=0,
+         title="Mensajes de Mercado Libre: conteo real de no leídos",
+         content="El indicador de mensajes usaba una ventana de días que podía ocultar mensajes reales. Ahora usa el endpoint oficial de no leídos de ML, conteo exacto en vez de aproximado."),
+    dict(version="1.0.0", release_date="2026-08-13", category="security", priority=1,
+         title="Rotación de tokens de diagnóstico y PIN de acceso",
+         content="Se rotaron el token de diagnóstico y el PIN de la app tras detectar que un valor sensible había quedado expuesto en un archivo del repositorio. Ambos valores viven ahora únicamente en variables de entorno, nunca en archivos versionados."),
+    dict(version="1.0.0", release_date="2026-08-13", category="feature", priority=1,
+         title="Reversa automática de deuda por reembolsos reales",
+         content="Cuando una orden con deuda registrada (ML o Amazon) termina en reembolso real al comprador, la deuda correspondiente ahora se revierte automáticamente en vez de quedar viva por error."),
+    dict(version="1.0.0", release_date="2026-08-12", category="bugfix", priority=0,
+         title="Deals de Mercado Libre: candidatos falsos y margen mal calculado",
+         content="El sistema marcaba productos como 'deal activo' cuando no lo estaban, y calculaba mal el margen resultante de aplicar un descuento -- ambos corregidos, afecta directamente decisiones de precio."),
+    dict(version="1.0.0", release_date="2026-08-05", category="improvement", priority=1,
+         title="Tijuana excluida del stock vendible en línea",
+         content="Por decisión operativa, el stock físico en Tijuana ya no cuenta como disponible para venta en línea (solo abastece a CDMX/Monterrey por transferencia) -- el dashboard ahora refleja esa regla en todos los cálculos de disponibilidad."),
+    dict(version="1.0.0", release_date="2026-07-21", category="bugfix", priority=0,
+         title="Corregida ubicación de BinManager: Cuautitlán ya no se confundía con Tijuana",
+         content="La ubicación 62 de BinManager estaba mal identificada como Tijuana; en realidad es Cuautitlán (CDMX). Esto afectaba directamente qué stock se contaba como 'vendible' en el dashboard."),
+]
+
+
+async def seed_changelog_entries() -> None:
+    """Siembra el histórico curado UNA sola vez (tabla vacía). A diferencia de
+    seed_product_type_templates() (que revalida en cada arranque), aquí no
+    tiene sentido re-sembrar -- las entradas nuevas se agregan a mano según
+    ocurren, no se regeneran desde una lista fija en cada deploy."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        row = await (await db.execute("SELECT COUNT(*) FROM changelog_entries")).fetchone()
+        if row and row[0] > 0:
+            return
+        import time as _time
+        now = _time.time()
+        for entry in _SEED_CHANGELOG:
+            await db.execute(
+                """INSERT INTO changelog_entries
+                   (version, release_date, title, content, category, priority, is_published, published_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (entry["version"], entry["release_date"], entry["title"], entry["content"],
+                 entry["category"], entry["priority"], entry["release_date"], now),
+            )
+        await db.commit()

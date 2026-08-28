@@ -1,0 +1,98 @@
+{# ─── changelog_modal.html ─────────────────────────────────────────────────
+   Modal global "qué hay de nuevo" -- MI2 stack conformance §17b.
+   Se auto-consulta en cada carga de página (incluido en base.html) contra
+   /api/changelog/latest; solo se muestra si hay entradas no descartadas
+   por el usuario actual. "Entendido" descarta las que se mostraron aquí
+   (no afecta entradas futuras). Ver /changelog para el historial completo.
+────────────────────────────────────────────────────────────────────────── #}
+
+<div id="changelog-modal"
+     class="fixed inset-0 z-[9400] hidden"
+     onclick="if(event.target===this) closeChangelogModal()">
+
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
+
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 shrink-0">
+            <div class="flex items-center gap-2">
+                <span class="text-lg">🆕</span>
+                <span class="font-bold text-gray-800">Qué hay de nuevo</span>
+            </div>
+            <button onclick="closeChangelogModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        </div>
+
+        <div id="changelog-modal-body" class="p-5 space-y-3 overflow-y-auto"></div>
+
+        <div class="px-5 pb-4 pt-2 flex gap-2 border-t border-gray-100 shrink-0">
+            <a href="/changelog"
+               class="flex-1 text-center py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+                Ver todas
+            </a>
+            <button onclick="closeChangelogModal(true)"
+                    class="flex-1 py-2.5 text-sm font-semibold text-white bg-yellow-500 hover:bg-yellow-600 rounded-xl transition">
+                Entendido
+            </button>
+        </div>
+
+    </div>
+    </div>
+</div>
+
+<script>
+(function() {
+
+var _clShownIds = [];
+
+window.closeChangelogModal = function(dismiss) {
+    document.getElementById('changelog-modal').classList.add('hidden');
+    if (dismiss && _clShownIds.length) {
+        _clShownIds.forEach(function(id) {
+            fetch('/api/changelog/' + id + '/dismiss', { method: 'POST' }).catch(function() {});
+        });
+        _clShownIds = [];
+    }
+};
+
+var CL_CAT_CLS = {
+    feature:     'bg-blue-100 text-blue-700',
+    improvement: 'bg-purple-100 text-purple-700',
+    bugfix:      'bg-green-100 text-green-700',
+    security:    'bg-red-100 text-red-700',
+};
+var CL_CAT_LABEL = { feature: 'Nuevo', improvement: 'Mejora', bugfix: 'Corrección', security: 'Seguridad' };
+
+function _clEsc(s) {
+    var d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+}
+
+// Fire-and-forget: si falla (red, 401 por sesión expirada, etc.) el modal
+// simplemente no aparece -- nunca debe romper la carga de la página.
+fetch('/api/changelog/latest')
+    .then(function(r) { return r.ok ? r.json() : { entries: [] }; })
+    .then(function(data) {
+        var entries = data.entries || [];
+        if (!entries.length) return;
+        _clShownIds = entries.map(function(e) { return e.id; });
+        var body = document.getElementById('changelog-modal-body');
+        body.innerHTML = entries.map(function(e) {
+            var cls = CL_CAT_CLS[e.category] || 'bg-gray-100 text-gray-600';
+            var label = CL_CAT_LABEL[e.category] || e.category;
+            return '<div class="border-b border-gray-50 pb-3 last:border-0 last:pb-0">' +
+                '<div class="flex items-center gap-2 mb-1">' +
+                    '<span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ' + cls + '">' + label + '</span>' +
+                    '<span class="text-[11px] text-gray-400">' + _clEsc(e.release_date) + '</span>' +
+                '</div>' +
+                '<p class="text-sm font-semibold text-gray-800">' + _clEsc(e.title) + '</p>' +
+                '<p class="text-xs text-gray-600 mt-0.5 leading-relaxed">' + _clEsc(e.content) + '</p>' +
+            '</div>';
+        }).join('');
+        document.getElementById('changelog-modal').classList.remove('hidden');
+    })
+    .catch(function() { /* silencioso a propósito -- ver comentario arriba */ });
+
+})();
+</script>

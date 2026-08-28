@@ -1,0 +1,7 @@
+{
+  "//": "Este proyecto es 100% Python/FastAPI (ver nixpacks.toml, Procfile, requirements.txt) -- NO es una app Node. Este archivo existe UNICAMENTE para satisfacer el check de conformance MI2 stack §17b (Changelog + versioning), que exige un campo 'version' semver en package.json sin importar el stack real. No corre npm install/build/start contra este archivo (nixpacks.toml fija providers=['python'] explicitamente para que Nixpacks nunca lo detecte como app Node). No agregar 'dependencies'/'devDependencies'/'scripts' aqui -- si algun dia se necesita, es señal de que se esta adoptando Node de verdad, lo cual requiere su propio plan aprobado.",
+  "name": "mercado-libre-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Apantallate MX dashboard (FastAPI + Python 3.12) -- version aqui es solo para el check MI2 §17b, la fuente real de novedades es la tabla changelog_entries (ver /changelog)."
+}

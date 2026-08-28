@@ -691,6 +691,12 @@ async def lifespan(app: FastAPI):
     except Exception as _e_seed:
         logger.error(f"[STARTUP] seed_product_type_templates() falló (¿disco lleno?): {_e_seed}")
 
+    # Seed changelog histórico (una sola vez -- no-op si la tabla ya tiene filas)
+    try:
+        await token_store.seed_changelog_entries()
+    except Exception as _e_cl_seed:
+        logger.error(f"[STARTUP] seed_changelog_entries() falló (¿disco lleno?): {_e_cl_seed}")
+
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
     # no recibe SIGKILL por timeout (exit 137).
@@ -1542,6 +1548,13 @@ _NAV_TAB_DEFS = [
          ml_href="/facturacion", amz_href="/facturacion",
          ml_active=["facturacion"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab="facturacion", amz_tab=None, admin_only=False, badge=None),
+    # ml_tab/amz_tab=None a propósito -- MI2 §17b (changelog) es visible para
+    # CUALQUIER usuario logueado, sin pasar por PERMISSION_TREE (línea 1618:
+    # el filtro de allowed_sections solo aplica si tab_key no es None).
+    dict(id="changelog", label="Novedades", icon="🆕",
+         ml_href="/changelog", amz_href="/changelog",
+         ml_active=["changelog"], amz_active=None, amz_uses_dispatcher=False,
+         ml_tab=None, amz_tab=None, admin_only=False, badge=None),
     dict(id="deuda", label="Deuda", icon="🏦",
          ml_href="/deuda-empresa", amz_href="/deuda-empresa",
          ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,
@@ -3868,6 +3881,46 @@ async def facturacion_page(request: Request):
         "formas_pago": FORMAS_PAGO,
         **ctx,
     })
+
+
+@app.get("/changelog", response_class=HTMLResponse)
+async def changelog_page(request: Request):
+    """Página de Novedades -- MI2 stack conformance §17b. Visible para
+    cualquier usuario logueado (ver ml_tab=None en _NAV_TAB_DEFS)."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    entries = await token_store.get_published_changelog()
+    return templates.TemplateResponse(request, "changelog.html", {
+        "user": user,
+        "active": "changelog",
+        "entries": entries,
+        **ctx,
+    })
+
+
+@app.get("/api/changelog/latest")
+async def api_changelog_latest(request: Request):
+    """Entradas publicadas que el usuario actual NO ha descartado -- consumido
+    por el modal "qué hay de nuevo" (partials/changelog_modal.html), incluido
+    globalmente en base.html. Requiere sesión (AuthMiddleware ya la exige para
+    cualquier ruta /api/ no listada en _AUTH_EXEMPT)."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or not du.get("username"):
+        return JSONResponse({"error": "Sin sesión"}, status_code=401)
+    entries = await token_store.get_latest_changelog_for_user(du["username"])
+    return {"entries": entries}
+
+
+@app.post("/api/changelog/{changelog_id}/dismiss")
+async def api_changelog_dismiss(changelog_id: int, request: Request):
+    """Marca una entrada de changelog como vista para el usuario actual."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or not du.get("username"):
+        return JSONResponse({"error": "Sin sesión"}, status_code=401)
+    await token_store.dismiss_changelog_entry(du["username"], changelog_id)
+    return {"ok": True}
 
 
 # ── Rutas públicas del portal de facturación (sin autenticación) ──────────────
