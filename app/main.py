@@ -20534,8 +20534,44 @@ async def diag_migrate_historical_to_s3(kind: str = "photos", limit: int = 50, t
             await db.commit()
             remaining = total_remaining - migrated
 
+        elif kind == "fiscal_data":
+            # FIX 2026-08-28 (mismo patrón que buyer_attachments, un día después):
+            # constancias fiscales (PDF hasta 5MB) insertadas como BLOB ANTES del
+            # cutover a S3 en save_billing_fiscal_data(). Documento con valor
+            # fiscal -- por eso NO se aplica ninguna purga/retención aquí, solo
+            # se cambia dónde vive el binario.
+            rows = await (await db.execute(
+                "SELECT id, request_id, constancia_name, constancia_data FROM billing_fiscal_data "
+                "WHERE (s3_key='' OR s3_key IS NULL) AND constancia_data IS NOT NULL LIMIT ?", (limit,)
+            )).fetchall()
+            total_remaining = (await (await db.execute(
+                "SELECT COUNT(*) FROM billing_fiscal_data WHERE (s3_key='' OR s3_key IS NULL) AND constancia_data IS NOT NULL"
+            )).fetchone())[0]
+
+            for row in rows:
+                try:
+                    content = bytes(row["constancia_data"])
+                    fname = row["constancia_name"] or "constancia.pdf"
+                    s3_key = f"billing_fiscal_data/{row['request_id']}/{fname}"
+                    ct = "application/pdf" if fname.lower().endswith(".pdf") else "image/jpeg"
+                    _s3_mig.upload_bytes(s3_key, content, ct)
+                    verify = _s3_mig.get_object_bytes(s3_key)
+                    if verify is None or len(verify) != len(content):
+                        failed.append({"id": row["id"], "error": "verificación falló tras subir"})
+                        continue
+                    freed_bytes += len(content)
+                    await db.execute(
+                        "UPDATE billing_fiscal_data SET constancia_data=NULL, s3_key=? WHERE id=?",
+                        (s3_key, row["id"]),
+                    )
+                    migrated += 1
+                except Exception as _e:
+                    failed.append({"id": row["id"], "error": str(_e)[:200]})
+            await db.commit()
+            remaining = total_remaining - migrated
+
         else:
-            return JSONResponse({"error": "kind debe ser 'photos', 'invoices' o 'buyer_attachments'"}, status_code=400)
+            return JSONResponse({"error": "kind debe ser 'photos', 'invoices', 'buyer_attachments' o 'fiscal_data'"}, status_code=400)
 
     return JSONResponse({
         "ok": True, "kind": kind, "migrated": migrated, "failed": failed,

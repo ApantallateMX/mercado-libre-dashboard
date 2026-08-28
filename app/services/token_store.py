@@ -859,6 +859,14 @@ async def init_db():
             await db.execute("ALTER TABLE billing_fiscal_data ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Migration 2026-08-28 (mismo patrón que amazon_buyer_message_attachments,
+        # ver incidente de disco lleno 2026-08-27): la constancia fiscal (PDF, hasta
+        # 5MB) se sube a S3/MinIO en vez de guardar el BLOB en SQLite. `constancia_data`
+        # queda nullable solo por compatibilidad con filas legacy ya insertadas.
+        try:
+            await db.execute("ALTER TABLE billing_fiscal_data ADD COLUMN s3_key TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_billing_requests_token ON billing_requests(token)"
         )
@@ -5686,13 +5694,30 @@ async def save_billing_fiscal_data(
     constancia_name: str = "",
     metodo_pago: str = "",
 ) -> None:
+    """Guarda los datos fiscales que el cliente llena en el link público de
+    facturación. FIX 2026-08-28 (mismo patrón que insert_buyer_message_attachments,
+    ver incidente de disco lleno 2026-08-27): la constancia fiscal sube a S3/MinIO
+    en vez de guardar el BLOB en SQLite. Si S3 no está configurado, cae al BLOB
+    legacy (nunca debería pasar en producción, pero mejor eso que perder el archivo)."""
+    from app.services import s3_storage
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    s3_key = ""
+    blob_fallback = None
+    if constancia_data:
+        if s3_storage.is_configured():
+            s3_key = f"billing_fiscal_data/{request_id}/{constancia_name or 'constancia.pdf'}"
+            s3_storage.upload_bytes(s3_key, constancia_data, "application/pdf")
+        else:
+            logger.warning(f"[BILLING] S3 no configurado -- guardando constancia como BLOB legacy (request {request_id})")
+            blob_fallback = constancia_data
+
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute(
             """INSERT INTO billing_fiscal_data
                (request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
-                forma_pago, metodo_pago, email, phone, street, constancia_data, constancia_name, submitted_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                forma_pago, metodo_pago, email, phone, street, constancia_data, constancia_name, s3_key, submitted_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(request_id) DO UPDATE SET
                  rfc=excluded.rfc, razon_social=excluded.razon_social,
                  cfdi_use=excluded.cfdi_use, fiscal_regime=excluded.fiscal_regime,
@@ -5701,10 +5726,11 @@ async def save_billing_fiscal_data(
                  email=excluded.email, phone=excluded.phone, street=excluded.street,
                  constancia_data=excluded.constancia_data,
                  constancia_name=excluded.constancia_name,
+                 s3_key=excluded.s3_key,
                  submitted_at=excluded.submitted_at""",
             (
                 request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
-                forma_pago, metodo_pago, email, phone, street, constancia_data, constancia_name, now,
+                forma_pago, metodo_pago, email, phone, street, blob_fallback, constancia_name, s3_key, now,
             ),
         )
         await db.commit()
@@ -5721,21 +5747,32 @@ async def get_billing_fiscal_data(request_id: int) -> Optional[dict]:
             return None
         d = dict(row)
         d.pop("constancia_data", None)  # never return binary in JSON context
+        d.pop("s3_key", None)  # ruta interna de storage, no se expone al panel admin
         return d
 
 
 async def get_billing_constancia(request_id: int) -> Optional[tuple]:
-    """Retorna (filename, bytes) o None."""
+    """Retorna (filename, bytes) o None. Lee de S3 si hay s3_key; cae al BLOB
+    legacy (filas insertadas antes de la migración a S3) solo si s3_key está vacío."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT constancia_name, constancia_data FROM billing_fiscal_data WHERE request_id=?",
+            "SELECT constancia_name, constancia_data, s3_key FROM billing_fiscal_data WHERE request_id=?",
             (request_id,),
         )
         row = await cursor.fetchone()
-        if row and row["constancia_data"]:
-            return (row["constancia_name"] or "constancia.pdf", bytes(row["constancia_data"]))
+    if not row:
         return None
+    filename = row["constancia_name"] or "constancia.pdf"
+    if row["s3_key"]:
+        from app.services import s3_storage
+        data = s3_storage.get_object_bytes(row["s3_key"])
+        if data is None:
+            return None
+        return (filename, data)
+    if row["constancia_data"]:
+        return (filename, bytes(row["constancia_data"]))
+    return None
 
 
 def _invoices_dir() -> Path:
@@ -5879,6 +5916,17 @@ async def delete_billing_request(request_id: int) -> None:
                 fp.unlink(missing_ok=True)
             except Exception:
                 pass
+
+    # Constancia fiscal en S3 (ver migración s3_key, 2026-08-28) -- evitar huérfanos
+    # en el bucket cuando se borra una solicitud de facturación.
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT s3_key FROM billing_fiscal_data WHERE request_id=?", (request_id,)
+        )
+        fiscal_row = await cursor.fetchone()
+    if fiscal_row and fiscal_row["s3_key"]:
+        _s3_inv.delete_object(fiscal_row["s3_key"])
 
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.execute("DELETE FROM billing_fiscal_data WHERE request_id=?", (request_id,))
