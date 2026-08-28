@@ -16247,6 +16247,49 @@ async def multi_sync_status():
     return status
 
 
+@app.post("/api/diag/upload-recovered-db")
+async def diag_upload_recovered_db(token: str = "", file: UploadFile = File(...)):
+    """EMERGENCIA 2026-08-27: reemplaza tokens.db con una copia reparada
+    (recuperada localmente vía `sqlite3 .recover` contra el respaldo crudo
+    subido en /api/diag/backup-raw-db-to-s3, verificada con PRAGMA
+    quick_check=ok y conteos de filas antes de subir). Escribe a un archivo
+    temporal primero y usa os.replace() (atómico en el mismo filesystem) --
+    nunca deja el .db principal a medio escribir si la subida se corta.
+    También borra -wal/-shm viejos del archivo corrupto -- son de la
+    versión anterior, aplicarlos sobre la base nueva la corrompería de
+    nuevo."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import os as _os_upl
+    db_path = Path(DATABASE_PATH)
+    tmp_path = db_path.with_suffix(".db.incoming")
+    written = 0
+    with open(tmp_path, "wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            written += len(chunk)
+    # Verificar ANTES de reemplazar el archivo en vivo
+    import sqlite3 as _sqlite3_upl
+    try:
+        conn = _sqlite3_upl.connect(str(tmp_path))
+        cur = conn.execute("PRAGMA quick_check")
+        result = cur.fetchone()
+        conn.close()
+        if result != ("ok",):
+            tmp_path.unlink(missing_ok=True)
+            return JSONResponse({"error": f"quick_check falló en el archivo subido: {result}", "bytes_received": written}, status_code=400)
+    except Exception as _e:
+        tmp_path.unlink(missing_ok=True)
+        return JSONResponse({"error": f"no se pudo verificar el archivo subido: {_e}", "bytes_received": written}, status_code=400)
+    for suffix in ("-wal", "-shm", "-journal"):
+        _os_upl.remove(str(db_path) + suffix) if (Path(str(db_path) + suffix)).exists() else None
+    _os_upl.replace(str(tmp_path), str(db_path))
+    return JSONResponse({"ok": True, "bytes_written": written})
+
+
 @app.get("/api/diag/download-raw-db")
 async def diag_download_raw_db(token: str = ""):
     """EMERGENCIA 2026-08-27: descarga tokens.db tal cual (410MB) para
