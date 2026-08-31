@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-31 (14) — FIX: cierre del barrido — bug gemelo AUTOBOT, diag ExclusiveBulbs, cachés restantes
+
+Continuación de (13), "vamos por todos" — los 3 pendientes que sí eran resolubles sin
+depender de terceros:
+
+1. **`app/auth.py` (callback OAuth Amazon)**: la rama `_is_acct2` intercambiaba el código
+   OAuth de AUTOBOT usando SIEMPRE `AMAZON_CLIENT_ID/SECRET` (cuenta 1, VECKTOR) — el bug
+   gemelo del fallback de `amazon_client.py` (ver memoria `project_amazon2_credential_
+   fallback_verification_2026-08-31.md`). Corregido a usar `AMAZON2_CLIENT_ID/SECRET`.
+   Sin efecto en producción hoy (AUTOBOT no se ha re-autorizado); deja el terreno listo
+   para cuando Jovan sí lo haga.
+2. **Nuevo `/api/diag/amazon-bm-managed-count`** (solo lectura) para verificar contra
+   producción real si ExclusiveBulbs califica para Alertas de Stock — resultado real:
+   **23,489 SKUs con match BM** (vs 553 que mostraba tokens.db local, probablemente por
+   la sync completa de 156K+ listings que sí llegó a producción). Cambia el panorama de
+   la exclusión manual del 2026-08-18 — **decisión pendiente de Jovan** (¿FBA vs Merchant
+   real de esa cuenta?), exclusión explícita se deja activa mientras tanto.
+3. **`_cleanup_memory_caches()` cerrado por completo** — se revisaron TODOS los dicts de
+   caché en memoria del archivo (no solo los ya sabidos): único caso real que faltaba,
+   `_returns_claims_cache`+`_returns_claims_locks` (mismo riesgo de rango de fechas libre
+   que `_orders_cache`). Investigada a fondo la condición de carrera con los locks
+   paralelos: función 100% síncrona (sin `await`), así que el chequeo `.locked()`+`pop()`
+   nunca puede colarse con una corrutina tomando el lock en el hueco — verificado con un
+   test real simulando un lock tomado durante el cleanup. El resto de los ~15 dicts
+   restantes quedan documentados uno por uno en el docstring (por qué SÍ están acotados
+   y no necesitan poda) — código muerto encontrado de paso (`_amazon_daily_cache`,
+   `_synced_alert_items`, sin lector/escritor) reportado, no tocado.
+
+**Plan de rotación de secrets preparado, NO ejecutado** (requiere login de Jovan en 3
+paneles externos — no ejecutable por el asistente): solo `MELI_CLIENT_SECRET` sigue
+siendo el valor filtrado (verificado por hash); `AMAZON_CLIENT_SECRET`/`CASHFLOW_API_KEY`
+probablemente ya rotados. Rotar `MELI_CLIENT_SECRET` NO invalida los 4 refresh tokens
+(no hace falta re-autorizar cuentas), pero sí el access_token vigente al instante —
+Railway+Coolify deben tener el valor nuevo listo para pegar en el mismo minuto. Plan
+completo en `.claude/memory/project_secret_rotation_plan_2026-08-31.md`. Hallazgo
+colateral: GitHub PAT en texto plano en `.git/config` local (no en el repo) — pendiente
+migrar a deploy key SSH.
+
+Verificado por el hilo principal: diff línea por línea, `py_compile`+`import app.main`
+sin errores nuevos, prueba real de `/auth/logout` (303, sesión limpia), consulta real
+contra producción del diag nuevo (3 cuentas Amazon), símbolos de locks confirmados
+(`asyncio.Lock()` real en `_returns_claims_locks`).
+
 ## 2026-08-31 (13) — FIX: barrido de deuda técnica (7 fixes) + bug real en /auth/logout
 
 Tras una escalada real de Jovan (frustración por diseño reactivo en vez de pensado a

@@ -7452,12 +7452,73 @@ def _cleanup_memory_caches():
       fechas libre.
     - _ads_category_cache (TTL 30 min): clave "ads_cat:{date_from}:{date_to}",
       mismo patrón.
-    No se tocan _health_products_cache/_paused_items_cache/_highlights_cache/
-    _ads_category (por cuenta)/_inventory_global_cache/etc. -- su clave está
-    acotada a un puñado fijo de cuentas/categorías/thresholds reales (no
-    crecen sin límite), o (caso _returns_claims_cache) tienen un dict de
-    locks en paralelo cuya semántica no queremos tocar sin revisarla aparte
-    -- reportado a Jovan para decidir por separado, no forzado aquí.
+
+    CIERRE 2026-08-31 (misma sesión, resto del barrido -- se revisaron TODOS
+    los dicts de caché en memoria del archivo, no solo los que ya se sabía
+    que faltaban):
+    - _returns_claims_cache + _returns_claims_locks (TTL 2 min,
+      _RETURNS_CLAIMS_TTL): clave (user_id, date_from, date_to) -- mismo
+      riesgo de rango de fechas libre que _orders_cache, era el caso que se
+      dejó pendiente por el dict de locks en paralelo. Investigado a fondo
+      (ver bloque de código abajo para el detalle de por qué es seguro
+      podarlo así): sólo se borra un Lock del dict si `lock.locked() is
+      False` en el instante exacto del chequeo -- y como esta función es
+      100% síncrona (sin ningún `await` en su cuerpo), ese chequeo y el
+      `pop()` ocurren sin ceder el control al event loop entre uno y otro,
+      así que ninguna corrutina puede colarse a tomar ese lock justo en el
+      hueco. Un Lock con alguien esperando/dentro del `async with` jamás se
+      toca, así que nunca se rompe la exclusión mutua que ese lock existe
+      para dar (evitar 2 fetches simultáneos a ML para el mismo rango de
+      fechas -- relevante por el riesgo de 429 en cascada, Hallazgo #2).
+
+    Se revisó explícitamente y se dejan FUERA (no son el mismo riesgo, con
+    evidencia real de cómo se construye cada clave, no por suposición):
+    - _health_products_cache/_paused_items_cache/_seller_catalog(_ts)/
+      _price_comp_cache/_ml_finanzas_cache: clave por user_id/uid de cuenta
+      -- puñado fijo (4 ML + 3 Amazon), no crece con el tiempo.
+    - _highlights_cache/_category_cache: clave por category_id de ML, pero
+      ese category_id sale de iterar las categorías de NUESTRO propio
+      catálogo (products ya cargados), no de un rango libre -- universo
+      acotado y estable (las categorías de nuestros ~listings no cambian
+      todos los días). _item_net_ratio_map: mismo argumento, clave = item_id
+      de nuestro propio catálogo (no crece por parámetro de request).
+    - _sku_cost_map/_sku_retail_map: se hace `.clear()` completo antes de
+      repoblar en cada prewarm (línea junto a su uso) -- nunca acumulan
+      entradas viejas, se auto-acotan solos.
+    - _bm_retail_ph_cache/_bm_cost_cache/_bm_master_mem: clave = SKU real de
+      BinManager, pero se repueblan por *overwrite* completo desde una única
+      llamada bulk 1x/día (~8,786 SKUs, ver _sync_bm_product_catalog) o desde
+      un warm-start completo de bm_sku_master al arrancar -- el tamaño del
+      dict está acotado al catálogo real de BM, no crece por cada consulta
+      individual (a diferencia de _bm_stock_cache, que sí mezcla consultas
+      ad-hoc por SKU vía diag/alertas en tiempo real además del bulk, por
+      eso ese sí necesitó el cap de 12,000).
+    - _amz_refunds_cache/_amz_returns_report_cache/_amz_reimbursements_cache/
+      _amz_sku_sales_cache/_unified_returns_cache: clave (seller_id, days) o
+      (days), pero "days" es un `Query(ge=1, le=365)` validado en el
+      endpoint -- un rango FIJO de valores enteros que no crece con el
+      calendario (a diferencia de date_from/date_to, donde cada día que pasa
+      es un valor nuevo posible). Tope real: ~3 cuentas Amazon × 365 = 1,095
+      entradas máximo por dict (o 365 para el unificado) -- lejos del
+      crecimiento sin límite real de los casos ya corregidos.
+    - _activate_suppressed: clave por user_id de cuenta (puñado fijo); los
+      sets de item_id que cuelgan de cada cuenta son estado de negocio
+      persistido en DB (ítems ocultados a propósito), no resultado de cómputo
+      cacheado con noción de "stale" -- no aplica poda por TTL.
+    - _prewarm_progress/_bm_bulk_stats/_scan_state/_oversell_alert_cache/
+      _oversell_correction_progress/_bm_health/_inventory_global_cache (clave
+      "inv_global:{threshold}", threshold acotado 1-50 por el input del
+      frontend)/_stock_sync_running/_bm_bulk_last_fail_ts/
+      _bm_top_category_empty_streak/_bm_category_zero_confirm_streak (clave
+      por categoría BM, universo fijo de 59): dicts de estado singleton o
+      con clave de cardinalidad muy chica y estable, no "caches" que
+      acumulen 1 entrada por request.
+
+    NOTA (no requiere acción, sólo queda documentado): _amazon_daily_cache y
+    _synced_alert_items están declarados pero no tienen ningún lector/escritor
+    en el resto del archivo (código muerto) -- no se tocan porque no hay
+    evidencia de qué se pretendía hacer con ellos; se reporta para que se
+    decida aparte si se completan o se eliminan.
     """
     import gc as _gc
     now = _time.time()
@@ -7506,6 +7567,28 @@ def _cleanup_memory_caches():
     for k in _expired_adc:
         _ads_category_cache.pop(k, None)
 
+    # _returns_claims_cache: TTL 2 min — limpiar entries con > 2× TTL (rango de fechas libre,
+    # clave (user_id, date_from, date_to)).
+    _rc_ttl = _RETURNS_CLAIMS_TTL * 2
+    _expired_rc = [k for k, (ts, _) in list(_returns_claims_cache.items()) if now - ts > _rc_ttl]
+    for k in _expired_rc:
+        _returns_claims_cache.pop(k, None)
+
+    # _returns_claims_locks: podar SOLO los locks que nadie tiene tomados ahora mismo
+    # (lock.locked() is False) y cuya clave ya no tiene una entrada viva en
+    # _returns_claims_cache (recién expirada arriba, o huérfana de un fetch que falló
+    # antes de escribir el cache). Ver docstring de esta función para el detalle de por
+    # qué el chequeo+pop es seguro sin condición de carrera: esta función no tiene
+    # ningún `await`, así que nada puede colarse a tomar el lock entre el chequeo
+    # `.locked()` y el `pop()`. Un lock CON alguien esperando/dentro nunca se borra —
+    # de lo contrario reabriríamos la carrera de fetch duplicado que el lock evita.
+    _expired_locks = [
+        k for k, _lock in list(_returns_claims_locks.items())
+        if not _lock.locked() and k not in _returns_claims_cache
+    ]
+    for k in _expired_locks:
+        _returns_claims_locks.pop(k, None)
+
     # Forzar GC para liberar objetos temporales del prewarm inmediatamente
     _gc.collect()
 
@@ -7516,7 +7599,9 @@ def _cleanup_memory_caches():
         f"sale_price_cache={len(_sale_price_cache)} ({len(_expired_sp)} eliminados), "
         f"orders_cache={len(_orders_cache)} ({len(_expired_ord)} eliminados), "
         f"multi_account_cache={len(_multi_account_cache)} ({len(_expired_ma)} eliminados), "
-        f"ads_category_cache={len(_ads_category_cache)} ({len(_expired_adc)} eliminados)"
+        f"ads_category_cache={len(_ads_category_cache)} ({len(_expired_adc)} eliminados), "
+        f"returns_claims_cache={len(_returns_claims_cache)} ({len(_expired_rc)} eliminados), "
+        f"returns_claims_locks={len(_returns_claims_locks)} ({len(_expired_locks)} eliminados)"
     )
 
 async def _sync_gap_stock_from_cache():
