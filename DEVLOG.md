@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-31 (15) — FIX: MTY/CDMX real (no más números congelados de 12+ días)
+
+Jovan reportó en vivo un caso concreto (SKU `SHIL000019`, sección "FULL Sin Stock"):
+`BM Disp.=2` fresco y correcto, pero `MTY=12`/`CDMX=19` — datos viejos congelados desde
+que se pausó `_bm_master_sync_loop` el 2026-08-19, mostrados como si fueran reales.
+Instrucción explícita: "si no tienes datos pones 0... esto debe ser en todas las alertas
+y solucionar en todo donde aplique" — no parche puntual, causa raíz, propagada a TODO
+el dashboard de un jalón.
+
+**Solución de fondo implementada** (ya se había investigado el costo real hoy mismo,
+entrada (11)/(13)):
+1. `_update_bm_master_for_category()` (`app/main.py`) ahora hace 1 llamada extra por
+   categoría con `LOCATIONID=68` (solo MTY) — mismo bulk client/semáforo global BM que
+   el resto de la función, integrada al `executemany()` existente (no reabre el
+   problema de "database is locked" arreglado hoy mismo). `cdmx_qty` sale por resta
+   contra el total combinado ya calculado (`47+62+68`) — matemáticamente correcto,
+   sin llamada adicional para CDMX.
+2. Nueva columna `mty_cdmx_verified` en `bm_sku_master` (default 0): 0 = valor aún no
+   confirmado por el código nuevo (tratar como desconocido), 1 = escrito en el ciclo
+   más reciente. Necesaria porque `stock_updated_at`/`verified` NO servían para esto —
+   ambos seguían actualizándose cada ciclo aunque `mty_qty`/`cdmx_qty` nunca se tocaran,
+   dejando pasar un valor de 12 días como si fuera fresco.
+3. **Un solo punto de gateo, propagado a las 6+ secciones automáticamente**:
+   `token_store.get_bm_master_rows_for_skus()` (el único lector de estas 2 columnas por
+   SKU, confirmado por grep contra todos los consumidores) fuerza `mty_qty`/`cdmx_qty`
+   a 0 cuando `mty_cdmx_verified=0` — sin tocar un solo template. `_bm_map_from_master`
+   deriva `_wh_fetched`/`_bm_wh_fetched` (lo que los templates ya usaban para mostrar
+   "—" en vez de un número) del mismo criterio, en vez de "algún valor distinto de 0"
+   (el bug exacto que dejaba pasar el 12/19 viejo).
+
+**Verificado dos veces con BM real, no mock** (por el especialista y de forma
+independiente por el hilo principal): corrida real de `_update_bm_master_for_category`
+para la categoría de SHIL000019 — resultado real `available_qty=6, mty_qty=0,
+cdmx_qty=6, mty_cdmx_verified=1` (0+6=6, matemática correcta), confirmado directamente
+en `tokens.db` por el hilo principal. SKUs sin refrescar todavía (`mty_cdmx_verified=0`)
+confirmado que devuelven 0/"—", nunca el valor congelado. `py_compile`+`import app.main`
+sin errores nuevos.
+
+**Pendiente de ejecutar tras el deploy**: `/api/diag/bm-master-full-resync` (ya existe,
+solo lectura hacia BM) para backfillear el catálogo completo con MTY/CDMX frescos en
+~20-30 min en vez de esperar hasta 2h para las categorías longtail.
+
 ## 2026-08-31 (14) — FIX: cierre del barrido — bug gemelo AUTOBOT, diag ExclusiveBulbs, cachés restantes
 
 Continuación de (13), "vamos por todos" — los 3 pendientes que sí eran resolubles sin

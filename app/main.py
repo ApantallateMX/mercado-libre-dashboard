@@ -8843,20 +8843,24 @@ async def _bm_map_from_master(products: list, sku_key: str = "sku") -> dict:
     verificar todavía no genera bm_avail=None (sin alerta), nunca un 0
     falso.
 
-    ACTUALIZADO 2026-08-31 (el comentario anterior ya no reflejaba la
-    realidad -- _bm_master_sync_loop está PAUSADO desde 2026-08-19, ver
-    app/main.py ~línea 923): el refresco real de bm_sku_master hoy corre
-    vía _update_bm_master_for_category (2 loops, top-categorías y
-    longtail, ConfColumns_Conditions_Excel) y SOLO mantiene frescos
-    available_qty, reserve_qty, total_qty, tj_qty (desde 2026-08-21),
-    pnp_*, category, upc, title, brand, model, image_url, retail_ph,
-    best_condition_sku/qty y verified. mty_qty, cdmx_qty y no_vendible_qty
-    quedaron CONGELADOS en el valor que tenían al pausar
-    _bm_master_sync_loop (12+ días y subiendo) -- ese loop era el único
-    escritor de esos 3 campos y nada lo reemplazó. Cualquier consumidor de
-    estos 3 campos vía _row_to_inv (mty/cdmx/no_vendible en el shape de
-    retorno) debe tratarlos como snapshot histórico, no como dato vivo,
-    hasta que se reactive un escritor real. Esta función no dispara
+    ACTUALIZADO 2026-08-31 #2 (caso real SHIL000019, reportado por Jovan:
+    "BM Disp.=2" fresco y correcto, pero "MTY=12 CDMX=19" viejos de hace 12+
+    días, mostrados como si fueran reales): el comentario ACTUALIZADO
+    2026-08-31 de abajo quedó vigente solo unas horas -- _update_bm_master_for_category
+    ahora SÍ escribe mty_qty/cdmx_qty (LOCATIONID=68 aparte + resta contra el
+    combinado, ver ese archivo), pero SOLO para los SKUs de las categorías
+    que ya corrieron con el código nuevo -- el resto sigue con el valor
+    congelado de _bm_master_sync_loop (pausado 2026-08-19). No hay forma de
+    distinguir "MTY=0 real" de "MTY nunca refrescado" con solo mty_qty/cdmx_qty
+    -- por eso token_store.get_bm_master_rows_for_skus() ya fuerza estos 2
+    campos a 0 cuando bm_sku_master.mty_cdmx_verified=0 (columna nueva,
+    escrita en 1 solo lugar: _update_bm_master_for_category). _row_to_inv de
+    abajo no necesita repetir ese chequeo -- ya llega en 0 cuando no es de
+    fiar -- pero SÍ deriva "_wh_fetched" de ese mismo criterio (no de si
+    mty/cdmx/tj son "truthy", que es justo el bug que dejó pasar el 12/19
+    viejo: un valor viejo distinto de 0 se veía idéntico a uno fresco).
+    no_vendible_qty sigue sin escritor activo (fuera del alcance de este
+    fix) -- tratarlo como snapshot histórico. Esta función no dispara
     ninguna sincronización, solo lee lo que ya esté guardado."""
     skus: set = set()
     for p in products:
@@ -8882,7 +8886,17 @@ async def _bm_map_from_master(products: list, sku_key: str = "sku") -> dict:
             "reserved_total": row.get("reserve_qty", 0) or 0,
             "no_vendible": row.get("no_vendible_qty", 0) or 0,
             "_v": True,
-            "_wh_fetched": bool(row.get("mty_qty") or row.get("cdmx_qty") or row.get("tj_qty")),
+            # FIX 2026-08-31 (caso real SHIL000019): antes era "algún valor
+            # distinto de 0 en mty/cdmx/tj" -- un MTY=12 viejo de hace 12 días
+            # pasaba esa prueba igual que uno fresco. Ahora depende de
+            # mty_cdmx_verified (mty_qty/cdmx_qty ya llegan en 0 desde
+            # get_bm_master_rows_for_skus() cuando no es de fiar, esto solo
+            # decide si el template muestra el número o "—"). tj_qty sigue
+            # fresco desde 2026-08-21 independientemente de este flag, pero
+            # los 3 se muestran juntos en el mismo bloque del template -- se
+            # prefiere ocultar tj_qty de más (aún fresco) mientras mty/cdmx no
+            # lo estén, antes que mostrar cualquiera de los 3 sin certeza real.
+            "_wh_fetched": bool(row.get("mty_cdmx_verified")),
         }
 
     result_map: dict = {}
@@ -22894,6 +22908,42 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     for u in updates:
         u["tj_qty"] = _tj_by_base.pop(u["sku"], 0)
 
+    # FIX 2026-08-31 (caso real SHIL000019, pedido explícito de Jovan: "no
+    # quejas... si no tienes datos pones 0"): mty_qty/cdmx_qty llevaban
+    # CONGELADOS desde 2026-08-19 -- su único escritor (_bm_master_sync_loop)
+    # está pausado, y este loop (el que sí corre hoy) nunca los tocaba.
+    # BM combina LocationIDs en un solo total cuando se piden juntos -- no
+    # hay forma de sacar el desglose MTY/CDMX de la MISMA llamada de arriba
+    # (LOCATIONID=47,62,68). El mínimo real es 1 llamada extra, SOLO MTY
+    # (LOCATIONID=68, mismo patrón ya usado arriba para PNP/tj) -- CDMX sale
+    # por resta contra el combinado ya calculado (available_qty de `updates`,
+    # que es 47+62+68): cdmx_qty = combinado - mty_qty. Como LOCATIONID=68 es
+    # subconjunto de 47,62,68, todo SKU que aparezca aquí YA está en
+    # `updates` -- a diferencia de tj_qty (Tijuana no es subconjunto de la
+    # consulta combinada), no puede haber "sobrantes" que requieran su propio
+    # INSERT aparte.
+    mty_rows = await bm_cli.get_bulk_stock(
+        category_id=category_id, conditions=_conditions_str, location_id="68"
+    )
+    _mty_by_base: dict[str, int] = {}
+    if mty_rows:
+        _mty_rows_by_base: dict[str, list] = {}
+        for row in mty_rows:
+            row_sku = (row.get("SKU") or "").upper().strip()
+            if not row_sku:
+                continue
+            base = _extract_base_sku(row_sku)
+            _mty_rows_by_base.setdefault(base, []).append(row)
+        for base, base_rows in _mty_rows_by_base.items():
+            _mty_by_base[base] = _bulk_stock_rows_to_master_fields(base, base_rows)["available_qty"]
+    for u in updates:
+        u["mty_qty"] = _mty_by_base.pop(u["sku"], 0)
+        u["cdmx_qty"] = max(0, u["available_qty"] - u["mty_qty"])
+        # mty_cdmx_verified=1: el código de arriba SÍ calculó estos 2 campos
+        # este ciclo -- a partir de aquí get_bm_master_rows_for_skus() ya
+        # puede confiar en el valor y dejar de forzarlo a 0.
+        u["mty_cdmx_verified"] = 1
+
     # FEATURE 2026-08-21 #2 (aclaración real de Jovan): PNP ("Plug and Play"
     # -- unidades que esperan prueba de encendido antes de grado final GRA/
     # GRB/GRC) SOLO se procesa en MTY -- la prioridad de "qué meter a la
@@ -22975,6 +23025,7 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
             await db.executemany(
                 """INSERT INTO bm_sku_master (
                        sku, available_qty, reserve_qty, total_qty, tj_qty,
+                       mty_qty, cdmx_qty, mty_cdmx_verified,
                        pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty,
                        category, upc,
                        title, brand, model, image_url, retail_ph,
@@ -22982,6 +23033,7 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        verified, stock_updated_at
                    ) VALUES (
                        :sku, :available_qty, :reserve_qty, :total_qty, :tj_qty,
+                       :mty_qty, :cdmx_qty, :mty_cdmx_verified,
                        :pnp_mty_available, :pnp_mty_novendible, :pnp_other_locations_qty,
                        :category, :upc,
                        :title, :brand, :model, :image_url, :retail_ph,
@@ -22993,6 +23045,9 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        reserve_qty=excluded.reserve_qty,
                        total_qty=excluded.total_qty,
                        tj_qty=excluded.tj_qty,
+                       mty_qty=excluded.mty_qty,
+                       cdmx_qty=excluded.cdmx_qty,
+                       mty_cdmx_verified=excluded.mty_cdmx_verified,
                        pnp_mty_available=excluded.pnp_mty_available,
                        pnp_mty_novendible=excluded.pnp_mty_novendible,
                        pnp_other_locations_qty=excluded.pnp_other_locations_qty,
@@ -23027,9 +23082,16 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                 "conditions": [], "verified": True, "stock_updated_at": _now_ts,
             }
         if _zero_params:
+            # mty_qty/cdmx_qty también a 0 aquí (con mty_cdmx_verified=1): ambos
+            # son subconjuntos de la MISMA consulta combinada (LOCATIONID=
+            # 47,62,68) que ya confirmó available_qty=0 para este SKU en esta
+            # categoría -- si el total es 0, MTY y CDMX por separado también lo
+            # son, necesariamente. tj_qty NO se toca aquí (Tijuana es una
+            # consulta de LocationIDs distinta, no un subconjunto de esta).
             await db.executemany(
                 "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, best_condition_sku='', "
-                "conditions_json='[]', verified=1, stock_updated_at=? WHERE sku=?",
+                "conditions_json='[]', verified=1, mty_qty=0, cdmx_qty=0, mty_cdmx_verified=1, "
+                "stock_updated_at=? WHERE sku=?",
                 _zero_params,
             )
         # tj_qty para SKUs con stock en Tijuana que NO aparecieron en la
@@ -23100,6 +23162,7 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         "elapsed_s": _elapsed,
         "conf_columns_rows": len(rows),
         "tj_rows": len(tj_rows or []),
+        "mty_rows": len(mty_rows or []),
         "skus_updated": len(updates),  # antes "known_skus_updated" -- ya no filtra por conocido
         "skus_confirmed_zero": len(_now_zero),
     }
@@ -23444,7 +23507,18 @@ async def diag_tv_cache_audit(token: str = "", fix: bool = False):
     ni DB) mientras mty_qty/cdmx_qty no tengan un escritor activo confiable.
     Reactivar el borrado real cuando _bm_master_sync_loop (u otro mecanismo
     equivalente) vuelva a refrescar esos dos campos -- ver comentario en
-    app/main.py ~línea 923 y _bm_map_from_master."""
+    app/main.py ~línea 923 y _bm_map_from_master.
+
+    ACTUALIZACIÓN 2026-08-31 (caso real SHIL000019): _update_bm_master_for_category
+    SÍ escribe mty_qty/cdmx_qty desde hoy (LOCATIONID=68 aparte + resta,
+    gateado por la columna mty_cdmx_verified -- ver get_bm_master_rows_for_skus
+    en token_store.py). Pero ESTE endpoint audita _bm_stock_cache (caché en
+    memoria + tabla `bm_stock_cache`, alimentada por load_bm_stock_cache() al
+    warm-start), NO bm_sku_master directamente -- son 2 fuentes distintas y
+    _bm_stock_cache sigue sin escritor real para mty/cdmx. El guard de arriba
+    sigue siendo correcto para ESTE caché específico; no reactivar fix=true
+    aquí solo porque bm_sku_master ya esté fresco -- confirmar primero si
+    _bm_stock_cache tiene su propio escritor antes de tocar este guard."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
 

@@ -1360,6 +1360,21 @@ async def init_db():
             ("pnp_mty_available", "INTEGER NOT NULL DEFAULT 0"),
             ("pnp_mty_novendible", "INTEGER NOT NULL DEFAULT 0"),
             ("pnp_other_locations_qty", "INTEGER NOT NULL DEFAULT 0"),
+            # FIX 2026-08-31 (caso real SHIL000019, reportado por Jovan: BM Disp.=2
+            # correcto/fresco pero MTY=12/CDMX=19 mostrados como si fueran reales --
+            # eran el último valor escrito por _bm_master_sync_loop antes de
+            # pausarse el 2026-08-19, 12+ días congelados). mty_qty/cdmx_qty por sí
+            # solos ya no alcanzan para decidir si confiar en el dato: un valor
+            # viejo distinto de 0 es indistinguible de uno fresco sin esta bandera
+            # aparte. verified/stock_updated_at NO sirven para esto -- ambos siguen
+            # actualizándose en cada ciclo de _update_bm_master_for_category aunque
+            # ese código nunca toque mty_qty/cdmx_qty, así que una fila con
+            # stock_updated_at de hace 2 minutos puede tener MTY/CDMX de hace 12
+            # días. 0 = todavía no confirmado por el código nuevo (LOCATIONID=68
+            # aparte + resta) -- tratar como desconocido, nunca mostrar el número
+            # congelado. 1 = _update_bm_master_for_category ya escribió este valor
+            # en el ciclo más reciente para este SKU.
+            ("mty_cdmx_verified", "INTEGER NOT NULL DEFAULT 0"),
         ):
             try:
                 await db.execute(f"ALTER TABLE bm_sku_master ADD COLUMN {_col} {_ddl}")
@@ -2627,7 +2642,20 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
     que hoy llama a BM fuera del loop de categorías -- ver _fetch_base en
     amazon_products.py). title/brand/model/category/upc/image_url agregados
     el mismo día (2da vuelta) para que el gap scan de Amazon también pueda
-    leer de aquí sin llamar a BM."""
+    leer de aquí sin llamar a BM.
+
+    FIX 2026-08-31 (caso real SHIL000019): mty_qty/cdmx_qty solo se
+    devuelven si mty_cdmx_verified=1 (escritos por el código nuevo de
+    _update_bm_master_for_category, ver comentario en el ALTER TABLE de
+    arriba) -- si no, se fuerzan a 0 aquí mismo, ANTES de llegar a
+    cualquier consumidor. Es el único lugar del código que lee estas 2
+    columnas por SKU (confirmado con grep: _bm_map_from_master,
+    items_grid_partial, sync_variation_stocks_api en main.py, y
+    app/api/sku_inventory.py + app/api/amazon_products.py llaman todos a
+    esta función) -- gatear aquí corrige las 6+ secciones/alertas del
+    dashboard de un jalón, sin tocar cada llamador ni cada template.
+    Instrucción explícita de Jovan: si no se puede confiar en el dato, 0,
+    nunca el valor viejo."""
     if not skus:
         return {}
     out = {}
@@ -2640,12 +2668,16 @@ async def get_bm_master_rows_for_skus(skus: list[str]) -> dict:
             cur = await db.execute(
                 f"""SELECT sku, available_qty, reserve_qty, total_qty, mty_qty, cdmx_qty,
                            tj_qty, no_vendible_qty, verified, stock_updated_at, retail_ph, cost_usd,
-                           title, brand, model, category, upc, image_url
+                           title, brand, model, category, upc, image_url, mty_cdmx_verified
                     FROM bm_sku_master WHERE sku IN ({placeholders})""",
                 chunk,
             )
             for r in await cur.fetchall():
-                out[r["sku"]] = dict(r)
+                row = dict(r)
+                if not row.get("mty_cdmx_verified"):
+                    row["mty_qty"] = 0
+                    row["cdmx_qty"] = 0
+                out[r["sku"]] = row
     return out
 
 
@@ -2831,16 +2863,20 @@ async def get_bulk_sku_lookup(skus: list[str]) -> dict:
             placeholders = ",".join("?" * len(chunk))
             cur = await db.execute(
                 f"""SELECT sku, available_qty, mty_qty, cdmx_qty, tj_qty, retail_ph,
-                           title, brand, model, category
+                           title, brand, model, category, mty_cdmx_verified
                     FROM bm_sku_master WHERE sku IN ({placeholders})""",
                 chunk,
             )
             for r in await cur.fetchall():
+                # FIX 2026-08-31 (mismo criterio que get_bm_master_rows_for_skus,
+                # ver ALTER TABLE mty_cdmx_verified): sin este flag, mty_qty/cdmx_qty
+                # pueden ser el valor congelado de hace 12+ días.
+                _mty_ok = bool(r["mty_cdmx_verified"])
                 out[r["sku"]] = {
                     "found": True,
                     "available_qty": r["available_qty"] or 0,
-                    "mty_qty": r["mty_qty"] or 0,
-                    "cdmx_qty": r["cdmx_qty"] or 0,
+                    "mty_qty": (r["mty_qty"] or 0) if _mty_ok else 0,
+                    "cdmx_qty": (r["cdmx_qty"] or 0) if _mty_ok else 0,
                     "tj_qty": r["tj_qty"] or 0,
                     "retail_ph": r["retail_ph"],
                     "title": r["title"], "brand": r["brand"], "model": r["model"],
