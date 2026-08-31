@@ -732,10 +732,16 @@ window._stockFilter = function(q) {
             <span class="text-xs text-gray-400">(MeLi activo, BM &lt; {{ threshold }} uds.)</span>
         </div>
         {% if critical %}
+        {% if can_execute_stock_actions %}
         <button onclick="bulkConcentrateCritical()" id="bulk-critical-btn"
                 class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
             Concentrar Análisis ({{ critical|length }})
         </button>
+        {% else %}
+        <span class="text-[10px] text-gray-400" title="Requiere permiso de ejecución + cuenta activa APANTALLATEMX">
+            🔒 Concentrar Análisis ({{ critical|length }})
+        </span>
+        {% endif %}
         {% endif %}
     </div>
 
@@ -781,7 +787,7 @@ window._stockFilter = function(q) {
             </div>
             {% endif %}
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                {% if p.sku %}
+                {% if p.sku and can_execute_stock_actions %}
                 <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:40] }}', {{ p.get('_bm_avail', 0) }}, this)"
                         class="flex-1 py-1.5 text-xs {{ 'bg-red-700 animate-pulse' if p.get('_days_supply') is not none and p._days_supply < 3 else 'bg-red-600' }} text-white rounded-lg font-medium active:bg-red-800 min-h-[36px]">
                     Concentrar{% if p.get('_days_supply') is not none and p._days_supply < 3 %} ⚡{% endif %}
@@ -867,7 +873,7 @@ window._stockFilter = function(q) {
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1 flex-wrap">
-                            {% if p.sku %}
+                            {% if p.sku and can_execute_stock_actions %}
                             <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:30]|replace("'","") }}', {{ p.get('_bm_avail', 0) }}, this)"
                                     class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium transition">
                                 Concentrar

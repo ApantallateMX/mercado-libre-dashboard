@@ -616,6 +616,13 @@ document.addEventListener('click', function(e) {
 <script>
 (function() {
     var _fixAction = null;
+    // Gate del quick-fix "Sync ahora" -- dispara multi-sync/trigger, una de
+    // las 5 acciones de "gran palanca" (ver _require_stock_action en
+    // main.py). Este banner es visible para CUALQUIER usuario logueado, así
+    // que sin este check cualquiera podía disparar un sync real de stock en
+    // las 4 cuentas ML + Amazon con un clic. El backend ya rechaza con 403
+    // si falta el permiso, esto solo evita ofrecer el botón de entrada.
+    var _canStockExecute = {{ 'true' if can_execute_stock_actions else 'false' }};
     function _checkGlobalHealth() {
         fetch('/api/system-health/status').then(function(r){ return r.json(); }).then(function(d) {
             if (d.overall === 'error') {
@@ -630,7 +637,7 @@ document.addEventListener('click', function(e) {
                         if (!_fixAction) {
                             if (k === 'meli_tokens' || k === 'revenue') _fixAction = {label:'Refrescar tokens', fn: function(){ fetch('/api/system-health/fix-tokens',{method:'POST'}); }};
                             else if (k === 'amazon') _fixAction = {label:'Reconectar Amazon', fn: function(){ window.location.href='/auth/amazon/connect'; }};
-                            else if (k === 'stock_sync') _fixAction = {label:'Sync ahora', fn: function(){ fetch('/api/stock/multi-sync/trigger',{method:'POST'}); }};
+                            else if (k === 'stock_sync' && _canStockExecute) _fixAction = {label:'Sync ahora', fn: function(){ fetch('/api/stock/multi-sync/trigger',{method:'POST'}); }};
                         }
                     }
                 }

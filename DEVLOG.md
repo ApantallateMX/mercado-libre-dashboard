@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-31 (10) — FEAT: permiso de ejecución para acciones de "gran palanca" en Stock
+
+Continuación de (9). Jovan pidió que Concentrar/Sync manual (acciones que escriben en
+TODAS las cuentas ML+Amazon de un jalón) las pueda disparar solo 1 persona designada,
+y solo desde la cuenta APANTALLATEMX activa — "es como decir solo el encargado de
+e-commerce". Tras varias rondas de diseño (flag especial tipo `can_zero_stock` →
+propuesta final de Jovan de reusar el mecanismo de subtabs ya probado hoy en
+Deals/Salud/Productos), quedó así:
+
+1. **Nuevo subtab lógico** `ml.productos.stock_execute` (`PERMISSION_TREE`, sin pestaña
+   de navegación nueva — vive dentro del subtab "Stock" existente, solo gatea botones).
+   Checkbox en `/usuarios` sale gratis del árbol, sin UI a la medida.
+2. **`_require_stock_action(request)`** (`main.py`) — 2 checks independientes, cada uno
+   con su propio bypass total de admin (regla de Jovan: "Admin tiene TODO sin excepción,
+   NUNCA se rompe"): (a) permiso del subtab `stock_execute`, (b) cuenta ML activa =
+   APANTALLATEMX (`523916436`, cookie `active_account_id`) — "esa la tomaremos como
+   maestra". Aplicado a los 5 endpoints reales de escritura: `concentration/execute`,
+   `fix-winner`, `unfix-winner`, `multi-sync/trigger` (le faltaba `Request` en la firma),
+   `multi-sync/trigger-single` (reemplaza un check viejo e inconsistente
+   `role in ("admin","editor")`).
+3. **UI gating** — `can_execute_stock_actions` (vía `_accounts_ctx` + cálculo propio en
+   `products_stock_issues_partial`): los 3 botones "Concentrar" (bulk, mobile, desktop)
+   muestran 🔒 con tooltip si falta el permiso; **hallazgo real durante la verificación**:
+   el botón global "Sync ahora" del banner de salud del sistema (`base.html`) era visible
+   para CUALQUIER usuario logueado y disparaba `multi-sync/trigger` sin ningún gate previo
+   — ahora también condicionado.
+4. `winner-status` (GET, solo lectura) se dejó con el gate liviano `stock` — no escribe
+   nada, no necesita `stock_execute`.
+
+**Verificado por el hilo principal** (no solo por el agente): servidor local +
+2 usuarios reales de prueba (uno con `stock` pero sin `stock_execute`, otro con ambos) +
+admin. Confirmado con curl: sin permiso → 403 en los 5 endpoints; con permiso pero
+`active_account_id` incorrecto → 403 en los 5; con permiso + cuenta correcta → pasa el
+gate (fix-winner/unfix-winner 200 reales sobre un SKU de prueba inexistente, sin riesgo;
+`concentration/execute` con `dry_run:true` pasa el gate y falla solo por lógica de
+negocio, no por permiso); admin con cuenta activa equivocada → bypass total confirmado
+en fix-winner/unfix-winner. **No se probó el camino positivo de `multi-sync/trigger` ni
+`trigger-single`** (ya se disparan contra credenciales reales de producción sin sandbox
+local — ese escenario ya se había verificado una vez durante el diseño, autoabortado por
+el guard de staleness de `bm_sku_master`; repetirlo no aportaba nada nuevo y sí riesgo
+innecesario). Usuarios y regla de prueba (`sku_platform_rules` del SKU falso) limpiados
+después. Pendiente conocido, no bloqueante: `unfix-winner` puede dar
+`500 database is locked` bajo contención SQLite concurrente — preexistente, no
+relacionado a este cambio, fuera de alcance.
+
 ## 2026-08-28 (9) — FEAT/FIX: consolidación de concentración de stock multi-cuenta (4 fixes)
 
 Auditoría de 2 rondas (marketplace-strategist + backend-integrations-engineer) sobre el

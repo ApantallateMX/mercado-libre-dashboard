@@ -98,6 +98,21 @@ PERMISSION_TREE = {
         "productos":    {"label": "Productos",    "subtabs": {
             "summary": "Resumen", "inventory": "Inventario", "stock": "Stock",
             "deals": "Deals", "listings": "Listings", "full-candidates": "Candidatos FULL",
+            # Permiso LÓGICO, sin pestaña de navegación propia (reconciliación
+            # 2026-08-31, pedido de Jovan): gatea los botones de "gran palanca"
+            # que ya viven dentro del subtab "stock" (Concentrar, Fijar/Quitar
+            # ganador, Sync manual BM→ML/Amazon) -- escriben en TODAS las
+            # cuentas ML/Amazon de un jalón, a diferencia de las acciones por
+            # SKU/item que "stock" (arriba) ya cubre. Tener "stock" (ver la
+            # pestaña) NO implica tener "stock_execute" (poder disparar estas
+            # 5 acciones) -- son independientes, igual que cualquier par
+            # tab/subtab del árbol. Reemplaza el flag especial que se había
+            # diseñado (ZERO_STOCK_ACTION_KEY-style, "can_execute_stock_actions")
+            # -- un subtab nuevo reusa el checkbox genérico de /usuarios (ver
+            # usuarios.html, se renderiza solo de PERMISSION_TREE) sin
+            # necesitar UI a la medida, y hereda el bypass de admin ya
+            # centralizado en _require_subtab (main.py) en vez de repetirlo.
+            "stock_execute": "Ejecutar Concentración/Sync (acción real)",
         }},
         "ads":          {"label": "Ads",          "subtabs": {
             "campaigns": "Campañas", "performance": "Rendimiento", "by-category": "Por categoría",

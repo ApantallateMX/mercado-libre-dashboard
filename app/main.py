@@ -1145,18 +1145,77 @@ def _tab_url(platform: str, tab: str) -> str:
     return "/facturacion"
 
 
+def _subtab_allowed(du: dict, platform: str, tab: str, subtab: str) -> bool:
+    """Versión booleana (sin excepción) de la regla de acceso a subtab —
+    misma lógica que _require_subtab, extraída para poder reusarla en
+    UI-gating (mostrar/ocultar un botón) donde no queremos lanzar 403,
+    solo decidir qué renderizar. Única fuente de verdad para ambos casos."""
+    if not du or du.get("role") == "admin":
+        return True
+    sections = du.get("allowed_sections") or []
+    if not sections:
+        return True
+    return user_store.has_subtab_access(sections, platform, tab, subtab)
+
+
 def _require_subtab(request: Request, platform: str, tab: str, subtab: str):
     """Gate de una sub-vista específica (ej. Salud→Mensajes). Se llama al
     inicio de partials/endpoints de subtabs individuales — el gating de
     AuthMiddleware solo cubre el tab completo, no cada subtab."""
     du = getattr(request.state, "dashboard_user", None)
-    if not du or du.get("role") == "admin":
-        return
-    sections = du.get("allowed_sections") or []
-    if not sections:
-        return
-    if not user_store.has_subtab_access(sections, platform, tab, subtab):
+    if not _subtab_allowed(du, platform, tab, subtab):
         raise HTTPException(status_code=403, detail="No tienes acceso a esta sección")
+
+
+# Cuenta ML "maestra" desde la que deben dispararse las acciones de stock que
+# escriben en TODAS las cuentas ML/Amazon de un jalón (concentración,
+# fijar/quitar ganador, multi-sync) -- reconciliación 2026-08-31 con Jovan:
+# el botón de estas acciones solo debe existir/funcionar con APANTALLATEMX
+# como cuenta activa, para que no se dispare 2+ veces por sesiones
+# concurrentes en distintas cuentas. user_id real, no una config nuestra —
+# es el mismo OAuth user_id de ML documentado en CLAUDE.md, no cambia entre
+# redeploys ni entre entornos (Railway/Coolify comparten la misma cuenta ML).
+_STOCK_ACTION_MASTER_ML_USER_ID = "523916436"  # APANTALLATEMX
+
+
+def _is_master_account_active(request: Request) -> bool:
+    """True si la cuenta ML activa (cookie active_account_id) es
+    APANTALLATEMX, o si el usuario es admin -- bypass total, sin excepción
+    (confirmado por Jovan 2026-08-31: el admin nunca debe quedar bloqueado
+    por esta regla, ni siquiera con otra cuenta activa)."""
+    du = getattr(request.state, "dashboard_user", None)
+    if du and du.get("role") == "admin":
+        return True
+    return request.cookies.get("active_account_id", "") == _STOCK_ACTION_MASTER_ML_USER_ID
+
+
+def _require_stock_action(request: Request):
+    """Gate combinado para las 5 acciones que escriben stock real en TODAS
+    las cuentas ML/Amazon a la vez: concentration/execute, fix-winner,
+    unfix-winner, multi-sync/trigger, multi-sync/trigger-single.
+
+    Dos chequeos INDEPENDIENTES, cada uno con su propio bypass total de
+    admin (no se reemplazan entre sí -- responden preguntas distintas):
+      1. QUIÉN puede -- subtab "ml.productos.stock_execute" (_require_subtab
+         ya trae el bypass de admin incorporado).
+      2. DESDE DÓNDE se ejecuta -- cuenta activa = APANTALLATEMX
+         (_is_master_account_active repite el bypass de admin explícito,
+         porque es un chequeo aparte que no pasa por _require_subtab).
+
+    Diseño reconciliado 2026-08-31 (3ra ronda): reemplaza el flag especial
+    tipo ZERO_STOCK_ACTION_KEY que se había diseñado antes -- Jovan propuso
+    usar el mecanismo de subtabs ya probado hoy en Deals/Salud/Productos en
+    vez de un flag a la medida, y es la opción más simple: el checkbox en
+    /usuarios sale gratis (se genera solo de PERMISSION_TREE, ver
+    usuarios.html) y no hay que mantener un segundo camino de "admin
+    bypass" manual como el que tiene can_zero_stock.
+    """
+    _require_subtab(request, "ml", "productos", "stock_execute")
+    if not _is_master_account_active(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Esta acción solo puede ejecutarse con APANTALLATEMX como cuenta activa.",
+        )
 
 
 def _derive_audit_section(path: str) -> str:
@@ -1760,6 +1819,16 @@ async def _accounts_ctx(request: Request) -> dict:
         "amazon_account": amazon_account,
         "dashboard_user": dashboard_user,
         "nav_tabs": _build_nav_tabs(last_platform, dashboard_user),
+        # UI-gating para los botones de Concentrar/Fijar ganador/Sync manual
+        # (ver _require_stock_action) -- mismo par de chequeos que el backend,
+        # solo que sin lanzar 403: aquí decide qué renderizar, no qué permitir.
+        # Si el contexto no trae esta clave en algún template (ruta que no usa
+        # _accounts_ctx), Jinja la trata como Undefined -> falsy -> botón
+        # oculto por default (fail-safe, nunca fail-open).
+        "can_execute_stock_actions": (
+            _subtab_allowed(dashboard_user, "ml", "productos", "stock_execute")
+            and _is_master_account_active(request)
+        ),
     }
 
 
@@ -6460,6 +6529,13 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
                 ctx["sobrestock"] = [a for a in _cov_alerts if a.get("reason") == "sobrestock"]
             except Exception:
                 ctx["sobrestock"] = []
+            # UI-gating de Concentrar/Fijar ganador/Sync manual (ver
+            # _require_stock_action) -- misma regla que el backend, aquí solo
+            # decide si el botón se renderiza.
+            ctx["can_execute_stock_actions"] = (
+                _subtab_allowed(_du_stock, "ml", "productos", "stock_execute")
+                and _is_master_account_active(request)
+            )
             # Trigger prewarm en background solo si admin y datos > TTL (30 min)
             if _is_admin_stock and _data_age_s > _STOCK_ISSUES_TTL:
                 asyncio.create_task(_prewarm_caches())
@@ -15226,6 +15302,7 @@ async def stock_concentration_execute_api(request: Request):
     Body: {sku, winner_user_id, total_stock, dry_run (default true)}
     Por seguridad, dry_run=true por defecto. Pasar dry_run=false para ejecutar.
     """
+    _require_stock_action(request)
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
@@ -15390,7 +15467,7 @@ async def stock_concentration_fix_winner_api(request: Request):
 
     Body: {"sku": "SNFN000941", "winner_platform": "ml"|"amazon", "winner_account_id": "123456"}
     """
-    _require_subtab(request, "ml", "productos", "stock")
+    _require_stock_action(request)
     try:
         body = await request.json()
     except Exception:
@@ -15444,7 +15521,7 @@ async def stock_concentration_unfix_winner_api(request: Request):
     """Quita la fijación de un SKU -- borra sus reglas de sku_platform_rules
     (vuelve a dejar todas las plataformas habilitadas, en vez de dejar filas
     enabled=0 huérfanas). Body: {"sku": "SNFN000941"}"""
-    _require_subtab(request, "ml", "productos", "stock")
+    _require_stock_action(request)
     try:
         body = await request.json()
     except Exception:
@@ -23892,8 +23969,9 @@ async def multi_sync_preview():
 
 
 @app.post("/api/stock/multi-sync/trigger")
-async def multi_sync_trigger():
+async def multi_sync_trigger(request: Request):
     """Dispara sync manual: sync BM→ML/Amazon + fuerza prewarm fresco."""
+    _require_stock_action(request)
     from app.services.stock_sync_multi import run_multi_stock_sync, get_sync_status
     if get_sync_status()["running"]:
         return JSONResponse({"status": "already_running"}, status_code=202)
@@ -23977,9 +24055,7 @@ async def trigger_single_account_sync(request: Request):
     Solo actualiza la entrada de esa cuenta en el estado por cuenta.
     """
     from app.services.stock_sync_multi import run_single_account_stock_sync, get_sync_status
-    _du = getattr(request.state, "dashboard_user", None)
-    if not _du or _du.get("role") not in ("admin", "editor"):
-        return JSONResponse({"error": "No autorizado — solo admin o editor"}, status_code=403)
+    _require_stock_action(request)
     if get_sync_status()["running"]:
         return JSONResponse({"status": "already_running"})
     try:
