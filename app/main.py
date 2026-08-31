@@ -31057,6 +31057,31 @@ async def diag_order_sample(sku: str = "", token: str = "", limit: int = 3):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/diag/amazon-bm-managed-count")
+async def diag_amazon_bm_managed_count(seller_id: str = "", token: str = ""):
+    """DIAG 2026-08-31 (verificación pendiente del barrido de deuda técnica):
+    cuenta cuántos SKUs de una cuenta Amazon tienen match verified=1 en
+    bm_sku_master -- mismo criterio que
+    `_get_amazon_stock_alert_enabled_sellers()`. Existe para confirmar contra
+    PRODUCCIÓN (no tokens.db local) si ExclusiveBulbs (A22XNR713HGDVG) de
+    verdad califica para Alertas de Stock Amazon, antes de decidir si se
+    quita su exclusión manual explícita
+    (`_AMAZON_STOCK_ALERT_FORCE_DISABLED_SELLERS`). Solo lectura -- no
+    escribe nada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id requerido"}, status_code=400)
+    n = await token_store.count_amazon_bm_managed_skus(seller_id)
+    return JSONResponse({
+        "seller_id": seller_id,
+        "bm_managed_skus": n,
+        "threshold": _AMAZON_STOCK_ALERT_BM_MIN_SKUS,
+        "would_qualify": n >= _AMAZON_STOCK_ALERT_BM_MIN_SKUS,
+        "force_disabled": seller_id in _AMAZON_STOCK_ALERT_FORCE_DISABLED_SELLERS,
+    })
+
+
 @app.get("/api/diag/catalog-sellers")
 async def diag_catalog_sellers(product_id: str = "", token: str = ""):
     """Lista todos los vendedores en una página de catálogo ML."""

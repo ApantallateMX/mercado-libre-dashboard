@@ -477,8 +477,19 @@ async def amazon_callback(
         _mkt_name      = _file_vars.get("AMAZON2_MARKETPLACE_NAME") or AMAZON2_MARKETPLACE_NAME
         _app_sol_id    = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
         _rt_env_key    = "AMAZON2_REFRESH_TOKEN"
-        _client_id     = _file_vars.get("AMAZON_CLIENT_ID")         or AMAZON_CLIENT_ID
-        _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET")     or AMAZON_CLIENT_SECRET
+        # FIX 2026-08-31 (barrido de deuda técnica, bug gemelo del fallback de
+        # amazon_client.py -- ver .claude/memory/
+        # project_amazon2_credential_fallback_verification_2026-08-31.md):
+        # usaba SIEMPRE AMAZON_CLIENT_ID/SECRET (cuenta 1, VECKTOR) sin
+        # importar que la cuenta autorizada fuera AUTOBOT -- esto es lo que
+        # habría vuelto a generar un refresh_token atado a la app equivocada
+        # en cualquier re-autorización futura. Corregido para usar las
+        # credenciales propias de AUTOBOT, igual que la rama _is_acct3 de
+        # abajo usa las suyas. Cambio sin efecto en producción HOY (AUTOBOT
+        # no se ha vuelto a autorizar) -- solo importa la próxima vez que
+        # alguien pase por este flujo con seller_id de AUTOBOT.
+        _client_id     = _file_vars.get("AMAZON2_CLIENT_ID")         or AMAZON2_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON2_CLIENT_SECRET")     or AMAZON2_CLIENT_SECRET
     else:
         _nickname      = _file_vars.get("AMAZON_NICKNAME")       or AMAZON_NICKNAME or "VECKTOR IMPORTS"
         _mkt_id        = _file_vars.get("AMAZON_MARKETPLACE_ID")    or AMAZON_MARKETPLACE_ID
