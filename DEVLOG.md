@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-31 (11) — FIX: causa raíz real de "database is locked" en unfix-winner
+
+Seguimiento del pendiente documentado en (10). Auditoría del backend-integrations-engineer:
+WAL mode + `busy_timeout=15s` ya estaban bien configurados y consistentes en TODO
+`token_store.py` — el bug no era de configuración. Causa raíz real: `_update_bm_master_
+for_category()` (`app/main.py`) mantenía UNA sola transacción abierta mientras hacía un
+`execute()` por cada SKU de una categoría BM completa (cientos de filas, sin commits
+intermedios) — corre sola cada 15min (top-5 categorías) y en loop continuo cada 2h
+(long-tail). Mientras esa transacción no comiteaba, sostenía el lock de escritura de
+SQLite (exclusivo incluso en WAL) el tiempo suficiente para que otros escritores del
+proceso (el DELETE puntual de `unfix-winner`) agotaran su propio `busy_timeout` y
+tiraran el 500 real. Ya había evidencia de esto en un comentario propio del código
+(`token_store.py:3363`, bloqueos de +2 min documentados bajo contención real).
+
+1. **Fix de causa raíz** (`app/main.py:22555-22705`, `_update_bm_master_for_category`):
+   los 5 bloques de `execute()` por fila (INSERT principal, "ausencia=0", tj_qty, PNP-MTY,
+   PNP-otros) ahora usan `executemany()` — misma sentencia SQL, misma lógica de negocio
+   (incluido el orden exacto del `.pop()` que evita duplicar un SKU entre PNP-MTY y
+   PNP-otros), solo cambia el mecanismo de ejecución. Mismo patrón que ya usaba
+   correctamente `bulk_update_ml_listing_qtys`.
+2. **Red de seguridad** (`app/services/token_store.py:4869-4926`): `delete_sku_platform_
+   rules_for_sku`/`set_sku_platform_rule` ahora reintentan 3 veces (~1.5s máximo total,
+   deliberadamente corto por ser endpoints en vivo) ante `OperationalError`, re-lanzando
+   el error real si los 3 fallan — nunca lo silencia.
+
+**Verificado dos veces** (por el especialista y de forma independiente por el hilo
+principal): equivalencia byte-a-byte del batching contra 1,678 filas reales de la
+categoría "Televisions" de `tokens.db` (abierta en modo solo lectura, nunca se escribió
+sobre el archivo real) — 1,679/1,679 filas idénticas, `_bm_master_mem` idéntico, y
+reducción medida del tiempo que la transacción sostiene el lock de 272ms a 69ms
+(-74.7%). Retry probado con contención real simulada (un thread separado sosteniendo
+`BEGIN IMMEDIATE` sobre una COPIA descartable de la DB, nunca la real): lock corto (0.6s)
+se recupera solo y borra la fila correctamente; lock largo (3s) falla rápido con el error
+real, no lo esconde. `py_compile` + `import app.main` sin errores.
+
 ## 2026-08-31 (10) — FEAT: permiso de ejecución para acciones de "gran palanca" en Stock
 
 Continuación de (9). Jovan pidió que Concentrar/Sync manual (acciones que escriben en

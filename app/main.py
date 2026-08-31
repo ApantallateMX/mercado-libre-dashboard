@@ -22555,10 +22555,39 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     import aiosqlite as _aio_updcat
     import json as _json_updcat
     _now_ts = _time.time()
+    # FIX 2026-08-31 (auditoría "database is locked" en unfix-winner, pedido
+    # explícito de Jovan): esta función mantenía UNA sola transacción abierta
+    # mientras hacía un execute() por fila -- para una categoría de cientos
+    # de SKUs eso sostenía el lock de escritura de SQLite (exclusivo incluso
+    # en WAL, solo puede haber 1 escritor a la vez) el tiempo suficiente para
+    # que OTROS escritores del proceso (ej. el DELETE de unfix-winner,
+    # token_store.delete_sku_platform_rules_for_sku) agotaran su busy_timeout
+    # y tiraran "database is locked" real -- confirmado con el comentario ya
+    # existente en token_store.py:3363 sobre bloqueos de más de 2 minutos
+    # bajo contención real. Los 5 bloques de abajo pasan de N execute()
+    # secuenciales a 1 executemany() cada uno -- MISMA sentencia SQL y MISMA
+    # lógica de negocio que antes (ausencia=0, tj_qty, PNP y PNP-otros
+    # incluidos), solo cambia el mecanismo de ejecución. Mismo patrón que ya
+    # usaba correctamente bulk_update_ml_listing_qtys en token_store.py.
     async with _aio_updcat.connect(DATABASE_PATH, timeout=15) as db:
+        _insert_params = []
         for u in updates:
             _conds_json = _json_updcat.dumps(u["conditions"])
-            await db.execute(
+            _insert_params.append({
+                **{k: v for k, v in u.items() if k != "conditions"},
+                "conditions_json": _conds_json, "stock_updated_at": _now_ts,
+            })
+            # Mantener el espejo en memoria (_bm_master_mem) sincronizado en el
+            # mismo instante -- así las 3 funciones que leen de ahí (alertas en
+            # tiempo real + Sustituir/sugerencias) ven el dato fresco sin
+            # esperar al próximo warm-start ni hacer una consulta a SQLite.
+            _bm_master_mem[u["sku"]] = {
+                "available_qty": u["available_qty"], "reserve_qty": u["reserve_qty"],
+                "best_condition_sku": u["best_condition_sku"], "conditions": u["conditions"],
+                "verified": True, "stock_updated_at": _now_ts,
+            }
+        if _insert_params:
+            await db.executemany(
                 """INSERT INTO bm_sku_master (
                        sku, available_qty, reserve_qty, total_qty, tj_qty,
                        pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty,
@@ -22594,18 +22623,8 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        conditions_json=excluded.conditions_json,
                        verified=excluded.verified,
                        stock_updated_at=excluded.stock_updated_at""",
-                {**{k: v for k, v in u.items() if k != "conditions"},
-                 "conditions_json": _conds_json, "stock_updated_at": _now_ts},
+                _insert_params,
             )
-            # Mantener el espejo en memoria (_bm_master_mem) sincronizado en el
-            # mismo instante -- así las 3 funciones que leen de ahí (alertas en
-            # tiempo real + Sustituir/sugerencias) ven el dato fresco sin
-            # esperar al próximo warm-start ni hacer una consulta a SQLite.
-            _bm_master_mem[u["sku"]] = {
-                "available_qty": u["available_qty"], "reserve_qty": u["reserve_qty"],
-                "best_condition_sku": u["best_condition_sku"], "conditions": u["conditions"],
-                "verified": True, "stock_updated_at": _now_ts,
-            }
         # SKUs YA en bm_sku_master de ESTA categoría que no aparecieron --
         # ausencia real confirmada (el fetch sí tuvo éxito) = 0, mismo
         # criterio ya usado en el resto del sistema. Acotado a category=?
@@ -22615,35 +22634,52 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         )
         _existing_in_category = {r[0] for r in await cur.fetchall()}
         _now_zero = _existing_in_category - seen_skus_in_response
+        _zero_params = []
         for _z in _now_zero:
-            await db.execute(
-                "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, best_condition_sku='', "
-                "conditions_json='[]', verified=1, stock_updated_at=? WHERE sku=?",
-                (_now_ts, _z),
-            )
+            _zero_params.append((_now_ts, _z))
             _bm_master_mem[_z] = {
                 "available_qty": 0, "reserve_qty": 0, "best_condition_sku": "",
                 "conditions": [], "verified": True, "stock_updated_at": _now_ts,
             }
+        if _zero_params:
+            await db.executemany(
+                "UPDATE bm_sku_master SET available_qty=0, reserve_qty=0, best_condition_sku='', "
+                "conditions_json='[]', verified=1, stock_updated_at=? WHERE sku=?",
+                _zero_params,
+            )
         # tj_qty para SKUs con stock en Tijuana que NO aparecieron en la
         # respuesta vendible de esta categoría (ni en `updates` ni en
         # `_now_zero`, típicamente porque nunca se habían visto en esta
         # categoría) -- solo toca tj_qty, nunca available_qty/category de
         # un SKU que ya pertenece a otra categoría real.
-        for _tj_sku, _tj_qty in _tj_by_base.items():
-            await db.execute(
+        _tj_params = [
+            {"sku": _tj_sku, "tj_qty": _tj_qty, "category": category_id, "stock_updated_at": _now_ts}
+            for _tj_sku, _tj_qty in _tj_by_base.items()
+        ]
+        if _tj_params:
+            await db.executemany(
                 """INSERT INTO bm_sku_master (sku, tj_qty, category, stock_updated_at)
                    VALUES (:sku, :tj_qty, :category, :stock_updated_at)
                    ON CONFLICT(sku) DO UPDATE SET
                        tj_qty=excluded.tj_qty,
                        category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
-                {"sku": _tj_sku, "tj_qty": _tj_qty, "category": category_id, "stock_updated_at": _now_ts},
+                _tj_params,
             )
         # PNP (MTY) para SKUs con stock PNP que NO aparecieron en la respuesta
         # vendible de esta categoría -- mismo criterio que el bloque de tj_qty
         # arriba, solo toca las columnas pnp_*, nunca available_qty/category.
+        # OJO: el .pop() de abajo debe seguir ejecutándose en este loop (antes
+        # de construir _pnp_other_params) para preservar exactamente el mismo
+        # efecto que antes -- evita que un SKU ya contado aquí se duplique en
+        # el bloque de "PNP fuera de MTY" de más abajo.
+        _pnp_mty_params = []
         for _pnp_sku, _pnp_u in _pnp_mty_by_base.items():
-            await db.execute(
+            _pnp_mty_params.append({
+                "sku": _pnp_sku, "available": _pnp_u["available"], "no_vendible": _pnp_u["no_vendible"],
+                "other": _pnp_other_by_base.pop(_pnp_sku, 0), "category": category_id, "stock_updated_at": _now_ts,
+            })
+        if _pnp_mty_params:
+            await db.executemany(
                 """INSERT INTO bm_sku_master (
                        sku, pnp_mty_available, pnp_mty_novendible, pnp_other_locations_qty,
                        category, stock_updated_at
@@ -22653,22 +22689,23 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        pnp_mty_novendible=excluded.pnp_mty_novendible,
                        pnp_other_locations_qty=excluded.pnp_other_locations_qty,
                        category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
-                {
-                    "sku": _pnp_sku, "available": _pnp_u["available"], "no_vendible": _pnp_u["no_vendible"],
-                    "other": _pnp_other_by_base.pop(_pnp_sku, 0), "category": category_id, "stock_updated_at": _now_ts,
-                },
+                _pnp_mty_params,
             )
         # Cualquier SKU restante que SOLO tenga PNP fuera de MTY (ninguna
         # coincidencia en updates ni en _pnp_mty_by_base) -- anomalía pura,
         # igual se registra para que la alerta lo muestre.
-        for _po_sku, _po_qty in _pnp_other_by_base.items():
-            await db.execute(
+        _pnp_other_params = [
+            {"sku": _po_sku, "other": _po_qty, "category": category_id, "stock_updated_at": _now_ts}
+            for _po_sku, _po_qty in _pnp_other_by_base.items()
+        ]
+        if _pnp_other_params:
+            await db.executemany(
                 """INSERT INTO bm_sku_master (sku, pnp_other_locations_qty, category, stock_updated_at)
                    VALUES (:sku, :other, :category, :stock_updated_at)
                    ON CONFLICT(sku) DO UPDATE SET
                        pnp_other_locations_qty=excluded.pnp_other_locations_qty,
                        category=COALESCE(NULLIF(bm_sku_master.category, ''), excluded.category)""",
-                {"sku": _po_sku, "other": _po_qty, "category": category_id, "stock_updated_at": _now_ts},
+                _pnp_other_params,
             )
         await db.commit()
 

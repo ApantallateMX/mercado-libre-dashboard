@@ -4869,22 +4869,61 @@ async def get_sku_platform_rules_for_sku(sku: str) -> dict[str, bool]:
 async def delete_sku_platform_rules_for_sku(sku: str) -> None:
     """Borra TODAS las reglas de un SKU (de cualquier user_id) -- 'des-fijar'
     un ganador (Fix 4): vuelve a dejar todas las plataformas habilitadas para
-    ese SKU, en vez de dejar filas enabled=0 huérfanas."""
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        await db.execute("DELETE FROM sku_platform_rules WHERE sku=?", (sku.upper(),))
-        await db.commit()
+    ese SKU, en vez de dejar filas enabled=0 huérfanas.
+
+    Retry corto (FIX 2026-08-31, auditoría "database is locked" en
+    unfix-winner bajo carga real): endpoint que el usuario espera en vivo,
+    así que el retry es deliberadamente breve (3 intentos, ~1.5s en el peor
+    caso) -- NO el patrón de 6 intentos x 5s de
+    update_stock_alert_resolution_bm_status (ese es fire-and-forget en
+    background, este no puede dejar a alguien esperando tanto). La causa
+    raíz real del lock largo (el loop de categorías de BM escribiendo
+    bm_sku_master fila por fila en una sola transacción) ya se corrigió
+    aparte con executemany() en _update_bm_master_for_category (main.py) --
+    esto es una red de seguridad para cualquier ventana de contención
+    residual, no el fix principal. Si los 3 intentos fallan, se re-lanza el
+    error real (nunca silenciarlo) -- el caller (endpoint unfix-winner) debe
+    ver el 500, no un éxito falso."""
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=0.3) as db:
+                await db.execute("DELETE FROM sku_platform_rules WHERE sku=?", (sku.upper(),))
+                await db.commit()
+                return
+        except aiosqlite.OperationalError as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(0.3)
+    logger.warning(f"[STOCK-WINNER] delete_sku_platform_rules_for_sku(sku={sku}) falló tras 3 intentos: {last_err}")
+    raise last_err
 
 
 async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enabled: bool) -> None:
-    """Habilita o deshabilita una plataforma para un SKU específico, por cuenta."""
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        await db.execute(
-            """INSERT INTO sku_platform_rules (user_id, sku, platform_id, enabled)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id, sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
-            (user_id, sku.upper(), platform_id, 1 if enabled else 0),
-        )
-        await db.commit()
+    """Habilita o deshabilita una plataforma para un SKU específico, por cuenta.
+
+    Retry corto -- mismo motivo y mismos parámetros que
+    delete_sku_platform_rules_for_sku (ver docstring de esa función):
+    endpoint fix-winner en vivo, 3 intentos / ~1.5s máximo, re-lanza el
+    error real si los 3 intentos fallan."""
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=0.3) as db:
+                await db.execute(
+                    """INSERT INTO sku_platform_rules (user_id, sku, platform_id, enabled)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(user_id, sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
+                    (user_id, sku.upper(), platform_id, 1 if enabled else 0),
+                )
+                await db.commit()
+                return
+        except aiosqlite.OperationalError as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(0.3)
+    logger.warning(f"[STOCK-WINNER] set_sku_platform_rule(sku={sku}, platform_id={platform_id}) falló tras 3 intentos: {last_err}")
+    raise last_err
 
 
 async def get_stock_winner_cache_one(base_sku: str) -> dict | None:
