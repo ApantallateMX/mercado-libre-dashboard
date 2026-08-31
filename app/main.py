@@ -8116,6 +8116,49 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("units", 0) > 0
                 ]
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
+
+                # FEATURE 2026-08-31 (Jovan, revisión de Concentrar en Stock Crítico):
+                # distinguir dentro de "Crítico" entre Riesgo de Reparto real (2+ cuentas
+                # ML con available_quantity>0 del mismo SKU base -- ahí SÍ aplica
+                # Concentrar, reduce sobreventa) y Reabasto puro (ya quedó 1 sola cuenta
+                # vendiéndolo -- Concentrar no tiene nada que reasignar, es solo comprar
+                # más). Fuente: ml_listings, tabla YA sincronizada en background por
+                # ml_listing_sync.py -- CERO llamadas nuevas a ML/BM desde este endpoint
+                # de solo lectura (regla dura del proyecto). normalize_to_bm_sku aquí debe
+                # ser la MISMA función que usó upsert_ml_listings para poblar base_sku
+                # (sku_utils.normalize_to_bm_sku, no sku_utils.base_sku/el proxy de main.py)
+                # o el cruce de mapas no empata.
+                if critical:
+                    from app.services.sku_utils import normalize_to_bm_sku as _norm_ml_listing_sku
+                    try:
+                        _all_active_listings = await token_store.get_ml_listings_all_accounts(statuses=["active"])
+                    except Exception as e:
+                        logger.warning(f"[STOCK-CRITICAL] No se pudo leer ml_listings para conteo cross-cuenta: {e}")
+                        _all_active_listings = []
+                    _accounts_with_stock_by_sku: dict = {}
+                    for _l in _all_active_listings:
+                        _bsku = (_l.get("base_sku") or "").upper()
+                        if not _bsku or (_l.get("available_qty") or 0) <= 0:
+                            continue
+                        _accounts_with_stock_by_sku.setdefault(_bsku, set()).add(_l.get("account_id"))
+                    try:
+                        _winner_cache_map = await token_store.get_all_stock_winner_cache()
+                    except Exception as e:
+                        logger.warning(f"[STOCK-CRITICAL] No se pudo leer stock_winner_cache: {e}")
+                        _winner_cache_map = {}
+                    for _p in critical:
+                        _bsku = _norm_ml_listing_sku(_p.get("sku", ""))
+                        _acct_count = len(_accounts_with_stock_by_sku.get(_bsku, set())) if _bsku else 0
+                        _p["_accounts_with_stock"] = _acct_count
+                        # Default seguro: si no hay dato (0 cuentas -- gap de sync, sku sin
+                        # match) o hay 2+, se trata como riesgo real y se deja el botón
+                        # Concentrar visible. Solo se degrada a "Reabasto puro" cuando
+                        # estamos SEGUROS de que solo 1 cuenta tiene existencia -- nunca
+                        # ocultar la acción por ausencia de dato.
+                        _p["_multi_account_risk"] = _acct_count != 1
+                        _w = _winner_cache_map.get(_bsku) or {}
+                        _p["_persisted_winner_nickname"] = _w.get("winner_nickname", "")
+
                 full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 # GAP 7: Inventario estancado — stock en ambos lados pero 0 ventas en 30d
@@ -15382,8 +15425,25 @@ async def stock_concentration_execute_api(request: Request):
             _conc_tasks.append(asyncio.create_task(_upd_qty(_winner["item_id"], total_stock)))
             asyncio.create_task(_safe_bg(token_store.save_item_sync(_winner["item_id"], _conc_uid, total_stock), "save_item_sync/concentration_winner"))
 
-        # 3. Limpiar cache de stock issues para todos los usuarios
-        _stock_issues_cache.clear()
+        # 3. Limpiar cache de stock issues -- SOLO de las cuentas realmente
+        # tocadas por esta concentración (ganador + perdedores), no todo el
+        # dict. FIX 2026-08-31 (Jovan): `_stock_issues_cache.clear()` vaciaba
+        # el caché de TODAS las cuentas por una acción de 1 SKU en 1 cuenta --
+        # cualquier usuario en cualquier cuenta que abriera el tab Stock
+        # después caía en la rama "sin cache" (main.py ~6543) y disparaba un
+        # _prewarm_caches() completo (recorre TODOS los SKUs vía BM, hasta
+        # ~700s) solo para volver a mostrar datos que no habían cambiado en
+        # su cuenta. Acotamos a las cuentas con user_id en winner/losers --
+        # son las únicas cuyo `available_quantity` real cambió.
+        _conc_affected_uids = {str(client.user_id)} if client else set()
+        if _winner.get("user_id"):
+            _conc_affected_uids.add(str(_winner["user_id"]))
+        for _loser in result.get("losers", []):
+            if _loser.get("user_id"):
+                _conc_affected_uids.add(str(_loser["user_id"]))
+        for _k in [k for k in _stock_issues_cache
+                   if any(k.startswith(f"stock_issues:{u}:") for u in _conc_affected_uids)]:
+            del _stock_issues_cache[_k]
 
     return result
 

@@ -7,6 +7,48 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-31 (12) — FEAT/FIX: Concentrar en Stock Crítico — filas no desaparecían + distinción Reparto/Reabasto
+
+Jovan reportó tras correr "Concentrar Análisis" (17/17 OK real): las filas seguían en
+pantalla igual, con riesgo de re-click, y "si le doy click a cualquiera, ya no muestra
+nada hasta que corre de nuevo el inventario BM". Auditoría (backend-integrations-engineer)
+confirmó 3 causas reales, no una:
+
+1. **Bug real**: ni `concentrateItem()` ni `bulkConcentrateCritical()` llamaban a
+   `_removeStockRows()` tras éxito — único botón masivo del tab que no lo hacía
+   (Reabastecer/Riesgo/Activar sí). Corregido: ambos ahora ocultan la fila al éxito
+   (`app/templates/partials/products_stock_issues.html`), igual que el resto del tab.
+2. **Hallazgo no pedido pero real**: `stock_concentration_execute_api` (`app/main.py`)
+   hacía `_stock_issues_cache.clear()` — vaciaba el caché de TODAS las cuentas por una
+   acción de 1 SKU, forzando un `_prewarm_caches()` completo (hasta ~700s) para
+   cualquier usuario que abriera el tab después. Corregido: invalidación acotada a las
+   cuentas realmente tocadas (ganador + perdedores reales de la respuesta de
+   `execute_concentration`, no solo la cuenta activa — verificado con un `dry_run=true`
+   real que mostró que una concentración típica toca 3 cuentas).
+3. **Decisión de negocio** (marketplace-strategist, aprobada por Jovan): "Stock Crítico"
+   mezclaba 2 problemas distintos bajo un solo criterio (BM≤10) — Riesgo de Reparto
+   (2+ cuentas ML con stock del mismo SKU simultáneo, Concentrar sí aplica) vs Reabasto
+   puro (ya 1 sola cuenta, Concentrar no tiene nada que reasignar, es señal de comprar).
+   Mismo patrón que la separación de "Quiebre Inminente" del 2026-08-22. Implementado
+   **sin flag nuevo que mantener** — se calcula en vivo por fila usando `ml_listings`
+   (ya sincronizado, cero llamadas nuevas a ML/BM) + `stock_winner_cache`: 2+ cuentas con
+   `available_quantity>0` = badge rojo "🔀 Riesgo Reparto" + botón Concentrar (igual que
+   antes); 1 sola cuenta = badge ámbar "📦 Reabasto necesario", sin botón (Concentrar
+   sería un no-op), con el nickname del ganador persistido.
+
+**Bug adicional encontrado y corregido durante la implementación** (no reportado por
+Jovan, encontrado en pruebas): el contador del botón "Concentrar Análisis (N)" usaba
+`selectattr('_multi_account_risk')` (trata clave ausente como falsa) mientras las filas
+usaban `.get(..., true)` (default true) — con un snapshot cacheado viejo esto daba
+"Concentrar Análisis (0)" con 19 filas mostrando riesgo real. Corregido con el mismo
+default en ambos lados.
+
+Verificado dos veces (especialista + hilo principal, servidor local + JWT admin real
+contra `tokens.db` de producción, sin escribir nada en ML): para APANTALLATEMX, 49 SKUs
+críticos totales = 42 con riesgo de reparto real + 7 en reabasto puro — el contador del
+botón, el badge ámbar del header y las 14 ocurrencias de "Sin reparto" (7 mobile + 7
+desktop) coinciden exactamente. `py_compile`+`import app.main` sin errores nuevos.
+
 ## 2026-08-31 (11) — FIX: causa raíz real de "database is locked" en unfix-winner
 
 Seguimiento del pendiente documentado en (10). Auditoría del backend-integrations-engineer:

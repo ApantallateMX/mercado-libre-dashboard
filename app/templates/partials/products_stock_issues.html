@@ -732,14 +732,28 @@ window._stockFilter = function(q) {
             <span class="text-xs text-gray-400">(MeLi activo, BM &lt; {{ threshold }} uds.)</span>
         </div>
         {% if critical %}
+        {# _multi_account_risk puede faltar en un snapshot cacheado viejo (server recién
+           reiniciado, prewarm todavía no corrió con este código) -- mismo default seguro
+           (true = riesgo) que usan las filas individuales, para que el contador y los
+           badges de cada fila SIEMPRE coincidan entre sí. #}
+        {% set ns = namespace(risk=0) %}
+        {% for _pc in critical %}
+            {% if _pc.get('_multi_account_risk', true) %}{% set ns.risk = ns.risk + 1 %}{% endif %}
+        {% endfor %}
+        {% set _crit_risk_count = ns.risk %}
         {% if can_execute_stock_actions %}
         <button onclick="bulkConcentrateCritical()" id="bulk-critical-btn"
                 class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
-            Concentrar Análisis ({{ critical|length }})
+            Concentrar Análisis ({{ _crit_risk_count }})
         </button>
         {% else %}
         <span class="text-[10px] text-gray-400" title="Requiere permiso de ejecución + cuenta activa APANTALLATEMX">
-            🔒 Concentrar Análisis ({{ critical|length }})
+            🔒 Concentrar Análisis ({{ _crit_risk_count }})
+        </span>
+        {% endif %}
+        {% if critical|length > _crit_risk_count %}
+        <span class="text-[10px] text-amber-600" title="Solo 1 cuenta ya vende cada uno de estos SKUs -- Concentrar no aplica, hace falta comprar más stock">
+            📦 +{{ critical|length - _crit_risk_count }} solo Reabasto
         </span>
         {% endif %}
         {% endif %}
@@ -760,6 +774,11 @@ window._stockFilter = function(q) {
                         <span class="font-mono text-[10px] text-gray-400">{{ p.id }}</span>
                         {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{{ p.sku }}</span>{% endif %}
                         {% if p.get('_is_scarce') %}<span class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1 py-0.5 rounded">⚡ESCASEZ</span>{% endif %}
+                        {% if p.get('_multi_account_risk', true) %}
+                        <span class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1 py-0.5 rounded">🔀 Riesgo Reparto{% if p.get('_accounts_with_stock') %} ({{ p._accounts_with_stock }} ctas){% endif %}</span>
+                        {% else %}
+                        <span class="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-1 py-0.5 rounded">📦 Reabasto necesario</span>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -787,11 +806,16 @@ window._stockFilter = function(q) {
             </div>
             {% endif %}
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                {% if p.sku and can_execute_stock_actions %}
-                <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:40] }}', {{ p.get('_bm_avail', 0) }}, this)"
+                {% if p.sku and can_execute_stock_actions and p.get('_multi_account_risk', true) %}
+                <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:40] }}', {{ p.get('_bm_avail', 0) }}, this, '{{ p.id }}')"
                         class="flex-1 py-1.5 text-xs {{ 'bg-red-700 animate-pulse' if p.get('_days_supply') is not none and p._days_supply < 3 else 'bg-red-600' }} text-white rounded-lg font-medium active:bg-red-800 min-h-[36px]">
                     Concentrar{% if p.get('_days_supply') is not none and p._days_supply < 3 %} ⚡{% endif %}
                 </button>
+                {% elif p.sku and not p.get('_multi_account_risk', true) %}
+                <span class="flex-1 py-1.5 text-[10px] text-center text-amber-700 bg-amber-50 border border-amber-200 rounded-lg font-medium min-h-[36px] flex items-center justify-center px-1"
+                      title="Solo 1 cuenta ({{ p._persisted_winner_nickname or 'esta' }}) vende este SKU -- concentrar no reasigna nada, hace falta comprar más stock.">
+                    Sin reparto que resolver
+                </span>
                 {% endif %}
                 {% set _crit_final_qty = p.get('_rec_qty') or ([(p.get('_bm_avail', 0) * 0.6) | int, 1] | max) %}
                 <button onclick="syncRestockItem('{{ p.id }}', {{ _crit_final_qty }}, this)"
@@ -843,6 +867,11 @@ window._stockFilter = function(q) {
                             <div class="flex items-center gap-1 flex-wrap">
                               <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
                               {% if p.get('_is_scarce') %}<span class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1 py-0.5 rounded">⚡</span>{% endif %}
+                              {% if p.get('_multi_account_risk', true) %}
+                              <span class="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-1 py-0.5 rounded" title="{{ p.get('_accounts_with_stock', 0) }} cuentas ML con stock activo de este SKU">🔀 Reparto</span>
+                              {% else %}
+                              <span class="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 px-1 py-0.5 rounded" title="Solo 1 cuenta vende este SKU -- concentrar no aplica, hace falta comprar más">📦 Reabasto</span>
+                              {% endif %}
                             </div>
                         </div>
                     </td>
@@ -873,11 +902,13 @@ window._stockFilter = function(q) {
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1 flex-wrap">
-                            {% if p.sku and can_execute_stock_actions %}
-                            <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:30]|replace("'","") }}', {{ p.get('_bm_avail', 0) }}, this)"
+                            {% if p.sku and can_execute_stock_actions and p.get('_multi_account_risk', true) %}
+                            <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:30]|replace("'","") }}', {{ p.get('_bm_avail', 0) }}, this, '{{ p.id }}')"
                                     class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium transition">
                                 Concentrar
                             </button>
+                            {% elif p.sku and not p.get('_multi_account_risk', true) %}
+                            <span class="px-2 py-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded font-medium" title="Solo 1 cuenta ({{ p._persisted_winner_nickname or 'esta' }}) vende este SKU">Sin reparto</span>
                             {% endif %}
                             {% set _crit_dt_final_qty = p.get('_rec_qty') or ([(p.get('_bm_avail', 0) * 0.6) | int, 1] | max) %}
                             <button onclick="syncRestockItem('{{ p.id }}', {{ _crit_dt_final_qty }}, this)"
@@ -2357,7 +2388,7 @@ function confirmSyncVariations(itemId, confirmBtn) {
 }
 
 // --- Stock Crítico: Concentrar SKU en mejor cuenta ---
-function concentrateItem(sku, title, bmAvail, btn) {
+function concentrateItem(sku, title, bmAvail, btn, itemId) {
     if (!sku) { alert('Este producto no tiene SKU registrado.'); return; }
     // SKU puede ser combo "SNTV003363 / SNWM000001" — tomar solo el primero (10 chars BM)
     var baseSku = sku.split('/')[0].trim();
@@ -2444,6 +2475,12 @@ function concentrateItem(sku, title, bmAvail, btn) {
             }
             btn.textContent = 'OK';
             btn.className = btn.className.replace('bg-red-600', 'bg-green-600').replace('hover:bg-red-700', '');
+            // FIX 2026-08-31 (Jovan): faltaba ocultar la fila al éxito -- era el único
+            // botón del tab que no lo hacía (Reabastecer/Riesgo/Activar sí). Oculta
+            // optimista ya, el próximo prewarm real decide si vuelve a aparecer
+            // (ver _multi_account_risk en main.py: puede reaparecer legítimamente si
+            // esta cuenta quedó como ganadora y el stock BM total sigue siendo bajo).
+            if (itemId) setTimeout(function() { _removeStockRows(itemId); }, 1200);
             var winnerItemId = (res.data.winner && res.data.winner.item_id) || res.data.winner_item_id || '';
             var winnerNick   = (res.data.winner && res.data.winner.nickname) || res.data.winner_nickname || (winner.nickname || winner.user_id);
             // Cuentas zeoreadas = losers que NO son el ganador
@@ -2491,12 +2528,17 @@ function concentrateItem(sku, title, bmAvail, btn) {
 }
 
 function bulkConcentrateCritical() {
+    // FEATURE 2026-08-31 (Jovan): solo tiene sentido "concentrar" los SKUs con
+    // riesgo de reparto real (2+ cuentas activas) -- los de "Reabasto puro"
+    // (_multi_account_risk=false, ya 1 sola cuenta) no tienen nada que
+    // reasignar; incluirlos aquí desperdiciaría llamadas a ML/BM sin cambiar
+    // nada real (ver hallazgo de fila global BM -- evitar tráfico inútil).
     var skus = [
         {% for p in critical %}
-        {% if p.sku %}{ sku: '{{ p.sku }}', avail: {{ p.get('_bm_avail', 0) }} }{{ ',' if not loop.last else '' }}{% endif %}
+        {% if p.sku and p.get('_multi_account_risk', true) %}{ sku: '{{ p.sku }}', avail: {{ p.get('_bm_avail', 0) }}, id: '{{ p.id }}' }{{ ',' if not loop.last else '' }}{% endif %}
         {% endfor %}
     ].filter(Boolean);
-    if (!skus.length) { alert('No hay SKUs en la sección crítica.'); return; }
+    if (!skus.length) { alert('No hay SKUs con riesgo de reparto en la sección crítica (los que quedan son solo Reabasto puro -- no tienen botón Concentrar individual tampoco).'); return; }
     if (!confirm('¿Analizar y concentrar automáticamente ' + skus.length + ' SKUs con stock crítico?\n\nEsto pondrá en 0 las cuentas con menos ventas.')) return;
     var btn = document.getElementById('bulk-critical-btn');
     var msg = document.getElementById('bulk-critical-msg');
@@ -2528,7 +2570,12 @@ function bulkConcentrateCritical() {
             })
             .then(function(r2) { return r2.json().then(function(data) { return {ok: r2.ok, data: data}; }); })
             .then(function(res) {
-                if (res.ok) done++; else errors++;
+                // FIX 2026-08-31 (Jovan): "17/17 OK" pero las filas seguían ahí --
+                // faltaba ocultar cada fila al éxito, como sí hace Reabastecer/
+                // Riesgo/Activar. Oculta optimista; el próximo prewarm real decide
+                // si reaparece (legítimo si esta cuenta quedó ganadora y el BM
+                // total sigue bajo -- ver _multi_account_risk en main.py).
+                if (res.ok) { done++; setTimeout(function() { _removeStockRows(s.id); }, 800); } else errors++;
                 updateProgress();
                 processNext(i + 1);
             });
