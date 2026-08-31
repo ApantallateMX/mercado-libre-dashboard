@@ -7,6 +7,61 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-08-31 (13) — FIX: barrido de deuda técnica (7 fixes) + bug real en /auth/logout
+
+Tras una escalada real de Jovan (frustración por diseño reactivo en vez de pensado a
+futuro — ver `.claude/memory/feedback_pensar_a_futuro_no_solo_reactivo.md`), se aprobó
+un barrido completo del proyecto buscando parches temporales con riesgo de escalar mal.
+Encontrados y corregidos:
+
+1. **CRÍTICO — riesgo de borrado activo**: `/api/diag/tv-cache-audit?fix=true` comparaba
+   `avail_total` (fresco) contra `mty_qty+cdmx_qty` (congelados desde 2026-08-19, cuando
+   se pausó `_bm_master_sync_loop`) para decidir qué SKUs "corruptos" borrar. Con esos
+   campos parados, generaba falsos positivos crecientes sobre TVs con movimiento real.
+   `fix=true` ya no borra nada por ese criterio — modo solo-reporte hasta que exista un
+   escritor activo confiable de mty/cdmx. Docstring de `_bm_map_from_master` corregido
+   (ya no dice que el loop pausado sigue corriendo).
+2. **CRÍTICO real, encontrado por el propio fix #5** — `POST /auth/logout` (el handler
+   que de verdad corría, `app/auth.py`) borraba tokens ML con `get_any_tokens()`
+   (`SELECT * FROM tokens LIMIT 1`, sin `ORDER BY`, resto de un diseño de 1-sola-cuenta):
+   **cualquier usuario cerrando sesión borraba los tokens ML de una cuenta arbitraria**,
+   no de la que estaba usando. Corregido — logout ya no toca tokens ML, solo la sesión
+   del dashboard. Duplicado muerto idéntico en `main.py` eliminado (no solo documentado,
+   ya no aportaba nada).
+3. Amazon: `_seed_amazon_accounts()` (`client_id or client_id2`) hace que AUTOBOT nunca
+   use sus propias credenciales — **investigado y NO tocado todavía**: prueba real
+   contra LWA confirmó que el refresh_token de AUTOBOT sigue atado a la app de VECKTOR
+   (401 con credenciales propias, 200 con las de VECKTOR). Quitar el fallback hoy
+   rompería la cuenta. Ruta real documentada en
+   `.claude/memory/project_amazon2_credential_fallback_verification_2026-08-31.md`
+   (incluye un bug gemelo en `auth.py` que repetiría el problema en cualquier
+   re-autorización — tampoco tocado, requiere que Jovan re-autorice la cuenta primero).
+4. Allowlist de Alertas de Stock Amazon (antes hardcodeada) ahora se deriva
+   automáticamente (≥20 SKUs con match real en `bm_sku_master`) — con exclusión
+   explícita preservada para ExclusiveBulbs (decisión de Jovan de 2026-08-18), ya que
+   localmente calificaría (553 SKUs) pero no se confirmó ese número contra producción.
+5. Helper genérico `_sqlite_write_with_retry()` extraído de 2 patrones de retry
+   duplicados (`token_store.py`) — mismo comportamiento, ahora 1 solo mecanismo.
+6. `_cleanup_memory_caches()` ampliado a 4 cachés más sin poda (`_sale_price_cache`,
+   `_orders_cache`, `_multi_account_cache`, `_ads_category_cache`) — quedan ~11 sin
+   tocar, documentados en el docstring para decidir aparte.
+7. Detector de colisiones de rutas nuevo (`_find_route_collisions`, corre en
+   `lifespan()` + `tests/test_route_collisions.py`) — encontró la colisión de
+   `/auth/logout` (punto 2) sin que nadie la buscara a propósito. `.gitignore` corregido
+   (`test*.py` sin anclar bloqueaba silenciosamente cualquier test real en `tests/`).
+
+**Pendiente explícito, no bloqueante**: semáforo global de ML (46+ instancias locales de
+`asyncio.Semaphore` sin coordinar, mismo patrón del incidente de 429 del 27-ago) —
+cambio de arquitectura mayor, queda para una ronda propia. Paquete de 10 limitaciones
+reales de la API de BM catalogado (no enviado a Alberto sin aprobación) para sumar al
+pendiente ya abierto de RMA (2-ago, sin respuesta).
+
+Verificado por el hilo principal (no solo por el agente): diff línea por línea de los 3
+archivos, `py_compile`+`import app.main` sin errores nuevos, `pytest
+tests/test_route_collisions.py` (2/2 passed tras el fix), prueba funcional real de
+`/auth/logout` (limpia sesión, 303, sin excepción) y de la exclusión de ExclusiveBulbs
+(`_get_amazon_stock_alert_enabled_sellers()` → solo VECKTOR+AUTOBOT).
+
 ## 2026-08-31 (12) — FEAT/FIX: Concentrar en Stock Crítico — filas no desaparecían + distinción Reparto/Reabasto
 
 Jovan reportó tras correr "Concentrar Análisis" (17/17 OK real): las filas seguían en

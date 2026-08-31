@@ -3355,6 +3355,64 @@ async def get_stock_alert_resolutions(limit: int = 50, closed_only: bool = False
         return [dict(r) for r in await cur.fetchall()]
 
 
+async def _sqlite_write_with_retry(
+    write_fn,
+    *,
+    max_attempts: int = 3,
+    connect_timeout: float = 0.3,
+    base_delay: float = 0.3,
+    linear_backoff: bool = False,
+    catch: type[BaseException] | tuple = aiosqlite.OperationalError,
+    reraise: bool = True,
+    on_exhausted=None,
+):
+    """Helper genérico de reintento para writes SQLite que chocan con
+    "database is locked" (SQLite en WAL permite lectores concurrentes pero
+    UN solo escritor a la vez -- ver comentario de arquitectura en
+    CLAUDE.md). Extraído 2026-08-31 (barrido de deuda técnica, pedido
+    explícito de Jovan) de 2 patrones que ya existían por separado y
+    duplicados en este archivo:
+    - update_stock_alert_resolution_bm_status (2026-08-17): timeout largo,
+      muchos intentos, backoff creciente, nunca re-lanza -- corre en
+      background sin nadie esperándolo.
+    - delete_sku_platform_rules_for_sku / set_sku_platform_rule
+      (2026-08-31): timeout corto, pocos intentos, backoff fijo, SIEMPRE
+      re-lanza -- corre dentro de un endpoint con un usuario esperando la
+      respuesta en vivo, nunca debe fingir éxito.
+
+    write_fn(db) recibe una conexión aiosqlite ya abierta (con
+    timeout=connect_timeout) y debe hacer su(s) propio(s) execute() --
+    este helper llama a db.commit() automáticamente si write_fn no lanza
+    excepción, y reintenta según los parámetros si `catch` sí se dispara.
+    on_exhausted(last_err), si se da, corre una sola vez al agotar
+    max_attempts (para loguear con el texto/nivel exacto que cada caller
+    necesite) -- reraise decide si además se propaga la excepción real o
+    se traga (el caller ya la logueó vía on_exhausted).
+
+    Objetivo de esto no es prevenir el próximo "database is locked" por sí
+    solo (la causa raíz de cada incidente se sigue arreglando aparte,
+    ej. executemany() en _update_bm_master_for_category) -- es que aplicar
+    el patrón de retry en un call site NUEVO sea 1 línea, no reinventar
+    la lógica de reintento otra vez."""
+    last_err: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            async with aiosqlite.connect(DATABASE_PATH, timeout=connect_timeout) as db:
+                result = await write_fn(db)
+                await db.commit()
+                return result
+        except catch as e:
+            last_err = e
+            if attempt < max_attempts - 1:
+                delay = base_delay * (attempt + 1) if linear_backoff else base_delay
+                await asyncio.sleep(delay)
+    if on_exhausted is not None:
+        on_exhausted(last_err)
+    if reraise:
+        raise last_err
+    return None
+
+
 async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status: str, bm_message: str) -> None:
     """Actualiza bm_status/bm_message de un registro ya guardado -- usado por
     el background task de _inject_bm_alter_sku (FIX 2026-08-17: la inyección
@@ -3364,38 +3422,44 @@ async def update_stock_alert_resolution_bm_status(resolution_id: int, bm_status:
     choca con "database is locked" (contención real observada en pruebas,
     otros writers del proceso ya la sufren) y no se reintenta, el registro se
     queda en bm_status='pending' PARA SIEMPRE sin ningún error visible, el
-    mismo tipo de silencio que este fix completo buscaba eliminar."""
-    # Verificado en pruebas locales: con ráfagas reales de contención (varios
-    # syncs completos de cuenta corriendo a la vez al arrancar) 4 intentos con
-    # timeout=15 no bastaron -- el write seguía chocando con "database is
-    # locked" más de 2 minutos después. Como nadie espera este resultado
-    # (corre en background), es preferible esperar más de la cuenta a
-    # rendirse rápido: timeout largo por intento + más intentos.
-    # FEATURE 2026-08-17: en cuanto bm_status pasa a 'success', arranca el
-    # seguimiento de "¿de verdad se envió?" (fulfillment_status) -- ver
-    # _substitution_fulfillment_loop. Guard con fulfillment_status='' para
-    # no pisar un estado terminal (completado/cancelada) si esto se
-    # re-dispara después por alguna razón.
-    import asyncio as _asyncio
-    last_err: Exception | None = None
-    for attempt in range(6):
-        try:
-            async with aiosqlite.connect(DATABASE_PATH, timeout=45) as db:
-                await db.execute(
-                    """UPDATE stock_alert_resolutions SET bm_status = ?, bm_message = ?,
-                           fulfillment_status = CASE
-                               WHEN ? = 'success' AND fulfillment_status = '' THEN 'pendiente_envio'
-                               ELSE fulfillment_status
-                           END
-                       WHERE id = ?""",
-                    (bm_status, bm_message, bm_status, resolution_id),
-                )
-                await db.commit()
-                return
-        except Exception as e:
-            last_err = e
-            await _asyncio.sleep(5 * (attempt + 1))
-    logger.error(f"[BM-ALTER-SKU] no se pudo actualizar bm_status de resolution_id={resolution_id} tras reintentos: {last_err}")
+    mismo tipo de silencio que este fix completo buscaba eliminar.
+
+    Verificado en pruebas locales: con ráfagas reales de contención (varios
+    syncs completos de cuenta corriendo a la vez al arrancar) 4 intentos con
+    timeout=15 no bastaron -- el write seguía chocando con "database is
+    locked" más de 2 minutos después. Como nadie espera este resultado
+    (corre en background), es preferible esperar más de la cuenta a
+    rendirse rápido: timeout largo por intento (45s) + 6 intentos + backoff
+    creciente (5, 10, 15, 20, 25s). Mismo mecanismo que
+    delete_sku_platform_rules_for_sku/set_sku_platform_rule (retry corto,
+    para endpoints en vivo) pero con estos parámetros largos y sin
+    re-lanzar -- ver _sqlite_write_with_retry.
+
+    FEATURE 2026-08-17: en cuanto bm_status pasa a 'success', arranca el
+    seguimiento de "¿de verdad se envió?" (fulfillment_status) -- ver
+    _substitution_fulfillment_loop. Guard con fulfillment_status='' para
+    no pisar un estado terminal (completado/cancelada) si esto se
+    re-dispara después por alguna razón."""
+
+    async def _write(db):
+        await db.execute(
+            """UPDATE stock_alert_resolutions SET bm_status = ?, bm_message = ?,
+                   fulfillment_status = CASE
+                       WHEN ? = 'success' AND fulfillment_status = '' THEN 'pendiente_envio'
+                       ELSE fulfillment_status
+                   END
+               WHERE id = ?""",
+            (bm_status, bm_message, bm_status, resolution_id),
+        )
+
+    def _on_exhausted(last_err):
+        logger.error(f"[BM-ALTER-SKU] no se pudo actualizar bm_status de resolution_id={resolution_id} tras reintentos: {last_err}")
+
+    await _sqlite_write_with_retry(
+        _write,
+        max_attempts=6, connect_timeout=45, base_delay=5, linear_backoff=True,
+        catch=Exception, reraise=False, on_exhausted=_on_exhausted,
+    )
 
 
 async def get_pending_shipment_resolutions() -> list[dict]:
@@ -4883,20 +4947,22 @@ async def delete_sku_platform_rules_for_sku(sku: str) -> None:
     esto es una red de seguridad para cualquier ventana de contención
     residual, no el fix principal. Si los 3 intentos fallan, se re-lanza el
     error real (nunca silenciarlo) -- el caller (endpoint unfix-winner) debe
-    ver el 500, no un éxito falso."""
-    last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with aiosqlite.connect(DATABASE_PATH, timeout=0.3) as db:
-                await db.execute("DELETE FROM sku_platform_rules WHERE sku=?", (sku.upper(),))
-                await db.commit()
-                return
-        except aiosqlite.OperationalError as e:
-            last_err = e
-            if attempt < 2:
-                await asyncio.sleep(0.3)
-    logger.warning(f"[STOCK-WINNER] delete_sku_platform_rules_for_sku(sku={sku}) falló tras 3 intentos: {last_err}")
-    raise last_err
+    ver el 500, no un éxito falso. Mecanismo compartido con
+    update_stock_alert_resolution_bm_status vía _sqlite_write_with_retry
+    (FIX 2026-08-31) -- solo cambian los parámetros (timeout/intentos/
+    reraise), no la lógica de reintento."""
+
+    async def _write(db):
+        await db.execute("DELETE FROM sku_platform_rules WHERE sku=?", (sku.upper(),))
+
+    def _on_exhausted(last_err):
+        logger.warning(f"[STOCK-WINNER] delete_sku_platform_rules_for_sku(sku={sku}) falló tras 3 intentos: {last_err}")
+
+    await _sqlite_write_with_retry(
+        _write,
+        max_attempts=3, connect_timeout=0.3, base_delay=0.3, linear_backoff=False,
+        catch=aiosqlite.OperationalError, reraise=True, on_exhausted=_on_exhausted,
+    )
 
 
 async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enabled: bool) -> None:
@@ -4905,25 +4971,25 @@ async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enable
     Retry corto -- mismo motivo y mismos parámetros que
     delete_sku_platform_rules_for_sku (ver docstring de esa función):
     endpoint fix-winner en vivo, 3 intentos / ~1.5s máximo, re-lanza el
-    error real si los 3 intentos fallan."""
-    last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            async with aiosqlite.connect(DATABASE_PATH, timeout=0.3) as db:
-                await db.execute(
-                    """INSERT INTO sku_platform_rules (user_id, sku, platform_id, enabled)
-                       VALUES (?, ?, ?, ?)
-                       ON CONFLICT(user_id, sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
-                    (user_id, sku.upper(), platform_id, 1 if enabled else 0),
-                )
-                await db.commit()
-                return
-        except aiosqlite.OperationalError as e:
-            last_err = e
-            if attempt < 2:
-                await asyncio.sleep(0.3)
-    logger.warning(f"[STOCK-WINNER] set_sku_platform_rule(sku={sku}, platform_id={platform_id}) falló tras 3 intentos: {last_err}")
-    raise last_err
+    error real si los 3 intentos fallan. Mismo helper compartido,
+    _sqlite_write_with_retry."""
+
+    async def _write(db):
+        await db.execute(
+            """INSERT INTO sku_platform_rules (user_id, sku, platform_id, enabled)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
+            (user_id, sku.upper(), platform_id, 1 if enabled else 0),
+        )
+
+    def _on_exhausted(last_err):
+        logger.warning(f"[STOCK-WINNER] set_sku_platform_rule(sku={sku}, platform_id={platform_id}) falló tras 3 intentos: {last_err}")
+
+    await _sqlite_write_with_retry(
+        _write,
+        max_attempts=3, connect_timeout=0.3, base_delay=0.3, linear_backoff=False,
+        catch=aiosqlite.OperationalError, reraise=True, on_exhausted=_on_exhausted,
+    )
 
 
 async def get_stock_winner_cache_one(base_sku: str) -> dict | None:
@@ -5275,6 +5341,26 @@ async def count_amazon_listings(seller_id: str) -> int:
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         row = await (await db.execute(
             "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=? AND synced_at > 0",
+            [seller_id],
+        )).fetchone()
+    return row[0] if row else 0
+
+
+async def count_amazon_bm_managed_skus(seller_id: str) -> int:
+    """Cuenta cuántos base_sku distintos del catálogo Amazon de esta cuenta
+    tienen match real y verificado en bm_sku_master -- criterio para decidir
+    si una cuenta "tiene catálogo BM gestionado" (usado por Alertas de Stock
+    Amazon para habilitar/deshabilitar la feature por cuenta automáticamente,
+    en vez de una allowlist de seller_id hardcodeada -- FIX 2026-08-31, ver
+    _AMAZON_STOCK_ALERT_ENABLED_SELLERS en app/main.py). Mismo criterio
+    verified=1 que ya usa _run_amazon_stock_reconcile_pass a nivel SKU
+    (evita contar filas fantasma nunca confirmadas por BM)."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        row = await (await db.execute(
+            """SELECT COUNT(DISTINCT al.base_sku)
+               FROM amazon_listings al
+               JOIN bm_sku_master bsm ON bsm.sku = al.base_sku
+               WHERE al.seller_id = ? AND al.base_sku != '' AND bsm.verified = 1""",
             [seller_id],
         )).fetchone()
     return row[0] if row else 0

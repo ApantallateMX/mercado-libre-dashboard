@@ -11,8 +11,8 @@ nul
 Agentes/
 Claude Codes/
 Proyecto Mercado LIbre/
-test*.html
-test*.py
+/test*.html
+/test*.py
 # .claude — ignorar archivos internos pero trackear agentes
 .claude/cache/
 .claude/history.jsonl

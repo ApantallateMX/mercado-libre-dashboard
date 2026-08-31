@@ -649,6 +649,123 @@ async def _seed_tokens():
         print(f"[SEED] Backfill nicknames error: {_e}")
 
 
+def _normalize_route_path(path: str) -> str:
+    """Normaliza un path de ruta reemplazando cualquier segmento {param} por
+    un placeholder genérico -- /api/items/{item_id}/status y
+    /api/items/{id}/status deben contar como el MISMO path a efectos de
+    colisión (FastAPI no distingue el NOMBRE del path param, solo su
+    posición en la ruta). Normalización básica a propósito -- no cubre
+    regex de validación custom en el param, pero cubre el caso real que
+    ya pasó 2 veces (mismo path literal, mismo nombre de param)."""
+    import re as _re_norm
+    return _re_norm.sub(r"\{[^}/]+\}", "{}", path)
+
+
+# FEATURE 2026-08-31 (barrido de deuda técnica, pedido explícito de Jovan):
+# ya pasó 2 veces este mes (`/stock`, `/api/items/{item_id}/status`) que una
+# ruta inline de este archivo queda MUERTA por estar ya registrada por uno de
+# los routers de app/api/*.py -- FastAPI hace first-match-wins por orden de
+# registro (app.include_router se ejecuta ANTES que el resto de decoradores
+# @app.* de este archivo) SIN avisar con ningún error al arrancar. La
+# colisión de `/stock` ya se resolvió de raíz (se borró el decorador
+# duplicado de main.py); la de `/api/items/{item_id}/status` se dejó a
+# propósito como código muerto documentado (ver comentario "FIX 2026-08-28"
+# más abajo, cerca del decorador) -- se lista aquí SOLO para que el chequeo
+# de abajo no la repita como alerta nueva en cada arranque. Cualquier
+# colisión que NO esté en esta lista sí es nueva y debe sonar fuerte -- este
+# mismo chequeo, al escribirlo, encontró una tercera colisión real hasta
+# ahora no documentada (`POST /auth/logout`, app.auth vs app.main) que se
+# deja deliberadamente FUERA de esta allowlist para que siga sonando fuerte
+# hasta que alguien la resuelva -- ver DEVLOG/reporte de este barrido.
+_KNOWN_ROUTE_COLLISIONS: set[tuple[str, str]] = {
+    ("/api/items/{}/status", "PUT"),
+}
+
+
+def _iter_leaf_routes(routes: list) -> list:
+    """Aplana recursivamente app.routes: esta versión de FastAPI (0.137,
+    ver requirements) NO copia las rutas de un router incluido directo a
+    app.routes -- las envuelve en un `_IncludedRouter` (fastapi.routing) con
+    el APIRouter original completo en `.original_router.routes`. Sin este
+    aplanado, iterar app.routes de forma plana no ve NINGUNA ruta de los ~19
+    routers de app/api/*.py (todas quedarían fuera del chequeo de
+    colisiones, exactamente el caso que se busca cubrir) -- confirmado
+    inspeccionando app.routes en vivo antes de escribir esto. También
+    desciende en cualquier objeto con `.routes` propio (ej. Mount) por si
+    algún router futuro se anida así."""
+    out = []
+    for route in routes:
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None and hasattr(original_router, "routes"):
+            out.extend(_iter_leaf_routes(original_router.routes))
+            continue
+        nested = getattr(route, "routes", None)
+        if nested:
+            out.extend(_iter_leaf_routes(nested))
+            continue
+        out.append(route)
+    return out
+
+
+def _find_route_collisions(app: "FastAPI") -> list[dict]:
+    """Detecta rutas (path normalizado + método HTTP) registradas más de una
+    vez en `app` -- ver comentario de _KNOWN_ROUTE_COLLISIONS arriba para el
+    problema real que esto previene. No es exhaustivo (normalización básica
+    de {param}, ver _normalize_route_path) pero cubre el caso real: el mismo
+    path+método definido 2+ veces entre los routers incluidos
+    (`app.include_router`, ~19 en este proyecto) y las rutas inline de
+    main.py. Puro/sin efectos secundarios -- solo lee `app.routes`, se puede
+    llamar en cualquier momento después de que todas las rutas estén
+    registradas (import completo del módulo), incluyendo desde un test."""
+    from collections import defaultdict
+    seen: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for route in _iter_leaf_routes(app.routes):
+        methods = getattr(route, "methods", None)
+        path = getattr(route, "path", None)
+        if not methods or not path:
+            continue  # rutas de archivos estáticos (Mount) u otras sin methods/path típico
+        norm_path = _normalize_route_path(path)
+        endpoint = getattr(route, "endpoint", None)
+        label = f"{getattr(endpoint, '__module__', '?')}.{getattr(endpoint, '__qualname__', '?')}"
+        for method in methods:
+            if method == "HEAD":
+                continue  # FastAPI agrega HEAD automático a cada GET -- no es una ruta real distinta
+            seen[(norm_path, method)].append(label)
+    collisions = []
+    for (norm_path, method), handlers in seen.items():
+        if len(handlers) > 1:
+            collisions.append({
+                "path": norm_path,
+                "method": method,
+                "handlers": handlers,
+                "known": (norm_path, method) in _KNOWN_ROUTE_COLLISIONS,
+            })
+    return collisions
+
+
+def _check_route_collisions_at_startup(app: "FastAPI") -> None:
+    """Llamado desde lifespan() al arrancar -- loguea fuerte cualquier
+    colisión NUEVA (no en _KNOWN_ROUTE_COLLISIONS) y, aparte, deja registro
+    (nivel info) de las ya conocidas para que sigan siendo visibles sin
+    generar ruido de "warning" en cada restart. Nunca lanza -- un chequeo de
+    higiene de rutas no debe tumbar el arranque real (mismo criterio que el
+    resto de este bloque de lifespan, ver try/except de arriba)."""
+    try:
+        collisions = _find_route_collisions(app)
+        new = [c for c in collisions if not c["known"]]
+        known = [c for c in collisions if c["known"]]
+        if new:
+            logger.error(
+                f"[ROUTE-COLLISION] {len(new)} colisión(es) NUEVA(S) de path+método -- "
+                f"la ruta registrada DESPUÉS queda MUERTA (first-match-wins, sin error al "
+                f"arrancar). Revisar YA: {new}"
+            )
+        if known:
+            logger.info(f"[ROUTE-COLLISION] {len(known)} colisión(es) ya conocidas/documentadas (sin acción): {known}")
+    except Exception as _e_rc:
+        logger.warning(f"[ROUTE-COLLISION] chequeo de colisiones falló (no bloquea el arranque): {_e_rc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -702,6 +819,11 @@ async def lifespan(app: FastAPI):
         await token_store.seed_doc_pages()
     except Exception as _e_doc_seed:
         logger.error(f"[STARTUP] seed_doc_pages() falló (¿disco lleno?): {_e_doc_seed}")
+
+    # Chequeo de colisiones de rutas (barrido de deuda técnica 2026-08-31) --
+    # rápido y en memoria pura (solo lee app.routes), no necesita estar en
+    # background. Ver _check_route_collisions_at_startup / _find_route_collisions.
+    _check_route_collisions_at_startup(app)
 
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
@@ -1539,22 +1661,13 @@ app.include_router(supplier_debt_router)
 
 # ---------- Account switcher ----------
 
-@app.post("/auth/logout")
-async def logout(request: Request):
-    token = request.cookies.get("dash_session")
-    if token:
-        du = await user_store.get_session(token)
-        if du:
-            await user_store.log_action(
-                username=du["username"],
-                action="logout",
-                ip=request.client.host if request.client else "",
-                user_id=du["id"],
-            )
-        await user_store.delete_session(token)
-    response = RedirectResponse("/login", status_code=302)
-    response.delete_cookie("dash_session")
-    return response
+# NOTA 2026-08-31 (barrido de deuda técnica): el decorador @app.post("/auth/logout")
+# que vivía aquí era código MUERTO por completo (colisión de ruta, first-match-wins
+# con app.auth.logout, incluido antes) -- se eliminó en vez de dejarlo documentado
+# como en el caso de /api/items/{item_id}/status, porque su lógica era idéntica a
+# la de app/auth.py::logout (misma limpieza de sesión de dashboard) y mantener 2
+# copias del mismo código muerto no aporta nada. Ver _KNOWN_ROUTE_COLLISIONS arriba
+# y tests/test_route_collisions.py.
 
 
 _AMZ_ONLY_PATHS = {"/amazon"}  # prefix — startswith check below
@@ -2730,9 +2843,66 @@ async def _realtime_stock_reconcile_wide_loop():
 # match en BM (SKU "ARBVYNL", convención distinta a SNxx/SHxx) -- catálogo
 # aparentemente NO gestionado en BM. Se arranca esta feature SOLO con las 2
 # cuentas confirmadas con catálogo real en BM (VECKTOR/AUTOBOT) para no
-# generar falsas alertas "sin stock" en pedidos que sí tienen -- agregar
-# ExclusiveBulbs aquí cuando se aclare cómo (o si) se gestiona su inventario.
-_AMAZON_STOCK_ALERT_ENABLED_SELLERS = {"A20NFIUQNEYZ1E", "A252KSQ687FNRO"}
+# generar falsas alertas "sin stock" en pedidos que sí tienen.
+#
+# FIX 2026-08-31 (barrido de deuda técnica, pedido explícito de Jovan): la
+# allowlist de arriba era un set hardcodeado de seller_id -- si se agrega una
+# 4a cuenta Amazon con catálogo BM real, se queda sin esta feature en
+# silencio hasta que alguien lo note y edite este set a mano. Ahora se deriva
+# automáticamente: una cuenta "tiene catálogo BM gestionado" si al menos
+# _AMAZON_STOCK_ALERT_BM_MIN_SKUS de sus SKUs (base_sku, ya normalizado)
+# tienen match verified=1 en bm_sku_master -- mismo criterio verified=1 que
+# ya usa _process_one_amazon_order más abajo a nivel SKU individual, aplicado
+# aquí a nivel cuenta completa. Umbral de 20 elegido para separar con margen
+# el caso real confirmado (VECKTOR/AUTOBOT: cientos de SKUs con match) del
+# caso ExclusiveBulbs (0 matches en su única muestra) sin exigir que el
+# catálogo esté 100% en BM. Cacheado con _MULTI_ACCOUNT_CACHE_TTL (5 min,
+# mismo TTL que ya usan los demás caches de cuentas en este archivo) porque
+# es una query con JOIN contra dos tablas, no algo para correr en cada orden.
+_AMAZON_STOCK_ALERT_BM_MIN_SKUS = 20
+
+# EXCEPCIÓN EXPLÍCITA 2026-08-31: al implementar el cálculo dinámico de
+# arriba, una corrida contra tokens.db LOCAL mostró 553 SKUs de
+# ExclusiveBulbs (A22XNR713HGDVG) con match real y verified=1 en
+# bm_sku_master -- muy por encima del umbral, y NO ruido (SKUs reales tipo
+# SHEL0000xx/SHIL0000xx, no colisión de ASIN). Esto contradice la exclusión
+# manual de 2026-08-18 (basada en 1 sola orden Merchant de prueba sin match).
+# Regla del proyecto: "no confiar en datos locales sin verificar contra
+# producción" (feedback_verificar_contra_produccion_no_local) -- no se
+# verificó aún el conteo real en Railway, así que se preserva la decisión
+# de Jovan del 18-ago mientras tanto en vez de dejar que el cálculo
+# automático la revierta solo. Quitar esta entrada (o confirmar el número
+# real en producción y decidir con esa base) es tarea aparte, NO
+# bloqueante para el resto del fix.
+_AMAZON_STOCK_ALERT_FORCE_DISABLED_SELLERS = {"A22XNR713HGDVG"}  # ExclusiveBulbs
+
+_amazon_stock_alert_sellers_cache: tuple[float, set] | None = None
+
+
+async def _get_amazon_stock_alert_enabled_sellers() -> set:
+    """Set de seller_id con catálogo BM gestionado real -- ver comentario
+    arriba. Cacheado 5 min; en caso de error de DB devuelve el cache viejo
+    (o vacío si nunca se calculó) en vez de tirar la excepción hacia arriba,
+    para no romper el ciclo de reconciliación completo por un fallo puntual."""
+    global _amazon_stock_alert_sellers_cache
+    now = _time.time()
+    if _amazon_stock_alert_sellers_cache and (now - _amazon_stock_alert_sellers_cache[0]) < _MULTI_ACCOUNT_CACHE_TTL:
+        return _amazon_stock_alert_sellers_cache[1]
+    try:
+        accounts = await token_store.get_all_amazon_accounts()
+        enabled = set()
+        for acc in accounts:
+            seller_id = acc.get("seller_id", "")
+            if not seller_id or seller_id in _AMAZON_STOCK_ALERT_FORCE_DISABLED_SELLERS:
+                continue
+            n = await token_store.count_amazon_bm_managed_skus(seller_id)
+            if n >= _AMAZON_STOCK_ALERT_BM_MIN_SKUS:
+                enabled.add(seller_id)
+        _amazon_stock_alert_sellers_cache = (now, enabled)
+        return enabled
+    except Exception as e:
+        logger.warning(f"[AMZ-STOCK-ALERT] Error derivando sellers habilitados, usando cache previo: {e}")
+        return _amazon_stock_alert_sellers_cache[1] if _amazon_stock_alert_sellers_cache else set()
 
 
 async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tuple[int, list]:
@@ -2745,6 +2915,7 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
 
     accounts = await token_store.get_all_amazon_accounts()
     created_after = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    enabled_sellers = await _get_amazon_stock_alert_enabled_sellers()
     n = 0
     errors: list = []
     trace: list = []  # solo se llena si debug=True (2026-08-18, depuración caso VECKTOR)
@@ -2867,7 +3038,7 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
 
     for acc in accounts:
         seller_id = acc.get("seller_id", "")
-        if not seller_id or seller_id not in _AMAZON_STOCK_ALERT_ENABLED_SELLERS:
+        if not seller_id or seller_id not in enabled_sellers:
             continue
         try:
             from app.services.amazon_client import get_amazon_client
@@ -2911,7 +3082,7 @@ async def _run_amazon_stock_reconcile_pass(days: int, debug: bool = False) -> tu
             continue
         oid = a.get("order_id", "")
         seller_id = a.get("account_id", "")
-        if not oid or oid in processed_order_ids or seller_id not in _AMAZON_STOCK_ALERT_ENABLED_SELLERS:
+        if not oid or oid in processed_order_ids or seller_id not in enabled_sellers:
             continue
         missed.setdefault(oid, seller_id)
     for order_id, seller_id in missed.items():
@@ -7260,6 +7431,33 @@ def _cleanup_memory_caches():
     Llamar después de cada ciclo completo de prewarm.
     Los entries expirados (TTL vencido) normalmente quedan en el dict hasta que
     son sobreescritos, acumulando memoria indefinidamente con múltiples cuentas.
+
+    AMPLIACIÓN 2026-08-31 (barrido de deuda técnica, pedido explícito de
+    Jovan): esta rutina solo podaba _products_cache/_bm_stock_cache/
+    _stock_issues_cache -- de los ~15 dicts de caché en memoria restantes en
+    este archivo, se agregan aquí los que comparten el mismo riesgo real
+    (clave sin límite natural -- item_id/rango de fechas libre, NO
+    account_id/uid de un puñado fijo de cuentas -- que crece 1 entrada por
+    cada valor nuevo consultado y nunca se sobreescribe solo) y el mismo
+    mecanismo trivial de podar (TTL simple, sin locks/lógica de invalidación
+    especial):
+    - _sale_price_cache (TTL 5 min): 1 entrada por item_id ML consultado,
+      el caso que disparó esta auditoría -- nunca se podaba.
+    - _orders_cache (TTL 15 min): clave "orders:{user_id}:{date_from}" --
+      cada date_from distinto usado en un filtro de fechas es una entrada
+      nueva que se queda para siempre.
+    - _multi_account_cache (TTL 5 min, _MULTI_ACCOUNT_CACHE_TTL): clave
+      "{multi_account|launches|multi_amazon}:{date_from}:{date_to}" -- 3
+      endpoints distintos comparten este dict, mismo riesgo de rango de
+      fechas libre.
+    - _ads_category_cache (TTL 30 min): clave "ads_cat:{date_from}:{date_to}",
+      mismo patrón.
+    No se tocan _health_products_cache/_paused_items_cache/_highlights_cache/
+    _ads_category (por cuenta)/_inventory_global_cache/etc. -- su clave está
+    acotada a un puñado fijo de cuentas/categorías/thresholds reales (no
+    crecen sin límite), o (caso _returns_claims_cache) tienen un dict de
+    locks en paralelo cuya semántica no queremos tocar sin revisarla aparte
+    -- reportado a Jovan para decidir por separado, no forzado aquí.
     """
     import gc as _gc
     now = _time.time()
@@ -7284,13 +7482,41 @@ def _cleanup_memory_caches():
     for k in _expired_si:
         _stock_issues_cache.pop(k, None)
 
+    # _sale_price_cache: TTL 5 min — limpiar entries con > 2× TTL (1 entrada por item_id ML)
+    _sp_ttl = _SALE_PRICE_CACHE_TTL * 2
+    _expired_sp = [k for k, (ts, _) in list(_sale_price_cache.items()) if now - ts > _sp_ttl]
+    for k in _expired_sp:
+        _sale_price_cache.pop(k, None)
+
+    # _orders_cache: TTL 15 min — limpiar entries con > 2× TTL (1 entrada por user_id+date_from)
+    _ord_ttl = _ORDERS_CACHE_TTL * 2
+    _expired_ord = [k for k, (ts, _) in list(_orders_cache.items()) if now - ts > _ord_ttl]
+    for k in _expired_ord:
+        _orders_cache.pop(k, None)
+
+    # _multi_account_cache: TTL 5 min — limpiar entries con > 2× TTL (3 endpoints, rango de fechas libre)
+    _ma_ttl = _MULTI_ACCOUNT_CACHE_TTL * 2
+    _expired_ma = [k for k, (ts, _) in list(_multi_account_cache.items()) if now - ts > _ma_ttl]
+    for k in _expired_ma:
+        _multi_account_cache.pop(k, None)
+
+    # _ads_category_cache: TTL 30 min — limpiar entries con > 2× TTL (rango de fechas libre)
+    _adc_ttl = _ADS_CATEGORY_CACHE_TTL * 2
+    _expired_adc = [k for k, (ts, _) in list(_ads_category_cache.items()) if now - ts > _adc_ttl]
+    for k in _expired_adc:
+        _ads_category_cache.pop(k, None)
+
     # Forzar GC para liberar objetos temporales del prewarm inmediatamente
     _gc.collect()
 
     logger.info(
         f"[MEM-CLEANUP] products_cache={len(_products_cache)} ({len(_expired_prod)} eliminados), "
         f"bm_stock_cache={len(_bm_stock_cache)}, "
-        f"stock_issues_cache={len(_stock_issues_cache)} ({len(_expired_si)} eliminados)"
+        f"stock_issues_cache={len(_stock_issues_cache)} ({len(_expired_si)} eliminados), "
+        f"sale_price_cache={len(_sale_price_cache)} ({len(_expired_sp)} eliminados), "
+        f"orders_cache={len(_orders_cache)} ({len(_expired_ord)} eliminados), "
+        f"multi_account_cache={len(_multi_account_cache)} ({len(_expired_ma)} eliminados), "
+        f"ads_category_cache={len(_ads_category_cache)} ({len(_expired_adc)} eliminados)"
     )
 
 async def _sync_gap_stock_from_cache():
@@ -8530,9 +8756,23 @@ async def _bm_map_from_master(products: list, sku_key: str = "sku") -> dict:
     confirmó ese dato contra BM) -- mismo criterio "mejor vacío que datos
     stale" que ya usaba el pipeline viejo (_bm_bulk_ok/Fix A): un SKU sin
     verificar todavía no genera bm_avail=None (sin alerta), nunca un 0
-    falso. El refresco real de bm_sku_master corre de forma
-    INDEPENDIENTE (_bm_master_sync_loop, cada ~2 min) -- esta función no
-    dispara ninguna sincronización, solo lee lo que ya esté guardado."""
+    falso.
+
+    ACTUALIZADO 2026-08-31 (el comentario anterior ya no reflejaba la
+    realidad -- _bm_master_sync_loop está PAUSADO desde 2026-08-19, ver
+    app/main.py ~línea 923): el refresco real de bm_sku_master hoy corre
+    vía _update_bm_master_for_category (2 loops, top-categorías y
+    longtail, ConfColumns_Conditions_Excel) y SOLO mantiene frescos
+    available_qty, reserve_qty, total_qty, tj_qty (desde 2026-08-21),
+    pnp_*, category, upc, title, brand, model, image_url, retail_ph,
+    best_condition_sku/qty y verified. mty_qty, cdmx_qty y no_vendible_qty
+    quedaron CONGELADOS en el valor que tenían al pausar
+    _bm_master_sync_loop (12+ días y subiendo) -- ese loop era el único
+    escritor de esos 3 campos y nada lo reemplazó. Cualquier consumidor de
+    estos 3 campos vía _row_to_inv (mty/cdmx/no_vendible en el shape de
+    retorno) debe tratarlos como snapshot histórico, no como dato vivo,
+    hasta que se reactive un escritor real. Esta función no dispara
+    ninguna sincronización, solo lee lo que ya esté guardado."""
     skus: set = set()
     for p in products:
         sku = p.get(sku_key, "")
@@ -23102,8 +23342,24 @@ async def diag_tv_cache_audit(token: str = "", fix: bool = False):
     """Diagnóstico: audita TODOS los SNTV* en _bm_stock_cache buscando el bug del
     2026-08-06 — avail_total atascado por encima del real MTY+CDMX (el merge de
     _fetch_tv_wh_breakdown solo corregía hacia arriba antes del fix).
-    fix=true: además de reportar, borra del caché+DB cada SKU stale_high (mismo efecto
-    que /api/diag/clear-bm-sku uno por uno, aquí en batch)."""
+
+    GUARD 2026-08-31 (pedido explícito de Jovan, barrido de deuda técnica):
+    mty_qty/cdmx_qty en bm_sku_master (de donde salen los campos "mty"/"cdmx"
+    de cada entrada de _bm_stock_cache, ver _bm_map_from_master/_get_bm_stock_cached)
+    están CONGELADOS desde 2026-08-19 -- su único escritor era
+    _bm_master_sync_loop, pausado ese día en el cutover a ConfColumns
+    (_update_bm_master_for_category NUNCA escribe mty_qty/cdmx_qty, solo
+    tj_qty/available_qty/total_qty/etc). Con esos dos valores fijos en el
+    tiempo, "avail_total > mty+cdmx" deja de ser una prueba de corrupción de
+    caché y pasa a ser una prueba de "avail_total se movió desde hace 12+
+    días" -- dispara cada vez más falsos positivos a medida que pasa el
+    tiempo, sobre SKUs con movimiento real reciente y bueno.
+    fix=true YA NO BORRA NADA basándose en ese criterio -- el endpoint queda
+    en modo solo-lectura/diagnóstico (reporta los candidatos, no toca caché
+    ni DB) mientras mty_qty/cdmx_qty no tengan un escritor activo confiable.
+    Reactivar el borrado real cuando _bm_master_sync_loop (u otro mecanismo
+    equivalente) vuelva a refrescar esos dos campos -- ver comentario en
+    app/main.py ~línea 923 y _bm_map_from_master."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
@@ -23131,23 +23387,23 @@ async def diag_tv_cache_audit(token: str = "", fix: bool = False):
 
     stale.sort(key=lambda x: x["cache_avail_total"] - x["real_mty_plus_cdmx"], reverse=True)
 
-    fixed = []
+    fix_disabled_reason = None
     if fix and stale:
-        for item in stale:
-            bk = item["sku"]
-            _bm_stock_cache.pop(bk, None)
-            try:
-                await token_store.delete_bm_stock_skus([bk])
-            except Exception:
-                pass
-            fixed.append(bk)
+        fix_disabled_reason = (
+            "fix=true ignorado: mty_qty/cdmx_qty están congelados desde 2026-08-19 "
+            "(_bm_master_sync_loop pausado, sin escritor activo) -- borrar por este "
+            "criterio hoy generaría falsos positivos crecientes sobre datos buenos. "
+            "Ver docstring de este endpoint."
+        )
+        logger.warning(f"[TV-CACHE-AUDIT] {fix_disabled_reason} ({len(stale)} candidatos NO borrados)")
 
     return JSONResponse({
         "snTV_checked": checked,
         "stale_high_found": len(stale),
         "stale_high": stale,
-        "fixed_count": len(fixed),
-        "fixed_skus": fixed if fix else [],
+        "fixed_count": 0,
+        "fixed_skus": [],
+        "fix_disabled_reason": fix_disabled_reason,
     })
 
 

@@ -279,11 +279,18 @@ async def callback(code: str = None, state: str = None, error: str = None):
 
 @router.post("/logout")
 async def logout(request: Request):
-    """Cierra la sesion: elimina tokens ML y la sesion del dashboard."""
-    # Eliminar tokens ML
-    tokens = await token_store.get_any_tokens()
-    if tokens:
-        await token_store.delete_tokens(tokens["user_id"])
+    """Cierra la sesion del dashboard -- NO toca tokens ML.
+
+    FIX 2026-08-31 (barrido de deuda técnica, detectado por el chequeo de
+    colisiones de rutas): esta función borraba tokens ML con
+    `token_store.get_any_tokens()` (`SELECT * FROM tokens LIMIT 1`, sin
+    `ORDER BY` -- resto de un diseño viejo de una sola cuenta/un solo
+    usuario). Con 4 cuentas ML reales, cualquier usuario cerrando sesión
+    borraba los tokens de una cuenta ML arbitraria, no de la cuenta que
+    estaba usando -- forzaba una re-autorización real de esa cuenta sin
+    que nadie lo pidiera. Los tokens ML son credenciales de infraestructura
+    compartida entre usuarios del dashboard, no algo atado a la sesión de
+    login de una persona -- cerrar sesión del dashboard nunca debió tocarlos."""
     # Eliminar sesión del dashboard
     dash_token = request.cookies.get("dash_session")
     if dash_token:
