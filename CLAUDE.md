@@ -197,7 +197,15 @@ YO configuro Railway/env vars/APIs. El usuario NO debe hacer configuraciones té
 - `git push mi2 main` — RESUELTO 2026-08-14: remote `mi2` usa deploy key SSH (`~/.ssh/ecomops_deploy`,
   alias `github-ecomops`) en vez de PAT — no expira, no puede filtrarse en la URL. Ver
   `.claude/memory/project_mi2_token_expired.md`
-- `DISABLE_BM_MONITOR=true` → BM sync 1x/semana (viernes 9pm Monterrey)
+- `DISABLE_BM_MONITOR` — CORREGIDO 2026-08-31 (la nota anterior sobre "1x/semana viernes
+  9pm" no correspondía a ningún código real, verificado a fondo). Es un interruptor
+  binario todo-o-nada: en `true` apaga 6 mecanismos completos (prewarm de stock cada 5min,
+  categorías top-5 cada 15min y longtail cada 2h, salud BM cada 2min, monitor de precios
+  cada 5min, catálogo completo 1x/día 3am Monterrey). El sync que escribe stock real hacia
+  ML/Amazon y el gap scan nocturno NO dependen de este flag, corren siempre (con su propio
+  circuit breaker de 45min si `bm_sku_master` queda desactualizado). Default en código si
+  la variable no está seteada: `"true"` (deshabilitado). Confirmado en Railway 2026-08-31:
+  `false` (BM monitor activo). Coolify sin confirmar — checar en su panel de variables.
 - Status panel: status-dashboard.mi2.com.mx
 
 ---

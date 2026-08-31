@@ -7835,8 +7835,11 @@ async def _run_feedback_sync_once() -> None:
 
 async def feedback_sync_loop() -> None:
     """Loop de fondo — se lanza una vez al arrancar la app (main.py startup).
-    Corre 1x/24h: el feedback/reseñas no cambian con más frecuencia que eso.
-    Espera 10 min antes de la PRIMERA corrida (igual patrón que
+    Corre cada 4h (`_FEEDBACK_SYNC_INTERVAL_SECONDS`) -- CORREGIDO 2026-08-31,
+    este docstring decía "1x/24h" pero el código siempre usó 4h (ver
+    comentario junto a la constante: margen de quota de Amazon Reports API,
+    no una decisión de "el feedback no cambia más seguido"). Espera 10 min
+    antes de la PRIMERA corrida (igual patrón que
     _startup_prewarm en main.py) — createReport de Amazon Reports API tiene
     quota muy baja y ya compite con otros reportes (inventory, financial) al
     arrancar; sin este delay, cada restart/deploy dispara el sync de
