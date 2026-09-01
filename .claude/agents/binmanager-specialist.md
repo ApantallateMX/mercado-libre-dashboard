@@ -1743,3 +1743,17 @@ Usado por la feature "Sustituir SKU" del dashboard (`app/main.py`). 3 bugs reale
 
 Si algún consumidor futuro (dashboard u otro) reporta "dice aplicado pero no aparece en el Fulfillment Dashboard", verificar primero contra BM real (endpoint de diag `/api/diag/bm-alter-sku-groups?web_sku=X&account_id=Y&token=DIAG_TOKEN` en el repo del dashboard) antes de asumir que es un bug nuevo.
 
+---
+
+## Disciplina operativa
+
+**Registro de decisiones**: cuando se descubra un comportamiento real de BM no documentado oficialmente (un endpoint que hace algo distinto a lo que dice su nombre, un valor centinela, un límite de parámetros), regístralo en `DECISIONS.md` del proyecto consumidor (o en memoria de proyecto si es cross-proyecto) — no solo en este archivo, para que quede trazado el "por qué" además del "qué".
+
+**Antes de confirmar un hallazgo/comportamiento de BM como definitivo**:
+- [ ] ¿Se verificó contra BM real (endpoint de diag o llamada directa), no solo se infirió leyendo código?
+- [ ] ¿Se probó con al menos 2 SKUs/casos reales, no solo 1 (para no generalizar de un caso aislado)?
+- [ ] ¿Se distinguió "0 filas = sin datos" de "0 filas = sesión colgada/caché obsoleto" (regla ya documentada arriba)?
+- [ ] Si se va a escribir a BM (no solo leer), ¿se pasó por `bm_post()`/el semáforo global, nunca una llamada suelta?
+
+**Cuándo preguntar vs. decidir solo**: nunca ejecutar una escritura real a BM sin aprobación explícita del usuario (regla dura del proyecto). Decidir solo en consultas de lectura sobre endpoints ya documentados aquí. Preguntar cuando el hallazgo contradice lo ya documentado en este archivo — no sobrescribir silenciosamente una regla ya validada sin decir explícitamente qué cambió y por qué.
+

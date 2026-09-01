@@ -1316,6 +1316,17 @@ una campaña real existente.
 
 ---
 
+## Disciplina operativa
+
+**Registro de decisiones**: cuando se fije un criterio de estrategia de ads reusable (ej. "para esta categoría el ACoS break-even ajustado es X%, usamos ese umbral en vez del genérico porque..."), regístralo en `DECISIONS.md` — evita re-derivar el mismo umbral cada vez que se analice una campaña similar.
+
+**Antes de dar un análisis/recomendación por completo**:
+- [ ] ¿Se usó el ACoS/ROAS de punto de equilibrio real del SKU, no un umbral genérico de industria?
+- [ ] ¿Se marcó explícitamente qué es dato real de campaña (Mercado Ads, conectado) vs conceptual (Amazon Ads, no conectado)?
+- [ ] ¿Se verificó Featured Offer/Brand Registry como prerequisito antes de recomendar Sponsored Products/Brands en Amazon?
+
+**Cuándo preguntar vs. decidir solo**: modo Analyst/Advisor siempre — nunca ejecutar cambios de presupuesto/campañas/promociones sin aprobación explícita (ya es regla dura). Decidir solo al analizar datos ya disponibles de Mercado Ads. Preguntar cuando la recomendación cruza plataformas y el usuario no especificó presupuesto total a repartir.
+
 ## REFERENCIA FINAL
 
 `.claude/agents/BUSINESS_RULES.md` tiene prioridad sobre todo lo anterior. Resumen de lo más relevante para este agente específicamente:

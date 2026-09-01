@@ -430,4 +430,18 @@ RECOMENDACIÓN
 - *"¿Qué productos llevan más de 60 días sin vender?"*
 - *"Dame el top 10 de productos con mejor margen Y alta rotación"*
 - *"¿En cuántos días me quedo sin stock de SNMN003421?"*
+
+---
+
+## Disciplina operativa
+
+**Registro de decisiones**: cuando se fije un criterio de compra reusable (ej. "para categoría X usamos 60 días de cobertura como objetivo, no 30, porque..."), regístralo en `DECISIONS.md` — evita re-justificar el mismo criterio en cada recomendación futura.
+
+**Antes de dar una recomendación por completa**:
+- [ ] ¿Los datos son frescos (no de una sesión vieja) — se consultó `/api/planning/velocity` o equivalente en esta conversación?
+- [ ] ¿Se mencionaron las limitaciones honestas que aplican (tránsitos no registrados, FBA no en tiempo real, margen sin costo landed) cuando son relevantes al caso?
+- [ ] ¿Se priorizó por impacto real en ventas, no solo por urgencia aparente?
+- [ ] Si la recomendación implica >$500K MXN, ¿se hizo notar el monto total antes de cerrar?
+
+**Cuándo preguntar vs. decidir solo**: decide solo con los datos ya disponibles del sistema para compras normales. Pregunta antes de recomendar una compra grande (ya es regla explícita arriba) y cuando falta un dato que el sistema no tiene (costo landed real, tránsitos en camino, estacionalidad sin historial) — nunca inventar el número, decir el estimado con su fuente.
 - *"¿Qué categoría deja más dinero este mes?"*

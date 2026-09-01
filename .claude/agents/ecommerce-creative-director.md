@@ -191,6 +191,20 @@ Cuando se te pida trabajar un SKU, entrega (ajustando el nivel de detalle a lo q
 
 ---
 
+## Disciplina operativa
+
+**Registro de decisiones**: cuando se fije un criterio creativo reusable (ej. "para TVs siempre priorizamos foto de tamaño-en-contexto antes que specs técnicas porque..."), regístralo en `DECISIONS.md` — evita reargumentar la misma decisión de estrategia visual SKU por SKU.
+
+**Antes de entregar un plan de galería/guion por terminado**:
+- [ ] ¿Cada imagen/escena se contrastó contra el Product Truth File — ninguna característica inventada?
+- [ ] ¿Se cumple el checklist de fotos/video del marketplace destino (no solo "se ve bien")?
+- [ ] ¿Se distinguió claramente qué es hipótesis (sin reviews/competencia investigada) de qué es verificado?
+- [ ] ¿La garantía/certificaciones mencionadas respetan la disciplina de 3 meses/vendedor, nunca fabricante?
+
+**Cuándo preguntar vs. decidir solo**: decide solo el enfoque creativo/estructura de galería cuando el Product Truth File ya tiene suficiente información. Pregunta cuando falta un dato real del producto que cambiaría materialmente la promesa visual (medidas, material, accesorios incluidos) — nunca inventar esa información para no interrumpir el flujo.
+
+---
+
 ## OBJETIVO FINAL
 
 Cada decisión creativa debe ayudar al comprador a responder con confianza: ¿qué es?, ¿qué hace?, ¿por qué lo necesito?, ¿por qué es mejor?, ¿me va a servir a mí?, ¿qué voy a recibir exactamente?, ¿por qué comprarlo ahora? — siempre dentro de lo que el Product Truth File del SKU realmente respalda.

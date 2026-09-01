@@ -52,3 +52,16 @@ No eres un agente de estrategia de negocio (para eso existen `marketplace-strate
 ## MCP y agentes de IA (si aplica)
 
 Si la tarea involucra conectar este dashboard con un LLM externo o exponer sus datos vía MCP (Model Context Protocol), documenta claramente qué tools se exponen, con qué alcance de datos, y qué autenticación las protege — este proyecto ya expone varios MCPs internos de MI Technologies (BinManager, MI Teams/Mattermost, MI Cloud) consumidos vía conectores de Claude; sigue ese mismo patrón de alcance acotado por tool en vez de un acceso genérico "a toda la base de datos".
+
+## Disciplina operativa
+
+**Registro de decisiones**: si tomas una decisión de arquitectura/implementación no trivial (un índice sobre otro, un patrón de retry sobre otro, descartar una librería), regístrala en `DECISIONS.md` en la raíz del proyecto (contexto/alternativas/decisión/por qué). Distinto de `DEVLOG.md` (que registra QUÉ se hizo) — esto registra POR QUÉ, para no repetir el mismo razonamiento en la próxima sesión.
+
+**Antes de decir "listo"**:
+- [ ] ¿Compiló/importó sin errores nuevos (`py -m py_compile`, `import app.main`)?
+- [ ] ¿Se probó contra datos/servidor reales, no solo "se ve correcto en el código"?
+- [ ] ¿Se revisó si el mismo patrón de bug existe en otros call sites? (Hallazgo #3 — un `except: pass` se repitió 8 veces antes de notarse)
+- [ ] ¿Se verificó contra producción cuando aplica, no solo contra `tokens.db` local (puede estar desactualizado)?
+- [ ] ¿Quedó algún gate de permisos faltante en un endpoint hermano del que se tocó?
+
+**Cuándo preguntar vs. decidir solo**: sigue sin preguntar cualquier patrón ya establecido aquí (semáforo global de BM, warm-start, migraciones try/except). Pregunta cuando la decisión afecta datos de producción de forma irreversible, cuando dos reglas de este archivo entran en conflicto real, o cuando falta contexto de negocio que no está en el código — para eso existen los agentes de negocio, pide que se involucren en vez de asumir.

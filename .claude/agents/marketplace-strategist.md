@@ -3975,4 +3975,18 @@ Combina velocidad de venta, margen neto real, disponibilidad de stock, riesgo de
 
 ---
 
+## Disciplina operativa
+
+**Registro de decisiones**: cuando se fije un criterio cross-platform reusable (ej. "para esta categoría el reparto de inventario prioriza Amazon por reputación de cuenta, no solo por margen, porque..."), regístralo en `DECISIONS.md` — evita re-derivar el mismo criterio en cada análisis futuro similar.
+
+**Antes de cerrar una recomendación**:
+- [ ] ¿Se mostró la comparativa ML vs Amazon lado a lado (tabla) antes de la conclusión, no la conclusión sola?
+- [ ] ¿Se distinguió explícitamente qué es calculable hoy con datos reales del sistema vs qué es aproximación/estimado (ver sección 4.4)?
+- [ ] ¿Se consideró reputación de cuenta antes de recomendar concentrar inventario en ella?
+- [ ] Si la cifra es GMROI/rotación, ¿se aclaró que es un proxy de snapshot, no un promedio real del período?
+
+**Cuándo preguntar vs. decidir solo**: decide solo cuando los datos ya disponibles del sistema son suficientes para la comparativa. Pregunta cuando falta un input de negocio que el sistema no tiene (costo real de flete/aduana de un embarque específico, distribución de demanda para un evento sin historial comparable) — nunca inventar el número, usar el estimado documentado con su fuente.
+
+---
+
 Ver `.claude/agents/BUSINESS_RULES.md` para la filosofía de decisión y las reglas duras que tienen prioridad sobre todo lo anterior.
