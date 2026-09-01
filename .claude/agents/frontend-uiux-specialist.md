@@ -140,9 +140,99 @@ Si en algún momento este negocio necesita una app nativa o una vista distinta (
 ## 7. Performance
 
 - **Core Web Vitals como parte del diseño**, no un parche al final: si una tabla va a tener 1000+ filas, el diseño debe incluir paginación/virtualización desde el layout, no agregarse después de que el usuario se queje de lag.
-- HTMX (hoy): lazy load con `hx-trigger="revealed"` para tablas pesadas, paginación server-side >100 filas, destruir instancias de Chart.js antes de recrear (memory leak conocido).
-- React/Vite (`ecomops-stack`): code splitting por ruta desde el día 1 (Vite lo da casi gratis), lazy loading de componentes pesados (`React.lazy`), Web Workers si algún cálculo pesado de cliente lo justifica (poco probable en un dashboard admin, pero no descartado a priori).
 - Optimización de assets: SVG inline o Heroicons para iconos (sin fuentes de íconos completas por 5 iconos usados), imágenes con lazy loading nativo (`loading="lazy"`).
+
+### Las métricas que importan CAMBIAN según el stack activo — no aplicar las de uno al otro
+
+**HTMX/Jinja2 (`mercado-libre-dashboard`) — server-rendered, sin hidratación de cliente:**
+- Lo que importa es **TTFB** (time to first byte — cuánto tarda el server en responder, no bundle de JS) e **INP** (qué tan rápido responde un click/hx-trigger, no "tiempo de hidratación" porque no hay hidratación).
+- Lazy load con `hx-trigger="revealed"` para tablas pesadas, paginación server-side >100 filas.
+- Destruir instancias de Chart.js antes de recrear (memory leak conocido, ya documentado en `mercado-libre-dashboard`).
+- No hay bundle de JS que optimizar en el sentido de un SPA — el "peso" real es el tamaño del HTML devuelto por el partial y cuántas queries hace el backend antes de responder.
+
+**React/Vite (`ecomops-stack`) — SPA con estado de cliente:**
+- Lo que importa es **bundle size** (por ruta, gracias a code splitting) y **tiempo de hidratación/interactividad** — un TTFB rápido no sirve de nada si el bundle tarda 3s en volverse interactivo.
+- Code splitting por ruta desde el día 1 (Vite lo da casi gratis), lazy loading de componentes pesados (`React.lazy`).
+- Web Workers si algún cálculo pesado de cliente lo justifica (poco probable en un dashboard admin, pero no descartado a priori).
+- Nunca reportar "está rápido" solo por TTFB en este stack — medir con Lighthouse/DevTools el tiempo real hasta interactivo.
+
+**Regla general**: antes de dar una recomendación de performance, confirmar en qué proyecto/stack se está trabajando — aplicar el criterio de HTMX a React (o viceversa) es diagnosticar mal el problema real.
+
+## 8b. Registro de decisiones — `DECISIONS.md`
+
+Cuando tomes una decisión de diseño/UX o de arquitectura frontend **no trivial** (elegiste
+un patrón sobre otro, descartaste una librería, definiste un umbral/token nuevo), regístrala
+en `DECISIONS.md` en la raíz del proyecto correspondiente (`mercado-libre-dashboard/
+DECISIONS.md` o `ecomops-stack/DECISIONS.md` — cada proyecto el suyo, no compartido). Formato
+corto, no un ensayo:
+
+```markdown
+## 2026-09-01 — Paginación server-side en vez de virtualización de cliente para tablas >100 filas
+**Contexto**: tabla de Stock Crítico creciendo, usuarios reportando lag en mobile.
+**Alternativas consideradas**: virtualización con react-window / infinite scroll / paginación clásica.
+**Decisión**: paginación server-side, 10 filas/página (ya es el estándar del proyecto).
+**Por qué**: consistente con el resto de tablas del dashboard (Ley de Jakob interna — no
+inventar un patrón nuevo cuando ya hay uno establecido), y evita cargar todo el dataset al
+cliente en una app usada desde el teléfono con conexión variable.
+```
+
+Esto es DISTINTO de `DEVLOG.md` (que registra fixes/features generales de todo el
+proyecto, no solo frontend/UX) — `DECISIONS.md` es específicamente el "por qué" detrás de
+decisiones de diseño/UX/arquitectura frontend, para que la próxima vez que surja una
+pregunta similar (¿virtualizar o paginar? ¿modal o inline?) no se razone desde cero — se
+lee lo que ya se decidió y por qué, y se sigue o se reta con una razón nueva y real.
+No registrar decisiones triviales (qué shade de gris usar) — solo las que alguien más
+podría cuestionar o repetir mal si no quedan explicadas.
+
+## 8c. Checklist de "definición de terminado" (antes de decir "listo")
+
+Nunca declarar una entrega terminada sin pasar por esto — el caso feliz solo es la mitad
+del trabajo:
+
+- [ ] **Estados**: ¿se probaron loading, error, empty y éxito? (no solo el caso con datos)
+- [ ] **Contraste real**: ¿se verificó contra el fondo real del dark theme, no solo "se ve bien" a simple vista?
+- [ ] **Responsive**: ¿se probó en mobile (375px) y no solo en el viewport de desarrollo?
+- [ ] **Consistencia con tokens**: ¿usa los colores/spacing/tipografía ya establecidos, o inventó valores nuevos sin razón?
+- [ ] **Accesibilidad mínima**: ¿foco visible, navegable por teclado, `aria-live` si hay contenido dinámico?
+- [ ] **Verificación técnica real** (no "se ve correcto en el código"): en HTMX/Jinja2, levantar el server local y probar el flujo real en el navegador o con curl al endpoint; en React/Vite, correr el build/dev server y revisar la consola del navegador por errores/warnings antes de reportar éxito. Mismo estándar de rigor que ya se aplica al resto del proyecto (compilar, importar, probar contra datos reales antes de dar algo por bueno) — un componente de UI no es la excepción.
+- [ ] **¿Ya existe algo similar?** (ver §8d) — si se creó un componente nuevo, confirmar que de verdad no había uno reutilizable.
+
+## 8d. Inventario de componentes — buscar antes de crear
+
+Antes de escribir un componente/partial nuevo, buscar si ya existe uno similar:
+- HTMX/Jinja2: revisar `app/templates/partials/` y los componentes ya documentados arriba
+  (KPI Card, badge de estado, modal de confirmación, toast) — extender el patrón existente
+  casi siempre es mejor que crear uno nuevo con una variación mínima.
+- React/Vite (`ecomops-stack`): una vez exista una carpeta real de componentes compartidos
+  (`packages/ui` o equivalente, a definir cuando arranque ese proyecto), el mismo criterio
+  aplica — buscar primero, extender segundo, crear nuevo solo si de verdad no hay overlap.
+
+Duplicar un patrón ligeramente distinto en dos lugares es el tipo de deuda técnica que este
+negocio ya ha pagado caro en el backend (ver auditorías de 2026-08-31) — no repetirlo en frontend.
+
+## 8e. Cuándo preguntar vs. decidir solo
+
+**Decide solo, sigue el patrón establecido, sin preguntar:**
+- Cualquier cosa donde ya existe un patrón documentado en este archivo (paleta, semáforos,
+  estructura de tabla, modal, toast, umbrales de stock/margen) — seguirlo es la decisión
+  correcta por defecto, no hace falta confirmar cada vez.
+- Decisiones puramente técnicas de implementación dentro del patrón ya elegido (nombre de
+  una clase CSS, estructura interna de un partial) que no cambian el comportamiento visible.
+
+**Pregunta antes de decidir:**
+- Cuando falta información real de negocio que no está en el código ni en la documentación
+  (ej. "¿este KPI nuevo debe contar hacia la meta diaria o es solo informativo?").
+- Cuando la decisión implica descartar o reemplazar un patrón ya establecido (no solo
+  extenderlo) — eso es un cambio de sistema, no una implementación puntual.
+- Cuando dos principios de este documento entran en tensión real para un caso concreto
+  (ej. "mostrar todos los estados" vs "no saturar la pantalla de un usuario en mobile") y
+  la resolución depende de contexto de negocio que no es obvio.
+
+Si no es ninguno de los dos casos anteriores y de verdad no hay señal clara: decidir con el
+criterio más conservador (seguir el patrón más parecido ya existente) y decirlo explícito
+al entregar ("seguí el mismo patrón de X porque no encontré una razón para desviarme") —
+nunca preguntar solo por evitar la responsabilidad de decidir algo pequeño, y nunca inventar
+en silencio algo que sí ameritaba una pregunta.
 
 ## 8. Proceso y mentalidad
 
@@ -251,6 +341,9 @@ Lo que SÍ aplica desde ya, heredado de las secciones 1-8 arriba: los mismos des
 
 ## Formato de respuesta
 
-1. Si el pedido es de diseño/UX: describe el problema primero (qué confunde, qué falta, qué sobra), propone el layout (ASCII art o estructura), especifica jerarquía tipográfica y colores con significado, describe el flujo de decisión del usuario, señala qué eliminar.
-2. Si el pedido es de implementación: identifica primero en qué proyecto/stack estás (HTMX o React) — nunca mezclar patrones de uno en el otro. Muestra el código completo del componente (no fragmentos sueltos), indica en qué archivo va, describe el contrato del endpoint si aplica, señala cambios necesarios en el layout base.
-3. Siempre: revisa accesibilidad (foco, contraste, aria) y performance (paginación, lazy load) como parte de la entrega, no como paso opcional al final.
+1. Antes de empezar: decide si esto requiere preguntar o decidir solo (§8e). Si hay que preguntar, hazlo antes de construir nada, no a medio camino.
+2. Si el pedido es de diseño/UX: describe el problema primero (qué confunde, qué falta, qué sobra), propone el layout (ASCII art o estructura), especifica jerarquía tipográfica y colores con significado, describe el flujo de decisión del usuario, señala qué eliminar.
+3. Si el pedido es de implementación: identifica primero en qué proyecto/stack estás (HTMX o React) — nunca mezclar patrones de uno en el otro. Antes de crear un componente nuevo, busca si ya existe uno similar (§8d). Muestra el código completo del componente (no fragmentos sueltos), indica en qué archivo va, describe el contrato del endpoint si aplica, señala cambios necesarios en el layout base.
+4. Siempre: revisa accesibilidad (foco, contraste, aria) y performance (§7, con el criterio del stack correcto) como parte de la entrega, no como paso opcional al final.
+5. Antes de decir "listo": pasa por el checklist completo de §8c — no declarar terminado solo porque el caso feliz funciona.
+6. Si la decisión tomada no es trivial (alguien más podría cuestionarla o repetirla mal después): regístrala en `DECISIONS.md` (§8b) antes de cerrar la tarea.
