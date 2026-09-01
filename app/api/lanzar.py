@@ -4023,7 +4023,7 @@ async def create_listing_endpoint(request: Request):
 @router.post("/modify-listing")
 async def modify_listing(request: Request):
     """PATCH a launched listing: title, price, and/or available stock."""
-    from app.services.meli_client import MeliClient, _active_user_id as _ctx
+    from app.services.meli_client import _active_user_id as _ctx
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
@@ -4038,7 +4038,12 @@ async def modify_listing(request: Request):
     if not item_id:
         return JSONResponse({"error": "item_id requerido"}, status_code=400)
 
-    client = MeliClient(user_id)
+    # FIX 2026-09-01 (mismo bug real que register-launched -- MeliClient(user_id)
+    # directo revienta con TypeError antes del try/except, respuesta HTML no
+    # JSON): usar el factory get_meli_client().
+    client = await get_meli_client(user_id)
+    if not client:
+        return JSONResponse({"error": "No hay tokens válidos para esta cuenta"}, status_code=401)
     try:
         patch: dict = {}
         if title:
@@ -4085,7 +4090,7 @@ async def register_launched(request: Request):
     Útil para publicaciones que existían antes del sistema de tracking.
     Obtiene título, precio y permalink desde la API de ML automáticamente.
     """
-    from app.services.meli_client import MeliClient, _active_user_id as _ctx
+    from app.services.meli_client import _active_user_id as _ctx
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
@@ -4097,7 +4102,19 @@ async def register_launched(request: Request):
     if not sku or not item_id:
         return JSONResponse({"error": "sku e item_id requeridos"}, status_code=400)
 
-    client = MeliClient(user_id)
+    # FIX 2026-09-01 (bug real reportado por Jovan: "SyntaxError... is not
+    # valid JSON" al registrar publicación existente): esto llamaba
+    # MeliClient(user_id) directo -- el constructor real pide
+    # (access_token, refresh_token, user_id), así que user_id caía en el
+    # parámetro access_token y faltaban los otros 2 -- TypeError inmediato,
+    # ANTES del try/except de abajo, sin tokens ni nada. FastAPI devolvía su
+    # página de error genérica (HTML "Internal Server Error"), no JSON --
+    # por eso el frontend truena al hacer .json() sobre eso. Se usa el
+    # factory get_meli_client() (ya usado en el resto de este archivo) que
+    # sí carga los tokens reales de la cuenta.
+    client = await get_meli_client(user_id)
+    if not client:
+        return JSONResponse({"error": "No hay tokens válidos para esta cuenta"}, status_code=401)
     try:
         # Fetch item data from ML
         item = await client.get(f"/items/{item_id}")

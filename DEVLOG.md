@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-01 — FIX: "Registrar publicación existente" y "Modificar publicación" (Lanzar → gaps) crasheaban siempre — TypeError antes del try/except
+
+Jovan reportó el error real: al registrar un MLM existente (SKU `SNHT000128` →
+`MLM3029687027`), el modal mostraba `SyntaxError: Unexpected token 'I',
+"Internal S"... is not valid JSON` — el frontend intentaba parsear como
+JSON una página de error HTML genérica de FastAPI.
+
+**Causa:** `app/api/lanzar.py` — dos endpoints (`/register-launched` y
+`/modify-listing`) construían el cliente de ML con `MeliClient(user_id)`,
+un solo argumento posicional. El constructor real de `MeliClient` pide
+`(access_token, refresh_token, user_id)` — `user_id` caía en el parámetro
+`access_token`, faltaban los otros 2 → `TypeError` inmediato, **fuera**
+del `try/except` de la función (la línea vivía antes del `try:`). FastAPI
+devuelve su página de error genérica (HTML) para una excepción no
+atrapada — nunca JSON, de ahí el error del frontend. Este bug hacía que
+AMBOS endpoints fallaran siempre, en el 100% de los casos, no solo para
+ese SKU puntual.
+
+**Fix:** ambos usan ahora `await get_meli_client(user_id)` (el factory ya
+usado en el resto de este mismo archivo, que sí carga tokens reales de
+la cuenta) con manejo explícito de `None`. Grep completo del patrón
+`MeliClient(` en todo el repo confirmó que estos eran los ÚNICOS 2 sitios
+con la llamada mal armada — el resto ya usa el factory o pasa los 3
+argumentos correctos.
+
+Probado localmente: antes devolvía HTML crudo (crash), ahora JSON válido.
+
+---
+
 ## 2026-08-31 (15) — FIX: MTY/CDMX real (no más números congelados de 12+ días)
 
 Jovan reportó en vivo un caso concreto (SKU `SHIL000019`, sección "FULL Sin Stock"):
