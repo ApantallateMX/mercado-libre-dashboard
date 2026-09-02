@@ -1536,6 +1536,7 @@
         warranty_time:    _wiz.warranty_time,
         family_name:      _wiz.family_name,
         gtin:             _wiz.gtin,
+        ml_attributes:    _wiz.ml_attributes,
         pkg_h:  (document.getElementById('wiz-f-pkg-h')  || {}).value || '',
         pkg_w:  (document.getElementById('wiz-f-pkg-w')  || {}).value || '',
         pkg_l:  (document.getElementById('wiz-f-pkg-l')  || {}).value || '',
@@ -1565,6 +1566,7 @@
       if (d.warranty_time)    _wiz.warranty_time    = d.warranty_time;
       if (d.family_name)      _wiz.family_name      = d.family_name;
       if (d.gtin)             _wiz.gtin             = d.gtin;
+      if (d.ml_attributes)    _wiz.ml_attributes    = d.ml_attributes;
 
       // Restaurar UI — campos de texto
       if (d.draft) {
@@ -1801,6 +1803,7 @@
           }
         }).catch(function() {});
       }
+      _wizSaveDraft();
       _wizGoStep(3);
     }
   };
