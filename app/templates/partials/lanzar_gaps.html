@@ -1933,7 +1933,9 @@
     document.getElementById('wiz-f-sku').value   = gap.sku || '';
     document.getElementById('wiz-f-model').value = gap.model || '';
     document.getElementById('wiz-f-brand').value = gap.brand || '';
-    document.getElementById('wiz-f-gtin').value  = gap.upc || '';
+    // Preferir lo que el usuario ya escribió (_wiz.gtin) sobre el dato original de BM —
+    // esta función corre cada vez que se entra al paso 2, no solo en la apertura inicial.
+    document.getElementById('wiz-f-gtin').value  = _wiz.gtin || gap.upc || '';
     // Garantía — siempre aplicar desde _wiz.warranty_type (nunca dejar vacío)
     document.getElementById('wiz-f-warranty-type').value = _wiz.warranty_type || 'Garantía del vendedor';
     document.getElementById('wiz-f-warranty-time').value = _wiz.warranty_time || '3 meses';
@@ -2045,16 +2047,25 @@
       var attrs = (d.required || []).filter(function(a) { return SKIP_IDS.indexOf(a.id) < 0; });
       if (!attrs.length) return;
       var gap = _wiz.gap || {};
+      // Esta función recarga el contenedor desde cero cada vez que se entra al paso 2
+      // (incluso si la categoría no cambió) — restaurar lo que el usuario ya había
+      // contestado antes (guardado en _wiz.ml_attributes) para no perderlo en el reset.
       container.innerHTML = attrs.slice(0, 12).map(function(a) {
         var allowed = a.values || [];
+        var existing = (_wiz.ml_attributes || []).find(function(e) { return e.id === a.id; });
         var inputHtml;
         if (allowed.length > 1 && allowed.length <= 20) {
           inputHtml = '<select data-attr-id="' + a.id + '" class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">' +
             '<option value="">— selecciona —</option>' +
-            allowed.map(function(v) { return '<option value="' + (v.id||v.name) + '">' + v.name + '</option>'; }).join('') +
+            allowed.map(function(v) {
+              var vId = String(v.id || v.name);
+              var isSel = existing && (vId === String(existing.value_id) || v.name === existing.value_name);
+              return '<option value="' + vId + '"' + (isSel ? ' selected' : '') + '>' + v.name + '</option>';
+            }).join('') +
             '</select>';
         } else {
-          inputHtml = '<input type="text" data-attr-id="' + a.id + '" placeholder="' + a.name + '" class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400"/>';
+          var existingVal = existing ? String(existing.value_name || '').replace(/"/g, '&quot;') : '';
+          inputHtml = '<input type="text" data-attr-id="' + a.id + '" value="' + existingVal + '" placeholder="' + a.name + '" class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400"/>';
         }
         return '<div><label class="text-[10px] text-gray-400 block mb-0.5">' + a.name + (a.tags && a.tags.required ? ' <span class="text-red-400">*</span>' : '') + '</label>' + inputHtml + '</div>';
       }).join('');

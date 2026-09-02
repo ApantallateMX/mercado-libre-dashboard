@@ -3828,7 +3828,7 @@ async def create_listing_endpoint(request: Request):
 
         # Intento 1: SIN family_name — ML crea listing estándar con nuestro título personalizado
         result = await _post_item(item_payload)
-        logger.info(f"ML intento 1 (sin family_name): {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
+        logger.info(f"ML intento 1 (sin family_name): {'ok' if not result.get('_meli_error') else result['_meli_error'][:600]}")
 
         # Intento 2: family_name requerido — para categorías tipo catálogo (ej. MLM1002 Televisores)
         # ML usa family_name como TÍTULO del listing; el campo "title" es inválido cuando family_name está presente.
@@ -3863,7 +3863,7 @@ async def create_listing_endpoint(request: Request):
                     # family_name SE CONVIERTE EN el título del listing en ML
                     _p2.pop("title", None)
                     result = await _post_item(_p2)
-                    logger.info(f"ML intento 2 family_name={_fn_cand!r}: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
+                    logger.info(f"ML intento 2 family_name={_fn_cand!r}: {'ok' if not result.get('_meli_error') else result['_meli_error'][:600]}")
                     if not result.get("_meli_error"):
                         break  # éxito — salir del loop
 
@@ -3877,7 +3877,7 @@ async def create_listing_endpoint(request: Request):
                 payload_fn_notitle.pop("title", None)
                 logger.warning("ML intento 3: title inválido + family_name (ML User Products)")
                 result = await _post_item(payload_fn_notitle)
-                logger.info(f"ML intento 3: {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
+                logger.info(f"ML intento 3: {'ok' if not result.get('_meli_error') else result['_meli_error'][:600]}")
 
         # Intento 4: family_name no aceptado → quitar family_name, mantener title
         if result.get("_meli_error"):
@@ -3888,7 +3888,7 @@ async def create_listing_endpoint(request: Request):
                 payload_no_fn.pop("family_name", None)
                 logger.warning("ML intento 4: family_name no permitido, quitando")
                 result = await _post_item(payload_no_fn)
-                logger.info(f"ML intento 4: {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
+                logger.info(f"ML intento 4: {'ok' if not result.get('_meli_error') else result['_meli_error'][:600]}")
 
         # Intento 5: título muy corto → enriquecer con marca + tipo de producto hasta 55 chars
         if result.get("_meli_error"):
@@ -3907,7 +3907,7 @@ async def create_listing_endpoint(request: Request):
                 payload_enriched["title"] = enriched_title
                 logger.warning(f"ML intento 5: título corto, enriquecido: {enriched_title!r}")
                 result = await _post_item(payload_enriched)
-                logger.info(f"ML intento 5: {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
+                logger.info(f"ML intento 5: {'ok' if not result.get('_meli_error') else result['_meli_error'][:600]}")
 
         if result.get("_meli_error"):
             return JSONResponse({"error": result["_meli_error"]}, status_code=400)
