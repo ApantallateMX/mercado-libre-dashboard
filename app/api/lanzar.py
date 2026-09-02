@@ -3539,28 +3539,44 @@ async def upload_picture_endpoint(request: Request):
     ext = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(content_type, "jpg")
 
     # Pulir imagen al momento de traerla: ML exige mínimo 500px en un lado y 250px
-    # en el otro ("item.pictures.invalid_size"). Las fotos encontradas por búsqueda
-    # web suelen venir más chicas — se hace upscale aquí, antes de subir, en vez de
-    # dejar que ML rechace la publicación más tarde con un error genérico.
+    # en el otro ("item.pictures.invalid_size"). Dos causas reales encontradas:
+    # 1) fotos que llegan chicas de origen (búsqueda web) -> upscale.
+    # 2) PNG con transparencia donde ML recorta el margen transparente antes de
+    #    medir, dejando el contenido "real" más chico de lo que parece el archivo
+    #    (confirmado en vivo: 3 fotos de 750x421 subidas, ML reportó max_size
+    #    374x421 para una de ellas) -> aplanar sobre fondo blanco para que no
+    #    quede nada transparente que ML pueda recortar.
     try:
         import io as _io
         from PIL import Image as _Image
         _img = _Image.open(_io.BytesIO(img_bytes))
         _w, _h = _img.size
-        _long, _short = max(_w, _h), min(_w, _h)
         logger.info(f"upload-picture: descargada {_w}x{_h} ({len(img_bytes)} bytes, {content_type}) de {image_url[:120]}")
+
+        _has_alpha = _img.mode in ("RGBA", "LA", "P") and (
+            _img.mode != "P" or "transparency" in _img.info
+        )
+        if _has_alpha:
+            _bg = _Image.new("RGB", _img.size, (255, 255, 255))
+            _rgba = _img.convert("RGBA")
+            _bg.paste(_rgba, mask=_rgba.split()[-1])
+            _img = _bg
+            ext = "jpg"
+            content_type = "image/jpeg"
+            logger.info(f"upload-picture: imagen con transparencia aplanada sobre fondo blanco ({image_url[:120]})")
+
+        _long, _short = max(_w, _h), min(_w, _h)
         if _long < 500 or _short < 250:
             _scale = max(500 / _long, 250 / _short, 1.0)
             _new_size = (round(_w * _scale), round(_h * _scale))
-            _save_fmt = "PNG" if ext == "png" else "JPEG"
-            if _save_fmt == "JPEG" and _img.mode in ("RGBA", "P", "LA"):
-                _img = _img.convert("RGB")
             _img = _img.resize(_new_size, _Image.LANCZOS)
+            logger.info(f"upload-picture: imagen {_w}x{_h} -> {_new_size[0]}x{_new_size[1]} (upscale, ML exige min 500/250)")
+
+        if _has_alpha or (_long < 500 or _short < 250):
             _buf = _io.BytesIO()
+            _save_fmt = "PNG" if ext == "png" else "JPEG"
             _img.save(_buf, format=_save_fmt, quality=92)
             img_bytes = _buf.getvalue()
-            content_type = "image/png" if ext == "png" else "image/jpeg"
-            logger.info(f"upload-picture: imagen {_w}x{_h} -> {_new_size[0]}x{_new_size[1]} (upscale, ML exige min 500/250)")
     except Exception as e:
         logger.warning(f"upload-picture: no se pudo validar/pulir tamaño de imagen ({image_url}): {e}")
 
