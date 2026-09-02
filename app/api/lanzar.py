@@ -3538,6 +3538,31 @@ async def upload_picture_endpoint(request: Request):
 
     ext = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(content_type, "jpg")
 
+    # Pulir imagen al momento de traerla: ML exige mínimo 500px en un lado y 250px
+    # en el otro ("item.pictures.invalid_size"). Las fotos encontradas por búsqueda
+    # web suelen venir más chicas — se hace upscale aquí, antes de subir, en vez de
+    # dejar que ML rechace la publicación más tarde con un error genérico.
+    try:
+        import io as _io
+        from PIL import Image as _Image
+        _img = _Image.open(_io.BytesIO(img_bytes))
+        _w, _h = _img.size
+        _long, _short = max(_w, _h), min(_w, _h)
+        if _long < 500 or _short < 250:
+            _scale = max(500 / _long, 250 / _short, 1.0)
+            _new_size = (round(_w * _scale), round(_h * _scale))
+            _save_fmt = "PNG" if ext == "png" else "JPEG"
+            if _save_fmt == "JPEG" and _img.mode in ("RGBA", "P", "LA"):
+                _img = _img.convert("RGB")
+            _img = _img.resize(_new_size, _Image.LANCZOS)
+            _buf = _io.BytesIO()
+            _img.save(_buf, format=_save_fmt, quality=92)
+            img_bytes = _buf.getvalue()
+            content_type = "image/png" if ext == "png" else "image/jpeg"
+            logger.info(f"upload-picture: imagen {_w}x{_h} -> {_new_size[0]}x{_new_size[1]} (upscale, ML exige min 500/250)")
+    except Exception as e:
+        logger.warning(f"upload-picture: no se pudo validar/pulir tamaño de imagen ({image_url}): {e}")
+
     client = await get_meli_client()
     if not client:
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
