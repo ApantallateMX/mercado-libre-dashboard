@@ -3548,6 +3548,7 @@ async def upload_picture_endpoint(request: Request):
         _img = _Image.open(_io.BytesIO(img_bytes))
         _w, _h = _img.size
         _long, _short = max(_w, _h), min(_w, _h)
+        logger.info(f"upload-picture: descargada {_w}x{_h} ({len(img_bytes)} bytes, {content_type}) de {image_url[:120]}")
         if _long < 500 or _short < 250:
             _scale = max(500 / _long, 250 / _short, 1.0)
             _new_size = (round(_w * _scale), round(_h * _scale))
@@ -3575,6 +3576,7 @@ async def upload_picture_endpoint(request: Request):
         pic_id = result.get("id")
         if not pic_id:
             return JSONResponse({"error": f"ML upload no id: {result}"}, status_code=502)
+        logger.info(f"upload-picture: ML devolvio id={pic_id} size={result.get('size')} max_size={result.get('max_size')} variations={[v.get('size') for v in (result.get('variations') or [])]}")
         return {"picture_id": pic_id, "secure_url": result.get("secure_url") or result.get("url", "")}
     except Exception as e:
         logger.error(f"upload-picture error: {e}")
