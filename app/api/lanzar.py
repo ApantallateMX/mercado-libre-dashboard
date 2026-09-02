@@ -3565,14 +3565,19 @@ async def upload_picture_endpoint(request: Request):
             content_type = "image/jpeg"
             logger.info(f"upload-picture: imagen con transparencia aplanada sobre fondo blanco ({image_url[:120]})")
 
+        # ML mide el contenido DESPUÉS de recortar márgenes blancos/vacíos (confirmado
+        # en vivo: una foto de 750x421 sin transparencia igual salió con max_size
+        # 374x421 -- casi la mitad). Usar el doble del mínimo real de ML como colchón
+        # de seguridad, no el mínimo exacto, para que sobreviva ese recorte interno.
         _long, _short = max(_w, _h), min(_w, _h)
-        if _long < 500 or _short < 250:
-            _scale = max(500 / _long, 250 / _short, 1.0)
+        _min_long, _min_short = 1000, 500
+        if _long < _min_long or _short < _min_short:
+            _scale = max(_min_long / _long, _min_short / _short, 1.0)
             _new_size = (round(_w * _scale), round(_h * _scale))
             _img = _img.resize(_new_size, _Image.LANCZOS)
-            logger.info(f"upload-picture: imagen {_w}x{_h} -> {_new_size[0]}x{_new_size[1]} (upscale, ML exige min 500/250)")
+            logger.info(f"upload-picture: imagen {_w}x{_h} -> {_new_size[0]}x{_new_size[1]} (upscale con colchón 2x sobre minimo ML)")
 
-        if _has_alpha or (_long < 500 or _short < 250):
+        if _has_alpha or (_long < _min_long or _short < _min_short):
             _buf = _io.BytesIO()
             _save_fmt = "PNG" if ext == "png" else "JPEG"
             _img.save(_buf, format=_save_fmt, quality=92)
