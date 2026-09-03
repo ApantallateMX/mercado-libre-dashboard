@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-02 — FEAT: Fase 2 Amazon — sustitución real con inyección BM + Pendientes de Envío + FIX de seguridad en validación de sustituto
+
+### Contexto
+La feature de "Sustituir" en Alertas de Stock ya inyectaba el SKU alternativo directo en BinManager para ML (ver 2026-08-17), pero para Amazon solo guardaba una nota interna — BM indexa cuentas con un `ProfileID`/`SiteAccountID` bigint interno, y lo único que el sistema conocía de Amazon era el Seller ID alfanumérico (ej. `A252KSQ687FNRO`), que BM rechaza.
+
+### Hallazgo que desbloqueó la fase
+Navegando el Fulfillment Dashboard de BM en vivo e interceptando (solo lectura) las llamadas reales que el propio frontend de BM hace a `GetAlterSKUMappingByWebSKU` al abrir el modal "Map" de 2 órdenes reales, se confirmaron los ProfileID reales:
+- **Amazon Autobot MX** (Seller `A252KSQ687FNRO`) → ProfileID/SiteAccountID = **11223344**
+- **Amazon Vektor** (Seller `A20NFIUQNEYZ1E`) → ProfileID/SiteAccountID = **112233**
+- **ExclusiveBulbs** (`A22XNR713HGDVG`) queda fuera a propósito — sin verificar, mismo caso sin cerrar que `_AMAZON_STOCK_ALERT_FORCE_DISABLED_SELLERS`.
+
+### Implementación (`app/main.py`)
+- Nuevo dict `_AMAZON_SELLER_TO_BM_PROFILE_ID` + helper `_bm_profile_id_for_resolution(platform, account_id)` que traduce el account_id de una resolución al ProfileID real de BM (ML: passthrough; Amazon: lookup; sin match: `""` = "no aplica a BM, solo nota interna").
+- Gates de `/api/stock/alerts/resolve-substitution` y `/retry-bm` actualizados para aceptar `platform in ("ml","amazon")` cuando hay ProfileID conocido.
+- `/delete-from-bm` y `/reopen` también traducen el account_id antes de llamar a `_delete_bm_alter_sku`.
+- Nueva función `_check_one_substitution_fulfillment_amazon()` — la rama ML de "Pendientes de Envío" (`_check_one_substitution_fulfillment`) era 100% ML-only (`get_meli_client`), así que sin esto una sustitución de Amazon aplicada en BM se hubiera quedado huérfana para siempre en esa vista. Usa `AmazonClient.get_order()` (Amazon no tiene un recurso de shipment separado como ML — el propio `OrderStatus` ya indica si sigue pendiente).
+- Plan diseñado con el agente `binmanager-specialist` (siguiendo la regla del proyecto de usar especialistas).
+
+### FIX de seguridad (hallazgo real durante la prueba, mismo día)
+Al probar Fase 2 en local contra BM real, se descubrió que `_inject_bm_alter_sku()` tenía una validación **"abierta por defecto"**: si `_bm_bulk_real_conditions()` no conocía ninguna condición con stock real para el SKU base (caché frío/stale), el chequeo se saltaba por completo y CUALQUIER sustituto inventado pasaba directo a escribirse en BM real — confirmado en vivo con un SKU inexistente contra la orden real `701-0034703-1073824` de Autobot (bug pre-existente, también afectaba el flujo ML; nunca se había disparado porque los usuarios reales siempre escriben condiciones válidas). El mapeo falso se detectó y se borró de inmediato de BM (verificado por lectura). Fix: ahora se rechaza también cuando no se conoce ninguna condición real — no hay caso de negocio legítimo donde sustituir por algo "de existencia desconocida" tenga sentido. Verificado con regresión: el mismo SKU inventado ahora se rechaza en el primer intento, sin ningún POST de escritura a BM (solo lecturas).
+
+### Verificación
+Local (`py -m uvicorn`, puerto 8004): Autobot y Vektor con ProfileID conocido → `bm_pending:true`; ExclusiveBulbs sin ProfileID → `bm_pending:false` (solo nota interna, sin error). Regresión del fix de validación confirmada por log de servidor (rechazo antes de cualquier escritura).
+
+---
+
 ## 2026-09-01 — FIX: "Registrar publicación existente" y "Modificar publicación" (Lanzar → gaps) crasheaban siempre — TypeError antes del try/except
 
 Jovan reportó el error real: al registrar un MLM existente (SKU `SNHT000128` →

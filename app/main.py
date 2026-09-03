@@ -3144,7 +3144,19 @@ async def _check_one_substitution_fulfillment(row: dict) -> None:
     sustituto se agota ANTES de que la orden se imprima/envíe, nadie se
     entera hasta que sea tarde. Revisa el estado real de envío (misma
     lógica de _shipment_should_alert que ya usa el feed de alertas en
-    vivo) y, mientras siga pendiente, el stock actual del sustituto."""
+    vivo) y, mientras siga pendiente, el stock actual del sustituto.
+
+    FEATURE 2026-09-02 (Fase 2 Amazon, aprobado por Jovan): antes esta
+    función solo sabía hablar con ML -- una sustitución de Amazon aplicada
+    en BM se quedaba huérfana en "Pendientes de Envío" para siempre, porque
+    get_meli_client con un seller_id de Amazon devuelve None y la función
+    regresaba de inmediato sin actualizar nada (hallazgo real del
+    binmanager-specialist al diseñar esta fase). Se bifurca por platform;
+    ver _check_one_substitution_fulfillment_amazon para el caso Amazon."""
+    if (row.get("platform") or "ml") == "amazon":
+        await _check_one_substitution_fulfillment_amazon(row)
+        return
+
     order_id = row["order_id"]
     account_id = row["account_id"]
     client = await get_meli_client(user_id=account_id)
@@ -3190,6 +3202,59 @@ async def _check_one_substitution_fulfillment(row: dict) -> None:
         logger.warning(f"[SUB-FULFILLMENT] error revisando resolution_id={row['id']} orden={order_id}: {e}")
     finally:
         await client.close()
+
+
+async def _check_one_substitution_fulfillment_amazon(row: dict) -> None:
+    """Equivalente Amazon de _check_one_substitution_fulfillment (Fase 2,
+    2026-09-02). Amazon no tiene un recurso de shipment separado como ML
+    (get_shipment) -- el propio OrderStatus (Unshipped/PartiallyShipped/
+    Shipped/Cancelled) ya indica si sigue pendiente de envío, mismo
+    criterio que ya usa _process_one_amazon_order para las alertas en
+    vivo. AmazonClient no requiere/expone .close() (a diferencia de
+    MeliClient) -- no se llama, mismo patrón que el resto del archivo usa
+    con get_amazon_client()."""
+    from app.services.amazon_client import get_amazon_client
+    order_id = row["order_id"]
+    seller_id = row["account_id"]
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return
+    try:
+        order = await client.get_order(order_id)
+        status = order.get("OrderStatus", "")
+        if status == "Cancelled":
+            # Mismo criterio autorizado por Jovan para ML: orden cancelada
+            # -> el mapeo de SKU alternativo en BM ya no tiene caso.
+            bm_account_id = _bm_profile_id_for_resolution("amazon", seller_id)
+            del_result = {"ok": False, "error": "sin ProfileID de BM conocido para esta cuenta"}
+            if bm_account_id:
+                del_result = await _delete_bm_alter_sku(
+                    account_id=bm_account_id, order_id=order_id,
+                    product_sku=(row.get("original_sku_raw") or row["original_sku"]),
+                    substitute_sku=row["substitute_sku"], qty=1,
+                )
+            await token_store.mark_resolution_fulfillment(row["id"], "cancelada")
+            if del_result.get("ok"):
+                await token_store.mark_stock_alert_resolution_bm_deleted(row["id"], deleted_by="sistema (orden cancelada)")
+            else:
+                logger.warning(f"[SUB-FULFILLMENT-AMZ] orden {order_id} cancelada pero no se pudo borrar el mapeo de BM: {del_result}")
+            return
+
+        if status in ("Unshipped", "PartiallyShipped"):
+            # Sigue pendiente de envío -- verificar si el sustituto TODAVÍA
+            # tiene stock, mismo criterio que la rama ML (bm_sku_master,
+            # cero llamadas nuevas a BM).
+            base, _cond = _split_bm_sku_condition(row["substitute_sku"])
+            _master_row = (await token_store.get_bm_master_rows_for_skus([base])).get(base)
+            if _master_row and _master_row.get("verified"):
+                await token_store.mark_resolution_fulfillment(row["id"], "pendiente_envio", stock_qty=_master_row.get("available_qty", 0) or 0)
+            return
+
+        # Shipped / Delivered / cualquier otro estado terminal no cubierto
+        # arriba -- ya no es accionable.
+        await token_store.mark_resolution_fulfillment(row["id"], "completado")
+    except Exception as e:
+        logger.warning(f"[SUB-FULFILLMENT-AMZ] error revisando resolution_id={row['id']} orden={order_id}: {e}")
 
 
 async def _substitution_fulfillment_loop():
@@ -18030,7 +18095,8 @@ async def reopen_stock_alert_resolution(resolution_id: int, request: Request):
     async def _cleanup_old_bm_mapping():
         try:
             del_result = await _delete_bm_alter_sku(
-                account_id=row["account_id"], order_id=row["order_id"], product_sku=(row.get("original_sku_raw") or row["original_sku"]),
+                account_id=_bm_profile_id_for_resolution(row.get("platform") or "ml", row.get("account_id") or ""),
+                order_id=row["order_id"], product_sku=(row.get("original_sku_raw") or row["original_sku"]),
                 substitute_sku=row["substitute_sku"], qty=1,
             )
             if del_result.get("ok"):
@@ -18063,6 +18129,42 @@ async def reopen_stock_alert_resolution(resolution_id: int, request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 # ALERTAS DE STOCK — registro de resoluciones (sustitución / stock en 0)
 # ═══════════════════════════════════════════════════════════════════════════
+
+# FASE 2 AMAZON (2026-09-02, aprobado por Jovan): BM indexa cuentas con un
+# ProfileID/SiteAccountID bigint interno propio -- para ML ese bigint ya
+# coincide 1:1 con el user_id de ML (por eso _inject_bm_alter_sku siempre
+# recibió "account_id" y lo mandó tal cual). Amazon no tiene ese numero en
+# ningun lugar del sistema, solo el Seller ID alfanumerico -- BM lo
+# rechazaria. Estos 2 valores se confirmaron EN VIVO (2026-09-02, lectura
+# pura via intercepcion de red, sin escribir nada) abriendo el modal "Map"
+# del Fulfillment Dashboard de BM para una orden real de cada cuenta y
+# leyendo el ProfileID/SiteAccountID que el propio frontend de BM le manda
+# a GetAlterSKUMappingByWebSKU -- no es un valor adivinado. ExclusiveBulbs
+# (A22XNR713HGDVG) queda fuera a proposito: no se ha verificado su
+# ProfileID (ver _AMAZON_STOCK_ALERT_FORCE_DISABLED_SELLERS mas arriba,
+# mismo caso sin cerrar) -- ausencia en este dict = "no aplica a BM todavia"
+# nunca se debe inventar un numero.
+_AMAZON_SELLER_TO_BM_PROFILE_ID = {
+    "A252KSQ687FNRO": 11223344,  # AUTOBOT AMZ MX (AMAZON2)
+    "A20NFIUQNEYZ1E": 112233,    # VECKTOR IMPORTS (AMAZON1)
+}
+
+
+def _bm_profile_id_for_resolution(platform: str, account_id: str) -> str:
+    """Traduce el account_id guardado en una resolución de Alertas de Stock
+    al ProfileID/SiteAccountID real que BinManager espera en el payload.
+    ML: account_id YA es ese bigint. Amazon: account_id es el Seller ID,
+    se traduce via _AMAZON_SELLER_TO_BM_PROFILE_ID. Devuelve "" si no hay
+    traduccion conocida -- el caller debe tratarlo como "no aplica a BM",
+    nunca mandarlo a BM tal cual (BM rechazaria un Seller ID alfanumerico
+    con un error confuso en vez de un "no soportado" claro)."""
+    if platform == "ml":
+        return account_id or ""
+    if platform == "amazon":
+        pid = _AMAZON_SELLER_TO_BM_PROFILE_ID.get(account_id)
+        return str(pid) if pid else ""
+    return ""
+
 
 _BM_ALTER_SKU_URL = "https://binmanager.mitechnologiesinc.com/FullFillMent/FullFillMent/AddAlterSKUMappingByWebSKU"
 
@@ -18149,6 +18251,19 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
     # (get_existence_anywhere) en cada intento -- se reemplaza por
     # _bm_bulk_real_conditions(), que lee el mismo bulk cacheado que ya usa
     # /api/stock/substitute-conditions (cero llamadas nuevas a BM).
+    # FIX 2026-09-02 (hallazgo real durante prueba de Fase 2 Amazon,
+    # aprobado por Jovan): esta validación era "abierta por defecto" -- si
+    # _bm_bulk_real_conditions no conocía NINGUNA condición con stock real
+    # para el SKU base (caché frío, entrada faltante en _bm_master_mem),
+    # el chequeo de abajo se saltaba por completo (`if _real_conditions and
+    # ...`) y CUALQUIER sustituto inventado pasaba directo a escribirse en
+    # BM real -- confirmado en vivo con un SKU inexistente contra la orden
+    # real 701-0034703-1073824 (limpiado de inmediato). No existe un caso
+    # de negocio legítimo donde "no sabemos si este sustituto tiene stock
+    # real" deba traducirse en "déjalo pasar" -- el propósito mismo de
+    # sustituir es reemplazar por algo que SÍ tiene stock. Ahora se rechaza
+    # también cuando no se conoce ninguna condición real (antes solo se
+    # rechazaba cuando SÍ se conocían y la pedida no estaba entre ellas).
     _sub_base = _bm_base_sku(substitute_sku)
     _sub_condition = substitute_sku.strip().upper()[len(_sub_base):].lstrip("-")
     if _sub_base:
@@ -18157,9 +18272,9 @@ async def _inject_bm_alter_sku(*, account_id: str, order_id: str, product_sku: s
         if not _sub_condition:
             _valid = ", ".join(sorted(_real_conditions)) or "ninguna encontrada"
             return {"ok": False, "error": f"{substitute_sku} no lleva condición (ej. -GRB, -NEW) -- condiciones reales para {_sub_base}: {_valid}"}
-        if _real_conditions and _sub_condition not in _real_conditions:
-            _valid = ", ".join(sorted(_real_conditions))
-            return {"ok": False, "error": f"{substitute_sku} no existe en BinManager -- condiciones reales para {_sub_base}: {_valid}"}
+        if _sub_condition not in _real_conditions:
+            _valid = ", ".join(sorted(_real_conditions)) or "ninguna encontrada (SKU desconocido o sin stock real en ninguna condición)"
+            return {"ok": False, "error": f"{substitute_sku} no existe en BinManager con stock real -- condiciones reales para {_sub_base}: {_valid}"}
 
     # FIX 2026-08-19 #4 (bug real confirmado: orden 2000018021258108,
     # resolución #41, "said" aprobó sustituir SNTV002236 por SNTV002236-GRB --
@@ -18422,12 +18537,14 @@ async def retry_stock_alert_resolution_bm(resolution_id: int, request: Request, 
         return JSONResponse({"detail": "Ya se había borrado de BinManager — no tiene caso reintentar"}, status_code=400)
     if row.get("bm_status") == "success" and not force:
         return JSONResponse({"detail": "Ya está aplicado en BinManager — no hace falta reintentar"}, status_code=400)
-    if row.get("platform") != "ml" or not row.get("account_id"):
-        return JSONResponse({"detail": "Esta resolución no aplica a BinManager (no es ML o falta cuenta)"}, status_code=400)
+    _retry_platform = row.get("platform") or "ml"
+    _retry_bm_account_id = _bm_profile_id_for_resolution(_retry_platform, row.get("account_id") or "")
+    if _retry_platform not in ("ml", "amazon") or not _retry_bm_account_id:
+        return JSONResponse({"detail": "Esta resolución no aplica a BinManager (plataforma no soportada, o cuenta sin ProfileID de BM conocido)"}, status_code=400)
 
     try:
         bm_result = await _inject_bm_alter_sku(
-            account_id=row["account_id"], order_id=row["order_id"], product_sku=(row.get("original_sku_raw") or row["original_sku"]),
+            account_id=_retry_bm_account_id, order_id=row["order_id"], product_sku=(row.get("original_sku_raw") or row["original_sku"]),
             substitute_sku=row["substitute_sku"], qty=1,
         )
     except Exception as e:
@@ -18463,7 +18580,8 @@ async def delete_stock_alert_resolution_from_bm(resolution_id: int, request: Req
         return JSONResponse({"detail": "Esta sustitución nunca se aplicó en BinManager — nada que borrar"}, status_code=400)
 
     result = await _delete_bm_alter_sku(
-        account_id=row["account_id"], order_id=row["order_id"],
+        account_id=_bm_profile_id_for_resolution(row.get("platform") or "ml", row.get("account_id") or ""),
+        order_id=row["order_id"],
         product_sku=(row.get("original_sku_raw") or row["original_sku"]), substitute_sku=row["substitute_sku"],
         qty=1,
     )
@@ -18638,12 +18756,16 @@ async def resolve_stock_alert_substitution(request: Request):
     FEATURE 2026-08-17: además de guardar el registro interno (como siempre),
     ahora inyecta el SKU alternativo DIRECTO en BinManager (ver
     _inject_bm_alter_sku) -- el usuario ya no tiene que entrar a BM a mano.
-    FIX 2026-08-18: solo aplica (apply_bm) a platform='ml' -- Amazon SÍ
+    FIX 2026-08-18: solo aplicaba (apply_bm) a platform='ml' -- Amazon SÍ
     tiene el feed de alertas en tiempo real desde hoy (polling, ver
-    _amazon_stock_reconcile_loop), pero la inyección a BM sigue bloqueada
+    _amazon_stock_reconcile_loop), pero la inyección a BM estaba bloqueada
     del lado de BinManager (ProfileID/SiteAccountID son bigint, no aceptan
-    el Seller ID de Amazon) -- para platform='amazon' esto guarda solo la
-    nota interna, igual que hacía ML antes de tener BM conectado."""
+    el Seller ID de Amazon).
+    FEATURE 2026-09-02 (Fase 2 Amazon, aprobado por Jovan): ese bloqueo ya
+    se resolvió -- ver _AMAZON_SELLER_TO_BM_PROFILE_ID. platform='amazon'
+    ahora también inyecta de verdad en BM cuando la cuenta tiene un
+    ProfileID confirmado; si no lo tiene (ej. ExclusiveBulbs, sin verificar
+    todavía), sigue guardando solo la nota interna como antes."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if not du:
         return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -18676,14 +18798,19 @@ async def resolve_stock_alert_substitution(request: Request):
     # Ahora se guarda primero (bm_status='pending' si aplica) y se responde de
     # inmediato; la inyección real a BM corre en background y actualiza el
     # registro cuando termine, sin bloquear al usuario.
-    apply_bm = platform == "ml" and bool(account_id)
+    bm_account_id = _bm_profile_id_for_resolution(platform, account_id)
+    apply_bm = platform in ("ml", "amazon") and bool(bm_account_id)
     # FIX 2026-08-18 (bug real confirmado por Jovan): original_sku ya viene
     # normalizado (sin bundle/condición) -- sku_raw preserva el seller_sku
-    # CRUDO de ML, necesario para que _inject_bm_alter_sku resuelva el
-    # ProductSKU real en BM con el WebSKU correcto (mandar el normalizado
+    # CRUDO (ML o Amazon), necesario para que _inject_bm_alter_sku resuelva
+    # el ProductSKU real en BM con el WebSKU correcto (mandar el normalizado
     # llevaba a un producto DISTINTO Y EQUIVOCADO cuando el SKU real tenía
-    # bundle/condición).
-    sku_raw = await token_store.get_realtime_stock_alert_raw_sku(order_id, platform, sku) if platform == "ml" else ""
+    # bundle/condición). Antes solo se pedía para platform='ml' porque
+    # Amazon nunca llegaba a apply_bm=True -- ahora que sí puede (Fase 2
+    # Amazon, 2026-09-02), se pide igual para ambas plataformas (la tabla
+    # realtime_stock_alerts ya guarda sku_raw para Amazon desde que existe
+    # el polling, ver _process_one_amazon_order).
+    sku_raw = await token_store.get_realtime_stock_alert_raw_sku(order_id, platform, sku)
     resolution_id = await token_store.record_stock_alert_resolution(
         order_id=order_id, platform=platform, account_id=account_id,
         original_sku=sku, resolution_type="substitution",
@@ -18733,7 +18860,7 @@ async def resolve_stock_alert_substitution(request: Request):
                 for _attempt in range(4):
                     try:
                         bm_result = await _inject_bm_alter_sku(
-                            account_id=account_id, order_id=order_id, product_sku=(sku_raw or sku),
+                            account_id=bm_account_id, order_id=order_id, product_sku=(sku_raw or sku),
                             substitute_sku=substitute_sku, qty=quantity,
                         )
                     except Exception as e:
