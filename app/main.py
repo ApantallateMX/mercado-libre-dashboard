@@ -1173,7 +1173,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/", "/api/ping", "/webhooks/")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/", "/api/ping", "/webhooks/", "/internal/")
 
 # Mapeo de rutas de página a sección (para control de acceso por sección)
 _PATH_TO_SECTION: dict[str, str] = {
