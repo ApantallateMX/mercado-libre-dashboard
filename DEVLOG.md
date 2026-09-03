@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-03 — FEAT: Túnel único hacia BinManager (primary/secondary) — cierra bloqueo real de BM
+
+### Incidente
+Se corrió el servidor local dos veces para probar Fase 2 Amazon mientras Railway (producción) seguía corriendo — ambos procesos usan la MISMA cuenta de servicio de BM (`Claude.Jovan@mitechnologiesinc.com`). `_BM_GLOBAL_SEM` (Semaphore(1) en `binmanager_client.py`) solo serializa DENTRO de un proceso — no hay coordinación entre procesos distintos. BM detectó peticiones concurrentes de la misma cuenta desde 2 fuentes y bloqueó el acceso (se liberó solo tiempo después).
+
+### Fix real (no solo disciplina/promesa)
+- **Solo la instancia marcada `BM_PROXY_ROLE=primary` (exclusivamente Railway) le habla a BM directo.** Todo lo demás (Coolify, cualquier local futuro) es `secondary` por default — ni siquiera necesita configuración explícita para quedar seguro.
+- Nuevo endpoint `POST /internal/bm-proxy` (`app/main.py`) — único punto real de entrada a BM para instancias secondary, protegido con token dedicado (`BM_PROXY_TOKEN`, no reusa `DIAG_TOKEN`) y restringido a URLs de `binmanager.mitechnologiesinc.com` (nunca un relay abierto).
+- `app/services/binmanager_client.py`: el choke point real es `BinManagerClient._post()`/`._get()` — TODOS los métodos de la clase pasan por ahí (login, bulk stock, AlterSKU, todo), así que cambiando solo estos 2 métodos se cubre el 100% del código sin tocar los ~24 call sites repartidos en 5 archivos. En secondary: `login()` es no-op, `_post()` reenvía por el túnel, `_get()` se rechaza defensivamente (nunca se llega ahí en la práctica, solo `login()` lo usaba).
+- Alerta pedida por Jovan: si el túnel (Railway) no responde, se dispara `post_marketplace_alert()` (#alertas-marketplace, ya existente) — rate-limited a 1 cada 15 min.
+- Nuevo endpoint auxiliar `POST /api/diag/set-railway-env-var` (DIAG_TOKEN) para poder configurar `BM_PROXY_TOKEN`/`BM_PROXY_ROLE` en Railway sin tener el token de gestión de Railway disponible localmente — reutiliza el mismo patrón `variableUpsert` que ya usa `app/auth.py`.
+
+### Verificación
+Suite de pruebas con `httpx` mockeado (cero llamadas de red reales, ni a BM ni a Railway) — confirmado: primary llama a BM directo y nunca al proxy; secondary reenvía al proxy y nunca toca `self._client()`; `_get()` en secondary se rechaza; `login()` en secondary es no-op; sin `BM_PROXY_TOKEN` configurado, falla ruidoso y alerta (nunca silencioso).
+
+### Riesgo aceptado (documentado, no oculto)
+Si Railway se cae, Coolify pierde acceso a BM en vivo hasta que Railway vuelva (las vistas de display siguen funcionando desde el caché, `_bm_stock_cache`). Trade-off explícito, aceptado por Jovan al aprobar el diseño — la alternativa (un servicio de lock externo dedicado) es más infraestructura de la que este problema necesita.
+
+---
+
 ## 2026-09-02 — FEAT: Fase 2 Amazon — sustitución real con inyección BM + Pendientes de Envío + FIX de seguridad en validación de sustituto
 
 ### Contexto

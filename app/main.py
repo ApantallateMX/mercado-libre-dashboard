@@ -19310,6 +19310,91 @@ _DEBUG_KEY = _os_diag.getenv("DEBUG_KEY", "dbg_7a3f9c1e5b8d2a6f4c0e9b7d3a1f8c6e"
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_6241f84538813554c2e442c513dc3f717135759759afbcba")
 
 
+@app.post("/api/diag/set-railway-env-var")
+async def diag_set_railway_env_var(name: str = "", value: str = "", token: str = ""):
+    """Utilidad puntual (2026-09-03) para auto-configurar UNA variable de
+    Railway usando las credenciales de gestión de Railway que YA viven en
+    este mismo proceso (RAILWAY_API_TOKEN/SERVICE_ID/ENVIRONMENT_ID/
+    PROJECT_ID) -- mismo patrón exacto que ya usa app/auth.py para
+    persistir refresh tokens. Se agregó para poder configurar BM_PROXY_TOKEN
+    y BM_PROXY_ROLE=primary en Railway ANTES de desplegar el código del
+    túnel BM, sin dejar ninguna ventana donde producción no sepa que es
+    "primary" (ver DEVLOG 2026-09-03, incidente de bloqueo BM). Protegido
+    por DIAG_TOKEN. No hace nada si RAILWAY_API_TOKEN no está configurado
+    en este proceso (ej. corriendo en Coolify o local) -- falla explícito,
+    nunca en silencio."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not name or not value:
+        return JSONResponse({"error": "name y value son requeridos"}, status_code=400)
+    _rw_token = _os_diag.getenv("RAILWAY_API_TOKEN", "")
+    _rw_svc = _os_diag.getenv("RAILWAY_SERVICE_ID", "")
+    _rw_env = _os_diag.getenv("RAILWAY_ENVIRONMENT_ID", "")
+    _rw_proj = _os_diag.getenv("RAILWAY_PROJECT_ID", "")
+    if not (_rw_token and _rw_svc and _rw_env and _rw_proj):
+        return JSONResponse({"error": "faltan credenciales RAILWAY_* en este proceso -- esto solo funciona corriendo en Railway"}, status_code=400)
+    import httpx as _httpx_diag
+    _mutation = "mutation U($i: VariableUpsertInput!) { variableUpsert(input: $i) }"
+    async with _httpx_diag.AsyncClient(timeout=15) as _c:
+        _r = await _c.post(
+            "https://backboard.railway.app/graphql/v2",
+            json={"query": _mutation, "variables": {"i": {
+                "projectId": _rw_proj, "serviceId": _rw_svc,
+                "environmentId": _rw_env, "name": name, "value": value,
+            }}},
+            headers={"Authorization": f"Bearer {_rw_token}", "Content-Type": "application/json"},
+        )
+    return JSONResponse({"ok": _r.status_code == 200, "railway_status": _r.status_code, "name": name})
+
+
+# Token dedicado para /internal/bm-proxy -- NO reusa _DIAG_TOKEN a propósito
+# (alcances distintos: diag es solo lectura/diagnóstico, este endpoint
+# ejecuta escrituras reales contra BM en nombre de otra instancia).
+_BM_PROXY_TOKEN_MAIN = _os_diag.getenv("BM_PROXY_TOKEN", "bmpx_9f1e4a7c2d8b5063a1e7f9c4d6b28035")
+_BM_PROXY_ALLOWED_BASE = "https://binmanager.mitechnologiesinc.com"
+
+
+@app.post("/internal/bm-proxy")
+async def internal_bm_proxy(request: Request):
+    """Único punto real de entrada a BM (2026-09-03, aprobado por Jovan tras
+    2 incidentes reales de bloqueo por peticiones concurrentes desde
+    procesos distintos con la misma cuenta de servicio de BM -- el semáforo
+    global de binmanager_client.py solo protege DENTRO de un proceso, no
+    entre Railway/Coolify/local). Solo esta instancia (marcada BM_PROXY_ROLE=
+    primary, exclusivamente en Railway) puede servir este endpoint de
+    verdad -- Coolify y cualquier instancia local (secondary por default)
+    reenvían aquí en vez de hablarle a BM directo, ver
+    app/services/binmanager_client.py (_proxy_bm_request/_BM_IS_PRIMARY).
+
+    Protegido por BM_PROXY_TOKEN (token dedicado, no DIAG_TOKEN) y
+    restringido a URLs de binmanager.mitechnologiesinc.com -- para que esto
+    nunca se vuelva un relay abierto a cualquier destino."""
+    import app.services.binmanager_client as _bm_client_mod
+    token = request.headers.get("X-BM-Proxy-Token", "")
+    if not _BM_PROXY_TOKEN_MAIN or token != _BM_PROXY_TOKEN_MAIN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not _bm_client_mod._BM_IS_PRIMARY:
+        return JSONResponse({"error": "esta instancia no es primary -- no puede servir de túnel BM"}, status_code=501)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "JSON inválido"}, status_code=400)
+
+    url = (body.get("url") or "").strip()
+    if not url.startswith(_BM_PROXY_ALLOWED_BASE):
+        return JSONResponse({"error": "url fuera del dominio permitido"}, status_code=400)
+    payload = body.get("payload")
+    try:
+        timeout = float(body.get("timeout") or 30)
+    except (TypeError, ValueError):
+        timeout = 30.0
+
+    r = await _bm_client_mod.bm_post(url, payload, timeout=timeout)
+    if r is None:
+        return JSONResponse({"status_code": 502, "text": ""})
+    return JSONResponse({"status_code": r.status_code, "text": r.text})
+
+
 @app.post("/api/diag/user-fix-orphan-sections")
 async def diag_user_fix_orphan_sections(token: str = "", dry_run: bool = True):
     """Escritura controlada (DIAG_TOKEN, sin sesión) para el incidente

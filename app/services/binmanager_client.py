@@ -43,6 +43,84 @@ _AJAX_HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+# ── Túnel único hacia BM (2026-09-03, aprobado por Jovan) ───────────────────
+# Incidente real: el semáforo de arriba (_BM_GLOBAL_SEM) solo serializa
+# DENTRO de un proceso -- Railway (producción) y un servidor local corriendo
+# al mismo tiempo, ambos con la MISMA cuenta de servicio de BM, generaron
+# peticiones concurrentes desde 2 procesos que no se conocen entre sí y BM
+# nos bloqueó. Fix real (no solo "prometer no volver a hacerlo"): SOLO la
+# instancia marcada como "primary" (Railway, vía BM_PROXY_ROLE) le habla a
+# BM directo. Cualquier otra instancia (Coolify, un local futuro) es
+# "secondary" por default (seguro) y reenvía TODO a través del endpoint
+# /internal/bm-proxy de Railway, que internamente usa la MISMA cola de
+# siempre -- así, sin importar de dónde salga la petición, todas terminan
+# en la única cola real.
+_BM_PROXY_ROLE = os.getenv("BM_PROXY_ROLE", "secondary")
+_BM_IS_PRIMARY = _BM_PROXY_ROLE == "primary"
+_BM_PROXY_TOKEN = os.getenv("BM_PROXY_TOKEN", "")
+_BM_PROXY_URL = os.getenv("BM_PROXY_URL", "https://apantallatemx.up.railway.app/internal/bm-proxy")
+
+_bm_proxy_last_alert_ts = 0.0
+_BM_PROXY_ALERT_COOLDOWN_S = 900  # 15 min -- no inundar #alertas-marketplace si Railway sigue caído
+
+
+async def _alert_bm_proxy_down(detail: str) -> None:
+    """Avisa a #alertas-marketplace si esta instancia (secondary) no pudo
+    alcanzar el túnel real hacia BM (Railway) -- pedido explícito de Jovan
+    al aprobar el túnel único. Rate-limited: máx 1 alerta cada 15 min."""
+    import time as _t
+    global _bm_proxy_last_alert_ts
+    now = _t.time()
+    if now - _bm_proxy_last_alert_ts < _BM_PROXY_ALERT_COOLDOWN_S:
+        return
+    _bm_proxy_last_alert_ts = now
+    try:
+        from app.services.marketplace_alerts import post_marketplace_alert
+        await post_marketplace_alert(
+            "🔴 **Túnel BM caído** — este ambiente no pudo alcanzar el proxy de "
+            f"BinManager en Railway. BM en vivo (sustituciones, live-check) no "
+            f"funciona hasta que Railway vuelva. Detalle: {detail[:200]}"
+        )
+    except Exception as e:
+        logger.error(f"[BM-PROXY] no se pudo mandar alerta de túnel caído: {e}")
+
+
+class _ProxiedResponse:
+    """Imita la interfaz mínima de httpx.Response que el resto del código ya
+    espera (.status_code, .text, .json()) -- construida con lo que regresa
+    el proxy de Railway. Solo se usa en instancias secondary."""
+
+    def __init__(self, status_code: int, text: str):
+        self.status_code = status_code
+        self.text = text
+        self.url = ""  # nunca usado para decidir nada en el camino secondary
+
+    def json(self):
+        return json.loads(self.text)
+
+
+async def _proxy_bm_request(url: str, payload: dict | None, timeout: float) -> "_ProxiedResponse":
+    """Reenvía un POST a BM a través del único túnel real (Railway) -- ver
+    comentario de _BM_PROXY_ROLE arriba. Usado por _post() cuando esta
+    instancia NO es primary."""
+    if not _BM_PROXY_TOKEN:
+        await _alert_bm_proxy_down("BM_PROXY_TOKEN no configurado en esta instancia")
+        raise RuntimeError("BM_PROXY_TOKEN no configurado -- instancia secondary sin forma segura de hablarle a BM")
+    body = {"url": url, "payload": payload, "timeout": timeout}
+    try:
+        async with httpx.AsyncClient(timeout=timeout + 15) as client:
+            r = await client.post(
+                _BM_PROXY_URL, json=body, headers={"X-BM-Proxy-Token": _BM_PROXY_TOKEN},
+            )
+        if r.status_code != 200:
+            await _alert_bm_proxy_down(f"proxy respondió HTTP {r.status_code}")
+            raise RuntimeError(f"BM proxy (Railway) respondió HTTP {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        return _ProxiedResponse(status_code=data.get("status_code") or 502, text=data.get("text") or "")
+    except httpx.HTTPError as e:
+        await _alert_bm_proxy_down(f"{type(e).__name__}: {e}")
+        raise RuntimeError(f"No se pudo alcanzar el túnel BM (Railway): {e}") from e
+
 # Payload base para Get_GlobalStock_InventoryBySKU con NEEDRETAILPRICEPH=True
 # Arrayfilters_* deben ser listas vacías (no None) — BM lanza NullReferenceException con null.
 _GS_BASE_PAYLOAD = {
@@ -104,7 +182,14 @@ class BinManagerClient:
         semáforo global bloqueado para siempre y tumbando TODAS las consultas BM
         de la app hasta un restart manual. asyncio.wait_for cancela la tarea sin
         importar la causa del colgamiento, garantizando que el semáforo se libere.
+
+        FEATURE 2026-09-03: si esta instancia no es "primary" (ver
+        _BM_PROXY_ROLE), reenvía por el túnel único en vez de llamar a BM
+        directo — el semáforo de abajo NO protege entre procesos distintos,
+        solo dentro de este mismo proceso.
         """
+        if not _BM_IS_PRIMARY:
+            return await _proxy_bm_request(url, kwargs.get("json"), kwargs.get("timeout") or 30)
         _hard_timeout = (kwargs.get("timeout") or 30) + 5
         async with _get_bm_sem():
             try:
@@ -117,7 +202,15 @@ class BinManagerClient:
 
     async def _get(self, url: str, **kwargs) -> httpx.Response:
         """GET a BM a través de la cola global — máx 1 request activo a la vez.
-        Ver _post() — mismo hard-timeout de seguridad vía asyncio.wait_for."""
+        Ver _post() — mismo hard-timeout de seguridad vía asyncio.wait_for.
+
+        FEATURE 2026-09-03: en la práctica solo login() usa _get() (User/Index),
+        y login() ya es no-op en instancias secondary — así que esto no
+        debería alcanzarse nunca fuera de primary. Guardia defensiva: si de
+        algún modo se llega aquí en secondary, rechaza en vez de hablarle a
+        BM directo en silencio (justo el bug que causó el bloqueo real)."""
+        if not _BM_IS_PRIMARY:
+            raise RuntimeError("_get() directo a BM no soportado en instancias secondary")
         _hard_timeout = (kwargs.get("timeout") or 30) + 5
         async with _get_bm_sem():
             try:
@@ -129,6 +222,12 @@ class BinManagerClient:
             return r
 
     async def login(self) -> bool:
+        # FEATURE 2026-09-03: en instancias secondary NUNCA se inicia sesión
+        # real con BM -- el túnel (Railway/primary) es quien mantiene la
+        # única sesión real. Ver _BM_PROXY_ROLE arriba.
+        if not _BM_IS_PRIMARY:
+            self._logged_in = True
+            return True
         async with self._login_lock:
             # Si otra coroutine ya completó el login mientras esperábamos, no repetir
             if self._logged_in:
