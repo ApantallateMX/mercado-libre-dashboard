@@ -20140,6 +20140,41 @@ async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
     return JSONResponse({"count": len(result), "items": result})
 
 
+@app.get("/api/diag/amazon-listings-sync-health")
+async def diag_amazon_listings_sync_health(seller_id: str = "", token: str = ""):
+    """Diagnóstico de solo lectura (2026-09-04, pedido por Jovan tras dudar
+    de que la búsqueda por palabra clave estuviera completa para
+    ExclusiveBulbs): salud real del sync local de amazon_listings para una
+    cuenta -- cuántas filas tienen título/ASIN vacíos (candidato a sync
+    incompleto/stub) y qué tan viejo es el dato."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id requerido"}, status_code=400)
+    import aiosqlite as _aio_alsh, time as _t_alsh
+    async with _aio_alsh.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_alsh.Row
+        cur = await db.execute(
+            """SELECT COUNT(*) AS total,
+                      SUM(CASE WHEN title = '' OR title IS NULL THEN 1 ELSE 0 END) AS empty_title,
+                      SUM(CASE WHEN asin = '' OR asin IS NULL THEN 1 ELSE 0 END) AS empty_asin,
+                      MIN(synced_at) AS oldest_sync, MAX(synced_at) AS newest_sync
+               FROM amazon_listings WHERE seller_id = ?""",
+            (seller_id,),
+        )
+        row = dict(await cur.fetchone())
+        cur = await db.execute(
+            "SELECT status, COUNT(*) AS n FROM amazon_listings WHERE seller_id = ? GROUP BY status",
+            (seller_id,),
+        )
+        by_status = [dict(r) for r in await cur.fetchall()]
+    now = _t_alsh.time()
+    row["oldest_sync_days_ago"] = round((now - row["oldest_sync"]) / 86400, 1) if row["oldest_sync"] else None
+    row["newest_sync_days_ago"] = round((now - row["newest_sync"]) / 86400, 1) if row["newest_sync"] else None
+    row["by_status"] = by_status
+    return row
+
+
 @app.get("/api/diag/amazon-listings-keyword-search")
 async def diag_amazon_listings_keyword_search(seller_id: str = "", keywords: str = "", token: str = ""):
     """Diagnóstico de solo lectura (2026-09-04, pedido por Jovan tras limpieza
