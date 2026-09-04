@@ -1505,6 +1505,43 @@ async def init_db():
             except Exception:
                 pass  # columna ya existe
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: transfer_requests — Requisición de Traspaso formal
+        # (FEATURE 2026-09-04, pedido explícito de Jovan): BinManager NO
+        # tiene ninguna forma real de crear un traspaso entre almacenes vía
+        # API (confirmado por binmanager-specialist -- operations_guide lista
+        # exhaustivamente las únicas 6 tools de escritura de BM, ninguna
+        # mueve inventario entre warehouses; todo traspaso real ocurre por
+        # proceso físico: escaneo de LPN, camión, recepción). Esta tabla NO
+        # automatiza ese movimiento -- da trazabilidad real (quién pidió qué,
+        # cuándo, a dónde, y si se cumplió) sobre "Transferencias Sugeridas"
+        # (antes solo tenía un botón "Copiar lista" sin ningún registro).
+        # status: 'pending' (recién creada) -> 'completed' (alguien confirmó
+        # que BM ya refleja el stock movido) -- nunca se infiere sola;
+        # "vencida" se calcula al leer (edad > _TRANSFER_REQUEST_STALE_DAYS
+        # sin completar), no se escribe, para no fingir certeza que no hay.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS transfer_requests (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                sku             TEXT NOT NULL,
+                product_title   TEXT NOT NULL DEFAULT '',
+                qty             INTEGER NOT NULL,
+                origin          TEXT NOT NULL DEFAULT 'TJ',
+                destination     TEXT NOT NULL,
+                note            TEXT NOT NULL DEFAULT '',
+                requested_by    TEXT NOT NULL DEFAULT '',
+                requested_by_user_id INTEGER,
+                created_at      REAL NOT NULL DEFAULT 0,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                completed_at    REAL,
+                completed_by    TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tr_status ON transfer_requests(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tr_sku ON transfer_requests(sku)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_tr_created ON transfer_requests(created_at)")
+
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: amazon_buyer_messages — mensajes reales de compradores Amazon
         # (Buyer-Seller Messaging) capturados vía el buzón Gmail dedicado que
         # Amazon reenvía en Notification Preferences → Messaging → Buyer
@@ -2833,6 +2870,67 @@ async def get_tj_only_transfer_candidates() -> list[dict]:
         _badge_rank[i["sales_badge"]], -i["units_12m"], -(i["tj_qty"] * (i["retail_ph"] or 0)),
     ))
     return items
+
+
+_TRANSFER_REQUEST_STALE_DAYS = 10  # sin cierre después de esto -> "vencida" (calculado, nunca escrito)
+
+
+async def create_transfer_request(*, sku: str, product_title: str, qty: int, destination: str,
+                                    note: str, requested_by: str, requested_by_user_id: int | None) -> int:
+    """Registra una Requisición de Traspaso (Tijuana -> CDMX/MTY) -- ver
+    comentario de la tabla en init_db(). NO mueve ningún inventario real
+    (BM no lo permite vía API) -- solo deja constancia de quién pidió qué,
+    cuándo, y a dónde, para que el caller notifique y dar seguimiento."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            """INSERT INTO transfer_requests
+                (sku, product_title, qty, origin, destination, note, requested_by, requested_by_user_id, created_at, status)
+               VALUES (?, ?, ?, 'TJ', ?, ?, ?, ?, ?, 'pending')""",
+            (sku, product_title, qty, destination, note, requested_by, requested_by_user_id, _t.time()),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_transfer_requests(status: str = "", limit: int = 100) -> list[dict]:
+    """Historial de requisiciones, más reciente primero. status='' trae
+    todas; 'pending'/'completed' filtra. El estado 'vencida' se calcula
+    aquí en lectura (pending + más de _TRANSFER_REQUEST_STALE_DAYS sin
+    cerrarse) -- nunca se escribe en la tabla, para no fingir un cierre
+    automático que nadie confirmó de verdad."""
+    import time as _t
+    _stale_cutoff = _t.time() - (_TRANSFER_REQUEST_STALE_DAYS * 86400)
+    sql = "SELECT * FROM transfer_requests"
+    params: list = []
+    if status == "pending":
+        sql += " WHERE status = 'pending'"
+    elif status == "completed":
+        sql += " WHERE status = 'completed'"
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        rows = [dict(r) for r in await (await db.execute(sql, params)).fetchall()]
+    for r in rows:
+        r["display_status"] = (
+            "vencida" if r["status"] == "pending" and r["created_at"] < _stale_cutoff
+            else r["status"]
+        )
+    return rows
+
+
+async def mark_transfer_request_completed(request_id: int, completed_by: str) -> bool:
+    """Marca una requisición como cumplida (el stock ya se ve movido en BM)
+    -- confirmación humana explícita, nunca inferida automáticamente."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "UPDATE transfer_requests SET status = 'completed', completed_at = ?, completed_by = ? WHERE id = ? AND status = 'pending'",
+            (_t.time(), completed_by, request_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def get_bulk_sku_lookup(skus: list[str]) -> dict:

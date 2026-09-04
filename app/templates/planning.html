@@ -586,6 +586,10 @@ function _tjRowHtml(t) {
         '<td class="py-3 px-3">' + _tjBadgeHtml(t) + _tjSalesLine(t) + '</td>' +
         '<td class="py-3 px-3 text-right"><span class="text-sm font-bold text-gray-800">' + t.tj_qty + '</span> <span class="text-[11px] text-gray-400">uds</span></td>' +
         '<td class="py-3 px-3 text-right text-xs text-gray-500">' + (t.retail_ph ? '$' + Number(t.retail_ph).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' USD' : '—') + '</td>' +
+        '<td class="py-3 px-3 text-right">' +
+            '<button onclick="_openTransferModal(\'' + _tjEscHtml(t.sku) + '\', \'' + _tjEscHtml((t.title||'').replace(/'/g,"\\'")) + '\', ' + t.tj_qty + ')" ' +
+            'class="text-xs px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-semibold whitespace-nowrap">Generar requisición</button>' +
+        '</td>' +
     '</tr>';
 }
 function _tjCardHtml(t) {
@@ -600,7 +604,10 @@ function _tjCardHtml(t) {
         '</div>' +
         '<div class="flex items-center justify-between mt-2">' + _tjBadgeHtml(t) +
             '<span class="text-[11px] text-gray-400">' + (t.sales_badge !== 'sin_historial' ? t.units_12m + ' uds/12m' : '') + '</span>' +
-        '</div></div>';
+        '</div>' +
+        '<button onclick="_openTransferModal(\'' + _tjEscHtml(t.sku) + '\', \'' + _tjEscHtml((t.title||'').replace(/'/g,"\\'")) + '\', ' + t.tj_qty + ')" ' +
+        'class="mt-2 w-full text-xs px-2.5 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-semibold">Generar requisición</button>' +
+    '</div>';
 }
 
 function _tjPopulateCategoryFilter() {
@@ -617,7 +624,7 @@ function _tjRenderPage(page) {
     var rows = _tjFiltered.map(_tjRowHtml);
     var cards = _tjFiltered.map(_tjCardHtml);
     if (!rows.length) {
-        document.getElementById('tj-tbody').innerHTML = '<tr><td colspan="5" class="text-center text-gray-400 text-sm py-8">Ningún producto coincide con estos filtros.</td></tr>';
+        document.getElementById('tj-tbody').innerHTML = '<tr><td colspan="6" class="text-center text-gray-400 text-sm py-8">Ningún producto coincide con estos filtros.</td></tr>';
         document.getElementById('tj-cards').innerHTML = '<p class="text-center text-gray-400 text-sm py-8">Ningún producto coincide con estos filtros.</p>';
         document.getElementById('tj-pag').innerHTML = '';
         return;
@@ -703,6 +710,127 @@ window.copyTjOnlyList = function() {
     });
 };
 
+// ============================================================
+// Requisición de Traspaso (FEATURE 2026-09-04)
+// ============================================================
+var _trModalCtx = null;
+
+window._openTransferModal = function(sku, title, tjQty) {
+    _trModalCtx = { sku: sku, title: title };
+    document.getElementById('tr-modal-sku').textContent = sku;
+    document.getElementById('tr-modal-product').textContent = title || '(sin título)';
+    document.getElementById('tr-modal-qty').value = tjQty;
+    document.getElementById('tr-modal-destination').value = 'CDMX';
+    document.getElementById('tr-modal-note').value = '';
+    document.getElementById('tr-modal-error').classList.add('hidden');
+    document.getElementById('transfer-request-modal').classList.remove('hidden');
+    document.getElementById('transfer-request-modal').classList.add('flex');
+};
+
+window._closeTransferModal = function() {
+    document.getElementById('transfer-request-modal').classList.add('hidden');
+    document.getElementById('transfer-request-modal').classList.remove('flex');
+    _trModalCtx = null;
+};
+
+window._submitTransferRequest = function() {
+    if (!_trModalCtx) return;
+    var qty = parseInt(document.getElementById('tr-modal-qty').value) || 0;
+    var destination = document.getElementById('tr-modal-destination').value;
+    var note = document.getElementById('tr-modal-note').value.trim();
+    var errEl = document.getElementById('tr-modal-error');
+    if (qty <= 0) {
+        errEl.textContent = 'La cantidad debe ser mayor a 0.';
+        errEl.classList.remove('hidden');
+        return;
+    }
+    var btn = document.getElementById('tr-modal-submit');
+    btn.disabled = true; btn.textContent = 'Generando...';
+    fetch('/api/planning/tj-only-transfer/request', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ sku: _trModalCtx.sku, product_title: _trModalCtx.title, qty: qty, destination: destination, note: note })
+    })
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+            btn.disabled = false; btn.textContent = 'Generar requisición';
+            if (d.ok) {
+                window._closeTransferModal();
+                if (window.showToast) showToast('Requisición #' + d.id + ' generada' + (d.notified ? ' y notificada' : ''), 'success');
+                if (!document.getElementById('tr-history-content').classList.contains('hidden')) _loadTransferHistory();
+            } else {
+                errEl.textContent = d.detail || 'No se pudo generar la requisición.';
+                errEl.classList.remove('hidden');
+            }
+        })
+        .catch(function(e) {
+            btn.disabled = false; btn.textContent = 'Generar requisición';
+            errEl.textContent = 'Error: ' + e.message;
+            errEl.classList.remove('hidden');
+        });
+};
+
+var _trHistoryLoaded = false;
+window._toggleTransferHistory = function() {
+    var content = document.getElementById('tr-history-content');
+    var chevron = document.getElementById('tr-history-chevron');
+    var opening = content.classList.contains('hidden');
+    content.classList.toggle('hidden', !opening);
+    if (chevron) chevron.textContent = opening ? '▾' : '▸';
+    if (opening) _loadTransferHistory();
+};
+
+var _TR_STATUS_CFG = {
+    pending:   { label: 'Pendiente', cls: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+    vencida:   { label: 'Vencida',   cls: 'bg-red-100 text-red-700 border-red-200' },
+    completed: { label: 'Cumplida',  cls: 'bg-green-100 text-green-700 border-green-200' },
+};
+
+function _loadTransferHistory() {
+    var el = document.getElementById('tr-history-content');
+    el.innerHTML = _spinner('Cargando historial...');
+    fetch('/api/planning/transfer-requests?limit=50')
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+            _trHistoryLoaded = true;
+            var items = d.items || [];
+            var countEl = document.getElementById('tr-history-count');
+            if (countEl) countEl.textContent = items.length ? '(' + items.length + ')' : '';
+            if (!items.length) {
+                el.innerHTML = '<p class="text-center text-gray-400 text-xs py-4">Ninguna requisición generada todavía.</p>';
+                return;
+            }
+            var rows = items.map(function(t) {
+                var cfg = _TR_STATUS_CFG[t.display_status] || _TR_STATUS_CFG.pending;
+                var dt = t.created_at ? new Date(t.created_at * 1000).toLocaleDateString('es-MX', {day:'2-digit', month:'short', year:'numeric'}) : '—';
+                return '<tr class="hover:bg-gray-50">' +
+                    '<td class="py-2 px-3 text-xs"><p class="font-medium text-gray-700 truncate max-w-[220px]">' + _tjEscHtml(t.product_title || t.sku) + '</p>' +
+                    '<p class="font-mono text-[10px] text-gray-400">' + t.sku + '</p></td>' +
+                    '<td class="py-2 px-3 text-xs text-gray-500">TJ &rarr; ' + t.destination + '</td>' +
+                    '<td class="py-2 px-3 text-xs text-right text-gray-700 font-semibold">' + t.qty + '</td>' +
+                    '<td class="py-2 px-3 text-xs text-gray-500">' + _tjEscHtml(t.requested_by || '—') + '<br><span class="text-[10px] text-gray-400">' + dt + '</span></td>' +
+                    '<td class="py-2 px-3 text-xs"><span class="text-[10px] font-semibold px-2 py-0.5 rounded-full border ' + cfg.cls + '">' + cfg.label + '</span></td>' +
+                    '<td class="py-2 px-3 text-right">' + (t.status === 'pending'
+                        ? '<button onclick="_completeTransferRequest(' + t.id + ')" class="text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 font-medium">Marcar cumplida</button>'
+                        : '<span class="text-[10px] text-gray-400">' + (t.completed_by ? 'por ' + _tjEscHtml(t.completed_by) : '') + '</span>') + '</td>' +
+                    '</tr>';
+            }).join('');
+            el.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-[10px] text-gray-400 bg-gray-50 uppercase">' +
+                '<th class="py-2 px-3">Producto</th><th class="py-2 px-3">Ruta</th><th class="py-2 px-3 text-right">Uds</th>' +
+                '<th class="py-2 px-3">Solicitó</th><th class="py-2 px-3">Estado</th><th class="py-2 px-3"></th>' +
+                '</tr></thead><tbody class="divide-y divide-gray-50">' + rows + '</tbody></table></div>';
+        })
+        .catch(function(e) { el.innerHTML = '<p class="text-center text-red-500 text-xs py-4">Error: ' + e.message + '</p>'; });
+}
+
+window._completeTransferRequest = function(id) {
+    fetch('/api/planning/transfer-requests/' + id + '/complete', { method: 'POST' })
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+            if (d.ok) { if (window.showToast) showToast('Requisición marcada como cumplida', 'success'); _loadTransferHistory(); }
+            else if (window.showToast) showToast(d.detail || 'No se pudo actualizar', 'error');
+        });
+};
+
 var TJ_SECTION_HTML =
     '<div class="mb-4 flex items-start justify-between gap-3 flex-wrap">' +
         '<div class="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-xs text-red-800 flex-1 min-w-[320px]">' +
@@ -741,9 +869,16 @@ var TJ_SECTION_HTML =
         '<th class="py-3 px-3 font-semibold">Ventas / Prioridad</th>' +
         '<th class="py-3 px-3 text-right font-semibold">Uds. en TJ</th>' +
         '<th class="py-3 px-3 text-right font-semibold">Costo ref.</th>' +
+        '<th class="py-3 px-3 text-right font-semibold">Acción</th>' +
         '</tr></thead><tbody id="tj-tbody" class="divide-y divide-gray-50"></tbody></table>' +
     '</div>' +
-    '<div id="tj-pag"></div>';
+    '<div id="tj-pag"></div>' +
+    '<div class="mt-5 pt-4 border-t border-gray-100">' +
+        '<button onclick="_toggleTransferHistory()" class="text-xs text-teal-700 hover:text-teal-800 font-semibold flex items-center gap-1">' +
+        '<span id="tr-history-chevron">▸</span> Historial de requisiciones' +
+        '<span id="tr-history-count" class="text-gray-400 font-normal"></span></button>' +
+        '<div id="tr-history-content" class="hidden mt-3"></div>' +
+    '</div>';
 
 window.loadTransfers = function() {
     _openSection('plan-transfers');
@@ -1441,6 +1576,47 @@ window._copyNoSkuList = function(items) {
                     class="text-gray-400 hover:text-gray-600 text-lg font-bold leading-none">✕</button>
         </div>
         <div id="no-sku-modal-body" class="overflow-y-auto flex-1 p-5"></div>
+    </div>
+</div>
+
+<!-- Modal Requisición de Traspaso (FEATURE 2026-09-04) -->
+<div id="transfer-request-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onclick="if(event.target===this)_closeTransferModal()">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <h3 class="font-semibold text-gray-800 text-sm">Generar requisición de traspaso</h3>
+            <button onclick="_closeTransferModal()" class="text-gray-400 hover:text-gray-600 text-lg font-bold leading-none">✕</button>
+        </div>
+        <div class="p-5 space-y-3">
+            <p class="text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Esto NO mueve el inventario solo — BinManager no lo permite vía sistema. Registra la solicitud
+                y avisa al equipo de almacén/logística para que lo ejecuten físicamente.
+            </p>
+            <div>
+                <p class="text-xs font-medium text-gray-700 mb-1" id="tr-modal-product">—</p>
+                <p class="font-mono text-[11px] text-gray-400" id="tr-modal-sku">—</p>
+            </div>
+            <div>
+                <label class="text-xs font-medium text-gray-600 block mb-1">Destino</label>
+                <select id="tr-modal-destination" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-teal-400">
+                    <option value="CDMX">CDMX</option>
+                    <option value="MTY">MTY</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-medium text-gray-600 block mb-1">Cantidad a traspasar</label>
+                <input id="tr-modal-qty" type="number" min="1" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-teal-400">
+            </div>
+            <div>
+                <label class="text-xs font-medium text-gray-600 block mb-1">Nota (opcional)</label>
+                <textarea id="tr-modal-note" rows="2" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-teal-400"></textarea>
+            </div>
+            <div id="tr-modal-error" class="hidden text-xs text-red-600"></div>
+        </div>
+        <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-100">
+            <button onclick="_closeTransferModal()" class="text-xs px-3 py-2 rounded-lg text-gray-600 hover:bg-gray-50 font-medium">Cancelar</button>
+            <button onclick="_submitTransferRequest()" id="tr-modal-submit"
+                    class="text-xs px-4 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-semibold">Generar requisición</button>
+        </div>
     </div>
 </div>
 

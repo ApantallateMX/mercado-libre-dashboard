@@ -28289,6 +28289,92 @@ async def planning_tj_only_transfer(category: str = ""):
     return {"items": items, "count": len(items)}
 
 
+@app.post("/api/planning/tj-only-transfer/request")
+async def planning_create_transfer_request(request: Request):
+    """Requisición de Traspaso formal (FEATURE 2026-09-04, pedido explícito
+    de Jovan): BinManager no tiene ninguna forma real de crear un traspaso
+    entre almacenes vía API (confirmado por binmanager-specialist -- las
+    únicas 6 tools de escritura reales de BM no mueven inventario entre
+    warehouses; todo traspaso ocurre por proceso físico). Este endpoint NO
+    mueve nada -- deja constancia (quién, qué, cuánto, a dónde, cuándo) y
+    notifica al canal de almacén/logística, para reemplazar el "Copiar
+    lista" manual de antes con algo que sí se puede dar seguimiento.
+    Body: {sku, product_title, qty, destination ('CDMX'|'MTY'), note}."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+
+    sku = (body.get("sku") or "").strip()
+    product_title = (body.get("product_title") or "").strip()
+    destination = (body.get("destination") or "").strip().upper()
+    note = (body.get("note") or "").strip()
+    try:
+        qty = int(body.get("qty") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+
+    if not sku or qty <= 0:
+        return JSONResponse({"detail": "sku y qty (>0) son requeridos"}, status_code=400)
+    if destination not in ("CDMX", "MTY"):
+        return JSONResponse({"detail": "destination debe ser CDMX o MTY"}, status_code=400)
+
+    request_id = await token_store.create_transfer_request(
+        sku=sku, product_title=product_title, qty=qty, destination=destination,
+        note=note, requested_by=du.get("username", ""), requested_by_user_id=du.get("id"),
+    )
+
+    from app.services.marketplace_alerts import post_warehouse_transfer_request
+    _msg = (
+        f"📦 **Nueva requisición de traspaso** — Tijuana → {destination}\n"
+        f"SKU: `{sku}`" + (f" ({product_title})" if product_title else "") + "\n"
+        f"Cantidad: {qty} uds\n"
+        f"Solicitó: {du.get('username', '')}" + (f"\nNota: {note}" if note else "") + "\n"
+        f"ID: #{request_id}"
+    )
+    notified = await post_warehouse_transfer_request(_msg)
+
+    try:
+        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
+        await user_store.log_action(
+            username=du["username"], user_id=du.get("id"),
+            action="transfer_request_created", item_id=sku,
+            detail={"qty": qty, "destination": destination, "note": note, "request_id": request_id},
+            ip=ip, ml_account="", section="Planeación",
+        )
+    except Exception:
+        pass
+
+    return JSONResponse({"ok": True, "id": request_id, "notified": notified})
+
+
+@app.get("/api/planning/transfer-requests")
+async def planning_list_transfer_requests(status: str = "", limit: int = 100):
+    """Historial de Requisiciones de Traspaso -- ver create_transfer_request.
+    status='' trae todas, 'pending'/'completed' filtra. Cada fila trae
+    display_status calculado ('vencida' si pending lleva demasiado tiempo
+    sin cerrarse) -- ver token_store._TRANSFER_REQUEST_STALE_DAYS."""
+    rows = await token_store.get_transfer_requests(status=status, limit=limit)
+    return {"items": rows, "count": len(rows)}
+
+
+@app.post("/api/planning/transfer-requests/{request_id}/complete")
+async def planning_complete_transfer_request(request_id: int, request: Request):
+    """Marca una Requisición de Traspaso como cumplida -- confirmación
+    humana explícita de que BM ya refleja el stock movido, nunca inferida
+    automáticamente (BM no avisa cuando esto pasa)."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if not du:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    ok = await token_store.mark_transfer_request_completed(request_id, du.get("username", ""))
+    if not ok:
+        return JSONResponse({"detail": "Requisición no encontrada o ya estaba cerrada"}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
 async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) -> list:
     """Fetch paginated paid orders for a MeLi user in a date range."""
     client = await get_meli_client(user_id=uid)

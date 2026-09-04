@@ -69,6 +69,29 @@ def level_id_to_color(level_id: str) -> str:
     return _LEVEL_TO_COLOR.get(level_id or "", "desconocido")
 
 
+async def _post_to_mattermost_channel(channel_id: str, text: str, label: str) -> bool:
+    """POST puro a un canal de Mattermost -- nunca lanza, solo loguea si
+    falla. No-op silencioso si el bot (MM_URL/MM_BOT_TOKEN, compartido) o el
+    channel_id puntual no están configurados. `label` es solo para logs."""
+    if not (MM_URL and MM_BOT_TOKEN and channel_id):
+        logger.info(f"[{label}] MM_* / channel_id no configurado -- mensaje no enviado: %s", text[:120])
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"{MM_URL}/api/v4/posts",
+                headers={"Authorization": f"Bearer {MM_BOT_TOKEN}"},
+                json={"channel_id": channel_id, "message": text},
+            )
+            if r.status_code not in (200, 201):
+                logger.warning(f"[{label}] Mattermost respondió %s: %s", r.status_code, r.text[:200])
+                return False
+            return True
+    except Exception as e:
+        logger.warning(f"[{label}] Error posteando a Mattermost: {e}")
+        return False
+
+
 async def post_marketplace_alert(text: str) -> bool:
     """POST puro a Mattermost -- nunca lanza, solo loguea si falla. No-op
     silencioso si el bot no está configurado (env vars ausentes) O si
@@ -76,23 +99,24 @@ async def post_marketplace_alert(text: str) -> bool:
     if not ALERTS_ENABLED:
         logger.info("[MarketplaceAlerts] PAUSADO (MARKETPLACE_ALERTS_ENABLED != true) -- alerta no enviada: %s", text[:120])
         return False
-    if not (MM_URL and MM_BOT_TOKEN and MM_CHANNEL_ID):
-        logger.info("[MarketplaceAlerts] MM_* no configurado -- alerta no enviada: %s", text[:120])
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.post(
-                f"{MM_URL}/api/v4/posts",
-                headers={"Authorization": f"Bearer {MM_BOT_TOKEN}"},
-                json={"channel_id": MM_CHANNEL_ID, "message": text},
-            )
-            if r.status_code not in (200, 201):
-                logger.warning("[MarketplaceAlerts] Mattermost respondió %s: %s", r.status_code, r.text[:200])
-                return False
-            return True
-    except Exception as e:
-        logger.warning(f"[MarketplaceAlerts] Error posteando a Mattermost: {e}")
-        return False
+    return await _post_to_mattermost_channel(MM_CHANNEL_ID, text, "MarketplaceAlerts")
+
+
+# FEATURE 2026-09-04 (pedido explícito de Jovan): notificación de una
+# Requisición de Traspaso nueva (ver transfer_requests en token_store.py) --
+# canal DISTINTO al de alertas de reputación (#alertas-marketplace), pedido
+# aparte todavía por confirmar. Sin gate de ALERTS_ENABLED -- es una feature
+# nueva pedida explícitamente hoy, no la campaña de reputación que Jovan
+# pausó el 25-ago; si MM_WAREHOUSE_CHANNEL_ID no está seteado, no-op seguro
+# (mismo patrón que el resto de este módulo) hasta que Jovan confirme canal.
+MM_WAREHOUSE_CHANNEL_ID = os.getenv("MM_WAREHOUSE_CHANNEL_ID", "")
+
+
+async def post_warehouse_transfer_request(text: str) -> bool:
+    """POST puro al canal de almacén/logística para una Requisición de
+    Traspaso nueva. No-op seguro si MM_WAREHOUSE_CHANNEL_ID no está
+    configurado todavía -- la requisición igual queda registrada en DB."""
+    return await _post_to_mattermost_channel(MM_WAREHOUSE_CHANNEL_ID, text, "WarehouseTransferRequest")
 
 
 # Umbrales OFICIALES MLM (Mexico) -- verificados en vivo 2026-08-25 contra

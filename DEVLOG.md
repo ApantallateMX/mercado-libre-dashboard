@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-04 — FEAT: Requisición de Traspaso formal (Transferencias Sugeridas)
+
+### Contexto
+Jovan reportó un caso real (TV TCL 65Q77K, SKU SNTV007411, 124 unidades en Tijuana, 0 vendibles en CDMX/MTY, 0 ventas en ML/Amazon) y pidió mejorar "Transferencias Sugeridas Entre Almacenes": no solo alertar, sino poder generar una orden real para surtir CDMX o MTY.
+
+### Investigación (binmanager-specialist)
+Confirmado que **BinManager no tiene ninguna forma real de crear un traspaso entre almacenes vía API** — `operations_guide(topic="write")` lista exhaustivamente las 6 únicas tools de escritura reales (`create_sku`, `create_tag`, `assign_tag_to_sku`, `update_sku`, `update_bin`, `update_user_workcenter`), ninguna mueve inventario entre warehouses; `update_bin` está bloqueada a propósito para no permitir cambiar el warehouse/location de un bin. Todo traspaso real ocurre por proceso físico (escaneo de LPN, camión, recepción) — ninguna API puede saltarse eso.
+
+### Solución: Requisición de Traspaso con trazabilidad real
+No se automatiza el movimiento (imposible) — se reemplaza el botón "Copiar lista" (sin registro) por una requisición formal con seguimiento:
+- Nueva tabla `transfer_requests` (`app/services/token_store.py`): sku, qty, destino (CDMX/MTY), quién y cuándo lo pidió, estado (`pending`/`completed`), `display_status` calculado como `vencida` si pasan 10 días sin cerrarse (nunca se infiere sola, solo se calcula al leer).
+- 3 endpoints nuevos en `app/main.py`: `POST /api/planning/tj-only-transfer/request` (crea + notifica), `GET /api/planning/transfer-requests` (historial), `POST /api/planning/transfer-requests/{id}/complete` (cierre humano explícito).
+- Notificación a Mattermost vía nueva `post_warehouse_transfer_request()` (`app/services/marketplace_alerts.py`, refactor de `_post_to_mattermost_channel()` compartido con `post_marketplace_alert`) — canal `MM_WAREHOUSE_CHANNEL_ID` **pendiente de confirmar con Jovan**; no-op seguro mientras tanto (la requisición igual queda registrada).
+- UI en `app/templates/planning.html`: botón "Generar requisición" por fila/tarjeta (modal con destino/cantidad/nota) + sección colapsable "Historial de requisiciones" con botón "Marcar cumplida".
+
+### Verificación
+Compilación de los 3 archivos Python OK. Template Jinja parseado sin errores. JS inline extraído y verificado con `node --check`. Lógica de DB (crear/listar/completar/cálculo de "vencida") probada contra un sqlite temporal aislado (nunca tokens.db real, cero llamadas a BM). `post_warehouse_transfer_request` confirmado no-op seguro sin canal configurado.
+
+### Pendiente
+Confirmar con Jovan el canal de Mattermost (`MM_WAREHOUSE_CHANNEL_ID`) para que las notificaciones empiecen a salir de verdad.
+
+---
+
 ## 2026-09-03 — FEAT: Túnel único hacia BinManager (primary/secondary) — cierra bloqueo real de BM
 
 ### Incidente
