@@ -20140,6 +20140,77 @@ async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
     return JSONResponse({"count": len(result), "items": result})
 
 
+_amz_full_report_search_state: dict = {"status": "idle"}
+
+
+async def _run_amazon_full_report_search(seller_id: str, keywords: list[str]):
+    """Background: baja el reporte COMPLETO de Amazon (GET_MERCHANT_LISTINGS_ALL_DATA,
+    trae título real, funciona para catálogos de cualquier tamaño -- ej.
+    156K SKUs de ExclusiveBulbs) vía la función ya existente y probada
+    get_merchant_listings_report(), lo guarda en amazon_listings (arregla el
+    sync con títulos vacíos de paso, mismo upsert que ya usa el sync
+    periódico) y filtra por palabras clave sobre el dato fresco completo --
+    no el caché local potencialmente incompleto. FEATURE 2026-09-04, pedido
+    por Jovan tras descubrir que 98% de los títulos locales de ExclusiveBulbs
+    estaban vacíos (sync incompleto de origen, nunca root-caused a fondo)."""
+    global _amz_full_report_search_state
+    _amz_full_report_search_state = {"status": "running", "started_at": _time.time()}
+    try:
+        from app.services.amazon_client import get_amazon_client
+        from app.services.amazon_listing_sync import _report_entry_to_row
+        client = await get_amazon_client(seller_id=seller_id)
+        if not client:
+            _amz_full_report_search_state = {"status": "error", "error": f"sin client para seller_id={seller_id}"}
+            return
+        entries = await client.get_merchant_listings_report(max_wait_secs=900)
+        rows = [_report_entry_to_row(e, seller_id) for e in entries]
+        rows = [r for r in rows if r]
+        if rows:
+            await token_store.upsert_amazon_listings_report(rows)
+        kw_upper = [k.upper() for k in keywords]
+        matches = [
+            r for r in rows
+            if any(kw in (r.get("title") or "").upper() for kw in kw_upper)
+        ]
+        _amz_full_report_search_state = {
+            "status": "done", "finished_at": _time.time(),
+            "total_report_rows": len(rows), "keywords": keywords,
+            "match_count": len(matches),
+            "matches": [
+                {"sku": r["sku"], "asin": r["asin"], "title": r["title"],
+                 "status": r["status"], "qty": r["available_qty"], "price": r["price"]}
+                for r in matches
+            ],
+        }
+    except Exception as e:
+        logger.error(f"[AMZ-FULL-REPORT-SEARCH] error: {e}")
+        _amz_full_report_search_state = {"status": "error", "error": str(e)[:500]}
+
+
+@app.post("/api/diag/amazon-full-report-search")
+async def diag_amazon_full_report_search_start(seller_id: str = "", keywords: str = "", token: str = ""):
+    """Dispara en background la descarga del reporte COMPLETO de Amazon
+    (ver _run_amazon_full_report_search) -- puede tardar varios minutos para
+    catálogos grandes (156K SKUs), por eso corre async con polling en vez de
+    una sola llamada síncrona (Railway tiene un techo de tiempo por request)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not keywords:
+        return JSONResponse({"error": "seller_id y keywords son requeridos"}, status_code=400)
+    if _amz_full_report_search_state.get("status") == "running":
+        return JSONResponse({"error": "ya hay una búsqueda corriendo -- ver /api/diag/amazon-full-report-search-status"}, status_code=409)
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    asyncio.create_task(_run_amazon_full_report_search(seller_id, kw_list))
+    return {"status": "started", "seller_id": seller_id, "keywords": kw_list}
+
+
+@app.get("/api/diag/amazon-full-report-search-status")
+async def diag_amazon_full_report_search_status(token: str = ""):
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return _amz_full_report_search_state
+
+
 @app.get("/api/diag/amazon-listings-sync-health")
 async def diag_amazon_listings_sync_health(seller_id: str = "", token: str = ""):
     """Diagnóstico de solo lectura (2026-09-04, pedido por Jovan tras dudar
