@@ -1469,6 +1469,13 @@ class AmazonClient:
 
                 items = []
                 reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                # DEBUG 2026-09-04 (bug real: title siempre vacío para
+                # ExclusiveBulbs pese a que asin/status/sku sí parsean bien --
+                # capturar los encabezados reales del TSV para confirmar el
+                # nombre exacto de columna que Amazon manda de verdad, en vez
+                # de asumir "item-name"/"Item Name" como hace el código de abajo.
+                self._last_report_fieldnames = list(reader.fieldnames or [])
+                self._last_report_raw_sample = content[:2000]
                 for row in reader:
                     sku = (
                         row.get("seller-sku")

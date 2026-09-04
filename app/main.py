@@ -20170,6 +20170,8 @@ async def _run_amazon_full_report_search(seller_id: str, keywords: list[str]):
             {"sku": e.get("sku"), "title": e.get("title"), "title_len": len(e.get("title") or "")}
             for e in entries[:5]
         ]
+        _debug_fieldnames = getattr(client, "_last_report_fieldnames", None)
+        _debug_raw_sample = getattr(client, "_last_report_raw_sample", "")
         rows = [_report_entry_to_row(e, seller_id) for e in entries]
         rows = [r for r in rows if r]
         if rows:
@@ -20184,6 +20186,8 @@ async def _run_amazon_full_report_search(seller_id: str, keywords: list[str]):
             "total_report_rows": len(rows), "keywords": keywords,
             "match_count": len(matches),
             "debug_sample": _debug_sample,
+            "debug_fieldnames": _debug_fieldnames,
+            "debug_raw_sample": _debug_raw_sample,
             "matches": [
                 {"sku": r["sku"], "asin": r["asin"], "title": r["title"],
                  "status": r["status"], "qty": r["available_qty"], "price": r["price"]}
