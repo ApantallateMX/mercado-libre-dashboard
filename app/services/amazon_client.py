@@ -1017,8 +1017,17 @@ class AmazonClient:
         import gzip as _gzip
 
         def _decode(raw: bytes) -> str:
+            # FIX 2026-09-04 (bug real confirmado: GET_MERCHANT_LISTINGS_ALL_DATA
+            # para ExclusiveBulbs traía el BOM UTF-8 pegado al nombre de la
+            # PRIMERA columna -- "﻿item-name" en vez de "item-name" -- así
+            # que get_merchant_listings_report() nunca hacía match con
+            # row.get("item-name") y el título quedaba vacío para ~60,000 SKUs
+            # (98% del catálogo), aunque asin/status/sku sí parseaban bien por
+            # no ser la primera columna. "utf-8-sig" es idéntico a "utf-8" para
+            # contenido SIN BOM (no cambia nada para los demás reportes) pero
+            # lo quita automáticamente cuando sí está presente.
             try:
-                return raw.decode("utf-8")
+                return raw.decode("utf-8-sig")
             except UnicodeDecodeError:
                 return raw.decode("cp1252", errors="replace")
 
