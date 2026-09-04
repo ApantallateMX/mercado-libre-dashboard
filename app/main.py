@@ -20163,6 +20163,13 @@ async def _run_amazon_full_report_search(seller_id: str, keywords: list[str]):
             _amz_full_report_search_state = {"status": "error", "error": f"sin client para seller_id={seller_id}"}
             return
         entries = await client.get_merchant_listings_report(max_wait_secs=900)
+        # DEBUG 2026-09-04 (match_count salió en 0 pese a coincidencias reales
+        # confirmadas en vivo en Seller Central -- inspeccionar si el título
+        # ya viene vacío desde get_merchant_listings_report o se pierde después).
+        _debug_sample = [
+            {"sku": e.get("sku"), "title": e.get("title"), "title_len": len(e.get("title") or "")}
+            for e in entries[:5]
+        ]
         rows = [_report_entry_to_row(e, seller_id) for e in entries]
         rows = [r for r in rows if r]
         if rows:
@@ -20176,6 +20183,7 @@ async def _run_amazon_full_report_search(seller_id: str, keywords: list[str]):
             "status": "done", "finished_at": _time.time(),
             "total_report_rows": len(rows), "keywords": keywords,
             "match_count": len(matches),
+            "debug_sample": _debug_sample,
             "matches": [
                 {"sku": r["sku"], "asin": r["asin"], "title": r["title"],
                  "status": r["status"], "qty": r["available_qty"], "price": r["price"]}
