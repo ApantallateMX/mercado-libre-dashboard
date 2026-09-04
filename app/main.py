@@ -20140,6 +20140,35 @@ async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
     return JSONResponse({"count": len(result), "items": result})
 
 
+@app.get("/api/diag/amazon-listings-keyword-search")
+async def diag_amazon_listings_keyword_search(seller_id: str = "", keywords: str = "", token: str = ""):
+    """Diagnóstico de solo lectura (2026-09-04, pedido por Jovan tras limpieza
+    de ExclusiveBulbs): busca en amazon_listings (título) por cualquiera de
+    las palabras clave dadas, separadas por coma, acotado a una cuenta.
+    Para decidir en bloque qué SKUs dar de baja -- no borra nada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not keywords:
+        return JSONResponse({"error": "seller_id y keywords son requeridos"}, status_code=400)
+    kw_list = [k.strip().upper() for k in keywords.split(",") if k.strip()]
+    if not kw_list:
+        return JSONResponse({"error": "ninguna keyword válida"}, status_code=400)
+    import aiosqlite as _aio_alks
+    async with _aio_alks.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_alks.Row
+        where_kw = " OR ".join(["UPPER(title) LIKE ?"] * len(kw_list))
+        params = [f"%{k}%" for k in kw_list]
+        cur = await db.execute(
+            f"""SELECT sku, asin, title, status, price, available_qty, fulfillment
+                FROM amazon_listings
+                WHERE seller_id = ? AND ({where_kw})
+                ORDER BY title""",
+            [seller_id] + params,
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    return {"seller_id": seller_id, "keywords": kw_list, "count": len(rows), "items": rows}
+
+
 @app.get("/api/diag/supplier-debt")
 async def diag_supplier_debt(token: str = ""):
     """Diagnóstico: salud del ledger de deuda — cuántas filas siguen en $0
