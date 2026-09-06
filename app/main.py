@@ -20268,7 +20268,11 @@ async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, 
             _amz_bulk_delete_state["failed_skus"].append({"sku": c["sku"], "error": str(e)[:200]})
             logger.error(f"[AMZ-BULK-DELETE] excepción borrando {c['sku']}: {e}")
         _amz_bulk_delete_state["done"] += 1
-        await asyncio.sleep(0.5)
+        # FEATURE 2026-09-05 (pedido por Jovan, "ve con la mejor opción"):
+        # 0.25s en vez de 0.5s -- ya corrieron 5,732 borrados reales sin
+        # ningún síntoma de rate-limit (0 errores 429), solo justifica
+        # mantener margen, no ser tan conservador como la primera corrida.
+        await asyncio.sleep(0.25)
 
     _amz_bulk_delete_state["status"] = "done"
     _amz_bulk_delete_state["finished_at"] = _time.time()
