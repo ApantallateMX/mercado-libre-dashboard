@@ -20143,29 +20143,79 @@ async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
 _amz_bulk_delete_state: dict = {"status": "idle"}
 
 
-async def _run_amazon_bulk_delete(seller_id: str, keyword_phrase: str, reason: str):
-    """Background: borra permanentemente en Amazon TODOS los listings de una
-    cuenta que coincidan con un título (frase) + 0 stock + status INACTIVE/
-    INCOMPLETE -- FEATURE 2026-09-04, pedido explícito de Jovan tras revisar
-    y aprobar la lista completa (5,734 SKUs de "replacement lamp" en
-    ExclusiveBulbs, ya verificados en Seller Central). Re-deriva el mismo
-    query exacto contra amazon_listings (recién corregido con títulos reales,
-    ver fix de BOM) en vez de recibir 5000+ SKUs por request. Rate-limited
-    (0.5s entre llamadas -- ~48 min para 5,734 SKUs) para no golpear la
-    cuenta real. Cada resultado (éxito o fallo) queda en amz_listing_actions
-    (save_listing_action, misma tabla que ya usa el endpoint individual de
-    borrado) -- auditoría durable incluso si el proceso se interrumpe a
-    medias."""
+def _amz_bulk_delete_query(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str):
+    """Construye el query compartido por el dry-run y la corrida real --
+    UN SOLO lugar define qué es "seguro borrar", para que nunca diverjan.
+
+    FIX 2026-09-05 (hallazgo real, encontrado ANTES de ejecutar por revisión
+    manual de Jovan -- no fue un incidente, fue la prueba de por qué este
+    blindaje hace falta): un primer intento de limpiar "lamp/projector/bulb"
+    en ExclusiveBulbs iba a incluir por error 11 SKUs de focos LED modernos
+    reales -- coincidían con la palabra "bulb"/"lamp" en el título (ej.
+    "EcoSmart ... LED Vintage Edison Light Bulb") pero tenían ventas hace
+    apenas 2 días y stock real en bm_sku_master. Un filtro de texto NUNCA
+    es suficiente por sí solo para decidir qué borrar. Por eso este query
+    SIEMPRE excluye, sin excepción y sin que el caller pueda desactivarlo:
+    (a) cualquier SKU con ventas reales en los últimos 365 días
+        (order_history, cualquier plataforma/cuenta -- mismo criterio que
+        el resto del proyecto), y
+    (b) cualquier SKU con stock real disponible >0 en bm_sku_master (por si
+        el listing de Amazon está en 0 pero BM sí tiene inventario real).
+    """
+    where = ["al.seller_id = ?", "al.available_qty = 0"]
+    params: list = [seller_id]
+
+    status_list = [s.strip().upper() for s in (statuses or "INACTIVE,INCOMPLETE").split(",") if s.strip()]
+    where.append(f"al.status IN ({','.join('?' * len(status_list))})")
+    params.extend(status_list)
+
+    kw_list = [k.strip().upper() for k in (keywords or "").split(",") if k.strip()]
+    if kw_list:
+        where.append("(" + " OR ".join(["UPPER(al.title) LIKE ?"] * len(kw_list)) + ")")
+        params.extend([f"%{k}%" for k in kw_list])
+
+    excl_list = [p.strip().upper() for p in (exclude_prefixes or "").split(",") if p.strip()]
+    for p in excl_list:
+        where.append("UPPER(al.sku) NOT LIKE ?")
+        params.append(f"{p}%")
+
+    from datetime import datetime as _dt_abd, timedelta as _td_abd
+    cutoff = (_dt_abd.utcnow() - _td_abd(days=365)).strftime("%Y-%m-%d")
+    sql = f"""
+        SELECT al.sku, al.asin, al.title
+        FROM amazon_listings al
+        LEFT JOIN (
+            SELECT sku, SUM(quantity) AS units_12m
+            FROM order_history
+            WHERE order_date >= ?
+              AND LOWER(status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
+            GROUP BY sku
+        ) oh ON oh.sku = al.sku
+        LEFT JOIN bm_sku_master bsm ON bsm.sku = al.sku
+        WHERE {' AND '.join(where)}
+          AND COALESCE(oh.units_12m, 0) = 0
+          AND COALESCE(bsm.available_qty, 0) = 0
+    """
+    return sql, [cutoff] + params
+
+
+async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str, reason: str):
+    """Background: borra permanentemente en Amazon los listings de una
+    cuenta que coincidan con el filtro de _amz_bulk_delete_query (título +
+    status + 0 stock + SIN ventas reales 12m + SIN stock real en BM) --
+    FEATURE 2026-09-04/05, pedido explícito de Jovan tras revisar y aprobar
+    la limpieza de ExclusiveBulbs. Re-deriva el query contra amazon_listings
+    (recién corregido con títulos reales, ver fix de BOM) en vez de recibir
+    miles de SKUs por request. Rate-limited (0.5s entre llamadas) para no
+    golpear la cuenta real. Cada resultado (éxito o fallo) queda en
+    amz_listing_actions (save_listing_action) -- auditoría durable incluso
+    si el proceso se interrumpe a medias."""
     global _amz_bulk_delete_state
     import aiosqlite as _aio_bd
+    sql, params = _amz_bulk_delete_query(seller_id, keywords, statuses, exclude_prefixes)
     async with _aio_bd.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_bd.Row
-        cur = await db.execute(
-            """SELECT sku, asin, title FROM amazon_listings
-               WHERE seller_id = ? AND UPPER(title) LIKE ?
-                 AND available_qty = 0 AND status IN ('INACTIVE', 'INCOMPLETE')""",
-            (seller_id, f"%{keyword_phrase.upper()}%"),
-        )
+        cur = await db.execute(sql, params)
         candidates = [dict(r) for r in await cur.fetchall()]
 
     _amz_bulk_delete_state = {
@@ -20212,36 +20262,45 @@ async def _run_amazon_bulk_delete(seller_id: str, keyword_phrase: str, reason: s
 
 @app.post("/api/diag/amazon-bulk-delete-by-keyword")
 async def diag_amazon_bulk_delete_by_keyword(
-    seller_id: str = "", keyword_phrase: str = "", reason: str = "",
+    seller_id: str = "", keywords: str = "", statuses: str = "INACTIVE,INCOMPLETE",
+    exclude_prefixes: str = "", reason: str = "",
     confirm: bool = False, token: str = "",
 ):
     """Dispara en background el borrado permanente masivo (ver
     _run_amazon_bulk_delete). Sin confirm=true SOLO cuenta cuántos SKUs
     coinciden (dry-run, no borra nada) -- mismo patrón que
     /api/diag/oversell-correction-run, para blindar contra un typo en una
-    operación de este tamaño e irreversible."""
+    operación de este tamaño e irreversible.
+
+    keywords: frases separadas por coma, unidas con OR contra el título
+    (ej. "lamp,projector,bulb"). Vacío = cualquier título (útil para
+    limpiar por status solamente, ej. todos los INCOMPLETE).
+    statuses: default INACTIVE,INCOMPLETE.
+    exclude_prefixes: prefijos de SKU a excluir siempre, separados por coma
+    (ej. "SN" para proteger nuestro propio inventario mientras se revisa
+    aparte contra BM) -- además del blindaje de ventas/stock que YA aplica
+    siempre sin poder desactivarse (ver _amz_bulk_delete_query)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
-    if not seller_id or not keyword_phrase:
-        return JSONResponse({"error": "seller_id y keyword_phrase son requeridos"}, status_code=400)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id es requerido"}, status_code=400)
     if _amz_bulk_delete_state.get("status") == "running":
         return JSONResponse({"error": "ya hay un borrado masivo corriendo -- ver /api/diag/amazon-bulk-delete-status"}, status_code=409)
 
     import aiosqlite as _aio_bdc
+    sql, params = _amz_bulk_delete_query(seller_id, keywords, statuses, exclude_prefixes)
     async with _aio_bdc.connect(DATABASE_PATH) as db:
-        cur = await db.execute(
-            """SELECT COUNT(*) FROM amazon_listings
-               WHERE seller_id = ? AND UPPER(title) LIKE ?
-                 AND available_qty = 0 AND status IN ('INACTIVE', 'INCOMPLETE')""",
-            (seller_id, f"%{keyword_phrase.upper()}%"),
-        )
+        cur = await db.execute(sql.replace("SELECT al.sku, al.asin, al.title", "SELECT COUNT(*)"), params)
         count = (await cur.fetchone())[0]
 
     if not confirm:
-        return {"dry_run": True, "would_delete_count": count, "keyword_phrase": keyword_phrase, "seller_id": seller_id}
+        return {"dry_run": True, "would_delete_count": count, "keywords": keywords, "statuses": statuses, "exclude_prefixes": exclude_prefixes, "seller_id": seller_id}
 
-    asyncio.create_task(_run_amazon_bulk_delete(seller_id, keyword_phrase, reason or f"Limpieza masiva '{keyword_phrase}' aprobada por Jovan 2026-09-04"))
-    return {"status": "started", "seller_id": seller_id, "keyword_phrase": keyword_phrase, "will_delete_count": count}
+    asyncio.create_task(_run_amazon_bulk_delete(
+        seller_id, keywords, statuses, exclude_prefixes,
+        reason or f"Limpieza masiva '{keywords or statuses}' aprobada por Jovan 2026-09-05",
+    ))
+    return {"status": "started", "seller_id": seller_id, "keywords": keywords, "will_delete_count": count}
 
 
 @app.get("/api/diag/amazon-bulk-delete-status")
