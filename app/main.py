@@ -20143,9 +20143,9 @@ async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
 _amz_bulk_delete_state: dict = {"status": "idle"}
 
 
-def _amz_bulk_delete_query(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str):
-    """Construye el query compartido por el dry-run y la corrida real --
-    UN SOLO lugar define qué es "seguro borrar", para que nunca diverjan.
+async def _amz_bulk_delete_candidates(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str) -> list[dict]:
+    """Candidatos "seguros de borrar" -- UNA sola función comparte esta
+    lógica entre el dry-run y la corrida real, para que nunca diverjan.
 
     FIX 2026-09-05 (hallazgo real, encontrado ANTES de ejecutar por revisión
     manual de Jovan -- no fue un incidente, fue la prueba de por qué este
@@ -20154,49 +20154,71 @@ def _amz_bulk_delete_query(seller_id: str, keywords: str, statuses: str, exclude
     reales -- coincidían con la palabra "bulb"/"lamp" en el título (ej.
     "EcoSmart ... LED Vintage Edison Light Bulb") pero tenían ventas hace
     apenas 2 días y stock real en bm_sku_master. Un filtro de texto NUNCA
-    es suficiente por sí solo para decidir qué borrar. Por eso este query
-    SIEMPRE excluye, sin excepción y sin que el caller pueda desactivarlo:
+    es suficiente por sí solo para decidir qué borrar. Por eso esto SIEMPRE
+    excluye, sin excepción y sin que el caller pueda desactivarlo:
     (a) cualquier SKU con ventas reales en los últimos 365 días
-        (order_history, cualquier plataforma/cuenta -- mismo criterio que
-        el resto del proyecto), y
-    (b) cualquier SKU con stock real disponible >0 en bm_sku_master (por si
-        el listing de Amazon está en 0 pero BM sí tiene inventario real).
-    """
-    where = ["al.seller_id = ?", "al.available_qty = 0"]
+        (order_history, cualquier plataforma/cuenta), y
+    (b) cualquier SKU con stock real disponible >0 en bm_sku_master.
+
+    FIX 2026-09-05 #2 (bug real encontrado al desplegar esto: los primeros
+    3 dry-runs dieron 502 "Application failed to respond"): la primera
+    versión hacía el cruce contra order_history con UN SOLO query
+    correlacionado sobre TODA la tabla (multi-año, todas las cuentas/
+    plataformas) antes de filtrar por SKU -- mismo error que
+    get_bulk_sku_lookup ya resolvía desde 2026-08-24 con chunks de 500 +
+    IN (...). Aquí se aplica el mismo patrón: primero se filtra
+    amazon_listings (rápido, 1 tabla), y SOLO para esos candidatos se
+    consulta order_history/bm_sku_master en lotes de 500."""
+    where = ["seller_id = ?", "available_qty = 0"]
     params: list = [seller_id]
 
     status_list = [s.strip().upper() for s in (statuses or "INACTIVE,INCOMPLETE").split(",") if s.strip()]
-    where.append(f"al.status IN ({','.join('?' * len(status_list))})")
+    where.append(f"status IN ({','.join('?' * len(status_list))})")
     params.extend(status_list)
 
     kw_list = [k.strip().upper() for k in (keywords or "").split(",") if k.strip()]
     if kw_list:
-        where.append("(" + " OR ".join(["UPPER(al.title) LIKE ?"] * len(kw_list)) + ")")
+        where.append("(" + " OR ".join(["UPPER(title) LIKE ?"] * len(kw_list)) + ")")
         params.extend([f"%{k}%" for k in kw_list])
 
     excl_list = [p.strip().upper() for p in (exclude_prefixes or "").split(",") if p.strip()]
     for p in excl_list:
-        where.append("UPPER(al.sku) NOT LIKE ?")
+        where.append("UPPER(sku) NOT LIKE ?")
         params.append(f"{p}%")
 
-    from datetime import datetime as _dt_abd, timedelta as _td_abd
-    cutoff = (_dt_abd.utcnow() - _td_abd(days=365)).strftime("%Y-%m-%d")
-    sql = f"""
-        SELECT al.sku, al.asin, al.title
-        FROM amazon_listings al
-        LEFT JOIN (
-            SELECT sku, SUM(quantity) AS units_12m
-            FROM order_history
-            WHERE order_date >= ?
-              AND LOWER(status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
-            GROUP BY sku
-        ) oh ON oh.sku = al.sku
-        LEFT JOIN bm_sku_master bsm ON bsm.sku = al.sku
-        WHERE {' AND '.join(where)}
-          AND COALESCE(oh.units_12m, 0) = 0
-          AND COALESCE(bsm.available_qty, 0) = 0
-    """
-    return sql, [cutoff] + params
+    import aiosqlite as _aio_abdc
+    async with _aio_abdc.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_abdc.Row
+        cur = await db.execute(
+            f"SELECT sku, asin, title FROM amazon_listings WHERE {' AND '.join(where)}", params,
+        )
+        candidates = [dict(r) for r in await cur.fetchall()]
+        if not candidates:
+            return []
+
+        from datetime import datetime as _dt_abd, timedelta as _td_abd
+        cutoff = (_dt_abd.utcnow() - _td_abd(days=365)).strftime("%Y-%m-%d")
+        skus = [c["sku"] for c in candidates]
+        has_sales: set = set()
+        has_bm_stock: set = set()
+        for i in range(0, len(skus), 500):
+            chunk = skus[i:i + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = await db.execute(
+                f"""SELECT sku FROM order_history
+                    WHERE sku IN ({placeholders}) AND order_date >= ?
+                      AND LOWER(status) NOT IN ('cancelled', 'payment_required', 'payment_in_process', 'pending')
+                    GROUP BY sku HAVING SUM(quantity) > 0""",
+                chunk + [cutoff],
+            )
+            has_sales.update(r[0] for r in await cur.fetchall())
+            cur = await db.execute(
+                f"SELECT sku FROM bm_sku_master WHERE sku IN ({placeholders}) AND available_qty > 0",
+                chunk,
+            )
+            has_bm_stock.update(r[0] for r in await cur.fetchall())
+
+    return [c for c in candidates if c["sku"] not in has_sales and c["sku"] not in has_bm_stock]
 
 
 async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str, reason: str):
@@ -20212,11 +20234,7 @@ async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, 
     si el proceso se interrumpe a medias."""
     global _amz_bulk_delete_state
     import aiosqlite as _aio_bd
-    sql, params = _amz_bulk_delete_query(seller_id, keywords, statuses, exclude_prefixes)
-    async with _aio_bd.connect(DATABASE_PATH) as db:
-        db.row_factory = _aio_bd.Row
-        cur = await db.execute(sql, params)
-        candidates = [dict(r) for r in await cur.fetchall()]
+    candidates = await _amz_bulk_delete_candidates(seller_id, keywords, statuses, exclude_prefixes)
 
     _amz_bulk_delete_state = {
         "status": "running", "started_at": _time.time(),
@@ -20287,11 +20305,8 @@ async def diag_amazon_bulk_delete_by_keyword(
     if _amz_bulk_delete_state.get("status") == "running":
         return JSONResponse({"error": "ya hay un borrado masivo corriendo -- ver /api/diag/amazon-bulk-delete-status"}, status_code=409)
 
-    import aiosqlite as _aio_bdc
-    sql, params = _amz_bulk_delete_query(seller_id, keywords, statuses, exclude_prefixes)
-    async with _aio_bdc.connect(DATABASE_PATH) as db:
-        cur = await db.execute(sql.replace("SELECT al.sku, al.asin, al.title", "SELECT COUNT(*)"), params)
-        count = (await cur.fetchone())[0]
+    candidates_preview = await _amz_bulk_delete_candidates(seller_id, keywords, statuses, exclude_prefixes)
+    count = len(candidates_preview)
 
     if not confirm:
         return {"dry_run": True, "would_delete_count": count, "keywords": keywords, "statuses": statuses, "exclude_prefixes": exclude_prefixes, "seller_id": seller_id}
