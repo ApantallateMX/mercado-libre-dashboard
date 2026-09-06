@@ -6669,8 +6669,11 @@ async def items_no_stock_redirect(request: Request):
     return RedirectResponse("/partials/products-stock-issues", status_code=302)
 
 
+# FIX 2026-09-05 (auditoría completa Jovan): quiebre_inminente se agregó 2026-08-22,
+# después de que este mecanismo de refresh en vivo ya existía (2026-08-09), y quedó
+# fuera por omisión -- era la única de las 10 listas que no se refrescaba al abrir el tab.
 _STOCK_LIST_KEYS = ("restock", "oversell_risk", "activate", "critical", "full_no_stock",
-                    "imbalanced", "stagnant", "price_risk", "no_bm_sku")
+                    "imbalanced", "stagnant", "price_risk", "no_bm_sku", "quiebre_inminente")
 
 
 def _refresh_bm_avail_live(ctx: dict) -> None:
@@ -8396,12 +8399,18 @@ async def _prewarm_caches(user_id: str = None):
                 # ml_price_alerts). Regla v1, conservadora: escasez → +8% si quedan
                 # <7 días de supply y sí se está vendiendo; sobrestock → -12% si
                 # llevan >90 días de supply, nunca por debajo de _precio_piso.
+                # FIX 2026-09-05 (auditoría completa Jovan, "Sobrestock"): a diferencia de
+                # TODAS las demás listas de alertas, esta no filtraba por status ni is_full --
+                # un listing pausado (no comprable) podía aparecer como "sobrestock" con
+                # sugerencia de bajar precio, sin sentido de negocio real (no se puede comprar).
                 _coverage_alerts = []
                 for _cp in bm_candidates:
                     _ds = _cp.get("_days_supply")
                     _price = _cp.get("price", 0) or 0
                     _u30 = _cp.get("units_30d", 0) or 0
                     if _ds is None or _price <= 0:
+                        continue
+                    if _cp.get("status") != "active" or _cp.get("is_full"):
                         continue
                     if _ds < 7 and _u30 > 0:
                         _coverage_alerts.append({
@@ -8453,7 +8462,11 @@ async def _prewarm_caches(user_id: str = None):
                 # sobre un listing que YA está vendible). Ahora restock/oversell_risk/critical/
                 # stagnant exigen status=="active" explícitamente; activate exige status==
                 # "paused" explícitamente (antes dependía solo de "no estar ya en restock").
-                restock = [p for p in products if p.get("status") == "active" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
+                # FIX 2026-09-05 (Jovan: "los putos 0s" en Sin Stock/Revenue Perdido): ML mueve
+                # un listing a status="inactive" automáticamente al llegar a qty=0 (línea 7088-90)
+                # -- nunca se queda en "active" con 0. El filtro solo revisaba "active" y por eso
+                # restock salía sistemáticamente vacío pese a que "inactive" se fetchea justo para esto.
+                restock = [p for p in products if p.get("status") in ("active", "inactive") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
                 # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
                 # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
@@ -8473,7 +8486,10 @@ async def _prewarm_caches(user_id: str = None):
                 # asignar a ninguna cuenta — "Activar" es solo una señal de oportunidad, no
                 # una asignación firme de cuánto publicar (esa sigue usando _bm_avail con
                 # colchón normalmente, sin cambios aquí).
-                activate = [p for p in products if p.get("status") == "paused" and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail_raw") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
+                # FIX 2026-09-05: mismo bug que restock -- "inactive" (auto-desactivado por
+                # stock=0) también es candidato de reactivación, no solo "paused" manual.
+                # p["id"] not in restock_ids ya evita duplicar los que restock (units>0) capturó.
+                activate = [p for p in products if p.get("status") in ("paused", "inactive") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail_raw") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
                 activate.sort(key=lambda x: x.get("_bm_avail_raw", 0), reverse=True)
                 critical = [
                     p for p in products
@@ -8623,11 +8639,17 @@ async def _prewarm_caches(user_id: str = None):
                 )
 
                 # Desbalance peligroso: MeLi publica más stock del que hay en BM
+                # FIX 2026-09-05 (auditoría completa Jovan): a diferencia de TODAS las demás
+                # listas, esta no filtraba por status ni excluía _synced_ids -- un listing
+                # PAUSADO (no comprable, sin riesgo real de sobreventa) se mostraba igual como
+                # "Desbalance Peligroso" (confirmado en vivo: SNPE000191, status=paused, avail=1602).
                 imbalanced = [
                     p for p in products
-                    if p.get("available_quantity", 0) > (p.get("_bm_avail_raw") or 0) > 0
+                    if p.get("status") == "active"
+                    and p.get("available_quantity", 0) > (p.get("_bm_avail_raw") or 0) > 0
                     and not p.get("is_full")
                     and p.get("sku")
+                    and p.get("id") not in _synced_ids
                     and _bm_bulk_ok(p.get("sku", ""))
                 ]
                 # FIX 2026-08-20 (auditoría de alertas): ordenaba por gap en unidades --
@@ -8692,6 +8714,12 @@ async def _prewarm_caches(user_id: str = None):
                     for _it in _lst:
                         if _it.get("id"):
                             _alert_ids.add(_it["id"])
+                # FIX 2026-09-05 (auditoría completa Jovan): Sobrestock vive en _coverage_alerts
+                # (fuente separada, ver arriba) y nunca se unía a este set -- Total Alertas
+                # subcontaba (55/66 de Sobrestock no aparecían en ninguna otra categoría).
+                for _ca in _coverage_alerts:
+                    if _ca.get("reason") == "sobrestock" and _ca.get("item_id"):
+                        _alert_ids.add(_ca["item_id"])
 
                 _sic_data = {
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
