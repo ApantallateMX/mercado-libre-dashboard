@@ -20171,7 +20171,7 @@ async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
 _amz_bulk_delete_state: dict = {"status": "idle"}
 
 
-async def _amz_bulk_delete_candidates(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str) -> list[dict]:
+async def _amz_bulk_delete_candidates(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str, include_prefixes: str = "", require_empty_title: bool = False) -> list[dict]:
     """Candidatos "seguros de borrar" -- UNA sola función comparte esta
     lógica entre el dry-run y la corrida real, para que nunca diverjan.
 
@@ -20214,6 +20214,18 @@ async def _amz_bulk_delete_candidates(seller_id: str, keywords: str, statuses: s
         where.append("UPPER(sku) NOT LIKE ?")
         params.append(f"{p}%")
 
+    # FIX 2026-09-06 (Jovan: "si tienen titulo vacio y 0 borralos" -- los 1,604
+    # SN-prefijados que Lotes 1-3 excluyeron a proposito por ser el formato real
+    # de inventario BM). include_prefixes es el espejo de exclude_prefixes (LIKE
+    # en vez de NOT LIKE); require_empty_title acota a titulo vacio real, no
+    # "cualquier titulo" (que ya es el comportamiento por default si keywords="").
+    incl_list = [p.strip().upper() for p in (include_prefixes or "").split(",") if p.strip()]
+    if incl_list:
+        where.append("(" + " OR ".join(["UPPER(sku) LIKE ?"] * len(incl_list)) + ")")
+        params.extend([f"{p}%" for p in incl_list])
+    if require_empty_title:
+        where.append("(title = '' OR title IS NULL)")
+
     import aiosqlite as _aio_abdc
     async with _aio_abdc.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_abdc.Row
@@ -20249,7 +20261,7 @@ async def _amz_bulk_delete_candidates(seller_id: str, keywords: str, statuses: s
     return [c for c in candidates if c["sku"] not in has_sales and c["sku"] not in has_bm_stock]
 
 
-async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str, reason: str):
+async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, exclude_prefixes: str, reason: str, include_prefixes: str = "", require_empty_title: bool = False):
     """Background: borra permanentemente en Amazon los listings de una
     cuenta que coincidan con el filtro de _amz_bulk_delete_query (título +
     status + 0 stock + SIN ventas reales 12m + SIN stock real en BM) --
@@ -20262,7 +20274,7 @@ async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, 
     si el proceso se interrumpe a medias."""
     global _amz_bulk_delete_state
     import aiosqlite as _aio_bd
-    candidates = await _amz_bulk_delete_candidates(seller_id, keywords, statuses, exclude_prefixes)
+    candidates = await _amz_bulk_delete_candidates(seller_id, keywords, statuses, exclude_prefixes, include_prefixes, require_empty_title)
 
     _amz_bulk_delete_state = {
         "status": "running", "started_at": _time.time(),
@@ -20313,8 +20325,8 @@ async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, 
 @app.post("/api/diag/amazon-bulk-delete-by-keyword")
 async def diag_amazon_bulk_delete_by_keyword(
     seller_id: str = "", keywords: str = "", statuses: str = "INACTIVE,INCOMPLETE",
-    exclude_prefixes: str = "", reason: str = "",
-    confirm: bool = False, token: str = "",
+    exclude_prefixes: str = "", include_prefixes: str = "", require_empty_title: bool = False,
+    reason: str = "", confirm: bool = False, token: str = "",
 ):
     """Dispara en background el borrado permanente masivo (ver
     _run_amazon_bulk_delete). Sin confirm=true SOLO cuenta cuántos SKUs
@@ -20329,7 +20341,12 @@ async def diag_amazon_bulk_delete_by_keyword(
     exclude_prefixes: prefijos de SKU a excluir siempre, separados por coma
     (ej. "SN" para proteger nuestro propio inventario mientras se revisa
     aparte contra BM) -- además del blindaje de ventas/stock que YA aplica
-    siempre sin poder desactivarse (ver _amz_bulk_delete_query)."""
+    siempre sin poder desactivarse (ver _amz_bulk_delete_query).
+    include_prefixes: opuesto de exclude_prefixes (LIKE en vez de NOT LIKE) --
+    acota a SOLO SKUs con ese prefijo (ej. "SN" para revisar el propio
+    inventario, ahora que ya se cruzó contra BM).
+    require_empty_title: acota a title='' o NULL (candidato real a sync
+    incompleto/nunca activado), no "cualquier título"."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not seller_id:
@@ -20337,15 +20354,16 @@ async def diag_amazon_bulk_delete_by_keyword(
     if _amz_bulk_delete_state.get("status") == "running":
         return JSONResponse({"error": "ya hay un borrado masivo corriendo -- ver /api/diag/amazon-bulk-delete-status"}, status_code=409)
 
-    candidates_preview = await _amz_bulk_delete_candidates(seller_id, keywords, statuses, exclude_prefixes)
+    candidates_preview = await _amz_bulk_delete_candidates(seller_id, keywords, statuses, exclude_prefixes, include_prefixes, require_empty_title)
     count = len(candidates_preview)
 
     if not confirm:
-        return {"dry_run": True, "would_delete_count": count, "keywords": keywords, "statuses": statuses, "exclude_prefixes": exclude_prefixes, "seller_id": seller_id}
+        return {"dry_run": True, "would_delete_count": count, "keywords": keywords, "statuses": statuses, "exclude_prefixes": exclude_prefixes, "include_prefixes": include_prefixes, "require_empty_title": require_empty_title, "seller_id": seller_id}
 
     asyncio.create_task(_run_amazon_bulk_delete(
         seller_id, keywords, statuses, exclude_prefixes,
-        reason or f"Limpieza masiva '{keywords or statuses}' aprobada por Jovan 2026-09-05",
+        reason or f"Limpieza masiva '{keywords or statuses}' aprobada por Jovan 2026-09-06",
+        include_prefixes, require_empty_title,
     ))
     return {"status": "started", "seller_id": seller_id, "keywords": keywords, "will_delete_count": count}
 
