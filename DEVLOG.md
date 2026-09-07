@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-06 — FIX: 4 bugs reales en alertas de Stock (auditoría completa a pedido de Jovan)
+
+### Commit: e82804a
+
+### Contexto
+Jovan reportó 5 tarjetas en $0/0 en Productos > Stock (Sin Stock, Revenue Perdido, Riesgo Sobreventa, Oportunidad Activar, Stock BM Disponible) mientras el resto de la página mostraba números reales. Tras el primer diagnóstico exigió auditar **las 13 tarjetas completas**, no solo las 5 en cero ("siempre haces las cosas a medias").
+
+### Bugs confirmados (auditoría con datos reales de producción, `backend-integrations-engineer`)
+- **restock/activate** (`app/main.py` ~8462/8486): ML mueve un listing a `status="inactive"` automáticamente al llegar a qty=0 — nunca se queda en `"active"`. El filtro solo revisaba `"active"`/`"paused"` y por eso Sin Stock/Revenue Perdido/Oportunidad Activar salían sistemáticamente vacíos o subcontados. Fix: incluir `"inactive"` en ambos filtros.
+- **imbalanced "Desbalance Peligroso"** (~8639): no filtraba por `status` ni excluía `_synced_ids` — un listing PAUSADO (no comprable, sin riesgo real) se mostraba como alerta. Confirmado en vivo: SNPE000191 pausado con avail=1602 apareciendo en la lista. Fix: exigir `status=="active"` + excluir `_synced_ids`.
+- **`_coverage_alerts` "Sobrestock"** (~8399): mismo problema de status/is_full, y además nunca se unía al set `_alert_ids` — Total Alertas subcontaba (55/66 de Sobrestock no aparecían en ninguna otra categoría). Fix: filtrar por `status=="active"` + `not is_full`, y sumar sus IDs a `_alert_ids`.
+- **`_STOCK_LIST_KEYS`**: `quiebre_inminente` quedó fuera del refresh en vivo de BM desde que se agregó (2026-08-22), por omisión.
+
+### Verificación
+Test aislado con casos sintéticos que replican los reales confirmados (incluyendo SNPE000191) — 100% passed antes del commit. Servidor local levantado y endpoint probado sin tracebacks. Deploy esperado hasta que terminó Lote 1 del borrado masivo de Amazon (ver entrada abajo) para no interrumpirlo. Verificado post-deploy con prewarm forzado en producción (APANTALLATE): Sin Stock 0→32, Revenue Perdido $0→$21,256, Oportunidad Activar 0→27, Desbalance 26→22 (bajó, correcto — ya no cuenta pausados), Sobrestock 66→47 (bajó, mismo motivo), Total Alertas 1743→1824 (subió, ahora sí cuenta Sobrestock).
+
+---
+
+## 2026-09-05/06 — OPERACION: Limpieza masiva de listings muertos ExclusiveBulbs (Amazon USA) + fix BOM en Reports API
+
+### Contexto
+Adrián Espino (dueño de cuenta ExclusiveBulbs) pidió limpiar listings viejos sin ventas ni stock. Al investigar se encontró un bug de meses: el reporte `GET_MERCHANT_LISTINGS_ALL_DATA` de Amazon trae el TSV con BOM (`﻿`) pegado al primer header (`item-name`), por lo que `title` salía vacío para 98% de los 61,463 listings de la cuenta. Fix en `amazon_client.py`: decode `utf-8-sig` en vez de `utf-8`.
+
+### Blindaje de seguridad (antes de cualquier borrado)
+`_amz_bulk_delete_candidates()` (`app/main.py`) excluye SIEMPRE, sin importar el keyword: cualquier SKU con ventas reales en `order_history` en los últimos 365 días, o con stock real >0 en `bm_sku_master`. Se encontró un near-miss real durante pruebas: el filtro "lamp/bulb" casi atrapaba 11 SKUs de LED modernos con ventas recientes — el blindaje los excluyó correctamente. Queries en chunks de 500 SKUs (mismo patrón que `get_bulk_sku_lookup()`) tras que la primera versión (JOIN correlacionado sin chunking) causara 502 reales en producción.
+
+### 3 lotes ejecutados (dry-run + `confirm=true`, aprobados por Jovan)
+- **Lote 1** (lamp,projector,bulb / excluye SN): 13,686 candidatos → 13,678 éxito, 8 fallos (SKUs con "/" en el nombre rompen la ruta de la API).
+- **Lote 2** (decal / excluye SN): 11,883 candidatos → 11,883 éxito, 0 fallos.
+- **Lote 3** (INCOMPLETE remanente, excluye SN): estimado inicial ~12,263, pero el conteo real bajó a 466 porque Lotes 1-2 ya habían borrado casi todo el solape → 457 éxito, 9 fallos (mismo patrón "/").
+- **Total: 26,018 listings muertos eliminados, 19 fallos** (todos por formato de SKU con "/", no por riesgo de datos — 2 adicionales del Lote 1 fueron "database is locked" transitorios).
+
+### Pendiente
+Revisar a mano los ~19 SKUs con "/" que fallaron (formato no soportado por la ruta DELETE de la API, no es un problema de datos). Cruzar los 1,604 SKUs "SN"-prefijados con título vacío y 0 stock contra BM directamente (excluidos de los 3 lotes a propósito).
+
+---
+
 ## 2026-09-04 — FEAT: Requisición de Traspaso formal (Transferencias Sugeridas)
 
 ### Contexto
