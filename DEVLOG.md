@@ -39,8 +39,13 @@ Adrián Espino (dueño de cuenta ExclusiveBulbs) pidió limpiar listings viejos 
 - **Lote 3** (INCOMPLETE remanente, excluye SN): estimado inicial ~12,263, pero el conteo real bajó a 466 porque Lotes 1-2 ya habían borrado casi todo el solape → 457 éxito, 9 fallos (mismo patrón "/").
 - **Total: 26,018 listings muertos eliminados, 19 fallos** (todos por formato de SKU con "/", no por riesgo de datos — 2 adicionales del Lote 1 fueron "database is locked" transitorios).
 
+### Lote 4 (2026-09-06) — SN-prefijados con título vacío
+Jovan: "si tienen titulo vacio y 0 borralos". Se agregaron 2 parámetros nuevos a `_amz_bulk_delete_candidates()`/`_run_amazon_bulk_delete()`/el endpoint (`app/main.py`, commit `ccbf394`): `include_prefixes` (espejo de `exclude_prefixes`, LIKE en vez de NOT LIKE) y `require_empty_title` (acota a `title=''` o `NULL`, no "cualquier título"). El blindaje de ventas/stock existente sigue aplicando sin cambios — verificado con test aislado antes del deploy.
+
+El conteo real de "SN + título vacío + 0 stock" resultó ser **111**, no los ~1,604 estimados semanas atrás — la mayoría de esos ya tienen título real desde que se corrigió el bug del BOM y corrió el re-sync completo. Resultado: **108/111 éxito, 3 fallos** (mismo patrón SKU con "/").
+
 ### Pendiente
-Revisar a mano los ~19 SKUs con "/" que fallaron (formato no soportado por la ruta DELETE de la API, no es un problema de datos). Cruzar los 1,604 SKUs "SN"-prefijados con título vacío y 0 stock contra BM directamente (excluidos de los 3 lotes a propósito).
+Revisar a mano los ~22 SKUs con "/" que fallaron en total (formato no soportado por la ruta DELETE de la API, no es un problema de datos).
 
 ---
 
