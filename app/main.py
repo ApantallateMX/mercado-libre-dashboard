@@ -23695,15 +23695,20 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     # FEATURE 2026-08-21 #2 (aclaración real de Jovan): PNP ("Plug and Play"
     # -- unidades que esperan prueba de encendido antes de grado final GRA/
     # GRB/GRC) SOLO se procesa en MTY -- la prioridad de "qué meter a la
-    # línea de proceso" se basa únicamente en lo que hay ahí. Si aparece PNP
-    # en CDMX/Tijuana es una anomalía real (TJ solo reabastece con producto
-    # YA terminado, nunca debería tener PNP) -- se captura aparte como
-    # alerta, sin mezclarlo con la cantidad de MTY. Solo para "Televisions"
-    # -- volumen real confirmado ahí (729 uds en la muestra de BinManager),
-    # no se generalizó a otras categorías. Números tal cual los muestra BM
-    # en su propia UI (Jovan confirmó con captura real: SNTV008001
-    # Disponible=4, No Vendible=379, Total=383) -- sin inventar una
-    # interpretación/score propio, solo AvailableQTY/NoVendibleQty crudos.
+    # línea de proceso" se basa únicamente en lo que hay ahí. Solo para
+    # "Televisions" -- volumen real confirmado ahí (729 uds en la muestra de
+    # BinManager), no se generalizó a otras categorías. Números tal cual los
+    # muestra BM en su propia UI (Jovan confirmó con captura real:
+    # SNTV008001 Disponible=4, No Vendible=379, Total=383) -- sin inventar
+    # una interpretación/score propio, solo AvailableQTY/NoVendibleQty crudos.
+    #
+    # FIX 2026-09-08 (Jovan: "PNP solo aplica a MTY no quiero de ningun otro
+    # lado mas"): se quitó la llamada extra que revisaba PNP en CDMX/Tijuana
+    # (era una alerta de anomalía, no algo que Jovan pidió mantener) -- de 2
+    # llamadas BM para PNP a 1. `_pnp_other_by_base` se deja como dict vacío
+    # a propósito (no se borra la columna `pnp_other_locations_qty` de
+    # bm_sku_master ni sus lecturas en Velocidad de Ventas -- simplemente
+    # nunca se vuelve a llenar, siempre queda en 0, sin tocar el schema).
     _pnp_mty_by_base: dict[str, dict] = {}
     _pnp_other_by_base: dict[str, int] = {}
     if category_id.strip() == "Televisions":
@@ -23733,12 +23738,6 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         # aparte se queda, es la única forma correcta de aislar el dato.
         _pnp_mty_rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions="PNP", location_id="68")
         _pnp_mty_by_base = _pnp_rows_to_qty(_pnp_mty_rows)
-
-        _pnp_other_rows = await bm_cli.get_bulk_stock(category_id=category_id, conditions="PNP", location_id="47,62,45,69,43,42")
-        _pnp_other_qty = _pnp_rows_to_qty(_pnp_other_rows)
-        _pnp_other_by_base = {
-            b: (v["available"] + v["reserve"] + v["no_vendible"]) for b, v in _pnp_other_qty.items()
-        }
 
     for u in updates:
         _pnp_u = _pnp_mty_by_base.pop(u["sku"], None)
