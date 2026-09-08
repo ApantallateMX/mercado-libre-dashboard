@@ -20358,7 +20358,12 @@ async def diag_amazon_bulk_delete_by_keyword(
     count = len(candidates_preview)
 
     if not confirm:
-        return {"dry_run": True, "would_delete_count": count, "keywords": keywords, "statuses": statuses, "exclude_prefixes": exclude_prefixes, "include_prefixes": include_prefixes, "require_empty_title": require_empty_title, "seller_id": seller_id}
+        # FEATURE 2026-09-08 (Jovan pidio ejemplos reales para verificar en la
+        # cuenta antes de aprobar un lote de 10k+): sample de hasta 20 SKUs/ASINs
+        # reales del dry-run, no solo el conteo -- para poder abrir el listing
+        # en Amazon y confirmar a ojo que sí es basura.
+        sample = [{"sku": c.get("sku", ""), "asin": c.get("asin", ""), "title": c.get("title", "")} for c in candidates_preview[:20]]
+        return {"dry_run": True, "would_delete_count": count, "keywords": keywords, "statuses": statuses, "exclude_prefixes": exclude_prefixes, "include_prefixes": include_prefixes, "require_empty_title": require_empty_title, "seller_id": seller_id, "sample": sample}
 
     asyncio.create_task(_run_amazon_bulk_delete(
         seller_id, keywords, statuses, exclude_prefixes,
