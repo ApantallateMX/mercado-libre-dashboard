@@ -6863,6 +6863,27 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         await client.close()
 
 
+@app.get("/api/diag/bm-pnp-merge-check")
+async def diag_bm_pnp_merge_check(token: str = "", sku: str = "SNTV008001"):
+    """DIAG TEMPORAL de solo lectura (2026-09-08, Jovan pidio fusionar la
+    llamada de PNP en la llamada principal en vez de una aparte -- necesito
+    confirmar con datos reales, ANTES de tocar _update_category_stock_master,
+    que BM SI etiqueta las filas de PNP con sufijo -PNP cuando se pide junto
+    con las demas condiciones en UNA sola llamada (nunca antes probado
+    combinado -- hoy PNP siempre se pide solo, sin sufijo porque BM no lo
+    necesita cuando solo hay 1 condicion). Usa el cliente compartido real
+    (misma sesion/semaforo que el prewarm), UNA sola llamada de lectura."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import get_shared_bm as _gsb_pnpcheck
+    bm_cli = await _gsb_pnpcheck()
+    rows = await bm_cli.get_bulk_stock(
+        category_id="Televisions", conditions="GRA,GRB,GRC,ICB,ICC,NEW,PNP", location_id="68",
+    )
+    matching = [r for r in (rows or []) if str(r.get("SKU", "")).upper().startswith(sku.upper())]
+    return {"sku_filter": sku, "total_rows": len(rows or []), "matching_rows": matching}
+
+
 @app.get("/api/stock/search-listings")
 async def stock_search_listings(request: Request, q: str = ""):
     """FEATURE 2026-09-08 (Jovan, tras confirmar que una publicación real con
