@@ -44,8 +44,13 @@ Jovan: "si tienen titulo vacio y 0 borralos". Se agregaron 2 parámetros nuevos 
 
 El conteo real de "SN + título vacío + 0 stock" resultó ser **111**, no los ~1,604 estimados semanas atrás — la mayoría de esos ya tienen título real desde que se corrigió el bug del BOM y corrió el re-sync completo. Resultado: **108/111 éxito, 3 fallos** (mismo patrón SKU con "/").
 
+### Lote 5 (2026-09-08) — Título vacío, cualquier prefijo
+Jovan preguntó "cómo va Exclusive" — al revisar `amazon-listings-sync-health` se encontró que 10,416 listings SEGUÍAN con título vacío (la mayoría sin prefijo SN, por eso Lote 4 no los tocó). Dry-run con `require_empty_title=true` sin `include_prefixes` dio 10,380 candidatos reales (blindaje de ventas/stock ya aplicado). Se agregó un campo `sample` (hasta 20 sku/asin/título) a la respuesta del dry-run (commit `a787c18`) para que Jovan verificara ejemplos reales en Amazon antes de aprobar un lote de este tamaño — mayoría con patrón `*TFLX` (importación/dropship vieja nunca titulada) y algunos `amzn.gr.*`. Aprobado y ejecutado: **10,377/10,380 éxito, 3 fallos** (mismo patrón SKU con "/", uno de ellos ya identificado en el sample antes de correr).
+
+**Total acumulado, 5 lotes: 36,503 listings muertos eliminados.**
+
 ### Pendiente
-Revisar a mano los ~22 SKUs con "/" que fallaron en total (formato no soportado por la ruta DELETE de la API, no es un problema de datos).
+Revisar a mano los ~25 SKUs con "/" que fallaron en total (formato no soportado por la ruta DELETE de la API, no es un problema de datos).
 
 ---
 
