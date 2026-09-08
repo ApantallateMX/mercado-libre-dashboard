@@ -376,6 +376,7 @@ function loadVelocity() {
         .then(function(r){ return r.json(); })
         .then(function(d){
             _velocityData = d.items || [];
+            _velTotalItems = d.total_items || _velocityData.length;
             _renderVelocityTable(_velocityData);
             _renderRadar();
         })
@@ -385,6 +386,7 @@ function loadVelocity() {
 }
 
 var _velRows = [];
+var _velTotalItems = 0;
 function _renderVelocityTable(items) {
     _velFiltered = items;
     _velPage = 1;
@@ -432,7 +434,8 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
         '<td class="py-2 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
         '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_7d||0) + (p.amz_units_7d||0)) + '</td>' +
         '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_30d||0) + (p.amz_units_30d||0)) + '</td>' +
-        '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
+        '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN((p.revenue_30d||0) + (p.amz_revenue_30d||0)) + '</td>' +
+        '<td class="py-2 pr-3 text-right text-xs">' + (p.bm_avail != null ? '<span class="font-semibold ' + (p.bm_avail > 0 ? 'text-gray-700' : 'text-red-600') + '">' + p.bm_avail + '</span>' : '<span class="text-gray-300">—</span>') + '</td>' +
         (function(){
             var d = p.dias_inventario;
             if (d == null) return '<td class="py-2 pr-3 text-right text-gray-300 text-xs">—</td>';
@@ -463,7 +466,10 @@ function _renderVelPage() {
         var start = (_velPage - 1) * _velPageSize;
         var pageItems = items.slice(start, start + _velPageSize);
 
-        if (cnt) cnt.textContent = total + ' productos';
+        // "X de Y" solo cuando NO hay filtro de búsqueda activo (si no, "de 392" confunde
+        // con el resultado de una búsqueda que de por sí redujo el conteo a menos de 100).
+        var _noFiltro = total === _velocityData.length;
+        if (cnt) cnt.textContent = (_noFiltro && _velTotalItems > total ? total + ' de ' + _velTotalItems : total) + ' productos';
 
         var maxRate = items[0] ? (items[0].total_daily_rate || items[0].daily_rate) : 1;
         var hasAmz = items.some(function(p){ return p.amz_daily_rate > 0; });
@@ -477,8 +483,9 @@ function _renderVelPage() {
             '<th class="pb-2 pr-3 text-right whitespace-nowrap font-bold">Total/día</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
-            '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
-            '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Días de inventario BM al ritmo actual">Días inv.</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Suma ML + Amazon">Revenue</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Disponible en BinManager (vendible: CDMX+MTY, Tijuana excluida)">Disp. BM</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Días de inventario BM al ritmo actual, sobre la ventana de ' + _days() + ' días seleccionada">Días inv.</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Solo Televisions -- PNP procesado únicamente en MTY. Disponible / No vendible (necesita proceso)">PNP (MTY)</th>' +
             '<th class="pb-2 pr-3">Proporción</th>' +
             '<th class="pb-2 pl-2 w-6"></th>' +
