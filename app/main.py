@@ -19919,6 +19919,21 @@ async def diag_ml_listings_by_sku(sku: str = "", account_id: str = "", token: st
             params,
         )
         rows = [dict(r) for r in await cur.fetchall()]
+        # FEATURE (mismo diag): units_30d por item_id -- restock/oversell_risk/
+        # critical exigen units>0 (ventas recientes) ADEMAS de status+qty=0,
+        # condicion que el tooltip de "Sin Stock (con BM)" no menciona. Para
+        # confirmar si eso explica por que un item con 0 stock no sale en la
+        # alerta aunque otro del mismo SKU si.
+        from datetime import datetime as _dt_mlbs, timedelta as _td_mlbs
+        _cutoff30 = (_dt_mlbs.utcnow() - _td_mlbs(days=30)).strftime("%Y-%m-%d")
+        for _row in rows:
+            _cur2 = await db.execute(
+                """SELECT COALESCE(SUM(quantity), 0) FROM order_history
+                   WHERE item_id = ? AND order_date >= ?
+                     AND LOWER(status) NOT IN ('cancelled','payment_required','payment_in_process','pending')""",
+                (_row["item_id"], _cutoff30),
+            )
+            _row["units_30d"] = (await _cur2.fetchone())[0]
     return {"sku": sku, "account_id": account_id or "todas", "count": len(rows), "listings": rows}
 
 
