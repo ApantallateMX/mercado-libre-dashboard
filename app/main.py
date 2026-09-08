@@ -1750,13 +1750,11 @@ _NAV_TAB_DEFS = [
          ml_href="/deuda-empresa", amz_href="/deuda-empresa",
          ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,
          ml_tab=None, amz_tab=None, admin_only=True, badge=None),
-    # Developer Manual (§14d) -- diccionario de datos técnico, admin-only
-    # (equipo operativo no lo necesita; el Manual de Usuario de arriba sí
-    # es para todos).
-    dict(id="developer_manual", label="Dev Manual", icon="🛠️",
-         ml_href="/developer-manual", amz_href="/developer-manual",
-         ml_active=["developer_manual"], amz_active=None, amz_uses_dispatcher=False,
-         ml_tab=None, amz_tab=None, admin_only=True, badge=None),
+    # FIX 2026-09-08 (Jovan: "no me gusta y genera espacio muerto" en el nav):
+    # Developer Manual (§14d) ya NO es tab de nivel superior -- la ruta
+    # /developer-manual sigue viva y admin-only (ver developer_manual_page),
+    # solo se accede ahora desde un link en /usuarios (Gestión de Usuarios),
+    # que ya es admin-only por su propia cuenta.
     # Finanzas, Listings y Deals dejaron de ser tabs de nivel superior
     # (consolidación 2026-07-24) — fusionados como subtabs de Ventas/
     # Productos respectivamente (mismo patrón que ML ya usaba).
