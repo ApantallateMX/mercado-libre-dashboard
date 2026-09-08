@@ -6863,6 +6863,44 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         await client.close()
 
 
+@app.get("/api/stock/search-listings")
+async def stock_search_listings(request: Request, q: str = ""):
+    """FEATURE 2026-09-08 (Jovan, tras confirmar que una publicación real con
+    MeLi=0 puede no calificar para NINGUNA de las 10 categorías de alerta --
+    ej. 0 ventas en 30d, gate intencional de restock -- y por eso el buscador
+    de la tab Stock "solo mostraba una" de varias publicaciones del mismo SKU:
+    el buscador solo filtra <tr> ya renderizados, así que una publicación que
+    nunca calificó para ninguna alerta nunca llega al navegador). Esta ruta
+    consulta ml_listings DIRECTO (fuente real, sin pasar por ningún filtro de
+    negocio) para que el frontend pueda mostrar "todas las publicaciones que
+    coinciden" y marcar cuáles no aparecen en ninguna alerta -- solo se activa
+    cuando el usuario busca algo, no en la carga normal de la página."""
+    _require_subtab(request, "ml", "productos", "stock")
+    q = (q or "").strip()
+    if len(q) < 3:
+        return {"items": []}
+    client = await get_meli_client()
+    if not client:
+        return {"items": []}
+    try:
+        import aiosqlite as _aio_ssl
+        like = f"%{q.upper()}%"
+        async with _aio_ssl.connect(DATABASE_PATH) as db:
+            db.row_factory = _aio_ssl.Row
+            cur = await db.execute(
+                """SELECT item_id, sku, title, status, available_qty, price
+                   FROM ml_listings
+                   WHERE account_id = ?
+                     AND (UPPER(sku) LIKE ? OR UPPER(item_id) LIKE ? OR UPPER(title) LIKE ?)
+                   LIMIT 50""",
+                (str(client.user_id), like, like, like),
+            )
+            rows = [dict(r) for r in await cur.fetchall()]
+        return {"items": rows}
+    finally:
+        await client.close()
+
+
 # ---------- Product Intelligence: shared cache ----------
 
 import time as _time
