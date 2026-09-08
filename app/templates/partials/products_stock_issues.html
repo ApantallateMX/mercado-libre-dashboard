@@ -85,11 +85,27 @@ window._stockFilter = function(q) {
     var statusEl = document.getElementById('stock-search-status');
     if (clearBtn) clearBtn.classList.toggle('hidden', !q);
 
+    // FIX 2026-09-08 (Jovan: buscar un SKU no "limpiaba" la vista -- las
+    // tarjetas KPI de arriba seguian mostrando los totales globales sin
+    // relacion con lo buscado). Ademas faltaban 2 secciones reales en este
+    // array (quiebre-inminente y sobrestock, agregadas despues de que este
+    // filtro se escribio) -- buscar un SKU que solo estuviera en esas dos
+    // no ocultaba nada ahi, aunque el contador de arriba decia "encontrado".
     var SECTION_IDS = [
         'restock-section','activate-section','risk-section','critical-section',
         'full-nostock-section','imbalanced-section','stagnant-section',
-        'price-risk-section','no-bm-sku-section','orphans-section'
+        'price-risk-section','no-bm-sku-section','orphans-section',
+        'quiebre-inminente-section','sobrestock-section'
     ];
+
+    // Los KPI de arriba son totales GLOBALES precalculados en el servidor --
+    // recalcularlos bien (sobre todo los que suman dinero/unidades) requeriria
+    // que cada fila cargue su propio valor en un data-attribute, que no existe
+    // hoy. Mas simple y sin riesgo de mostrar un numero mal recalculado:
+    // ocultar el grid completo mientras hay busqueda activa, dejando solo
+    // el detalle filtrado + el contador "X alertas encontradas".
+    var kpiGrid = document.getElementById('stock-kpi-grid');
+    if (kpiGrid) kpiGrid.classList.toggle('hidden', !!q);
 
     var totalShown = 0;
     SECTION_IDS.forEach(function(sid) {
@@ -136,7 +152,7 @@ window._stockFilter = function(q) {
 </script>
 
 <!-- KPIs -->
-<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 mb-6">
+<div id="stock-kpi-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 mb-6">
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"
          class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Sin Stock (con BM)</p>
