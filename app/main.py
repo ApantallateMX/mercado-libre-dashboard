@@ -1740,12 +1740,13 @@ _NAV_TAB_DEFS = [
     # (ver base.html), igual que el resto de alertas del sistema. /changelog
     # sigue siendo una ruta real (accesible desde el popup/campana, "Ver
     # todas"), solo se quitó de _NAV_TAB_DEFS.
-    # ml_tab/amz_tab=None a propósito -- MI2 §17a (Manual de Usuario) es
-    # visible para CUALQUIER usuario logueado, mismo patrón que Novedades.
-    dict(id="manual", label="Manual", icon="📖",
-         ml_href="/manual", amz_href="/manual",
-         ml_active=["manual"], amz_active=None, amz_uses_dispatcher=False,
-         ml_tab=None, amz_tab=None, admin_only=False, badge=None),
+    # FIX 2026-09-08 (Jovan: "esa mamada de manual también" -- espacio muerto
+    # en el nav, mismo reclamo que llevó a mover Dev Manual): igual que
+    # Novedades, /manual sigue siendo una ruta real, ahora accesible desde un
+    # link fijo en la campana de notificaciones (ver base.html) en vez de tab.
+    # MI2 §17a exige que sea visible para CUALQUIER usuario logueado -- por
+    # eso NO se movió a /usuarios (admin-only) como Dev Manual, sino a la
+    # campana, que es visible para todos.
     dict(id="deuda", label="Deuda", icon="🏦",
          ml_href="/deuda-empresa", amz_href="/deuda-empresa",
          ml_active=["deuda_empresa"], amz_active=None, amz_uses_dispatcher=False,

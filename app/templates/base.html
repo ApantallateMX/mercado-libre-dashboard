@@ -713,6 +713,14 @@ document.addEventListener('click', function(e) {
         {% endif %}
     </div>
     <div id="notif-empty" class="hidden flex-1 flex items-center justify-center text-sm text-gray-400 py-10">Sin notificaciones</div>
+    <!-- FIX 2026-09-08 (Jovan: "espacio muerto" en el nav): Manual dejó de ser
+         tab fijo, mismo tratamiento que Novedades arriba -- pero a diferencia
+         de Novedades, MI2 §17a exige que sea visible para CUALQUIER usuario
+         logueado (no puede esconderse detrás de admin como Dev Manual), así
+         que vive aquí como link fijo, no como notificación con estado. -->
+    <a href="/manual" class="flex-shrink-0 flex items-center gap-2 px-4 py-2.5 border-t border-gray-100 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition">
+        📖 Manual de usuario
+    </a>
 </div>
 <div id="notif-overlay" onclick="window.toggleNotifPanel()" class="hidden fixed inset-0 bg-black/10 z-40"></div>
 <script>
