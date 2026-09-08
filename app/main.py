@@ -21517,6 +21517,36 @@ async def diag_order_lookup(order_id: str = "", token: str = ""):
     }
 
 
+@app.get("/api/diag/best-order-today")
+async def diag_best_order_today(account_id: str = "", token: str = "", date: str = "", limit: int = 5):
+    """DIAGNÓSTICO de solo lectura (2026-09-07, Jovan preguntó "qué venta fue
+    la mejor hoy en Apantallate"): top N órdenes de order_history por monto
+    (unit_price * quantity) para una fecha dada (default hoy, UTC) -- opcional
+    acotado a un account_id. No excluye canceladas/reembolsadas a propósito
+    (para que Jovan vea el dato crudo y decida)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_bot
+    from datetime import datetime as _dt_bot
+    target_date = date or _dt_bot.utcnow().strftime("%Y-%m-%d")
+    where = ["order_date LIKE ?"]
+    params: list = [f"{target_date}%"]
+    if account_id:
+        where.append("account_id = ?")
+        params.append(account_id)
+    async with _aio_bot.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_bot.Row
+        cur = await db.execute(
+            f"""SELECT order_id, account_id, platform, sku, unit_price, quantity,
+                       (unit_price * quantity) AS total, status, order_date
+                FROM order_history WHERE {' AND '.join(where)}
+                ORDER BY total DESC LIMIT ?""",
+            params + [limit],
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    return {"date": target_date, "account_id": account_id or "todas", "top_orders": rows}
+
+
 @app.get("/api/diag/ml-order-raw-sku")
 async def diag_ml_order_raw_sku(order_id: str = "", account_id: str = "", token: str = ""):
     """DIAGNÓSTICO PUNTUAL 2026-08-18 -- confirmar si el seller_sku CRUDO de
