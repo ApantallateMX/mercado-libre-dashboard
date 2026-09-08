@@ -21528,7 +21528,11 @@ async def diag_best_order_today(account_id: str = "", token: str = "", date: str
         return JSONResponse({"error": "token inválido"}, status_code=403)
     import aiosqlite as _aio_bot
     from datetime import datetime as _dt_bot
-    target_date = date or _dt_bot.utcnow().strftime("%Y-%m-%d")
+    from zoneinfo import ZoneInfo as _zi_bot
+    # FIX 2026-09-08: "hoy" debe ser hora de Mexico (CDMX), no UTC -- con UTC
+    # ya cambia de dia varias horas antes de medianoche real en Mexico, dando
+    # top_orders=[] con "hoy" apuntando al dia siguiente que aun no tiene ventas.
+    target_date = date or _dt_bot.now(_zi_bot("America/Mexico_City")).strftime("%Y-%m-%d")
     where = ["order_date LIKE ?"]
     params: list = [f"{target_date}%"]
     if account_id:
