@@ -157,7 +157,7 @@ window._stockFilter = function(q) {
          class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
         <p class="text-xs text-gray-500">Sin Stock (con BM)</p>
         <p class="text-2xl font-bold text-orange-600">{{ restock_count }}</p>
-        <p class="text-[10px] text-gray-400">MeLi=0, BM tiene stock</p>
+        <p class="text-[10px] text-gray-400">MeLi=0, BM tiene stock, con ventas 30d</p>
     </div>
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"
          class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition kpi-card">
@@ -277,7 +277,7 @@ window._stockFilter = function(q) {
         <div class="flex items-center gap-2">
             <div class="w-1 h-6 bg-orange-400 rounded"></div>
             <h3 class="text-sm md:text-base font-bold text-gray-800">Reabastecer</h3>
-            <span class="text-xs text-gray-400">(MeLi=0, BM disponible)</span>
+            <span class="text-xs text-gray-400" title="No incluye publicaciones sin ventas en 30d (probables duplicados/variantes sin demanda propia) -- esas no aparecen aquí a propósito, para no sugerir reponer stock donde no convierte">(MeLi=0, BM disponible, con ventas recientes)</span>
         </div>
         {% if restock %}
         <button onclick="bulkSyncRestock()" id="bulk-restock-btn"
@@ -745,7 +745,7 @@ window._stockFilter = function(q) {
         <div class="flex items-center gap-2">
             <div class="w-1 h-6 bg-red-400 rounded"></div>
             <h3 class="text-sm md:text-base font-bold text-gray-800">Stock Crítico</h3>
-            <span class="text-xs text-gray-400">(MeLi activo, BM &lt; {{ threshold }} uds.)</span>
+            <span class="text-xs text-gray-400" title="No incluye SKUs con 0 ventas en 30d -- esos aparecen en Inventario Estancado en vez de aquí, para no sugerir 'comprar ya' y 'considera liquidar' al mismo tiempo">(MeLi activo, BM &lt; {{ threshold }} uds., con ventas recientes)</span>
         </div>
         {% if critical %}
         {# _multi_account_risk puede faltar en un snapshot cacheado viejo (server recién
@@ -1013,7 +1013,7 @@ window._stockFilter = function(q) {
         <div class="flex items-center gap-2">
             <div class="w-1 h-6 bg-green-400 rounded"></div>
             <h3 class="text-sm md:text-base font-bold text-gray-800">Activar</h3>
-            <span class="text-xs text-gray-400">(MeLi=0, BM disponible, sin ventas recientes)</span>
+            <span class="text-xs text-gray-400" title="Publicación pausada o auto-desactivada por MeLi (no activa), con stock BM disponible -- puede tener ventas recientes o no; a diferencia de Reabastecer, aquí SÍ importa avisar aunque no venda porque hoy no es comprable en absoluto">(MeLi pausado/inactivo, BM disponible)</span>
         </div>
         {% if activate %}
         <button onclick="bulkActivateAll()" id="bulk-activate-btn"

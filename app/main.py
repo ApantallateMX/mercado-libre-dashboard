@@ -8465,6 +8465,22 @@ async def _prewarm_caches(user_id: str = None):
                 # un listing a status="inactive" automáticamente al llegar a qty=0 (línea 7088-90)
                 # -- nunca se queda en "active" con 0. El filtro solo revisaba "active" y por eso
                 # restock salía sistemáticamente vacío pese a que "inactive" se fetchea justo para esto.
+                #
+                # DECISIÓN 2026-09-08 (auditoría completa de alertas, Jovan): "units>0" (ventas
+                # en los últimos 30d) está aquí desde el primer commit de esta feature -- NO es
+                # un gate accidental, es la razón de ser de "Reabastecer" vs "Activar": prioriza
+                # publicaciones que SÍ generan ingreso, no cualquier MeLi=0+BM>0. El tooltip en
+                # products_stock_issues.html NO mencionaba esta condición -- confirmado en vivo
+                # con SNTV007478/APANTALLATEMX: de 3 publicaciones del mismo SKU, MLM4490263466
+                # (units_30d=0, probable duplicado histórico -- su gemela MLM2676965227 sí vende
+                # 213/mes) queda excluida en silencio. Se evaluó quitar el gate vs corregir el
+                # tooltip: quitarlo pondría un botón "Sync N uds" en publicaciones sin historial
+                # de venta (posibles duplicados/variantes muertas de ML, que no se pueden fusionar
+                # fácilmente -- ver BM_PREFIXES/SKU vs item_id), alimentando de stock BM asignado
+                # una publicación que nunca convierte en vez de la que sí vende. Se mantiene el
+                # gate (decisión de negocio: "restockear" implica acción automática de venta, no
+                # solo visibilidad) y se corrige el tooltip para que diga la verdad -- ver
+                # products_stock_issues.html línea ~280.
                 restock = [p for p in products if p.get("status") in ("active", "inactive") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
                 # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
@@ -8504,6 +8520,10 @@ async def _prewarm_caches(user_id: str = None):
                     # ("considera liquidar") al mismo tiempo -- contradicción real de
                     # negocio, no una combinación informativa. "Crítico" solo tiene
                     # sentido para un SKU que SÍ se está vendiendo.
+                    # NOTA 2026-09-08 (auditoría completa de alertas): mismo gate oculto que
+                    # restock (ver comentario ahí) -- se mantiene por la misma razón (evita la
+                    # contradicción de negocio de arriba) y el tooltip en
+                    # products_stock_issues.html se corrigió para mencionarlo.
                     and p.get("units", 0) > 0
                 ]
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
@@ -8626,10 +8646,22 @@ async def _prewarm_caches(user_id: str = None):
                 # invisibles. Ahora usa el MISMO criterio ya validado en Deals
                 # (_recup_below_target / _neto_ml_negative, calculado en el mismo
                 # ciclo por _calc_margins -- cero llamadas nuevas a BM).
+                # FIX 2026-09-08 (auditoría completa de alertas, Jovan): a diferencia de
+                # TODAS las demás listas (critical/stagnant/imbalanced/oversell_risk ya
+                # exigen status=="active" desde el FIX 2026-08-07/2026-09-05), esta nunca
+                # filtró por status ni excluyó is_full -- viene de bm_candidates, que
+                # deliberadamente incluye active+paused+inactive (para el bulk BM único,
+                # ver arriba). Verificado en producción con datos reales: 9 de 45 items
+                # muestreados en "Margen Real Insuficiente" eran status="paused" con
+                # available_quantity>0 (ej. MLM874252374/SNPE000170, LUTEMAMEXICO, 3276
+                # uds pausadas) -- sugería bajar precio en una publicación que nadie puede
+                # comprar. Mismo patrón que imbalanced/sobrestock, nunca aplicado aquí.
                 price_risk = [
                     p for p in bm_candidates
                     if p.get("price", 0) > 0
                     and p.get("available_quantity", 0) > 0
+                    and p.get("status") == "active"
+                    and not p.get("is_full")
                     and p.get("sku")
                     and (p.get("_recup_below_target") or p.get("_neto_ml_negative"))
                 ]
@@ -19919,11 +19951,13 @@ async def diag_ml_listings_by_sku(sku: str = "", account_id: str = "", token: st
             params,
         )
         rows = [dict(r) for r in await cur.fetchall()]
-        # FEATURE (mismo diag): units_30d por item_id -- restock/oversell_risk/
-        # critical exigen units>0 (ventas recientes) ADEMAS de status+qty=0,
-        # condicion que el tooltip de "Sin Stock (con BM)" no menciona. Para
-        # confirmar si eso explica por que un item con 0 stock no sale en la
-        # alerta aunque otro del mismo SKU si.
+        # FEATURE (mismo diag): units_30d por item_id -- restock/critical exigen
+        # units>0 (ventas recientes) ADEMAS de status+qty=0, condicion que el
+        # tooltip de "Sin Stock (con BM)"/"Stock Crítico" no mencionaba (ya
+        # corregido 2026-09-08). CORRECCIÓN 2026-09-08: verificado en código que
+        # oversell_risk NO tiene este gate (línea ~8473 de _prewarm_caches) --
+        # el comentario original de este docstring lo incluía por error, no
+        # replicar ese dato al razonar sobre oversell_risk en el futuro.
         from datetime import datetime as _dt_mlbs, timedelta as _td_mlbs
         _cutoff30 = (_dt_mlbs.utcnow() - _td_mlbs(days=30)).strftime("%Y-%m-%d")
         for _row in rows:
