@@ -19893,6 +19893,35 @@ async def diag_bm_alter_sku_delete_exact(
     return JSONResponse({"ok": _ok, "status_code": resp.status_code, "response": data})
 
 
+@app.get("/api/diag/ml-listings-by-sku")
+async def diag_ml_listings_by_sku(sku: str = "", account_id: str = "", token: str = ""):
+    """DIAGNÓSTICO de solo lectura (2026-09-08, Jovan reportó 2 publicaciones
+    "Sin stock" reales en ML para un SKU pero solo 1 contada en alertas):
+    todas las filas crudas de ml_listings para un SKU (opcional acotado a
+    account_id) -- para ver cuántos item_id distintos existen y su status/qty
+    real, sin pasar por ningún filtro de _prewarm_caches."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    import aiosqlite as _aio_mlbs
+    where = ["UPPER(sku) = ?"]
+    params: list = [sku.strip().upper()]
+    if account_id:
+        where.append("account_id = ?")
+        params.append(account_id)
+    async with _aio_mlbs.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_mlbs.Row
+        cur = await db.execute(
+            f"""SELECT item_id, account_id, title, status, price, available_qty,
+                       sold_qty, sku, is_full, last_updated, synced_at
+                FROM ml_listings WHERE {' AND '.join(where)}""",
+            params,
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+    return {"sku": sku, "account_id": account_id or "todas", "count": len(rows), "listings": rows}
+
+
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
     """Diagnóstico externo: caché en memoria + bm_sku_master para un SKU.
