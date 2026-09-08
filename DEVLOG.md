@@ -7,6 +7,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-08 — DECISION: no fusionar la llamada de PNP con la llamada principal de sync BM
+
+### Contexto
+Jovan pidió que el dato de PNP (`pnp_mty_available`) se descargue en la MISMA llamada que ya alimenta el sistema, no como una llamada extra a BM ("no lo ocupo como una bajada más"). Hoy `_update_category_stock_master()` (`app/main.py` ~línea 23723) hace 2 llamadas extra solo para PNP (MTY + otras ubicaciones), aparte de la llamada principal de stock vendible.
+
+### Investigación (verificado con datos reales antes de tocar código)
+Se agregó un diag temporal de solo lectura que combinó `conditions="GRA,GRB,GRC,ICB,ICC,NEW,PNP"` en una sola llamada real (cliente compartido, mismo semáforo) para SNTV008001. Resultado: BM devolvió **una sola fila combinada** (`AvailableQTY=5, NoVendibleQty=2061`) sin ningún sufijo de SKU que distinga qué parte corresponde a PNP vs a las condiciones graduadas — ni siquiera coincide con el valor real conocido de solo-PNP para ese SKU (Disponible=4, No Vendible=379, captura real de Jovan). BM agrega todo sin trazabilidad por condición cuando se piden varias juntas en una categoría con producto en una sola línea.
+
+### Decisión
+**No se fusiona.** Fusionar arriesgaba mezclar unidades PNP (no vendibles, en proceso de ensamblaje) como si fueran stock vendible real — el mismo tipo de corrupción de datos que ya causó incidentes reales antes en este proyecto. Las 2 llamadas separadas de PNP se quedan como están. Hallazgo documentado directamente en el código (línea ~23723) para que nadie repita el intento sin volver a verificar con datos reales primero. Diag temporal usado para la prueba, ya removido (commit `7a66bfa`).
+
+---
+
 ## 2026-09-08 — FEAT: mostrar publicaciones que no califican para ninguna alerta al buscar
 
 ### Commit: 5d0786d
