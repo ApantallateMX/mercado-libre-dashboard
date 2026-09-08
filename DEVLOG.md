@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-08 — FIX: bug real en Margen Real Insuficiente + tooltips falsos (auditoría completa de las 13 categorías de Alertas de Stock)
+
+### Commit: 95a4722
+
+### Contexto
+Jovan notó que un SKU (SNTV007478, cuenta APANTALLATEMX) tenía 2 publicaciones reales "Sin stock" en ML pero la alerta "Sin Stock (con BM)" solo contaba 1. Pidió explícitamente verificar TODO el sistema de alertas y aplicar las mejores soluciones, no solo reportar — se delegó a `backend-integrations-engineer` con autorización para decidir e implementar.
+
+### Causa del caso original (no era bug, era decisión de negocio sin documentar)
+`restock`/`critical` exigen `units>0` (ventas en 30d) desde el primer commit de la feature — de las 3 publicaciones de SNTV007478, la gemela sin ventas recientes (MLM4490263466, units_30d=0, probable duplicado histórico) queda excluida a propósito; su hermana con 213 ventas/mes sí cuenta. El tooltip nunca mencionaba esta condición — corregido en `products_stock_issues.html` (Sin Stock, Reabastecer, Stock Crítico, y también Activar que decía lo contrario de lo que hace).
+
+### BUG REAL encontrado en la auditoría — "Margen Real Insuficiente" (price_risk)
+A diferencia de TODAS las demás categorías (ya corregidas 2026-08-07/2026-09-05), `price_risk` nunca filtró por `status` ni `is_full` — viene de `bm_candidates`, que incluye active+paused+inactive a propósito para el bulk de BM. Confirmado en producción: 9 de 45 items muestreados eran `status="paused"` con stock real (ej. MLM874252374/SNPE000170, LUTEMAMEXICO, 3276 uds pausadas) sugiriendo bajar precio de algo que nadie puede comprar. Fix: exigir `status=="active"` y `not is_full` (`app/main.py` ~línea 8646-8667).
+
+### Resto de la auditoría
+Las 8 categorías restantes (oversell_risk, full_no_stock, imbalanced, stagnant, quiebre_inminente, no_bm_sku, sobrestock, y el propio `no_bm_sku` que a propósito no filtra por status) verificadas contra datos reales — tooltips correctos, sin gates ocultos adicionales. Se corrigió también un docstring propio (`/api/diag/ml-listings-by-sku`) que afirmaba sin verificar que `oversell_risk` tenía el mismo gate de `units>0` — no lo tiene ni debe tenerlo.
+
+### Verificación
+Test aislado (`backend-integrations-engineer`, 9/9 checks, incluye reproducir el bug viejo de price_risk antes/después del fix con datos sintéticos basados en los casos reales) + `py -m py_compile` + parseo Jinja del template, todo limpio antes del commit.
+
+### Herramienta nueva usada para diagnosticar
+`/api/diag/ml-listings-by-sku?sku=X&account_id=Y&token=Z` (agregado en este mismo día) — filas crudas de `ml_listings` + `units_30d` real por `item_id`, para poder ver la discrepancia entre lo que ML muestra y lo que el sistema cuenta sin pasar por ningún filtro de `_prewarm_caches`.
+
+---
+
 ## 2026-09-08 — FIX: 3 hallazgos en Velocidad de Ventas (Planeación, auditoría completa)
 
 ### Commit: 697c141
