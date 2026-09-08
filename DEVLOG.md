@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-08 — FEAT: mostrar publicaciones que no califican para ninguna alerta al buscar
+
+### Commit: 5d0786d
+
+### Contexto
+Tras el fix anterior (mismo día), Jovan seguía confundido: "por que me sigue solo mostrando uno si lo busco". Causa real: el buscador de la tab Stock solo filtra `<tr>`/`<div>` ya renderizados en las 12 secciones de alerta -- una publicación real con MeLi=0 puede no calificar para NINGUNA categoría (ej. MLM4490263466/SNTV007478, 0 ventas en 30d, gate intencional de Reabastecer) y por lo tanto nunca llega al navegador. El buscador no tenía ningún bug -- simplemente no puede encontrar algo que el servidor nunca envió.
+
+### Solución
+Nuevo endpoint `GET /api/stock/search-listings?q=X` (`app/main.py`): consulta `ml_listings` DIRECTO (sin pasar por ningún filtro de negocio de `_prewarm_caches`), aislado por cuenta activa de la sesión, solo con `q` de 3+ caracteres. El frontend (`products_stock_issues.html`), al buscar (debounced 300ms), llama este endpoint y compara contra el HTML ya renderizado de las 12 secciones -- las publicaciones que coinciden pero NO aparecen en ninguna alerta se muestran en un panel amarillo aparte, con link directo a ML y su status/stock real, para que Jovan decida qué hacer (pausar, consolidar, etc.) en vez de que la publicación sea invisible sin explicación.
+
+### Verificación
+Test aislado del SQL (incluye caso real SNTV007478 + aislamiento por cuenta -- nunca mezcla listings de otra cuenta) + compilación + parseo Jinja + sintaxis JS de los 5 bloques `<script>` del template, todo limpio. Verificado en producción: el endpoint devuelve las 3 publicaciones reales del SKU, incluyendo la que antes era invisible.
+
+---
+
 ## 2026-09-08 — FIX: bug real en Margen Real Insuficiente + tooltips falsos (auditoría completa de las 13 categorías de Alertas de Stock)
 
 ### Commit: 95a4722
