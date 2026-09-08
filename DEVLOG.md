@@ -7,6 +7,16 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-08 — FIX: quitar la llamada extra de PNP fuera de MTY
+
+### Contexto
+Jovan: "pnp solo aplica a mty no quiero de ningun otro lado mas". `_update_category_stock_master()` hacía 2 llamadas a BM para PNP: una para MTY (la que sí quiere) y otra que revisaba CDMX/Tijuana como anomalía ("PNP fuera de MTY").
+
+### Fix
+Se quitó la segunda llamada. `_pnp_other_by_base` se deja como dict vacío a propósito (nunca se vuelve a llenar) en vez de tocar el schema de `bm_sku_master` (columna `pnp_other_locations_qty`) o sus lecturas en Velocidad de Ventas -- se verificó cada punto que consume esa variable/columna antes de tocar código (regla del proyecto: grep referencias completas al borrar código) y todos se degradan a 0/no-op sin errores. De 2 llamadas BM para PNP por ciclo de categoría a 1.
+
+---
+
 ## 2026-09-08 — DECISION: no fusionar la llamada de PNP con la llamada principal de sync BM
 
 ### Contexto
