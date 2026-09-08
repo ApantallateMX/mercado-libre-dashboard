@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-08 — FIX: 3 hallazgos en Velocidad de Ventas (Planeación, auditoría completa)
+
+### Commit: 697c141
+
+### Contexto
+Jovan reportó (screenshot real) que la tabla "Velocidad de Ventas — ML + Amazon por SKU" no mostraba la cantidad disponible en BinManager. Auditoría completa (`backend-integrations-engineer`) contra `/api/planning/velocity` con datos reales encontró 3 problemas, no solo el reportado.
+
+### Hallazgos y fixes (`app/templates/planning.html`)
+- **`bm_avail` ya se calculaba en el backend** (`app/main.py:29093`, desde `_bm_stock_cache`, correcto: nunca llama BM en vivo) **pero nunca se pintaba** — se agregó columna "Disp. BM".
+- **Revenue solo sumaba Mercado Libre**, pese a que el título de la sección dice "ML + Amazon por SKU" — confirmado con SNTV001764: mostraba $107,967 cuando el revenue real combinado (ML+Amazon) era ~$129,115. Fix en frontend (sumar `amz_revenue_30d`), no en backend, para no tocar el shape del JSON que otros consumidores puedan usar.
+- **La tabla trunca a 100 de hasta 392 SKUs sin avisar** (`result_items[:100]`, backend ya devuelve `total_items` real pero el frontend lo ignoraba) — ahora el contador muestra "100 de 392" cuando aplica, solo si no hay una búsqueda activa reduciendo el conteo por otra razón.
+
+### No es bug, pero se documentó
+"Días inv." usa la ventana de días que el usuario elige en el selector (7/14/30/60), mientras Cobertura usa siempre 30 días fijos — mismo SKU puede mostrar un número distinto en cada sección. Se agregó tooltip aclarando "sobre la ventana de N días seleccionada" en vez de cambiar el cálculo (decisión de UX, no bug real).
+
+### Verificación
+JS de `planning.html` verificado con `node -e "new Function(...)"` sobre el bloque `<script>` extraído, y el template completo re-parseado con Jinja2 (`env.get_template`) — ambos sin errores antes del commit.
+
+---
+
 ## 2026-09-06 — FIX: 4 bugs reales en alertas de Stock (auditoría completa a pedido de Jovan)
 
 ### Commit: e82804a
