@@ -7,6 +7,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX: TypeError real en amazon_dashboard.js rompía funciones globales fuera del Dashboard
+
+### Contexto
+Verificando pendientes en producción (ASIN search, gap scan y Wizard Amazon v2 con ExclusiveBulbs), la consola del navegador mostró un error real en `Productos > Sin Publicar`: `TypeError: Cannot read properties of null (reading 'addEventListener')` en `amazon_dashboard.js:1138`. Las 3 pruebas de fondo (ASIN search, gap scan de SNAC000046, Wizard v2 completo hasta el checklist de Step 4) funcionaron correctamente y quedan verificadas.
+
+### Causa
+`document.getElementById('btn-amz-update-goal').addEventListener(...)` (y 2 casos gemelos: `btn-amz-filtrar`, `btn-amz-limpiar`) se llamaban directo sin verificar que el elemento existiera. Esos botones solo existen en la página Dashboard de Amazon -- en cualquier otra página de la sección Amazon que carga el mismo `amazon_dashboard.js` (ej. Productos), la excepción aborta el resto del script en ese archivo. Como ~25 funciones (`searchAsin`, `setAmzVentasView`, `openAmzSubstitutionModal`, `toggleFbaSim`, etc.) se asignan con `window.foo = function(){...}` DESPUÉS de esas 3 líneas, nunca quedaban definidas en páginas sin esos botones -- riesgo silencioso si algo llega a depender de ellas fuera del Dashboard.
+
+### Fix
+Guard `if (elemento) {...}` en las 3 llamadas (`app/static/js/amazon_dashboard.js` ~1138, ~1164, ~1173), mismo patrón defensivo ya usado en el resto del archivo. Grep confirmó que no hay más casos del mismo patrón (`getElementById(...).addEventListener` sin guard a nivel top-level) en el resto de `app/static/js/`. Verificado localmente (`node --check`, servidor local puerto 8004, JS servido con el fix confirmado) antes de push.
+
+---
+
 ## 2026-09-08 — FIX: quitar la llamada extra de PNP fuera de MTY
 
 ### Contexto

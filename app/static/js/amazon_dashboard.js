@@ -1135,19 +1135,22 @@ function renderAmzHealth(d, cont) {
 }
 
 // ─── Meta diaria ──────────────────────────────────────────────────────────────
-document.getElementById('btn-amz-update-goal').addEventListener('click', function() {
-    var newGoal = parseFloat(document.getElementById('amz-daily-goal-input').value) || 50000;
-    amzDailyGoal = newGoal;
-    fetch('/api/metrics/amazon-goal', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({daily_goal: newGoal, seller_id: window.amzActiveSellerId || ''})
-    }).then(function(){
-        var p = getDateParams();
-        fetch('/api/metrics/amazon-daily-sales-data?' + p)
-            .then(function(r){return r.json();})
-            .then(function(data){ renderAmazonDailyTable(data); });
+var _amzUpdateGoalBtn = document.getElementById('btn-amz-update-goal');
+if (_amzUpdateGoalBtn) {
+    _amzUpdateGoalBtn.addEventListener('click', function() {
+        var newGoal = parseFloat(document.getElementById('amz-daily-goal-input').value) || 50000;
+        amzDailyGoal = newGoal;
+        fetch('/api/metrics/amazon-goal', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({daily_goal: newGoal, seller_id: window.amzActiveSellerId || ''})
+        }).then(function(){
+            var p = getDateParams();
+            fetch('/api/metrics/amazon-daily-sales-data?' + p)
+                .then(function(r){return r.json();})
+                .then(function(data){ renderAmazonDailyTable(data); });
+        });
     });
-});
+}
 
 // ─── Range buttons ────────────────────────────────────────────────────────────
 document.querySelectorAll('.amz-range-btn').forEach(function(btn) {
@@ -1158,20 +1161,26 @@ document.querySelectorAll('.amz-range-btn').forEach(function(btn) {
     });
 });
 
-document.getElementById('btn-amz-filtrar').addEventListener('click', function() {
-    var df = document.getElementById('amz_date_from').value;
-    var dt = document.getElementById('amz_date_to').value;
-    var periodEl2 = document.getElementById('amz-period-label');
-    if (df && dt && periodEl2) periodEl2.textContent = df + ' – ' + dt;
-    highlightRangeBtn(null);
-    loadAmazonDashboard();
-});
+var _amzFiltrarBtn = document.getElementById('btn-amz-filtrar');
+if (_amzFiltrarBtn) {
+    _amzFiltrarBtn.addEventListener('click', function() {
+        var df = document.getElementById('amz_date_from').value;
+        var dt = document.getElementById('amz_date_to').value;
+        var periodEl2 = document.getElementById('amz-period-label');
+        if (df && dt && periodEl2) periodEl2.textContent = df + ' – ' + dt;
+        highlightRangeBtn(null);
+        loadAmazonDashboard();
+    });
+}
 
-document.getElementById('btn-amz-limpiar').addEventListener('click', function() {
-    setRange(30);
-    highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
-    loadAmazonDashboard();
-});
+var _amzLimpiarBtn = document.getElementById('btn-amz-limpiar');
+if (_amzLimpiarBtn) {
+    _amzLimpiarBtn.addEventListener('click', function() {
+        setRange(30);
+        highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
+        loadAmazonDashboard();
+    });
+}
 
 // ─── Balance Amazon ────────────────────────────────────────────────────────────
 function loadAmzBalance() {
