@@ -2466,33 +2466,35 @@ async def auto_fix_errors(request: Request):
         remaining_errs = [i for i in result_issues if i.get("severity") == "ERROR"]
 
         # ── Step 4: save successful fixes to template ─────────────────────────
+        # BUG REAL 2026-09-09: esto solo corría "if not remaining_errs" --
+        # una ronda que corrige 6/7 atributos pero deja 1 pendiente (ej. un
+        # enum que la IA acertó al segundo intento) perdía esos 6 para
+        # siempre, porque nunca se guardaban. Confirmado con BIRTMAN BT-42i:
+        # la plantilla ELECTRIC_FAN solo terminó con el último atributo
+        # corregido ("design"), no con los otros 6 de la ronda anterior.
+        # Ahora guarda lo que SÍ se corrigió en cada ronda, sin importar si
+        # quedan otros errores pendientes -- "if existing:" también se quitó
+        # (ver fix anterior) para poder crear la plantilla desde cero.
         template_updated = False
-        if not remaining_errs:
-            try:
-                from app.services.token_store import (
-                    get_product_type_template as _gpt,
-                    save_product_type_template as _spt,
-                )
-                # BUG REAL 2026-09-09: "if existing:" descartaba el guardado
-                # completo la PRIMERA vez que se corregía un product_type
-                # nuevo (sin plantilla previa) -- exactamente el caso de
-                # ELECTRIC_FAN con BIRTMAN BT-42i, confirmado con
-                # /api/amazon/lanzar/templates/ELECTRIC_FAN -> "Template not
-                # found" pese a 3 rondas de auto-fix ya aplicadas. Ahora
-                # siempre guarda, creando la plantilla desde cero si hace falta.
-                existing = await _gpt(product_type, client.marketplace_id) or {}
-                new_defaults = dict(existing.get("defaults") or {})
-                for attr_name, val_list in attr_patches.items():
-                    if val_list and isinstance(val_list, list):
-                        v = val_list[0].get("value")
-                        if v is not None and not isinstance(v, list):
-                            new_defaults[attr_name] = v
-                existing["defaults"] = new_defaults
-                await _spt(product_type, client.marketplace_id, existing)
-                template_updated = True
-            except Exception as _te:
-                logger.warning(f"[auto-fix] Template update failed: {_te}")
+        try:
+            from app.services.token_store import (
+                get_product_type_template as _gpt,
+                save_product_type_template as _spt,
+            )
+            existing = await _gpt(product_type, client.marketplace_id) or {}
+            new_defaults = dict(existing.get("defaults") or {})
+            for attr_name, val_list in attr_patches.items():
+                if val_list and isinstance(val_list, list):
+                    v = val_list[0].get("value")
+                    if v is not None and not isinstance(v, list):
+                        new_defaults[attr_name] = v
+            existing["defaults"] = new_defaults
+            await _spt(product_type, client.marketplace_id, existing)
+            template_updated = True
+        except Exception as _te:
+            logger.warning(f"[auto-fix] Template update failed: {_te}")
 
+        if not remaining_errs:
             logger.info(f"[auto-fix] SKU={sku} pt={product_type} fixed={fixed_labels}")
             return JSONResponse({
                 "ok": True,

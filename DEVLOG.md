@@ -21,8 +21,14 @@ Continuación del intento de lanzar BIRTMAN BT-42i. Jovan notó algo clave: "ya 
 - `create_listing` ahora carga `get_product_type_template()` y aplica sus `defaults` para cualquier atributo que el formulario no haya llenado explícitamente -- nunca pisa un valor real del usuario.
 - `auto-fix-errors` ahora siempre guarda (crea la plantilla desde cero si no existe), en vez de solo actualizar una ya existente.
 
+### Bug gemelo #3, encontrado al probar el fix anterior
+El guardado de plantilla solo corría dentro de `if not remaining_errs:` -- una ronda que corrige 6/7 atributos pero deja 1 pendiente (un enum que la IA acertó hasta el segundo intento) perdía esos 6 para siempre, porque solo se guardaba la ÚLTIMA ronda que llegó a 0 errores. Confirmado en vivo: la plantilla ELECTRIC_FAN terminó con un solo campo (`design`) en vez de los 7 corregidos en total. Movido fuera del gate -- ahora guarda lo que se corrigió en CADA ronda, sin importar si quedan otros errores pendientes.
+
+### Hallazgo adicional — el motor de matching de Amazon no re-evalúa tras PATCH
+Incluso con los 7 atributos ya aplicados vía PATCH sobre el listing real, `/api/amazon/lanzar/listing-status` seguía devolviendo el mismo error 8560 ("no se pudo encontrar/crear ASIN"). Esto confirma que el motor de matching/creación de catálogo de Amazon evalúa la sumisión del **create (PUT) original**, no los PATCHes posteriores -- por completos que sean. La única vía real es una sumisión completa desde el inicio, que es exactamente lo que el fix de `create_listing` (cargar la plantilla) ahora permite para el SIGUIENTE intento de creación.
+
 ### Verificación
-`py_compile` limpio. Pendiente: reintentar el flujo completo de BIRTMAN BT-42i tras el deploy para confirmar que un solo "Publish on Amazon" ya incluye todos los atributos corregidos previamente.
+`py_compile` limpio en las 2 rondas de fix. Pendiente: confirmar con un "Publish on Amazon" limpio (plantilla ya completa) que el error 8560 por fin desaparece.
 
 ---
 
