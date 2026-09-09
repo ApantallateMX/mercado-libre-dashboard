@@ -1770,7 +1770,9 @@ class AmazonClient:
         # ── Seguir el link a el JSON Schema real y extraer enums por atributo ──
         # Se usa all_resp (NOT_ENFORCED) porque trae el set completo de atributos;
         # si no vino (error de red puntual), se intenta con enforced_resp como fallback.
-        enums = await self._fetch_schema_enums(all_resp or enforced_resp, product_type)
+        _schema_extra = await self._fetch_schema_enums(all_resp or enforced_resp, product_type)
+        enums = _schema_extra.get("enums") or {}
+        language_tag_attrs = _schema_extra.get("language_tag_attrs") or []
 
         result = {
             "product_type": product_type,
@@ -1781,10 +1783,12 @@ class AmazonClient:
             "groups": merged_groups,
             "group_titles": merged_titles,
             "enums": enums,
+            "language_tag_attrs": language_tag_attrs,
         }
         logger.info(
             f"[Amazon] Schema for {product_type}: {len(req_props)} required, "
-            f"{len(optional_props)} optional, {len(enums)} attrs with enum restringido"
+            f"{len(optional_props)} optional, {len(enums)} attrs with enum restringido, "
+            f"{len(language_tag_attrs)} attrs requieren language_tag"
         )
         return result
 
@@ -1792,10 +1796,18 @@ class AmazonClient:
         """
         Sigue el link "schema.link.resource" (URL S3 pre-firmada) que trae la respuesta
         de /definitions/2020-09-01/productTypes/{pt} y extrae, por atributo, la lista de
-        valores aprobados (enum) cuando el atributo esta restringido a un catalogo fijo.
+        valores aprobados (enum) cuando el atributo esta restringido a un catalogo fijo,
+        y por separado que atributos (con o sin enum) exigen "language_tag".
 
-        Retorna: {attr_name: {"enum": [...], "enum_names": [...]}} -- solo para atributos
-        que SI tienen enum (la mayoria de texto libre/numeros no aparecen aqui).
+        Retorna: {"enums": {attr_name: {"enum": [...], "enum_names": [...]}},
+                   "language_tag_attrs": [attr_name, ...]}
+        -- "enums" solo para atributos que SI tienen enum (la mayoria de texto libre/
+        numeros no aparecen ahi). "language_tag_attrs" es indepediente del enum: cubre
+        CUALQUIER atributo de texto libre localizado (ej. room_type, size,
+        recommended_uses_for_product) cuyo schema real trae "language_tag" dentro de
+        items.properties -- sin esto, aplicar un default ahi sin language_tag es
+        rechazado por Amazon aunque el valor en si sea valido (bug real 2026-09-09,
+        BIRTMAN BT-42i / ELECTRIC_FAN).
 
         Por que no reusar self._request(): el resource es una URL absoluta ya firmada
         por AWS (S3), no un path de SP-API -- no lleva el access_token LWA ni pasa por
@@ -1805,7 +1817,7 @@ class AmazonClient:
         link = ((definitions_resp or {}).get("schema") or {}).get("link") or {}
         resource_url = link.get("resource")
         if not resource_url:
-            return {}
+            return {"enums": {}, "language_tag_attrs": []}
         try:
             async with httpx.AsyncClient(timeout=20) as http:
                 resp = await http.get(resource_url)
@@ -1813,14 +1825,14 @@ class AmazonClient:
                 schema_doc = resp.json()
         except Exception as e:
             logger.warning(f"[Amazon] no se pudo descargar el JSON Schema real de {product_type}: {e}")
-            return {}
+            return {"enums": {}, "language_tag_attrs": []}
 
         enums: dict = {}
+        language_tag_attrs: list = []
         for attr_name, prop_def in (schema_doc.get("properties") or {}).items():
             # Forma típica SP-API: {type: array, items: {properties: {value: {enum: [...]}}}}
-            value_def = (
-                ((prop_def or {}).get("items") or {}).get("properties", {}).get("value")
-            )
+            items_props = ((prop_def or {}).get("items") or {}).get("properties") or {}
+            value_def = items_props.get("value")
             enum_vals = None
             enum_names = None
             if isinstance(value_def, dict) and value_def.get("enum"):
@@ -1832,7 +1844,9 @@ class AmazonClient:
                 enum_names = prop_def.get("enumNames")
             if enum_vals:
                 enums[attr_name] = {"enum": enum_vals, "enum_names": enum_names or []}
-        return enums
+            if "language_tag" in items_props:
+                language_tag_attrs.append(attr_name)
+        return {"enums": enums, "language_tag_attrs": language_tag_attrs}
 
     async def close_listing(self, sku: str) -> dict:
         """Set listing quantity to 0 (closes without deleting the SKU)."""

@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX: template defaults sin `language_tag` + atributo de dimensiones equivocado para ELECTRIC_FAN (2 bugs más del mismo incidente BIRTMAN BT-42i)
+
+### Contexto
+Al terminar de completar la plantilla ELECTRIC_FAN con los valores reales verificados (`room_type`, `size`, `recommended_uses_for_product`, dimensiones), se encontraron 2 bugs de código adicionales que habrían vuelto a tumbar el Publish aunque los VALORES fueran correctos.
+
+### Bug 1 — defaults de plantilla sin `language_tag`
+`room_type`, `size` y `recommended_uses_for_product` son atributos de texto libre localizado -- el schema real de Amazon exige `language_tag` en `items.properties` para ellos (confirmado ahora vía `_fetch_schema_enums` extendido). Pero tanto `auto_fix_errors()` (Step 4, guardado de plantilla ~línea 2532) como `create_listing()` (merge de defaults ~línea 2161) manejaban los defaults como valores planos `{attr: value}`, sin ningún `language_tag`. Amazon los habría rechazado igual.
+
+**Fix**: `amazon_client.py` -- `_fetch_schema_enums()` ahora también extrae `language_tag_attrs` (lista de atributos, con o sin enum, cuyo schema real trae `language_tag` en `items.properties`), agregado como nueva clave en el resultado de `fetch_product_type_schema()`. `_get_product_schema()` (amazon_lanzar.py) exige `"language_tag_attrs" in schema` para el cache-hit (self-heal de cachés viejas). `auto_fix_errors()` ahora guarda un `defaults_language_tags` paralelo (preserva el `language_tag` que ya traía el patch aplicado, en vez de descartarlo al aplanar a `value`). `create_listing()` usa ese `defaults_language_tags` explícito si existe, y si no, cae al idioma real del marketplace de la cuenta SOLO si el schema real confirma que ese atributo específico lo requiere.
+
+### Bug 2 — nombre del atributo de dimensiones fijo por lista de 2 excepciones
+`create_listing()` (~línea 1731) elegía entre `item_length_width_height` e `item_depth_width_height` con una lista fija (`product_type in ("TELEVISION","COMPUTER_MONITOR")`) -- pero ELECTRIC_FAN (y probablemente otras categorías) también usa `item_depth_width_height`, confirmado contra el schema real. El atributo de dimensiones nunca se llenaba para Fans.
+
+**Fix**: la selección ahora consulta el schema real del `product_type` (`_get_product_schema`, ya cacheado) y usa `item_depth_width_height` si ese atributo existe de verdad en el schema (`"all"`), con el comportamiento anterior como fallback si el schema no responde -- general, no otra excepción hardcodeada.
+
+### Verificación
+`py_compile` limpio en ambos archivos. Servidor local levantado (`py -m uvicorn app.main:app --port 8004`), `GET /api/amazon/lanzar/product-schema/ELECTRIC_FAN?seller_id=A22XNR713HGDVG` con sesión real → 200 OK, `language_tag_attrs` confirmado con `room_type`/`size`/`recommended_uses_for_product` presentes, `item_depth_width_height` confirmado en `"all"` para ELECTRIC_FAN (contra la API real de Amazon, no mock).
+
+---
+
 ## 2026-09-09 — FIX DE RAÍZ: nunca leíamos los enums reales del schema de Amazon (delegado a backend-integrations-engineer)
 
 ### Contexto

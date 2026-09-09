@@ -879,11 +879,13 @@ async def _get_product_schema(product_type: str, seller_id: str) -> dict:
 
     cache_key = f"{product_type}|{client.marketplace_id}"
     schema, cached_at = await get_schema_cache(cache_key)
-    # "enums" in schema: self-heal de cache vieja (pre 2026-09-09) que se guardo
-    # sin seguir el link a los enums reales -- sin este check, una entrada cacheada
-    # hace 3 semanas sin enums se serviria como "hit" por 30 dias mas, y el
-    # auto-fix con IA seguiria adivinando valores libres para atributos restringidos.
-    if schema and "enums" in schema and (_time.time() - cached_at) < 30 * 86400:
+    # "enums"/"language_tag_attrs" in schema: self-heal de cache vieja que se guardo
+    # sin seguir el link a los enums reales (pre 2026-09-09) o sin el mapeo de
+    # language_tag_attrs (fix del mismo dia, un poco mas tarde) -- sin este check,
+    # una entrada cacheada vieja se serviria como "hit" por 30 dias mas, y el
+    # auto-fix con IA seguiria adivinando valores libres para atributos restringidos
+    # o defaults sin language_tag para atributos de texto libre localizado.
+    if schema and "enums" in schema and "language_tag_attrs" in schema and (_time.time() - cached_at) < 30 * 86400:
         return schema
 
     schema = await client.fetch_product_type_schema(product_type)
@@ -1728,10 +1730,24 @@ async def create_listing(request: Request):
                 "height": {"value": _h_val, "unit": _dim_unit},
                 "marketplace_id": client.marketplace_id,
             }]
-            _dim_attr_name = "item_length_width_height" if product_type not in ("TELEVISION","COMPUTER_MONITOR") else "item_depth_width_height"
+            # BUG REAL 2026-09-09 (BIRTMAN BT-42i, ELECTRIC_FAN): el nombre del
+            # atributo de dimensiones NO depende solo de TV/Monitor -- una lista fija
+            # de 2 excepciones asumía "item_length_width_height" para todo lo demás,
+            # pero ELECTRIC_FAN (y probablemente otras categorías) en realidad usa
+            # "item_depth_width_height" igual que TV/Monitor. Se decide contra el
+            # schema real del product_type (que atributo existe de verdad) en vez de
+            # una lista hardcodeada; si el schema no responde, se mantiene el
+            # comportamiento anterior como fallback seguro.
+            _dim_schema = await _get_product_schema(product_type, seller_id)
+            _dim_all_attrs = set((_dim_schema or {}).get("all") or [])
+            _USES_DEPTH_ATTR = (
+                "item_depth_width_height" in _dim_all_attrs
+                or product_type in ("TELEVISION", "COMPUTER_MONITOR")
+            )
+            _dim_attr_name = "item_depth_width_height" if _USES_DEPTH_ATTR else "item_length_width_height"
+            _dim_first_key = "depth" if _USES_DEPTH_ATTR else "length"
             attributes[_dim_attr_name] = [{
-                "length" if product_type not in ("TELEVISION","COMPUTER_MONITOR") else "depth":
-                    {"value": _w_val, "unit": _dim_unit},
+                _dim_first_key: {"value": _w_val, "unit": _dim_unit},
                 "width":  {"value": _l_val, "unit": _dim_unit},
                 "height": {"value": _h_val, "unit": _dim_unit},
                 "marketplace_id": client.marketplace_id,
@@ -2161,9 +2177,23 @@ async def create_listing(request: Request):
     try:
         from app.services.token_store import get_product_type_template as _get_tmpl_defaults
         _tmpl = await _get_tmpl_defaults(product_type, client.marketplace_id)
+        _tmpl_lang_tags = _tmpl.get("defaults_language_tags") or {}
+        # BUG REAL 2026-09-09 (BIRTMAN BT-42i): varios atributos de texto libre
+        # localizado (room_type, size, recommended_uses_for_product) exigen
+        # "language_tag" en el schema real de Amazon -- si la plantilla no trae uno
+        # explícito guardado (defaults_language_tags, ver fix en auto_fix_errors), se
+        # cae al idioma real del marketplace de la cuenta, pero SOLO si el schema real
+        # confirma que ESE atributo lo requiere (nunca se agrega a uno que no lo pide).
+        _tmpl_schema = await _get_product_schema(product_type, seller_id)
+        _lang_required_attrs = set((_tmpl_schema or {}).get("language_tag_attrs") or [])
+        _default_lang_tag = "en_US" if client.marketplace_id == "ATVPDKIKX0DER" else "es_MX"
         for _attr, _val in (_tmpl.get("defaults") or {}).items():
             if _attr not in attributes and _val not in (None, ""):
-                attributes[_attr] = [{"value": _val, "marketplace_id": client.marketplace_id}]
+                _entry = {"value": _val, "marketplace_id": client.marketplace_id}
+                _lt = _tmpl_lang_tags.get(_attr) or (_default_lang_tag if _attr in _lang_required_attrs else None)
+                if _lt:
+                    _entry["language_tag"] = _lt
+                attributes[_attr] = [_entry]
     except Exception as _e_tmpl:
         logger.warning(f"[AMZ Lanzar] No se pudieron aplicar defaults de plantilla para {product_type}: {_e_tmpl}")
 
@@ -2530,12 +2560,25 @@ async def auto_fix_errors(request: Request):
             )
             existing = await _gpt(product_type, client.marketplace_id) or {}
             new_defaults = dict(existing.get("defaults") or {})
+            # BUG REAL 2026-09-09 (BIRTMAN BT-42i): se guardaba solo el "value" plano,
+            # descartando el "language_tag" que sí traía el patch aplicado -- al
+            # reaplicarse en el siguiente create_listing, el atributo salía sin
+            # language_tag y Amazon lo rechazaba de nuevo (room_type, size,
+            # recommended_uses_for_product son texto libre localizado).
+            new_lang_tags = dict(existing.get("defaults_language_tags") or {})
             for attr_name, val_list in attr_patches.items():
                 if val_list and isinstance(val_list, list):
-                    v = val_list[0].get("value")
+                    _first = val_list[0] if isinstance(val_list[0], dict) else {}
+                    v = _first.get("value")
                     if v is not None and not isinstance(v, list):
                         new_defaults[attr_name] = v
+                        _lt = _first.get("language_tag")
+                        if _lt:
+                            new_lang_tags[attr_name] = _lt
+                        elif attr_name in new_lang_tags:
+                            del new_lang_tags[attr_name]
             existing["defaults"] = new_defaults
+            existing["defaults_language_tags"] = new_lang_tags
             await _spt(product_type, client.marketplace_id, existing)
             template_updated = True
         except Exception as _te:
