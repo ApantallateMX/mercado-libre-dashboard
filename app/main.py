@@ -21485,6 +21485,36 @@ async def diag_seller_flex_ingest_options():
     return resp
 
 
+@app.get("/api/diag/amazon-listing-full-attributes")
+async def diag_amazon_listing_full_attributes(token: str = "", seller_id: str = "", sku: str = ""):
+    """DIAGNÓSTICO (2026-09-09, incidente BIRTMAN BT-42i) -- trae TODOS los
+    atributos ya enviados a Amazon para un listing existente (includedData=attributes),
+    no solo summaries/issues. Necesario para reconstruir un re-Publish (create_listing
+    hace un PUT completo, no un PATCH parcial) sin re-inventar datos que ya se
+    mandaron antes (título, bullets, fotos, dimensiones, etc.) -- se reusan los
+    valores reales ya en Amazon como base. Solo lectura, no escribe nada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not sku:
+        return JSONResponse({"error": "seller_id y sku requeridos"}, status_code=400)
+    from app.services.amazon_client import get_amazon_client
+    client = await get_amazon_client(seller_id)
+    if not client:
+        return JSONResponse({"error": f"sin client para seller_id={seller_id}"}, status_code=404)
+    try:
+        result = await client._request(
+            "GET",
+            f"/listings/2021-08-01/items/{client.seller_id}/{sku}",
+            params=[
+                ("marketplaceIds", client.marketplace_id),
+                ("includedData", "attributes,summaries,issues,fulfillmentAvailability"),
+            ],
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return result
+
+
 @app.get("/api/diag/amazon-listing-live-qty")
 async def diag_amazon_listing_live_qty(token: str = "", seller_id: str = "", sku: str = ""):
     """DIAGNÓSTICO temporal (2026-08-21) -- valida en vivo la hipótesis de que
