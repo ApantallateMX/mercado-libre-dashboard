@@ -708,19 +708,27 @@ async def _execute(updates: list[dict], ml_clients: dict, amz_clients: dict) -> 
                 # Si el listing está pausado y vamos a subir stock, activar primero
                 if new_qty > 0 and lst.get("status") == "paused":
                     try:
-                        await client.update_item_status(lst["item_id"], "active")
+                        await asyncio.wait_for(client.update_item_status(lst["item_id"], "active"), timeout=25)
                         logger.info(f"[MULTI-SYNC] Activado listing pausado {lst['item_id']}")
                         await asyncio.sleep(0.3)
                     except Exception as exc_act:
                         logger.warning(
                             f"[MULTI-SYNC] No se pudo activar {lst['item_id']}: {exc_act}"
                         )
-                await client.update_item_stock(lst["item_id"], new_qty)
+                # FIX 2026-09-08 (incidente real: multi-sync completo colgado ~10 min
+                # en un solo SKU, sin error, sin avanzar -- confirmado que la app en
+                # general seguía respondiendo, solo esta corrida quedó atorada). Sin
+                # timeout, una sola llamada colgada a ML/Amazon congela TODO el
+                # catálogo restante indefinidamente, sin ninguna señal de error. Con
+                # wait_for, un timeout se propaga como asyncio.TimeoutError -- ya
+                # capturado por el except Exception de abajo, mismo tratamiento que
+                # cualquier otro fallo (se cuenta como error, sigue con el siguiente SKU).
+                await asyncio.wait_for(client.update_item_stock(lst["item_id"], new_qty), timeout=25)
             else:
                 client = amz_clients.get(acct)
                 if not client:
                     raise ValueError(f"Sin cliente Amazon para {acct}")
-                await client.update_listing_quantity(lst["sku"], new_qty)
+                await asyncio.wait_for(client.update_listing_quantity(lst["sku"], new_qty), timeout=25)
 
             results.append({
                 "sku":        lst.get("sku", ""),
