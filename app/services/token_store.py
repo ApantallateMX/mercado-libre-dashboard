@@ -1839,6 +1839,7 @@ async def init_db():
                 quality_attrs  TEXT NOT NULL DEFAULT '[]',
                 bonus_attrs    TEXT NOT NULL DEFAULT '[]',
                 defaults_json  TEXT NOT NULL DEFAULT '{}',
+                defaults_language_tags_json TEXT NOT NULL DEFAULT '{}',
                 ai_hints       TEXT NOT NULL DEFAULT '',
                 validated      INTEGER NOT NULL DEFAULT 0,
                 validated_at   TEXT DEFAULT NULL,
@@ -1871,6 +1872,16 @@ async def init_db():
         # Migrate: add field_defs_json to amz_product_type_templates
         try:
             await db.execute('ALTER TABLE amz_product_type_templates ADD COLUMN field_defs_json TEXT NOT NULL DEFAULT "[]"')
+            await db.commit()
+        except Exception:
+            pass  # already exists
+        # Migrate: add defaults_language_tags_json to amz_product_type_templates
+        # BUG REAL 2026-09-09 (BIRTMAN BT-42i): sin esta columna, cualquier
+        # language_tag que auto_fix_errors() intentara preservar junto a un default
+        # se perdia en silencio -- save_product_type_template() solo escribia
+        # columnas fijas, y get_product_type_template() nunca lo leia de vuelta.
+        try:
+            await db.execute('ALTER TABLE amz_product_type_templates ADD COLUMN defaults_language_tags_json TEXT NOT NULL DEFAULT "{}"')
             await db.commit()
         except Exception:
             pass  # already exists
@@ -8833,7 +8844,7 @@ async def get_product_type_template(product_type: str, marketplace_id: str = "AT
     import json as _j
     async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
         row = await (await db.execute(
-            "SELECT required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,launch_count,validated_at,field_defs_json FROM amz_product_type_templates WHERE product_type=? AND marketplace_id=?",
+            "SELECT required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,launch_count,validated_at,field_defs_json,defaults_language_tags_json FROM amz_product_type_templates WHERE product_type=? AND marketplace_id=?",
             (product_type.upper(), marketplace_id),
         )).fetchone()
     if not row:
@@ -8846,6 +8857,7 @@ async def get_product_type_template(product_type: str, marketplace_id: str = "AT
             "ai_hints": row[4] or "", "validated": bool(row[5]),
             "launch_count": row[6] or 0, "validated_at": row[7],
             "field_defs": _j.loads(row[8] or "[]"),
+            "defaults_language_tags": _j.loads(row[9] or "{}") if len(row) > 9 else {},
         }
     except Exception:
         return {}
@@ -8856,8 +8868,8 @@ async def save_product_type_template(product_type: str, marketplace_id: str, dat
     async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
         await db.execute(
             'INSERT OR REPLACE INTO amz_product_type_templates '
-            '(product_type,marketplace_id,required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,validated_at,launch_count,field_defs_json,updated_at) '
-            'VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime("now"))',
+            '(product_type,marketplace_id,required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,validated_at,launch_count,field_defs_json,defaults_language_tags_json,updated_at) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime("now"))',
             (
                 product_type.upper(), marketplace_id,
                 _j.dumps(data.get("required_attrs", [])),
@@ -8869,6 +8881,7 @@ async def save_product_type_template(product_type: str, marketplace_id: str, dat
                 data.get("validated_at"),
                 data.get("launch_count", 0),
                 _j.dumps(data.get("field_defs", [])),
+                _j.dumps(data.get("defaults_language_tags", {})),
             ),
         )
         await db.commit()

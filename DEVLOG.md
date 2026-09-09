@@ -25,6 +25,9 @@ Al terminar de completar la plantilla ELECTRIC_FAN con los valores reales verifi
 ### Verificación
 `py_compile` limpio en ambos archivos. Servidor local levantado (`py -m uvicorn app.main:app --port 8004`), `GET /api/amazon/lanzar/product-schema/ELECTRIC_FAN?seller_id=A22XNR713HGDVG` con sesión real → 200 OK, `language_tag_attrs` confirmado con `room_type`/`size`/`recommended_uses_for_product` presentes, `item_depth_width_height` confirmado en `"all"` para ELECTRIC_FAN (contra la API real de Amazon, no mock).
 
+### Bug 3 (encontrado al aplicar el fix anterior en producción) — `defaults_language_tags` nunca se guardaba
+`amz_product_type_templates` es una tabla de columnas fijas (`token_store.py`), no un blob JSON genérico -- `save_product_type_template()`/`get_product_type_template()` solo leían/escribían las columnas que ya existían. El `defaults_language_tags` del fix de arriba se perdía en silencio (ni error, ni dato) porque no había columna para él. Se agregó `defaults_language_tags_json` (migración `ALTER TABLE` con el mismo patrón ya usado para `field_defs_json`) y se actualizaron ambas funciones para leerla/escribirla. Verificado localmente con un template sintético (`TEST_MIGRATION_CHECK`, limpiado después): el campo ahora sí hace round-trip completo.
+
 ---
 
 ## 2026-09-09 — FIX DE RAÍZ: nunca leíamos los enums reales del schema de Amazon (delegado a backend-integrations-engineer)
