@@ -6978,6 +6978,28 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
             _rph = float(_row.get("LastRetailPricePurchaseHistory") or 0)
             _cost = float(_row.get("AvgCostQTY") or 0)
             _size = int(_row.get("Size") or 0)
+            # FIX 2026-09-09 (pedido por Jovan tras reporte real: el modal de
+            # Sustituir decía "sin stock en ninguna condición" para SNTV007669
+            # pese a tener stock real en -GRB): el sync de stock en vivo
+            # (Get_GlobalStock_InventoryBySKU, _update_category_stock_master)
+            # a veces agrega el stock de un SKU en una sola fila SIN sufijo de
+            # condición, y en ese caso el desglose por condición (conditions_json)
+            # queda vacío -- límite ya documentado en _bulk_stock_rows_to_master_fields.
+            # ConfColumns_Conditions_Excel SÍ trae columnas separadas por condición
+            # (GRA/GRB/GRC/NEW/ICB/ICC) en cada fila -- se usa aquí SOLO como
+            # respaldo del desglose (nunca de available_qty/reserve/total, que
+            # siguen viniendo exclusivamente de Get_GlobalStock_InventoryBySKU,
+            # ver CLAUDE.md), y solo rellena cuando el maestro llega vacío
+            # (ver upsert_bm_catalog_batch: COALESCE, nunca pisa un dato bueno).
+            _is_tv = _sku.startswith("SNTV")
+            _valid_conds = _CONF_COND_NON_TV + (_CONF_COND_TV_EXTRA if _is_tv else ())
+            _conds = sorted(
+                (
+                    {"condition": c, "qty": int(_row.get(c) or 0), "sku": f"{_sku}-{c}"}
+                    for c in _valid_conds if int(_row.get(c) or 0) > 0
+                ),
+                key=lambda x: -x["qty"],
+            )
             rows.append({
                 "sku":       _sku,
                 "retail_ph": _rph if 0 < _rph < 9000 else 0,
@@ -6995,11 +7017,31 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "category":  _row.get("CategoryName") or _row.get("Category") or "",
                 "upc":       _row.get("UPC") or _row.get("Upc") or "",
                 "image_url": _row.get("ImageURL") or _row.get("ImageUrl") or "",
+                "conditions_json": json.dumps(_conds) if _conds else "",
             })
 
         # Guardar en DB
         saved = await token_store.upsert_bm_catalog_batch(rows)
         logger.info(f"[CATALOG-SYNC] {saved}/{_total_rows} SKUs guardados en DB")
+
+        # Espejo en memoria (_bm_master_mem) para que el backfill de
+        # conditions_json tenga efecto inmediato sin esperar reinicio del
+        # servidor -- mismo criterio que el UPSERT: solo si el maestro en
+        # memoria está vacío, nunca pisa un dato bueno del sync de stock real.
+        _conds_backfilled = 0
+        for _r in rows:
+            _cj = _r.get("conditions_json") or ""
+            if not _cj:
+                continue
+            _mem_entry = _bm_master_mem.get(_r["sku"])
+            if _mem_entry is not None and not _mem_entry.get("conditions"):
+                try:
+                    _mem_entry["conditions"] = json.loads(_cj)
+                    _conds_backfilled += 1
+                except Exception:
+                    pass
+        if _conds_backfilled:
+            logger.info(f"[CATALOG-SYNC] conditions_json de respaldo aplicado a {_conds_backfilled} SKUs en memoria (bulk vino agregado sin sufijo)")
 
         # Actualizar _bm_retail_ph_cache / _bm_cost_cache en memoria
         _now = _time.time()

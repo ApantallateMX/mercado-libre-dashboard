@@ -2188,13 +2188,22 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     cualquier cambio de retail_ph/cost_usd — bajo volumen (sync semanal),
     cada cambio es relevante para alertas de precio.
     rows: list of {sku, retail_ph, cost_usd, brand, model, title, size,
-    category, upc, image_url}. category/upc/image_url agregados 2026-08-20
-    (pedido por Jovan): este sync corre 1x/día para TODO el catálogo de BM
-    (con o sin stock) -- antes esos 3 campos solo los llenaba el loop de
-    categorías, que únicamente toca SKUs que aparecen con stock actual.
+    category, upc, image_url, conditions_json}. category/upc/image_url
+    agregados 2026-08-20 (pedido por Jovan): este sync corre 1x/día para TODO
+    el catálogo de BM (con o sin stock) -- antes esos 3 campos solo los
+    llenaba el loop de categorías, que únicamente toca SKUs que aparecen con
+    stock actual.
     Usa COALESCE(NULLIF(...)) igual que _update_bm_master_for_category para
     no pisar un valor bueno ya escrito por el loop de categorías con uno
     vacío si esta fila viniera parcial.
+
+    conditions_json agregado 2026-09-09 (bug real: modal Sustituir sin
+    desglose por condición cuando Get_GlobalStock_InventoryBySKU agrega el
+    stock de un SKU en una fila sin sufijo) -- este campo viene de
+    ConfColumns_Conditions_Excel y SOLO rellena el desglose cuando el maestro
+    (escrito por el sync de stock en vivo, fuente de verdad) llegó vacío;
+    nunca pisa un conditions_json ya poblado, y NUNCA toca available_qty/
+    reserve_qty/total_qty -- esos siguen siendo exclusivos del otro sync.
     Retorna cantidad de rows insertadas/actualizadas.
     """
     if not rows:
@@ -2228,11 +2237,11 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
         await db.executemany(
             """INSERT INTO bm_sku_master (
                    sku, title, brand, model, retail_ph, cost_usd, size,
-                   category, upc, image_url, catalog_updated_at
+                   category, upc, image_url, conditions_json, catalog_updated_at
                )
                VALUES (
                    :sku, :title, :brand, :model, :retail_ph, :cost_usd, :size,
-                   :category, :upc, :image_url, :updated_at
+                   :category, :upc, :image_url, :conditions_json, :updated_at
                )
                ON CONFLICT(sku) DO UPDATE SET
                    title = excluded.title, brand = excluded.brand, model = excluded.model,
@@ -2241,10 +2250,18 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
                    category = COALESCE(NULLIF(excluded.category, ''), bm_sku_master.category),
                    upc = COALESCE(NULLIF(excluded.upc, ''), bm_sku_master.upc),
                    image_url = COALESCE(NULLIF(excluded.image_url, ''), bm_sku_master.image_url),
+                   conditions_json = CASE
+                       WHEN bm_sku_master.conditions_json IS NULL
+                            OR bm_sku_master.conditions_json = ''
+                            OR bm_sku_master.conditions_json = '[]'
+                       THEN NULLIF(excluded.conditions_json, '')
+                       ELSE bm_sku_master.conditions_json
+                   END,
                    catalog_updated_at = excluded.catalog_updated_at""",
             [{**r, "cost_usd": r.get("cost_usd", 0), "size": r.get("size", 0),
               "category": r.get("category", ""), "upc": r.get("upc", ""),
-              "image_url": r.get("image_url", ""), "updated_at": now} for r in rows],
+              "image_url": r.get("image_url", ""), "conditions_json": r.get("conditions_json", ""),
+              "updated_at": now} for r in rows],
         )
         if changes:
             await db.executemany(

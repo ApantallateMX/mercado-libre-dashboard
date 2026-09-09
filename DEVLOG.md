@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX: modal Sustituir decía "sin stock en ninguna condición" con stock real en -GRB
+
+### Contexto
+Jovan reportó (caso real, orden con SNTV007669): el modal "Registrar sustitución" de Alertas de Stock decía "No se encontró stock de SNTV007669 en ninguna condición vendible" pese a que escribir el SKU completo a mano ("-GRB") sí mostraba disponibilidad real. Pidió mostrar TODAS las condiciones posibles (GRA/GRB/GRC/ICB/ICC) para poder decidir cuál enviar.
+
+### Causa
+`/api/stock/substitute-conditions` lee `bm_sku_master.conditions_json`, poblado por `_bulk_stock_rows_to_master_fields()` desde `Get_GlobalStock_InventoryBySKU` (fuente de verdad para `available_qty`). Esa función deriva la condición del sufijo de cada fila (`SKU-GRB`, etc.) -- pero cuando BM agrega el stock de un SKU en una sola fila SIN sufijo (límite ya documentado en el propio código), el desglose por condición queda vacío aunque `available_qty` sea correcto. Confirmado con datos reales: `/api/diag/sku?sku=SNTV007669` → `avail=1` en el maestro, pero `/api/stock/substitute-conditions?sku=SNTV007669` → `conditions: []`.
+
+### Fix
+`_sync_bm_product_catalog()` (`app/main.py`, corre 1x/día vía `ConfColumns_Conditions_Excel`, ~8,786 SKUs en 1 sola llamada) YA trae columnas separadas por condición (GRA/GRB/GRC/NEW/ICB/ICC) en cada fila -- antes se descartaban. Ahora se extraen y se guardan como respaldo del desglose (`upsert_bm_catalog_batch`, `token_store.py`) **solo cuando el maestro llegó vacío** (`CASE WHEN conditions_json = '' OR '[]' THEN ... ELSE mantener el existente`) -- nunca pisa un dato bueno del sync de stock en vivo, y **nunca toca `available_qty`/`reserve_qty`/`total_qty`** (siguen siendo exclusivos de `Get_GlobalStock_InventoryBySKU`, regla dura del proyecto). También actualiza el espejo en memoria (`_bm_master_mem`) en el mismo ciclo para que el backfill tenga efecto sin esperar un reinicio del servidor.
+
+### Decisión de diseño — por qué no una llamada en vivo
+El propio historial del endpoint (`_bm_bulk_real_conditions`) documenta que Jovan pidió explícitamente QUITAR una llamada a BM en vivo por cada tecla en este mismo modal (2026-08-19, BinManager reportó sobrecarga real). Por eso el fix reutiliza datos que YA se descargan en el sync de catálogo programado, cero llamadas nuevas a BM.
+
+### Verificación
+`py_compile` limpio en ambos archivos. Se disparó un sync manual de catálogo en producción (`/api/diag/trigger-catalog-sync`) para que el backfill tenga efecto de inmediato en vez de esperar al ciclo de las 3am, y se re-verificó `/api/stock/substitute-conditions?sku=SNTV007669` post-sync.
+
+---
+
 ## 2026-09-09 — FIX CRÍTICO: mounting_type se descartaba en silencio fuera de TV/Monitor + default falso "Wall Mount" ya aplicado en vivo
 
 ### Contexto
