@@ -7036,7 +7036,16 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
             _mem_entry = _bm_master_mem.get(_r["sku"])
             if _mem_entry is not None and not _mem_entry.get("conditions"):
                 try:
-                    _mem_entry["conditions"] = json.loads(_cj)
+                    _parsed_conds = json.loads(_cj)
+                    _mem_entry["conditions"] = _parsed_conds
+                    # FIX 2026-09-09 (grep de consistencia -- ver mismo patrón
+                    # ya corregido en _update_bm_master_for_category): sin esto
+                    # quedaba conditions_json poblado pero best_condition_sku
+                    # vacío en memoria, inconsistente entre sí. _parsed_conds ya
+                    # viene ordenado desc por qty (ver parseo de ConfColumns
+                    # arriba), así que [0] es la condición ganadora.
+                    if _parsed_conds:
+                        _mem_entry["best_condition_sku"] = _parsed_conds[0].get("sku") or ""
                     _conds_backfilled += 1
                 except Exception:
                     pass
@@ -20811,7 +20820,8 @@ async def diag_bm_sku_master_lookup(token: str = "", sku: str = "", fix_zero: bo
             )
             await db.commit()
         master = await (await db.execute(
-            "SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at, category, upc FROM bm_sku_master WHERE sku=?",
+            "SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at, category, upc, "
+            "best_condition_sku, best_condition_qty, conditions_json FROM bm_sku_master WHERE sku=?",
             (base,),
         )).fetchone()
         amz_rows = await (await db.execute(
@@ -23807,18 +23817,66 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
     async with _aio_updcat.connect(DATABASE_PATH, timeout=15) as db:
         _insert_params = []
         for u in updates:
-            _conds_json = _json_updcat.dumps(u["conditions"])
+            # FIX DEFINITIVO 2026-09-09 (causa raíz confirmada -- reporte real
+            # de Jovan x2 hoy, SNTV007669 y SNTV006841, "no se encontró stock
+            # en ninguna condición vendible" con stock real confirmado en BM;
+            # mi primer intento -- el backfill en _sync_bm_product_catalog/
+            # upsert_bm_catalog_batch, ver ahí -- fue un PARCHE INCOMPLETO
+            # porque ESTE loop, que corre cada 15 min para categorías top-5
+            # (TVs entre ellas, _CONF_COLUMNS_TOP_INTERVAL_S) y cada 2h para
+            # el resto, seguía pisando conditions_json con '[]' sin ninguna
+            # guardia cada vez que Get_GlobalStock_InventoryBySKU agregaba el
+            # stock del SKU en 1 sola fila SIN sufijo de condición (límite
+            # real del endpoint, ver _bulk_stock_rows_to_master_fields) --
+            # el backfill diario rellenaba el dato y el SIGUIENTE ciclo de 15
+            # min lo volvía a vaciar, por eso "se arregló un momento y se
+            # rompió de nuevo".
+            #
+            # Regla: available_qty/reserve_qty/total_qty (fuente de verdad,
+            # NUNCA tocados aquí) mandan sobre si el desglose por condición
+            # debe quedar en [] o no.
+            #   - Esta fila SÍ trajo desglose real (con sufijo) -> se usa,
+            #     es el dato más fresco posible.
+            #   - No trajo desglose Y available_qty confirma 0 -> [] es
+            #     correcto, no hay nada que sustituir (0 real, no bug).
+            #   - No trajo desglose pero available_qty>0 (el caso del bug) ->
+            #     se PRESERVA el último desglose bueno conocido (memoria, ya
+            #     sincronizada con bm_sku_master por warm-start al arrancar y
+            #     por este mismo mecanismo en cada ciclo) en vez de vaciarlo.
+            #     Puede quedar desactualizado en el DETALLE por condición
+            #     unos ciclos, pero NUNCA cae a "sin stock" con stock real.
+            #   - No trajo desglose, available_qty>0, pero tampoco había nada
+            #     que preservar (SKU nunca visto con desglose) -> [] tal cual,
+            #     no hay otra fuente aquí (el backfill diario de ConfColumns
+            #     eventualmente lo rellena, y esta guardia ya no lo perderá).
+            # best_condition_sku/qty viajan SIEMPRE junto con la misma
+            # decisión que conditions_json -- nunca deben quedar
+            # inconsistentes entre sí (ej. best_condition_sku vacío con
+            # conditions_json no vacío).
+            _old_mem = _bm_master_mem.get(u["sku"])
+            _old_conditions = (_old_mem.get("conditions") if _old_mem else None) or []
+            if u["conditions"] or u["available_qty"] <= 0 or not _old_conditions:
+                _final_conditions = u["conditions"]
+                _final_best_sku = u["best_condition_sku"]
+                _final_best_qty = u["best_condition_qty"]
+            else:
+                _final_conditions = _old_conditions
+                _final_best_sku = (_old_mem.get("best_condition_sku") or "") if _old_mem else ""
+                _final_best_qty = max((int(c.get("qty") or 0) for c in _old_conditions), default=0)
+            _conds_json = _json_updcat.dumps(_final_conditions)
             _insert_params.append({
-                **{k: v for k, v in u.items() if k != "conditions"},
+                **{k: v for k, v in u.items() if k not in ("conditions", "best_condition_sku", "best_condition_qty")},
+                "best_condition_sku": _final_best_sku, "best_condition_qty": _final_best_qty,
                 "conditions_json": _conds_json, "stock_updated_at": _now_ts,
             })
             # Mantener el espejo en memoria (_bm_master_mem) sincronizado en el
             # mismo instante -- así las 3 funciones que leen de ahí (alertas en
             # tiempo real + Sustituir/sugerencias) ven el dato fresco sin
             # esperar al próximo warm-start ni hacer una consulta a SQLite.
+            # Mismos valores decididos arriba -- DB y memoria nunca divergen.
             _bm_master_mem[u["sku"]] = {
                 "available_qty": u["available_qty"], "reserve_qty": u["reserve_qty"],
-                "best_condition_sku": u["best_condition_sku"], "conditions": u["conditions"],
+                "best_condition_sku": _final_best_sku, "conditions": _final_conditions,
                 "verified": True, "stock_updated_at": _now_ts,
             }
         if _insert_params:

@@ -51,6 +51,25 @@ Incluso con los 7 atributos ya aplicados vía PATCH sobre el listing real, `/api
 
 ---
 
+## 2026-09-09 — FIX DEFINITIVO: conditions_json se seguía vaciando cada 15 min tras el primer parche (delegado a backend-integrations-engineer)
+
+### Contexto
+El fix de la entrada de abajo (backfill de `conditions_json` desde el sync de catálogo 1x/día) resultó ser un parche incompleto -- Jovan lo reportó de nuevo horas después con otro SKU (SNTV006841) y corrigió el enfoque: "siempre arreglar para 1 cosa pero no das una solución definitiva para todo". Se delegó a `backend-integrations-engineer` para encontrar y corregir la causa raíz real, no otro parche paralelo.
+
+### Causa raíz real
+`_update_bm_master_for_category()` (`app/main.py` ~23532) es el escritor FRECUENTE de `bm_sku_master` -- corre cada 900s (15 min, `_CONF_COLUMNS_TOP_INTERVAL_S`) para categorías top-5 por ventas (Televisions incluida) y cada 7200s (2h) para el resto. Escribía `conditions_json` (y el espejo en memoria `_bm_master_mem`) SIN NINGUNA guardia -- cada vez que `Get_GlobalStock_InventoryBySKU` agregaba el stock de un SKU en una fila sin sufijo de condición (límite real ya documentado), pisaba el desglose con `[]` de nuevo, sin importar que el backfill diario ya lo hubiera rellenado bien horas antes. De ahí el patrón "se arregló un momento y se rompió de nuevo" -- el parche competía contra un escritor 96x más frecuente (15 min vs 24h) y siempre perdía.
+
+### Fix
+En `_update_bm_master_for_category`, antes de escribir cada fila a DB y memoria: si la fila trae desglose real, se usa (dato más fresco). Si no trae desglose pero `available_qty` confirma 0, `[]` es correcto. Si no trae desglose y `available_qty > 0` (el caso del bug), se **preserva** el último desglose bueno conocido en memoria en vez de vaciarlo -- `available_qty`/`reserve_qty`/`total_qty` (fuente de verdad) nunca se tocan, solo deciden si el desglose por condición debe quedar en `[]` o preservarse. `best_condition_sku`/`best_condition_qty` viajan siempre junto con la misma decisión (nunca quedan inconsistentes con `conditions_json`). De paso se corrigió la misma inconsistencia en el backfill de memoria de `_sync_bm_product_catalog` (rellenaba `conditions` pero no `best_condition_sku`), y se agregaron `best_condition_sku/qty/conditions_json` al SELECT de `/api/diag/bm-sku-master-lookup` para verificación directa en producción.
+
+### Por qué no se agregó una llamada extra a ConfColumns en este loop
+TVs ya hace 4 llamadas a BM por ciclo de 15 min (principal + Tijuana + MTY + PNP) -- agregar una 5ª aumenta presión sobre BM sin necesidad real. Con la guardia, el dato nunca se pierde una vez que existe (por un ciclo con sufijo o por el backfill diario); solo puede quedar temporalmente desactualizado en el detalle si un SKU nunca tuvo desglose y aparece agregado desde el primer momento -- caso que el sync diario ya cubre en <24h.
+
+### Verificación
+`py_compile` limpio. 4 casos sintéticos probados (preservar con bug real, limpiar en 0 real, usar dato fresco cuando llega, quedar vacío cuando nunca hubo nada que preservar). Reproducido el bug exacto en DB local (SNTV006841: avail=1, conditions_json='[]') antes del fix. Verificación post-deploy pendiente vía `/api/diag/bm-sku-master-lookup?sku=SNTV006841&token=<DIAG_TOKEN>`.
+
+---
+
 ## 2026-09-09 — FIX: modal Sustituir decía "sin stock en ninguna condición" con stock real en -GRB
 
 ### Contexto
