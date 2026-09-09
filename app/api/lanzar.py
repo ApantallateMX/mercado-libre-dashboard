@@ -3331,69 +3331,129 @@ async def estimate_dimensions_endpoint(request: Request):
                 "confidence": "unknown", "note": "No se pudo estimar"}
 
 
+class _UpcRateLimited(Exception):
+    """La API trial de upcitemdb devuelve HTTP 200 con {"code": "TOO_FAST"}
+    en vez de un 429 real -- sin este marcador, un rate-limit se veía
+    indistinguible de un "no encontrado" genuino (bug real detectado
+    2026-09-09 probando el fallback multi-query: cada intento extra
+    aumentaba las chances de pegarle al límite por segundo del free tier)."""
+    pass
+
+
+async def _upcitemdb_search(query: str, cl: "httpx.AsyncClient") -> Optional[dict]:
+    """Una consulta puntual a Open UPC ItemDB (free tier, sin key). Retorna el
+    primer item con EAN/UPC válido (>=12 chars), None si no hay match, o
+    lanza _UpcRateLimited si el free tier está limitando la tasa."""
+    search_url = f"https://api.upcitemdb.com/prod/trial/search?s={query}&type=product&match_mode=0"
+    resp = await cl.get(search_url, headers={"User-Agent": "Mozilla/5.0"})
+    if resp.status_code != 200:
+        logger.info(f"UPC no encontrado para '{query}' (status {resp.status_code})")
+        return None
+
+    data = resp.json()
+    code = data.get("code")
+    if code == "NOT_FOUND":
+        # Respuesta válida de "sin match" -- NO es rate-limit, solo no hay resultado.
+        logger.info(f"UPC no encontrado para '{query}' (NOT_FOUND)")
+        return None
+    if code and code != "OK":
+        # TOO_FAST, INVALID_LICENSE_KEY, u otro error real del free tier.
+        logger.warning(f"upcitemdb rate-limit/error para '{query}': {code} — {data.get('message')}")
+        raise _UpcRateLimited(code)
+
+    items = data.get("items") or []
+    for item in items:
+        ean  = (item.get("ean") or "").strip()
+        upc  = (item.get("upc") or "").strip()
+        gtin = ean or upc
+        if gtin and len(gtin) >= 12:
+            logger.info(f"UPC encontrado para '{query}': {gtin}")
+            # Parse weight → kg
+            weight_kg = None
+            raw_w = (item.get("weight") or "").strip().lower()
+            if raw_w:
+                import re as _re
+                _wm = _re.search(r"([\d.]+)\s*(lb|oz|kg|g)\b", raw_w)
+                if _wm:
+                    _wv, _wu = float(_wm.group(1)), _wm.group(2)
+                    weight_kg = round(
+                        _wv * 0.453592 if _wu == "lb" else
+                        _wv * 0.0283495 if _wu == "oz" else
+                        _wv / 1000 if _wu == "g" else _wv, 2)
+            # Parse dimension → cm (format "L in X W in X H in" or similar)
+            dims = None
+            raw_d = (item.get("dimension") or "").strip().lower()
+            if raw_d:
+                import re as _re2
+                _parts = _re2.findall(r"([\d.]+)\s*(in|cm|mm)\b", raw_d)
+                if len(_parts) >= 3:
+                    def _to_cm(v, u):
+                        v = float(v)
+                        return round(v * 2.54 if u == "in" else v / 10 if u == "mm" else v, 1)
+                    dims = {
+                        "length_cm": _to_cm(*_parts[0]),
+                        "width_cm":  _to_cm(*_parts[1]),
+                        "height_cm": _to_cm(*_parts[2]),
+                    }
+            return {
+                "upc": gtin, "source": "upcitemdb",
+                "title": item.get("title", ""),
+                "weight_kg": weight_kg,
+                "dims": dims,
+                "images": (item.get("images") or [])[:3],
+            }
+    logger.info(f"UPC no encontrado para '{query}' (0 matches con GTIN válido)")
+    return None
+
+
 @router.post("/search-upc")
 async def search_upc_endpoint(request: Request):
-    """Busca el UPC/GTIN de un producto por marca + modelo + título usando Open UPC API."""
+    """Busca el UPC/GTIN de un producto por marca + modelo + título usando Open UPC API.
+
+    FIX 2026-09-09 (Jovan, probando el Wizard con BIRTMAN BT-42i — un producto
+    de marca privada de venta mayorista en México, sin UPC registrado en
+    ningún lado): antes probaba UNA sola query (marca+modelo) contra
+    upcitemdb y se rendía. Ahora intenta 3 variantes de query en orden
+    (marca+modelo -> modelo solo -> título completo) antes de rendirse --
+    el nombre de marca/modelo exacto en la ficha BM a veces no calza con
+    como está indexado en upcitemdb, pero una query distinta sí puede
+    matchear. Sigue siendo la misma fuente (upcitemdb no requiere key) --
+    para productos genuinamente sin UPC público (como BIRTMAN, verificado
+    a mano contra Google + sitios de mayoristas MX + Amazon.com.mx, sin
+    éxito) el camino correcto sigue siendo la exención GTIN de Amazon, no
+    algo que este endpoint pueda resolver."""
     body  = await request.json()
     brand = (body.get("brand") or "").strip()
     model = (body.get("model") or "").strip()
     title = (body.get("title") or body.get("product_title") or "").strip()
 
-    query = " ".join(filter(None, [brand, model])).strip() or title
-    if not query:
-        return JSONResponse({"error": "brand/model requeridos"}, status_code=400)
+    queries = []
+    brand_model = " ".join(filter(None, [brand, model])).strip()
+    if brand_model:
+        queries.append(brand_model)
+    if model and model != brand_model:
+        queries.append(model)
+    if title and title not in queries:
+        queries.append(title)
+
+    if not queries:
+        return JSONResponse({"error": "brand/model/title requeridos"}, status_code=400)
 
     try:
-        # Open UPC ItemDB — free tier, no key required, returns GTIN/EAN/UPC
-        search_url = f"https://api.upcitemdb.com/prod/trial/search?s={query}&type=product&match_mode=0"
         async with httpx.AsyncClient(timeout=15.0) as cl:
-            resp = await cl.get(search_url, headers={"User-Agent": "Mozilla/5.0"})
-
-        if resp.status_code == 200:
-            data  = resp.json()
-            items = data.get("items") or []
-            for item in items:
-                ean = (item.get("ean") or "").strip()
-                upc = (item.get("upc") or "").strip()
-                gtin = ean or upc
-                if gtin and len(gtin) >= 12:
-                    logger.info(f"UPC encontrado para '{query}': {gtin}")
-                    # Parse weight → kg
-                    weight_kg = None
-                    raw_w = (item.get("weight") or "").strip().lower()
-                    if raw_w:
-                        import re as _re
-                        _wm = _re.search(r"([\d.]+)\s*(lb|oz|kg|g)\b", raw_w)
-                        if _wm:
-                            _wv, _wu = float(_wm.group(1)), _wm.group(2)
-                            weight_kg = round(
-                                _wv * 0.453592 if _wu == "lb" else
-                                _wv * 0.0283495 if _wu == "oz" else
-                                _wv / 1000 if _wu == "g" else _wv, 2)
-                    # Parse dimension → cm (format "L in X W in X H in" or similar)
-                    dims = None
-                    raw_d = (item.get("dimension") or "").strip().lower()
-                    if raw_d:
-                        import re as _re2
-                        _parts = _re2.findall(r"([\d.]+)\s*(in|cm|mm)\b", raw_d)
-                        if len(_parts) >= 3:
-                            def _to_cm(v, u):
-                                v = float(v)
-                                return round(v * 2.54 if u == "in" else v / 10 if u == "mm" else v, 1)
-                            dims = {
-                                "length_cm": _to_cm(*_parts[0]),
-                                "width_cm":  _to_cm(*_parts[1]),
-                                "height_cm": _to_cm(*_parts[2]),
-                            }
-                    return {
-                        "upc": gtin, "source": "upcitemdb",
-                        "title": item.get("title", ""),
-                        "weight_kg": weight_kg,
-                        "dims": dims,
-                        "images": (item.get("images") or [])[:3],
-                    }
-
-        logger.info(f"UPC no encontrado para '{query}' (status {resp.status_code})")
+            for i, q in enumerate(queries):
+                if i > 0:
+                    await asyncio.sleep(1.2)  # respeta el rate-limit por segundo del free tier
+                try:
+                    result = await _upcitemdb_search(q, cl)
+                except _UpcRateLimited:
+                    # El free tier está limitando -- reintentar más queries ahora
+                    # solo empeoraría las cosas. Se rinde con la misma respuesta
+                    # honesta de "no encontrado" (el checklist ya guía a la
+                    # exención GTIN cuando esto pasa).
+                    break
+                if result:
+                    return result
         return {"upc": None, "source": None}
 
     except Exception as e:

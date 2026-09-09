@@ -2449,10 +2449,18 @@ function _amzWizBuildReview() {
       Object.keys(_fieldVals).forEach(function(attr) {
         if (_schemaReq.indexOf(attr) >= 0) {
           var val = (_fieldVals[attr] || '').trim();
+          var isUpc = attr === 'externally_assigned_product_identifier';
           checks.push({
-            label: _schemaLabels[attr] || attr.replace(/_/g, ' '),
+            label: (isUpc && !val) ? 'UPC / EAN — no encontrado' : (_schemaLabels[attr] || attr.replace(/_/g, ' ')),
             ok: val.length > 0,
             warn: false,
+            // Cuando de verdad no hay UPC (búsqueda intentada y sin match en
+            // ninguna fuente), el camino correcto de Amazon es la exención
+            // GTIN -- no es un error bloqueante sin salida, sino un flujo
+            // legítimo para marca propia sin código registrado.
+            extraHtml: (isUpc && !val)
+              ? ' — <button onclick="window._amzWizGtinExemption()" class="underline text-blue-600">Solicitar exención GTIN en Seller Central →</button>'
+              : '',
           });
         }
       });
@@ -2467,7 +2475,7 @@ function _amzWizBuildReview() {
       var cls  = c.ok ? 'text-green-700' : c.warn ? 'text-yellow-600' : 'text-red-500';
       return '<div class="flex items-center gap-2 text-xs ' + cls + '">' +
         '<span class="shrink-0">' + icon + '</span>' +
-        '<span>' + c.label + '</span></div>';
+        '<span>' + c.label + (c.extraHtml || '') + '</span></div>';
     }).join('');
   } else {
     document.getElementById('amz-wiz-checklist-wrap').classList.add('hidden');

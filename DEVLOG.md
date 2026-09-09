@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX: búsqueda de UPC en Wizard Amazon v2 se rendía tras 1 intento + checklist sin salida clara
+
+### Contexto
+Jovan pidió probar el Wizard lanzando un producto real desde 0 en ExclusiveBulbs (BIRTMAN BT-42i, SNFN000941). Todo el contenido IA + fotos funcionó bien, pero el checklist final marcó ❌ en "UPC/EAN (required)". Jovan corrigió que sí existe un botón de búsqueda con un clic que no probé, y después encontró manualmente en Amazon.com.mx el UPC real (724065746269) de un producto equivalente vendido bajo otra marca ("LUTEMA BT-42i-APP", mismo fabricante "INDUSTRIAS BIRTMAN S.A. DE C.V.") — confirmó que es el mismo producto físico, cada vendedor solo renombra la marca/modelo.
+
+### Investigación
+`/api/lanzar/search-upc` (`app/api/lanzar.py`) solo hacía UNA consulta (marca+modelo) contra la capa gratuita de `upcitemdb.com` y se rendía. Búsqueda manual en Google + sitios de mayoristas MX (bodegasol.com.mx, tradepoint.com.mx) confirmó que BIRTMAN es marca de reventa mayorista mexicana sin UPC indexado en ninguna fuente pública automatizable -- el UPC real solo aparece en la ficha "Detalles del producto" de un listing específico de Amazon.com.mx bajo una marca distinta, algo que ningún API de búsqueda por texto puede adivinar.
+
+### Fix 1 — multi-query fallback (mismo free tier, sin key nueva)
+Antes de rendirse, ahora intenta 3 variantes de query en orden: marca+modelo → modelo solo → título completo (`_upcitemdb_search()` extraído como helper reusable).
+
+### Bug real encontrado en mi propio fix (antes de subir)
+Al probar el fallback con múltiples queries seguidas, la API de upcitemdb devuelve HTTP 200 con `{"code":"TOO_FAST"}` en vez de un 429 real -- indistinguible de "no encontrado" genuino sin revisar el campo `code`. 3 requests seguidas disparaban el rate-limit por segundo más seguido que antes (1 sola request). Fix: distinguir `code=="NOT_FOUND"` (resultado válido vacío) de cualquier otro código de error/rate-limit (`_UpcRateLimited`, aborta el resto de queries en vez de insistir), más 1.2s de espera entre intentos.
+
+### Fix 2 — UX del checklist (Step 4)
+Cuando de verdad no hay UPC en ninguna fuente, el checklist mostraba un ❌ genérico sin salida. Ahora el label cambia a "UPC / EAN — no encontrado" con link inline al mismo flujo de exención GTIN de Seller Central que ya existía en Step 3 (`window._amzWizGtinExemption()`) -- deja claro que es un flujo legítimo de Amazon para marca propia sin UPC registrado, no un error sin solución.
+
+### Verificación
+`py_compile` + parseo Jinja + sintaxis JS del `<script>` limpios. Probado en local contra el caso real (BIRTMAN BT-42i): confirma que ya no revienta cuando upcitemdb responde con rate-limit real, solo entonces devuelve `{upc:null}` honesto en vez de un 500. Wizard NO se publicó (era una prueba) -- el producto de prueba quedó sin publicar en ExclusiveBulbs.
+
+---
+
 ## 2026-09-09 — FIX: TypeError real en amazon_dashboard.js rompía funciones globales fuera del Dashboard
 
 ### Contexto
