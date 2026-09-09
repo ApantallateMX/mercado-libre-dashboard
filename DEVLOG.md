@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX DE RAÍZ: nunca leíamos los enums reales del schema de Amazon (delegado a backend-integrations-engineer)
+
+### Contexto
+Tras 3 rondas fallidas del "Auto-corregir con IA" adivinando valores para `electric_fan_design` (nombre de atributo equivocado, luego el placeholder literal "valor_requerido", luego un valor vacío), Jovan corrigió el enfoque: en vez de seguir reintentando el botón esperando que la IA acertara por azar, había que investigar de verdad cómo funciona el schema de Amazon y delegar al especialista técnico. Se lanzó `backend-integrations-engineer` con el problema completo.
+
+### Causa raíz real (confirmada contra la API real de Amazon, cuenta ExclusiveBulbs)
+`GET /definitions/2020-09-01/productTypes/{pt}` no trae los enums inline en su respuesta top-level -- trae `schema.link.resource`, una URL S3 pre-firmada (expira en 7 días) que apunta al JSON Schema COMPLETO, y ESE sí tiene `"enum": [...]` por cada atributo restringido. `fetch_product_type_schema()` (`app/services/amazon_client.py`) solo leía `propertyGroups` (nombres) de la respuesta top-level y nunca seguía ese link -- por eso el auto-fix con IA tenía que inventar texto libre para atributos que en realidad son un catálogo cerrado. Confirmado: ELECTRIC_FAN tiene 32 atributos con enum restringido de 156 requeridos. El enum real de `electric_fan_design` es `blower/ceiling_fan/exhaust_fan/floor_fan/table_fan/wearable_fan/window_fan` -- no existe "tower_fan" pese a que la descripción del atributo menciona "tower" en prosa. Valor correcto para BIRTMAN BT-42i (confirmado con Jovan): `floor_fan`.
+
+### Fix (general, no parche puntual de Fans)
+- `amazon_client.py`: nuevo método `_fetch_schema_enums()` sigue el link S3 y extrae `{attr: {enum, enum_names}}`; `fetch_product_type_schema()` ahora incluye `"enums"` en su resultado.
+- `amazon_lanzar.py` `_get_product_schema()`: el cache (30 días TTL) ahora exige `"enums" in schema` para considerar un hit -- se auto-sana solo, sin tocar la DB a mano, para cachés viejas guardadas antes de este fix.
+- `auto_fix_errors()`: antes de pedirle a la IA que resuelva atributos desconocidos, le pasa el catálogo real de enums y le exige elegir SOLO de ahí; valida la respuesta contra el enum real antes de aplicarla -- un valor fuera de catálogo se descarta en vez de mandarse a Amazon a gastar otro ciclo de rechazo.
+- Bug relacionado corregido de paso: el prompt de la IA tenía hardcodeado `"marketplace A1AM78C64UM0Y8 (Mexico MX)"` y `language_tag: es_MX` sin importar la cuenta real -- para ExclusiveBulbs (marketplace US) le decía a la IA el mercado e idioma equivocados. Ahora usa `client.marketplace_id`/`client.marketplace_name` reales.
+
+### Verificación
+`py_compile` limpio en ambos archivos. El especialista ejecutó `fetch_product_type_schema("ELECTRIC_FAN")` con el código nuevo contra la cuenta real de ExclusiveBulbs (no mock): confirmó 156 required, 32 atributos con enum, y la lista exacta de `electric_fan_design` end-to-end.
+
+---
+
 ## 2026-09-09 — FIX CRÍTICO: fixes del Auto-corregir del Wizard Amazon nunca se incorporaban al Publish
 
 ### Contexto

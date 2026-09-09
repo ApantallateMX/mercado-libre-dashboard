@@ -1712,7 +1712,20 @@ class AmazonClient:
         """
         Fetches the attribute schema for a product type from Amazon Definitions API.
         Makes two calls: ENFORCED (required attrs) and NOT_ENFORCED (all attrs).
-        Returns simplified dict: {required, optional, groups, group_titles}.
+        Returns simplified dict: {required, optional, groups, group_titles, enums}.
+
+        CAUSA RAIZ real (2026-09-09, incidente BIRTMAN BT-42i / electric_fan_design):
+        la respuesta top-level de /definitions/2020-09-01/productTypes/{pt} NO trae los
+        enums inline -- trae un campo "schema" = {"link": {"resource": <URL S3 pre-firmada,
+        expira en 7 dias>}} que apunta al JSON Schema COMPLETO. Antes solo leiamos
+        "propertyGroups" (nombres de atributos) de la respuesta top-level y tirabamos ese
+        link sin seguirlo -- por eso nunca teniamos los enums reales y el auto-fix con IA
+        tenia que ADIVINAR valores libres para atributos restringidos (ej. "valor_requerido",
+        "fan_design" en vez de "electric_fan_design"). Confirmado con llamada real: el JSON
+        Schema en ese link SI trae "properties.<attr>.items.properties.value.enum" para los
+        atributos de tipo enum (electric_fan_design real: blower/ceiling_fan/exhaust_fan/
+        floor_fan/table_fan/wearable_fan/window_fan -- nota: NO existe "tower_fan" como
+        opcion aprobada pese a que la descripcion del atributo menciona "tower" en prosa).
         """
         import asyncio as _aio
 
@@ -1753,6 +1766,12 @@ class AmazonClient:
         merged_titles = all_titles if all_titles else req_titles
 
         optional_props = all_props - req_props
+
+        # ── Seguir el link a el JSON Schema real y extraer enums por atributo ──
+        # Se usa all_resp (NOT_ENFORCED) porque trae el set completo de atributos;
+        # si no vino (error de red puntual), se intenta con enforced_resp como fallback.
+        enums = await self._fetch_schema_enums(all_resp or enforced_resp, product_type)
+
         result = {
             "product_type": product_type,
             "marketplace_id": self.marketplace_id,
@@ -1761,9 +1780,59 @@ class AmazonClient:
             "all": sorted(all_props),
             "groups": merged_groups,
             "group_titles": merged_titles,
+            "enums": enums,
         }
-        logger.info(f"[Amazon] Schema for {product_type}: {len(req_props)} required, {len(optional_props)} optional")
+        logger.info(
+            f"[Amazon] Schema for {product_type}: {len(req_props)} required, "
+            f"{len(optional_props)} optional, {len(enums)} attrs with enum restringido"
+        )
         return result
+
+    async def _fetch_schema_enums(self, definitions_resp: dict, product_type: str) -> dict:
+        """
+        Sigue el link "schema.link.resource" (URL S3 pre-firmada) que trae la respuesta
+        de /definitions/2020-09-01/productTypes/{pt} y extrae, por atributo, la lista de
+        valores aprobados (enum) cuando el atributo esta restringido a un catalogo fijo.
+
+        Retorna: {attr_name: {"enum": [...], "enum_names": [...]}} -- solo para atributos
+        que SI tienen enum (la mayoria de texto libre/numeros no aparecen aqui).
+
+        Por que no reusar self._request(): el resource es una URL absoluta ya firmada
+        por AWS (S3), no un path de SP-API -- no lleva el access_token LWA ni pasa por
+        el host sellingpartnerapi-na.amazon.com, así que se llama con un cliente httpx
+        aparte, sin duplicar la logica de auth de _request().
+        """
+        link = ((definitions_resp or {}).get("schema") or {}).get("link") or {}
+        resource_url = link.get("resource")
+        if not resource_url:
+            return {}
+        try:
+            async with httpx.AsyncClient(timeout=20) as http:
+                resp = await http.get(resource_url)
+                resp.raise_for_status()
+                schema_doc = resp.json()
+        except Exception as e:
+            logger.warning(f"[Amazon] no se pudo descargar el JSON Schema real de {product_type}: {e}")
+            return {}
+
+        enums: dict = {}
+        for attr_name, prop_def in (schema_doc.get("properties") or {}).items():
+            # Forma típica SP-API: {type: array, items: {properties: {value: {enum: [...]}}}}
+            value_def = (
+                ((prop_def or {}).get("items") or {}).get("properties", {}).get("value")
+            )
+            enum_vals = None
+            enum_names = None
+            if isinstance(value_def, dict) and value_def.get("enum"):
+                enum_vals = value_def.get("enum")
+                enum_names = value_def.get("enumNames")
+            elif isinstance(prop_def, dict) and prop_def.get("enum"):
+                # Algunos atributos no-array traen el enum directo en el nivel superior
+                enum_vals = prop_def.get("enum")
+                enum_names = prop_def.get("enumNames")
+            if enum_vals:
+                enums[attr_name] = {"enum": enum_vals, "enum_names": enum_names or []}
+        return enums
 
     async def close_listing(self, sku: str) -> dict:
         """Set listing quantity to 0 (closes without deleting the SKU)."""

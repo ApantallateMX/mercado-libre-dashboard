@@ -879,7 +879,11 @@ async def _get_product_schema(product_type: str, seller_id: str) -> dict:
 
     cache_key = f"{product_type}|{client.marketplace_id}"
     schema, cached_at = await get_schema_cache(cache_key)
-    if schema and (_time.time() - cached_at) < 30 * 86400:
+    # "enums" in schema: self-heal de cache vieja (pre 2026-09-09) que se guardo
+    # sin seguir el link a los enums reales -- sin este check, una entrada cacheada
+    # hace 3 semanas sin enums se serviria como "hit" por 30 dias mas, y el
+    # auto-fix con IA seguiria adivinando valores libres para atributos restringidos.
+    if schema and "enums" in schema and (_time.time() - cached_at) < 30 * 86400:
         return schema
 
     schema = await client.fetch_product_type_schema(product_type)
@@ -2416,14 +2420,47 @@ async def auto_fix_errors(request: Request):
             unknown_msgs.append(err.get("message", ""))
 
     # ── Step 2: AI for unmapped errors ────────────────────────────────────────
+    # FIX REAL 2026-09-09 (incidente BIRTMAN BT-42i / electric_fan_design, ELECTRIC_FAN):
+    # antes la IA adivinaba un valor de texto libre para CUALQUIER atributo, incluidos
+    # los restringidos a un catálogo fijo (enum) -- Amazon los rechaza siempre que el
+    # valor no esté EXACTO en su lista aprobada. Ahora se le pasan los enums reales
+    # (sacados del JSON Schema real vía fetch_product_type_schema/_fetch_schema_enums,
+    # no adivinados) para que elija de ahí, y se valida la respuesta antes de aplicarla
+    # -- si la IA inventa un valor fuera de catálogo, se descarta en vez de mandarlo a
+    # Amazon y gastar otro ciclo de rechazo. Aplica a CUALQUIER categoría con atributos
+    # enum, no solo Fans.
     ai_used = False
     if unknown_msgs and _or_client.is_available():
+        schema_for_ai = await _get_product_schema(product_type, seller_id)
+        enums_catalog = (schema_for_ai or {}).get("enums") or {}
+
+        # Idioma/marketplace reales del listing -- antes estaba hardcodeado a
+        # "A1AM78C64UM0Y8 (Mexico MX)" sin importar la cuenta, lo cual mandaba a la IA
+        # instrucciones de idioma equivocadas para cuentas fuera de México (ej.
+        # ExclusiveBulbs, marketplace US ATVPDKIKX0DER).
+        mkt_label = f"{client.marketplace_id} ({client.marketplace_name})"
+        lang_hint = "en_US" if client.marketplace_id == "ATVPDKIKX0DER" else "es_MX"
+
+        enum_block = ""
+        if enums_catalog:
+            enum_lines = [
+                f'- {attr}: {vals["enum"]}' for attr, vals in enums_catalog.items()
+            ]
+            enum_block = (
+                "\n\nSome attributes for this product type are restricted to an approved "
+                "catalog of values (enum). If the attribute you identify for an error is in "
+                "this list, you MUST pick the value EXACTLY as written here (these are the "
+                "only values Amazon accepts) -- never invent a new one, never translate it, "
+                "never use a placeholder:\n" + "\n".join(enum_lines)
+            )
+
         ai_prompt = (
             f"Amazon SP-API listing for product type {product_type} on marketplace "
-            f"A1AM78C64UM0Y8 (Mexico MX) returned these validation errors:\n"
+            f"{mkt_label} returned these validation errors:\n"
             + "\n".join(f"- {m}" for m in unknown_msgs)
+            + enum_block
             + "\n\nFor EACH error, return a JSON array of objects: "
-            '{"attr":"sp_api_attribute_name","value":...,"language_tag":"es_MX"(only if string in MX)}. '
+            f'{{"attr":"sp_api_attribute_name","value":...,"language_tag":"{lang_hint}"(only if the value is a free-text string)}}. '
             "Use real SP-API attribute names (snake_case English). Booleans as true/false. Integers as numbers. "
             "Return ONLY the JSON array, no explanation."
         )
@@ -2440,16 +2477,26 @@ async def auto_fix_errors(request: Request):
                 ai_fixes = _json.loads(arr_m.group(0))
                 for fix in (ai_fixes if isinstance(ai_fixes, list) else []):
                     attr_name = fix.get("attr")
-                    if attr_name and attr_name not in seen_attrs:
-                        seen_attrs.add(attr_name)
-                        _v = fix.get("value")
-                        _lt = fix.get("language_tag")
-                        entry: dict = {"value": _v, "marketplace_id": client.marketplace_id}
-                        if _lt:
-                            entry["language_tag"] = _lt
-                        attr_patches[attr_name] = [entry]
-                        fixed_labels.append(f"{attr_name}={_v!r} (AI)")
-                        ai_used = True
+                    if not attr_name or attr_name in seen_attrs:
+                        continue
+                    _v = fix.get("value")
+                    # Validar contra el catálogo real antes de aplicar -- un valor
+                    # fuera de lista se descarta aquí en vez de mandarse a Amazon.
+                    if attr_name in enums_catalog and _v not in enums_catalog[attr_name]["enum"]:
+                        logger.warning(
+                            f"[auto-fix] IA propuso valor fuera de catálogo para "
+                            f"{attr_name}: {_v!r} (válidos: {enums_catalog[attr_name]['enum']}) -- descartado"
+                        )
+                        unknown_msgs.append(f"{attr_name}: valor de IA '{_v}' fuera de catálogo aprobado")
+                        continue
+                    seen_attrs.add(attr_name)
+                    _lt = fix.get("language_tag")
+                    entry: dict = {"value": _v, "marketplace_id": client.marketplace_id}
+                    if _lt:
+                        entry["language_tag"] = _lt
+                    attr_patches[attr_name] = [entry]
+                    fixed_labels.append(f"{attr_name}={_v!r} (AI)")
+                    ai_used = True
         except Exception as _ae:
             logger.warning(f"[auto-fix] AI resolution failed: {_ae}")
 
