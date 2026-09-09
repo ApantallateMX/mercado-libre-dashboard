@@ -2251,10 +2251,9 @@ async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
                    upc = COALESCE(NULLIF(excluded.upc, ''), bm_sku_master.upc),
                    image_url = COALESCE(NULLIF(excluded.image_url, ''), bm_sku_master.image_url),
                    conditions_json = CASE
-                       WHEN bm_sku_master.conditions_json IS NULL
-                            OR bm_sku_master.conditions_json = ''
-                            OR bm_sku_master.conditions_json = '[]'
-                       THEN NULLIF(excluded.conditions_json, '')
+                       WHEN (bm_sku_master.conditions_json = '' OR bm_sku_master.conditions_json = '[]')
+                            AND excluded.conditions_json != ''
+                       THEN excluded.conditions_json
                        ELSE bm_sku_master.conditions_json
                    END,
                    catalog_updated_at = excluded.catalog_updated_at""",

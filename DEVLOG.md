@@ -21,8 +21,11 @@ Jovan reportó (caso real, orden con SNTV007669): el modal "Registrar sustituci�
 ### Decisión de diseño — por qué no una llamada en vivo
 El propio historial del endpoint (`_bm_bulk_real_conditions`) documenta que Jovan pidió explícitamente QUITAR una llamada a BM en vivo por cada tecla en este mismo modal (2026-08-19, BinManager reportó sobrecarga real). Por eso el fix reutiliza datos que YA se descargan en el sync de catálogo programado, cero llamadas nuevas a BM.
 
+### Bug real en el propio fix — NOT NULL constraint
+El primer intento en producción usó `NULLIF(excluded.conditions_json, '')` para señalar "nada que rellenar" -- pero `conditions_json` es `NOT NULL DEFAULT ''`, y `NULLIF('','')` da `NULL`, violando la columna. Esto rompió el sync COMPLETO (0/9648 SKUs guardados, transacción atómica por `executemany` así que no hubo corrupción parcial, solo el sync no avanzó). Corregido: usar `excluded.conditions_json` directo (string vacío es válido) en vez de `NULL` como sentinel. Verificado localmente contra la DB real con SKUs de prueba antes de re-desplegar: rellena cuando está vacío, preserva cuando ya hay datos buenos.
+
 ### Verificación
-`py_compile` limpio en ambos archivos. Se disparó un sync manual de catálogo en producción (`/api/diag/trigger-catalog-sync`) para que el backfill tenga efecto de inmediato en vez de esperar al ciclo de las 3am, y se re-verificó `/api/stock/substitute-conditions?sku=SNTV007669` post-sync.
+`py_compile` limpio en ambos archivos + prueba local contra la DB real (SKUs sintéticos, limpiados después) confirmando ambos casos (backfill y preservación). Se disparó un sync manual de catálogo en producción (`/api/diag/trigger-catalog-sync`) para que el backfill tenga efecto de inmediato en vez de esperar al ciclo de las 3am, y se re-verificó `/api/stock/substitute-conditions?sku=SNTV007669` post-sync.
 
 ---
 
