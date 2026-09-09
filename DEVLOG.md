@@ -7,6 +7,22 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX DE RAÍZ: `supplier_declared_has_product_identifier_exemption=True` se mandaba SIEMPRE, contradiciendo el UPC real (causa real del error 8560 persistente)
+
+### Contexto
+Tras corregir todos los atributos de BIRTMAN BT-42i (enums, dimensiones, mounting_type, language_tag) el Publish seguía fallando con el mismo error 8560 ("no se pudo encontrar/crear ASIN"), siempre apuntando a `externally_assigned_product_identifier`. Verifiqué contra la API real de Amazon (`Catalog Items API` por UPC) que el UPC no está tomado por ninguna otra marca/ASIN -- descartando la hipótesis inicial. La causa real estaba en otro atributo.
+
+### Causa real
+`create_listing()` (`app/api/amazon_lanzar.py:1761`) mandaba **siempre**, para cualquier producto, `supplier_declared_has_product_identifier_exemption = True` ("declaro que este producto no tiene UPC/EAN") -- incluso cuando sí se manda un UPC real en la misma solicitud (`externally_assigned_product_identifier`). Es una contradicción directa que Amazon rechaza con el mismo error genérico de "no se pudo encontrar/crear ASIN", que parece ser del UPC sin serlo -- afecta a CUALQUIER listing nuevo con UPC real, no solo a Fans.
+
+### Fix
+Ahora solo se declara la exención (`True`) cuando NO hay UPC que mandar (`if not upc:`). Cuando sí hay UPC real, el atributo simplemente no se envía.
+
+### Verificación
+`py_compile` limpio. Servidor local levantado sin errores. No se pudo probar el efecto en un Publish real sin repetir la acción contra Amazon (control de aprobación con Jovan) -- verificado por lectura de código + trazado del flujo de datos.
+
+---
+
 ## 2026-09-09 — FIX: template defaults sin `language_tag` + atributo de dimensiones equivocado para ELECTRIC_FAN (2 bugs más del mismo incidente BIRTMAN BT-42i)
 
 ### Contexto

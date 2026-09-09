@@ -1758,7 +1758,15 @@ async def create_listing(request: Request):
 
         # ── Atributos universales requeridos por Amazon ───────────────────────
         attributes["country_of_origin"] = [{"value": country_of_origin or "CN", "marketplace_id": client.marketplace_id}]
-        attributes["supplier_declared_has_product_identifier_exemption"] = [{"value": True, "marketplace_id": client.marketplace_id}]
+        # BUG REAL 2026-09-09 (BIRTMAN BT-42i): esto se mandaba SIEMPRE en True,
+        # incluso cuando sí hay un UPC/EAN real en `attributes["externally_assigned_
+        # product_identifier"]` -- declarar "exento de identificador" Y mandar un
+        # identificador real en la misma solicitud es una contradicción que Amazon
+        # rechaza con el error genérico 8560 ("no se pudo encontrar/crear ASIN"),
+        # que aparenta ser un problema del UPC sin serlo. Ahora solo se declara
+        # exento cuando de verdad no hay UPC que mandar.
+        if not upc:
+            attributes["supplier_declared_has_product_identifier_exemption"] = [{"value": True, "marketplace_id": client.marketplace_id}]
         attributes["supplier_declared_dg_hz_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
         attributes["number_of_items"] = [{"value": 1, "marketplace_id": client.marketplace_id}]
         attributes["batteries_required"] = [{"value": False, "marketplace_id": client.marketplace_id}]
