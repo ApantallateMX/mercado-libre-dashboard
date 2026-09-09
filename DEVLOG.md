@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX CRÍTICO: mounting_type se descartaba en silencio fuera de TV/Monitor + default falso "Wall Mount" ya aplicado en vivo
+
+### Contexto
+Continuación del lanzamiento real de BIRTMAN BT-42i (SNFN000941, ExclusiveBulbs) con el UPC real ya confirmado. El primer intento de "Publish on Amazon" SÍ creó el SKU en Amazon (confirmado con `/api/amazon/diag/check-sku`: `found:true`) pese a 8 errores de atributos faltantes -- Amazon no bloquea la creación, solo la deja incompleta. El botón "Auto-corregir con IA" aplicó un PATCH real contra ese listing con `mounting_type="Wall Mount"` -- **dato falso** para un ventilador de torre de piso (no se monta en pared), tomado de una tabla estática hardcodeada (`_MX_ERROR_ATTR_MAP`, `app/api/amazon_lanzar.py`) sin ninguna verificación contra el producto real.
+
+### Bug 1 — mounting_type nunca llegaba a Amazon fuera de TV/Monitor
+El dropdown "Mounting" del wizard se muestra para TODAS las categorías, pero el backend (`create_listing`, `app/api/amazon_lanzar.py` ~1809) solo escribía `attributes["mounting_type"]` dentro del bloque `if _IS_DISPLAY_TYPE` (TELEVISION/COMPUTER_MONITOR/MONITOR/TV) -- para Fans (y cualquier otra categoría) el valor se leía del payload pero se descartaba en silencio. Cambiar el dropdown a "Table Mount" en la UI no tuvo ningún efecto real hasta este fix. Movido a la sección universal de atributos.
+
+### Bug 2 — default hardcodeado "Wall Mount" sin contexto de producto
+`_MX_ERROR_ATTR_MAP` mapea fragmentos de mensajes de error → valores default, construido originalmente para un producto tipo repelente/zapper (referencias a "certificación de pesticida", "electronic-pest-control" siguen ahí) y nunca generalizado. `"tipo de montaje" → "Wall Mount"` quedó demostrado como incorrecto en vivo. Removido del mapa -- ahora ese error, si vuelve a ocurrir, cae al paso de resolución por IA (contextual) en vez de un default ciego. Se dejó una advertencia en el código para el próximo default que se agregue ahí.
+
+### Bug 3 (menor) — fragmento de matching frágil
+`"fuente de alimentación"` no coincidía con el texto real del error `"Fuente Alimentación"` (sin "de") -- se agregó la variante sin "de" a la tabla.
+
+### Verificación
+`py_compile` limpio. NO se pudo probar contra Amazon real sin repetir la acción de publicar (que ya tiene su propio control de aprobación con Jovan) -- verificado por lectura de código + trazado manual del flujo de datos (dropdown UI → payload → atributo SP-API) para confirmar que el valor ahora sí llega.
+
+### Pendiente
+El listing SNFN000941 en Amazon sigue con `mounting_type="Wall Mount"` (ya aplicado antes de este fix) y le faltan 6 atributos requeridos más (Tamaño, Tipo de habitación, Unidad de profundidad, Usos recomendados, Diseño del ventilador eléctrico) -- se retoma con Jovan para completarlo con el código ya corregido, sin volver a usar el auto-fix a ciegas para mounting_type.
+
+---
+
 ## 2026-09-09 — FIX: búsqueda de UPC en Wizard Amazon v2 se rendía tras 1 intento + checklist sin salida clara
 
 ### Contexto

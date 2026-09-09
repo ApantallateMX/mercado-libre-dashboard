@@ -1806,9 +1806,6 @@ async def create_listing(request: Request):
                     attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "hertz", "marketplace_id": client.marketplace_id}]
                 except (ValueError, TypeError):
                     pass
-            if mounting_type:
-                _mt_map = {"Tabletop, Wall Mount": "Wall Mount", "Tabletop": "Table Mount", "Wall Mount": "Wall Mount"}
-                attributes["mounting_type"] = [{"value": _mt_map.get(mounting_type, mounting_type), "marketplace_id": client.marketplace_id}]
             try:
                 _hdmi = int(total_hdmi_ports) if total_hdmi_ports is not None else 0
             except (ValueError, TypeError):
@@ -1817,6 +1814,16 @@ async def create_listing(request: Request):
                 _hdmi = 2  # TV default
             if _hdmi > 0:
                 attributes["total_hdmi_ports"] = [{"value": _hdmi, "marketplace_id": client.marketplace_id}]
+
+        # ── Mounting — universal (BUG 2026-09-09: vivía dentro de _IS_DISPLAY_TYPE,
+        # el formulario del wizard muestra el dropdown "Mounting" para TODAS las
+        # categorías (no solo TV/monitor) pero el valor se descartaba en silencio
+        # para el resto -- confirmado en vivo con BIRTMAN BT-42i (Fans): Amazon
+        # pedía 'Tipo de montaje' aunque el dropdown ya tenía "Table Mount"
+        # seleccionado, porque nunca llegaba al payload) ──────────────────────
+        if mounting_type:
+            _mt_map = {"Tabletop, Wall Mount": "Wall Mount", "Tabletop": "Table Mount", "Wall Mount": "Wall Mount"}
+            attributes["mounting_type"] = [{"value": _mt_map.get(mounting_type, mounting_type), "marketplace_id": client.marketplace_id}]
 
         # ── Features, components, connectivity — universal ────────────────────
         _sf = special_feature or (["High Definition"] if product_type == "TELEVISION" else [])
@@ -2288,6 +2295,15 @@ async def create_listing(request: Request):
 # ── 3c. Auto-fix de errores Amazon ───────────────────────────────────────────
 # Mapeo: fragmento del mensaje de error en español (Seller Central MX) → atributo SP-API + valor default
 # Construido con datos del schema real de Amazon: Product Type Definitions API (2026-06-09)
+#
+# ADVERTENCIA 2026-09-09: este mapa se armó originalmente para productos tipo
+# repelente/zapper (ver "certificación de pesticida", "electronic-pest-control")
+# y algunos defaults NO generalizan bien a otras categorías -- "tipo de
+# montaje" -> "Wall Mount" quedó demostrado en vivo como INCORRECTO para un
+# ventilador de torre de piso (BIRTMAN BT-42i, ExclusiveBulbs) y se removió de
+# este mapa; ahora cae al paso de IA (contextual) en vez de un default ciego.
+# Antes de agregar un default nuevo aquí, confirmar que aplica de verdad
+# multi-categoría, no solo al producto que se estaba probando en ese momento.
 _MX_ERROR_ATTR_MAP: list[tuple[str, dict]] = [
     # (fragmento lowercase del mensaje, {attr, value, ?language_tag, ?unit, ?complex})
     ("requiere montaje",                    {"attr": "is_assembly_required",  "value": False}),
@@ -2301,6 +2317,7 @@ _MX_ERROR_ATTR_MAP: list[tuple[str, dict]] = [
     ("número de piezas",                    {"attr": "number_of_pieces",      "value": 1}),
     ("material",                            {"attr": "material_type",         "value": "Plástico"}),
     ("fuente de alimentación",              {"attr": "power_source_type",     "value": "Corded Electric"}),
+    ("fuente alimentación",                 {"attr": "power_source_type",     "value": "Corded Electric"}),
     ("fuente de energía",                   {"attr": "power_source_type",     "value": "Corded Electric"}),
     ("baterías requeridas",                 {"attr": "batteries_required",    "value": False}),
     ("baterías incluidas",                  {"attr": "batteries_included",    "value": False}),
@@ -2314,7 +2331,6 @@ _MX_ERROR_ATTR_MAP: list[tuple[str, dict]] = [
     ("palabras clave del tipo de artículo", {"attr": "item_type_keyword",     "value": "electronic-pest-control"}),
     ("país de origen",                      {"attr": "country_of_origin",     "value": "CN"}),
     ("es recondicionado",                   {"attr": "is_refurbished",        "value": False}),
-    ("tipo de montaje",                     {"attr": "mounting_type",         "value": "Wall Mount"}),
     ("resistente al agua",                  {"attr": "is_waterproof",         "value": False}),
     ("número de configuraciones",           {"attr": "number_of_settings",    "value": 1}),
     ("tipo de artículo",                    {"attr": "item_type_keyword",     "value": "electronic-pest-control"}),
