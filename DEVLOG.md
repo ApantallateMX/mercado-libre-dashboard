@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-09 — FIX CRÍTICO: fixes del Auto-corregir del Wizard Amazon nunca se incorporaban al Publish
+
+### Contexto
+Continuación del intento de lanzar BIRTMAN BT-42i. Jovan notó algo clave: "ya no es de UPC, son otros problemas" -- el error de Amazon ("no se pudo encontrar/crear ASIN", código 8560, apuntando a `externally_assigned_product_identifier`) seguía apareciendo incluso con un UPC que sí pasó la validación síncrona del Publish. Esto llevó a encontrar el bug de raíz.
+
+### Causa real (no era UPC)
+`/api/amazon/lanzar/auto-fix-errors` corrige atributos faltantes vía PATCH (is_assembly_required, power_source_type, size, room_type, etc.) y los guarda como "defaults" de una plantilla por product_type+marketplace (`amz_product_type_templates`) para reusar en futuros lanzamientos. Pero:
+1. **`create_listing` (el PUT/create real de "Publish on Amazon") nunca leía esa plantilla** -- cada clic en Publish reenviaba el producto SIN los atributos ya corregidos. El motor de matching/creación de ASIN de Amazon evalúa la sumisión completa del create, no los PATCHes sueltos que vienen después -- por eso seguía viendo un producto "incompleto" y fallaba con el mismo error genérico, que por su texto boilerplate parecía ser de UPC sin serlo.
+2. **El guardado de la plantilla tenía un segundo bug**: `if existing:` descartaba el guardado completo la PRIMERA vez que se corregía un product_type sin plantilla previa -- confirmado con `/api/amazon/lanzar/templates/ELECTRIC_FAN` → "Template not found" pese a 3 rondas de auto-fix ya aplicadas sobre BIRTMAN BT-42i. Los fixes nunca se persistían en ningún lado más allá del PATCH puntual a ese listing.
+
+### Fix
+- `create_listing` ahora carga `get_product_type_template()` y aplica sus `defaults` para cualquier atributo que el formulario no haya llenado explícitamente -- nunca pisa un valor real del usuario.
+- `auto-fix-errors` ahora siempre guarda (crea la plantilla desde cero si no existe), en vez de solo actualizar una ya existente.
+
+### Verificación
+`py_compile` limpio. Pendiente: reintentar el flujo completo de BIRTMAN BT-42i tras el deploy para confirmar que un solo "Publish on Amazon" ya incluye todos los atributos corregidos previamente.
+
+---
+
 ## 2026-09-09 — FIX: modal Sustituir decía "sin stock en ninguna condición" con stock real en -GRB
 
 ### Contexto

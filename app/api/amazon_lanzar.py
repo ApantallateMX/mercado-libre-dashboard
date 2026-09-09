@@ -2143,6 +2143,26 @@ async def create_listing(request: Request):
     if upc and len(upc) > 13 and "externally_assigned_product_identifier" in attributes:
         del attributes["externally_assigned_product_identifier"]
 
+    # BUG REAL 2026-09-09 (encontrado con BIRTMAN BT-42i, ExclusiveBulbs):
+    # /auto-fix-errors corrige atributos vía PATCH y los guarda como
+    # "defaults" de la plantilla del product_type -- pero create_listing
+    # (este endpoint, el PUT/create real) nunca los leía de vuelta. Cada
+    # "Publish on Amazon" repetía el envío SIN esos atributos, así que el
+    # motor de matching/creación de Amazon (que evalúa la sumisión completa,
+    # no los PATCHes sueltos de después) seguía viendo un producto
+    # incompleto -- de ahí que el error "no se pudo encontrar/crear ASIN"
+    # (código 8560) parecía ser de UPC pero en realidad era de estos
+    # atributos nunca incorporados. Se aplican SOLO los que el formulario no
+    # llenó, nunca pisan un valor explícito del usuario.
+    try:
+        from app.services.token_store import get_product_type_template as _get_tmpl_defaults
+        _tmpl = await _get_tmpl_defaults(product_type, client.marketplace_id)
+        for _attr, _val in (_tmpl.get("defaults") or {}).items():
+            if _attr not in attributes and _val not in (None, ""):
+                attributes[_attr] = [{"value": _val, "marketplace_id": client.marketplace_id}]
+    except Exception as _e_tmpl:
+        logger.warning(f"[AMZ Lanzar] No se pudieron aplicar defaults de plantilla para {product_type}: {_e_tmpl}")
+
     def _is_attr_validation_error(issues_list):
         """True if errors are attribute validation issues (not product type)."""
         for i in issues_list:
@@ -2453,17 +2473,23 @@ async def auto_fix_errors(request: Request):
                     get_product_type_template as _gpt,
                     save_product_type_template as _spt,
                 )
-                existing = await _gpt(product_type, client.marketplace_id)
-                if existing:
-                    new_defaults = dict(existing.get("defaults") or {})
-                    for attr_name, val_list in attr_patches.items():
-                        if val_list and isinstance(val_list, list):
-                            v = val_list[0].get("value")
-                            if v is not None and not isinstance(v, list):
-                                new_defaults[attr_name] = v
-                    existing["defaults"] = new_defaults
-                    await _spt(product_type, client.marketplace_id, existing)
-                    template_updated = True
+                # BUG REAL 2026-09-09: "if existing:" descartaba el guardado
+                # completo la PRIMERA vez que se corregía un product_type
+                # nuevo (sin plantilla previa) -- exactamente el caso de
+                # ELECTRIC_FAN con BIRTMAN BT-42i, confirmado con
+                # /api/amazon/lanzar/templates/ELECTRIC_FAN -> "Template not
+                # found" pese a 3 rondas de auto-fix ya aplicadas. Ahora
+                # siempre guarda, creando la plantilla desde cero si hace falta.
+                existing = await _gpt(product_type, client.marketplace_id) or {}
+                new_defaults = dict(existing.get("defaults") or {})
+                for attr_name, val_list in attr_patches.items():
+                    if val_list and isinstance(val_list, list):
+                        v = val_list[0].get("value")
+                        if v is not None and not isinstance(v, list):
+                            new_defaults[attr_name] = v
+                existing["defaults"] = new_defaults
+                await _spt(product_type, client.marketplace_id, existing)
+                template_updated = True
             except Exception as _te:
                 logger.warning(f"[auto-fix] Template update failed: {_te}")
 
