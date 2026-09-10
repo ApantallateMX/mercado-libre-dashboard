@@ -20569,6 +20569,48 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
     return {"date": date, "totals": totals, "by_account": by_account}
 
 
+@app.get("/api/diag/amazon-sales-api-reference")
+async def diag_amazon_sales_api_reference(token: str = "", seller_id: str = "", date: str = ""):
+    """Referencia "verdad" para verificar order_history: mismo cálculo que
+    alimenta el widget 'Meta Diaria de Ventas Amazon' (Sales API
+    getOrderMetrics, granularity=Day) para UNA cuenta y UN día -- sin sesión,
+    para poder comparar por curl contra /api/diag/daily-sales-by-account
+    (ver DEVLOG 2026-09-10). No lee ni escribe order_history."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not date:
+        return JSONResponse({"error": "seller_id y date (YYYY-MM-DD) son requeridos"}, status_code=400)
+    from app.services.amazon_client import get_amazon_client as _get_amz
+    from app.api.metrics import _get_cached_order_metrics as _cached_metrics
+    client = await _get_amz(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no se pudo obtener cliente Amazon para esa cuenta"}, status_code=400)
+    try:
+        # Mismo rango que usa el widget real: date/date+1 exclusivo (ver
+        # _get_cached_order_metrics), granularity=Day -- un solo bucket.
+        metrics_data = await _cached_metrics(client, date, date)
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+    orders = sum(int(m.get("orderCount", 0) or 0) for m in metrics_data)
+    units  = sum(int(m.get("unitCount", 0) or 0) for m in metrics_data)
+    revenue = round(sum(float((m.get("totalSales") or {}).get("amount", 0) or 0) for m in metrics_data), 2)
+    currency = (metrics_data[0].get("totalSales") or {}).get("currencyCode", "") if metrics_data else ""
+    return {
+        "seller_id": seller_id,
+        "nickname": client.nickname,
+        "date": date,
+        "source": "Sales API getOrderMetrics (Ordered Product Sales, mismo dato que Seller Central)",
+        "orders": orders,
+        "units": units,
+        "revenue": revenue,
+        "currency": currency,
+        "raw_buckets": metrics_data,
+    }
+
+
 @app.post("/api/diag/amazon-orders-resync")
 async def diag_amazon_orders_resync(token: str = "", days: int = 3, wait: bool = False):
     """Fuerza una corrida de _save_amazon_orders_bg (Reports API) sin esperar
