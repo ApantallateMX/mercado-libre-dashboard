@@ -20569,6 +20569,53 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
     return {"date": date, "totals": totals, "by_account": by_account}
 
 
+@app.get("/api/diag/amazon-orders-report-raw")
+async def diag_amazon_orders_report_raw(token: str = "", seller_id: str = "", date_from: str = "", date_to: str = "", filter_date: str = ""):
+    """Dump crudo de get_orders_report() (Reports API) -- para depurar
+    diferencias entre order_history (post-fix 2026-09-10) y la referencia de
+    Sales API (/api/diag/amazon-sales-api-reference) aislando si la brecha
+    está en el propio reporte de Amazon o en el procesamiento de
+    _save_amazon_orders_bg. Si se pasa filter_date (YYYY-MM-DD), cuenta
+    aparte solo las filas cuyo purchase-date (UTC) cae en ese día."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id or not date_from or not date_to:
+        return JSONResponse({"error": "seller_id, date_from y date_to son requeridos"}, status_code=400)
+    from app.services.amazon_client import get_amazon_client as _get_amz
+    client = await _get_amz(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no se pudo obtener cliente Amazon para esa cuenta"}, status_code=400)
+    try:
+        rows = await client.get_orders_report(date_from, date_to)
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+    from collections import Counter
+    status_counts = Counter((r.get("order-status") or "") for r in rows)
+    order_ids_all = set(r.get("amazon-order-id") for r in rows if r.get("amazon-order-id"))
+    result = {
+        "seller_id": seller_id,
+        "date_from": date_from, "date_to": date_to,
+        "total_item_rows": len(rows),
+        "unique_orders_all_statuses": len(order_ids_all),
+        "status_breakdown": dict(status_counts),
+    }
+    if filter_date:
+        day_rows = [r for r in rows if (r.get("purchase-date") or "")[:10] == filter_date]
+        day_order_ids = set(r.get("amazon-order-id") for r in day_rows if r.get("amazon-order-id"))
+        active_day_rows = [r for r in day_rows if (r.get("order-status") or "") not in ("Cancelled", "Pending", "Canceled")]
+        active_day_order_ids = set(r.get("amazon-order-id") for r in active_day_rows if r.get("amazon-order-id"))
+        result["filter_date"] = filter_date
+        result["day_item_rows_all_statuses"] = len(day_rows)
+        result["day_unique_orders_all_statuses"] = len(day_order_ids)
+        result["day_unique_orders_non_cancelled_non_pending"] = len(active_day_order_ids)
+        result["day_status_breakdown"] = dict(Counter((r.get("order-status") or "") for r in day_rows))
+        result["sample_rows"] = day_rows[:3]
+    return result
+
+
 @app.get("/api/diag/amazon-sales-api-reference")
 async def diag_amazon_sales_api_reference(token: str = "", seller_id: str = "", date: str = ""):
     """Referencia "verdad" para verificar order_history: mismo cálculo que
