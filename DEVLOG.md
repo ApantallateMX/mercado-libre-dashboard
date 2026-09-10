@@ -38,6 +38,42 @@ No se otorgó admin al bot sin confirmar con Jovan/infra primero (un Team Admin 
 
 ---
 
+## 2026-09-10 — DIAGNÓSTICO (sin fix aplicado todavía): order_history subestima ventas Amazon reales -- causa raíz probable es getOrders() (lista) de SP-API, no un problema de moneda/margen
+
+### Contexto
+Jovan reportó con evidencia visual (captura del widget "Meta Diaria de Ventas Amazon") una discrepancia real: para el 2026-09-09, ese widget muestra **105 órdenes / Revenue $366,122.35 / Neto Est. $311,204.00** para UNA cuenta Amazon (la que estuviera activa en su sesión). El mismo día se había reportado en Mattermost, usando `/api/diag/daily-sales-by-account` (que lee `order_history`), un total muy menor para las 3 cuentas Amazon juntas. Este hallazgo es DISTINTO de los 3 fixes de arriba (moneda USD/MXN, ganancia_neta contaminada, credenciales AUTOBOT) -- esos ya corregían cómo se CALCULA el dinero dentro de las filas que sí existen; este es sobre cuántas filas (órdenes) realmente llegan a existir en `order_history`.
+
+### Fuente real del widget "Meta Diaria de Ventas Amazon"
+`amazon_dashboard.html` (sección `#amz-daily-goal-section`) → JS `loadAmazonDashboard()`/`amazon_dashboard.js` → `GET /api/metrics/amazon-daily-sales-data` (`app/api/metrics.py:1363`). Este endpoint:
+- Es **por cuenta** (`seller_id` de query, o "primera cuenta" en DB si viene vacío vía `get_amazon_client()`) -- NUNCA suma las 3 cuentas Amazon juntas. La fila que vio Jovan es de una sola cuenta, no un combinado.
+- NO lee `order_history`. Llama en vivo a la **Sales API de Amazon** (`get_order_metrics`, granularity=Day, cacheada 
+  `_AMAZON_METRICS_TTL` en memoria) -- el mismo dato "Ordered Product Sales" que muestra Seller Central. Con fallback a Orders API en vivo solo para "hoy" si el día trae 0 (lag de 2-4h de Sales API).
+- Es, por diseño, la fuente más confiable que existe en el sistema para "¿cuánto vendió Amazon realmente ese día?" -- no depende de ningún sync propio.
+
+### Confirmado con datos reales de producción (Railway, hoy)
+`GET /api/diag/daily-sales-by-account?date=2026-09-09` (order_history, ya con el fix de moneda de hoy aplicado):
+- ExclusiveBulbs: 74 órdenes, USD 9,769.61 (~$166,083 MXN)
+- VECKTOR IMPORTS: 27 órdenes, $96,051.42 MXN
+- AUTOBOT AMZ MX: 38 órdenes, $77,358.10 MXN
+- **Total Amazon combinado: 139 órdenes / ~$339,493 MXN**
+
+Contra el widget real de Jovan para UNA sola cuenta: 105 órdenes / $366,122.35 MXN. Ya sea cual sea la cuenta exacta (no se pudo confirmar cuál -- `/api/metrics/amazon-daily-sales-data` requiere sesión con cookie `dash_session`, protegida por login, no por `DIAG_TOKEN`; no se intentó generar una sesión para no tocar autenticación de producción sin aprobación), **una sola cuenta real tiene más órdenes (105) que las 3 cuentas Amazon JUNTAS en order_history (139 en total, repartidas entre 3)** -- confirma que `order_history` para Amazon está incompleta de forma severa, no es un margen de error menor.
+
+### Causa raíz identificada (con evidencia directa, no solo teoría)
+1. **`getOrders()` (endpoint de LISTA de SP-API) ya tiene un bug de confiabilidad documentado en este mismo código** (`amazon_client.py:320-330`, incidente real 2026-08-18/19, orden VECKTOR `702-3480491-5024235`: `getOrder` puntual confirmó `Unshipped` real, pero `getOrders` con la MISMA ventana de fecha/status nunca la devolvió). `_save_amazon_orders_bg()` (`app/main.py:3444`, el único proceso que llena `order_history` para Amazon de forma masiva/automática) depende 100% de `getOrders()` vía `fetch_orders_range()` para saber qué órdenes existen -- toda orden que `getOrders` no devuelva es invisible para `order_history`, sin importar qué tan bien funcione el resto del pipeline.
+2. **Prueba en vivo hoy** (`/api/diag/amazon-orders-list`, días=2 y días=7, filtro `Unshipped+PartiallyShipped+Shipped+Canceled`): VECKTOR devolvió 0 órdenes en 48h y solo 1 en 7 días; AUTOBOT devolvió "Internal Server Error" (posible efecto secundario de la reautorización de credenciales de hoy mismo, sin confirmar -- no se investigó más porque no es el foco de este diagnóstico); ExclusiveBulbs devolvió solo 1 en 7 días. Esto es consistente con "`getOrders` pierde la mayoría de las órdenes", pero el filtro de este diag (`+Canceled` mezclado con estados activos) NO es el mismo que usa `fetch_orders_range()` en producción (`Shipped+Unshipped+PartiallyShipped`, sin `Canceled`) -- no se puede afirmar con esta sola prueba qué % exacto de órdenes se pierde en el sync real; sí sirve como confirmación cualitativa de que el problema es real y severo, no solo un incidente aislado de agosto.
+3. **Factor adicional, ya con manejo correcto (no silencioso) pero real:** dentro de `_save_amazon_orders_bg()`, si `get_order_items(order_id)` falla (429/timeout bajo el `Semaphore(1)` compartido entre las 3 cuentas), esa orden completa se descarta de ese ciclo (`logger.warning`, no `except: pass` -- cumple la regla del proyecto) y solo se reintenta si la orden sigue dentro de la ventana de 3 días la próxima corrida (1h después, con guard de 2h). En un día de alto volumen (105+ órdenes/cuenta), esto agrava la pérdida de (1).
+4. **Se descartó** que "solo se guarda al abrir el detalle manualmente en `/amazon/orders`" sea la causa única (hipótesis inicial de Jovan) -- sí existe `_supplier_debt_sync_loop()` (`app/main.py:17101`, corre sola cada 1h desde el arranque, sin depender de que nadie navegue nada) que dispara `_save_amazon_orders_bg(days=3)` para las 3 cuentas Amazon automáticamente. El problema no es "nadie lo dispara", es que lo que dispara (`getOrders` lista) no trae todas las órdenes que existen.
+
+### Propuesta (NO ejecutada -- pendiente de aprobación de Jovan, cambio de fondo en cómo se sincronizan órdenes Amazon)
+Documentada en detalle en la respuesta a Jovan de esta sesión. Resumen de las 2 rutas evaluadas:
+- **Ruta A (recomendada como fix rápido de los 2 endpoints de reporte)**: que `/api/diag/daily-sales-by-account` y `/api/diag/sku-sales-profit` dejen de depender de `order_history` para Amazon y usen `get_order_metrics` (Sales API, la misma fuente del widget) en vivo por cuenta, igual que ya hace `/api/metrics/amazon-daily-sales-data`. Riesgo: Sales API es por-cuenta (3 llamadas en vez de 1 query SQL) y ya tiene su propio TTL de caché -- sin problema de rate limit si se reusa `_get_cached_order_metrics()` tal cual existe hoy. No resuelve `sku-sales-profit` (Sales API no desglosa por SKU) -- ese necesitaría seguir usando `order_history` o agregar Orders API con su propio costo de rate limit.
+- **Ruta B (fix de fondo, mayor alcance)**: corregir `_save_amazon_orders_bg()` para no depender solo de `getOrders()` -- ej. usar el **Reports API** (`GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL` o similar, ya usado para el backfill de ExclusiveBulbs de 156K+ listings per WIP) en vez de `getOrders()` paginado, que es más confiable para rangos de fecha pero tiene latencia de generación (minutos) y su propio rate limit de creación de reportes. Riesgo: cambio grande, toca el único pipeline que llena `order_history` para Amazon, requiere backfill histórico y pruebas contra las 3 cuentas antes de confiar en él para reportes reales.
+
+No se tocó código de producción en este diagnóstico -- solo lectura (`GET` a diag endpoints existentes, protegidos por `DIAG_TOKEN`) y esta entrada de DEVLOG.
+
+---
+
 ## 2026-09-10 — FIX: colisión de rutas pre-existente bloqueaba /api/orders/export.csv, /api/orders/period-stats y /api/orders/platform-comparison (500 siempre)
 
 ### Contexto

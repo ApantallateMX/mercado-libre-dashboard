@@ -3441,9 +3441,58 @@ async def _process_ml_message_webhook(resource: str, user_id: str) -> None:
 _amz_bg_running: bool  = False
 _amz_bg_last_run: float = 0.0   # epoch seconds de la última corrida exitosa
 
+def _chunk_date_range(date_from: str, date_to: str, max_days: int = 25) -> list:
+    """Trocea un rango de fechas en ventanas de a lo más max_days días (inclusive).
+    Usado por _save_amazon_orders_bg para respetar el límite de rango de
+    GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL (probado en vivo hasta
+    30 días sin error 2026-09-10 -- 25 deja margen de seguridad bajo ese límite
+    probado, sin haber encontrado el límite real de Amazon)."""
+    from datetime import datetime as _dt2, timedelta as _td2
+    start = _dt2.strptime(date_from, "%Y-%m-%d")
+    end = _dt2.strptime(date_to, "%Y-%m-%d")
+    chunks = []
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + _td2(days=max_days - 1), end)
+        chunks.append((cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+        cur = chunk_end + _td2(days=1)
+    return chunks
+
+
 async def _save_amazon_orders_bg(days: int = 30) -> None:
-    """Background: descarga órdenes Amazon + items, guarda en order_history.
-    Evita duplicados con _amz_bg_running y un intervalo mínimo de 2h entre corridas.
+    """Background: descarga órdenes+items Amazon vía Reports API, guarda en
+    order_history. Evita duplicados con _amz_bg_running y un intervalo mínimo
+    de 2h entre corridas.
+
+    FIX DE RAÍZ 2026-09-10 (ver DEVLOG "order_history subestima ventas Amazon
+    reales"): antes esta función dependía de getOrders() (lista paginada de
+    SP-API) para saber qué órdenes existen, y de get_order_items() por-orden
+    (serializado con Semaphore(1)) para sus items. getOrders() tiene un bug
+    de confiabilidad YA documentado en amazon_client.py (get_order(), nota
+    2026-08-18/19) -- no devuelve consistentemente todas las órdenes que
+    existen dentro de su propia ventana de fecha/status. Confirmado en vivo
+    2026-09-10 que la severidad real es mucho mayor que ese incidente
+    aislado: VECKTOR devolvió 0 órdenes vía getOrders() en 48h que, según el
+    Reports API, tenía 278 órdenes reales -- una sola cuenta con MÁS órdenes
+    perdidas que las que las 3 cuentas Amazon JUNTAS lograban guardar en
+    order_history ese mismo día.
+
+    Reemplazo: GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL
+    (`client.get_orders_report()`) es ahora la ÚNICA fuente que llena
+    order_history para Amazon -- reemplaza el pipeline getOrders+
+    get_order_items por completo (no corre en paralelo con él; mismo
+    principio que "un solo escritor confiable" ya aplicado hoy a
+    ganancia_neta/margen_pct). Trae orden+items en una sola descarga por
+    ventana de fecha, sin llamadas por-orden ni Semaphore(1) -- Amazon lo
+    genera desde su propio almacén de reportes, no una consulta en vivo.
+
+    Trade-off aceptado y documentado (no oculto): el reporte NO trae
+    BuyerInfo.BuyerName (columna de comprador, requiere RDT) -- la feature
+    "Oportunidades Mayoreo" pierde ese dato para órdenes nuevas de Amazon
+    (buyer_nickname queda ''). Impacto limitado: el comentario original de
+    esa feature (2026-08-27) ya advertía que "puede venir vacío/anonimizado
+    sin RDT" -- no había garantía de tenerlo antes tampoco. Revisar si se
+    reactiva cuando se resuelva el RDT pendiente (ver DEVLOG).
     """
     global _amz_bg_running, _amz_bg_last_run
     if _amz_bg_running:
@@ -3466,9 +3515,8 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
 
         date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
         date_to   = _dt.utcnow().strftime("%Y-%m-%d")
+        date_chunks = _chunk_date_range(date_from, date_to, max_days=25)
 
-        # Semáforo 1 — SP-API es strict con rate limits
-        _amz_sem = asyncio.Semaphore(1)
         all_rows: list = []
 
         async def _process_amz_account(acc):
@@ -3477,72 +3525,81 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
             if not client:
                 return
             try:
-                orders = await client.fetch_orders_range(date_from, date_to)
-                logger.info(f"[AMZ-BG] {nick}: {len(orders)} órdenes en {days}d")
-                for order in orders:
-                    status = order.get("OrderStatus", "")
-                    if status in ("Cancelled", "Pending"):
-                        continue
-                    order_id   = order.get("AmazonOrderId", "")
-                    order_date = (order.get("PurchaseDate") or "")[:10]
-                    order_month = order_date[:7]
-                    if not order_id or not order_date:
-                        continue
-                    # Feature "Oportunidades Mayoreo" 2026-08-27: BuyerName cuando
-                    # Amazon lo expone (puede venir vacío/anonimizado sin RDT -- ver
-                    # DEVLOG). Sin llamada extra, ya viene en el order fetcheado.
-                    buyer_nickname_amz = ((order.get("BuyerInfo") or {}).get("BuyerName") or "").strip()
+                acct_rows = 0
+                for i, (chunk_from, chunk_to) in enumerate(date_chunks):
+                    if i > 0:
+                        # Espaciado entre ventanas de la MISMA cuenta -- respeta el
+                        # rate limit de creación de reportes (~1/45s, ver
+                        # get_onsite_inventory_report). Cuentas distintas corren en
+                        # paralelo (asyncio.gather de abajo) sin este espaciado --
+                        # el límite de SP-API es por seller, no global.
+                        await asyncio.sleep(45)
                     try:
-                        async with _amz_sem:
-                            items = await client.get_order_items(order_id)
-                        for it in items:
-                            sku_raw = (it.get("SellerSKU") or "").strip()
-                            if not sku_raw:
-                                continue
-                            sku = _norm_sku(sku_raw) or sku_raw.upper()
-                            qty = int(it.get("QuantityOrdered") or 0)
-                            if qty <= 0:
-                                continue
-                            price_obj = it.get("ItemPrice") or {}
-                            price     = float(price_obj.get("Amount") or 0)
-                            currency  = price_obj.get("CurrencyCode", "MXN")
-                            fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
-                            retail_mxn    = _sku_retail_map.get(sku, 0) or 0
-                            retail_ph_usd = round(retail_mxn / fx, 2) if retail_mxn > 0 else 0
-                            amz_fee   = round(price * 0.15, 2)
-                            neto      = round(price - amz_fee, 2)
-                            recup     = round(neto / retail_mxn * 100, 1) if retail_mxn > 0 else 0
-                            all_rows.append({
-                                "order_id":       order_id,
-                                "account_id":     nick,
-                                "platform":       "amazon",
-                                "item_id":        it.get("ASIN", ""),
-                                "sku":            sku,
-                                "unit_price":     price,
-                                "quantity":       qty,
-                                "sale_fee":       amz_fee,
-                                "neto_plat":      neto,
-                                "costo_usd":      0.0,
-                                "costo_mxn":      0.0,
-                                "retail_ph_usd":  retail_ph_usd,
-                                "ganancia_neta":  0.0,
-                                "margen_pct":     0.0,
-                                "recup_retail_pct": recup,
-                                "fx_rate":        round(fx, 4),
-                                "currency":       currency,
-                                "order_date":     order_date,
-                                "order_month":    order_month,
-                                "status":         status,
-                                "data_source":    "estimated",
-                                "buyer_id":       "",
-                                "buyer_nickname": buyer_nickname_amz,
-                            })
-                    except Exception as _e_item:
-                        # get_order_items es rate-limited (429 frecuente bajo carga) — si
-                        # falla aquí, esa orden se queda sin sus items en order_history
-                        # hasta el próximo ciclo. Antes silencioso (encontrado 2026-08-03,
-                        # auditoría de sistema — VECKTOR quedó unos días atrás por esto).
-                        logger.warning(f"[AMZ-BG] {nick}: error obteniendo items de orden {order_id}: {_e_item}")
+                        report_rows = await client.get_orders_report(chunk_from, chunk_to)
+                    except Exception as _e_chunk:
+                        # Si UNA ventana falla (timeout/FATAL), las demás ventanas
+                        # y las otras 2 cuentas siguen -- no se pierde todo el
+                        # backfill por un solo chunk problemático. Logueado, no
+                        # silencioso (mismo criterio que el resto del proyecto).
+                        logger.warning(f"[AMZ-BG] {nick}: error en reporte {chunk_from}→{chunk_to}: {_e_chunk}")
+                        continue
+                    for row in report_rows:
+                        status = (row.get("order-status") or "").strip()
+                        if status in ("Cancelled", "Pending", "Canceled"):
+                            continue
+                        order_id = (row.get("amazon-order-id") or "").strip()
+                        order_date = (row.get("purchase-date") or "")[:10]
+                        sku_raw = (row.get("sku") or "").strip()
+                        if not order_id or not order_date or not sku_raw:
+                            continue
+                        sku = _norm_sku(sku_raw) or sku_raw.upper()
+                        try:
+                            qty = int(float(row.get("quantity") or 0))
+                        except (ValueError, TypeError):
+                            qty = 0
+                        if qty <= 0:
+                            continue
+                        try:
+                            price = float(row.get("item-price") or 0)
+                        except (ValueError, TypeError):
+                            price = 0.0
+                        currency = (row.get("currency") or "MXN").strip() or "MXN"
+                        order_month = order_date[:7]
+                        fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
+                        retail_mxn    = _sku_retail_map.get(sku, 0) or 0
+                        retail_ph_usd = round(retail_mxn / fx, 2) if retail_mxn > 0 else 0
+                        amz_fee   = round(price * 0.15, 2)
+                        neto      = round(price - amz_fee, 2)
+                        recup     = round(neto / retail_mxn * 100, 1) if retail_mxn > 0 else 0
+                        all_rows.append({
+                            "order_id":       order_id,
+                            "account_id":     nick,
+                            "platform":       "amazon",
+                            "item_id":        (row.get("asin") or "").strip(),
+                            "sku":            sku,
+                            "unit_price":     price,
+                            "quantity":       qty,
+                            "sale_fee":       amz_fee,
+                            "neto_plat":      neto,
+                            "costo_usd":      0.0,
+                            "costo_mxn":      0.0,
+                            "retail_ph_usd":  retail_ph_usd,
+                            "ganancia_neta":  0.0,
+                            "margen_pct":     0.0,
+                            "recup_retail_pct": recup,
+                            "fx_rate":        round(fx, 4),
+                            "currency":       currency,
+                            "order_date":     order_date,
+                            "order_month":    order_month,
+                            "status":         status,
+                            "data_source":    "report",
+                            "buyer_id":       "",
+                            # BuyerName no disponible en este reporte sin RDT --
+                            # ver docstring de esta función.
+                            "buyer_nickname": "",
+                        })
+                        acct_rows += 1
+                logger.info(f"[AMZ-BG] {nick}: {acct_rows} filas de item en {days}d ({len(date_chunks)} ventana(s))")
             except Exception as _amz_err:
                 logger.warning(f"[AMZ-BG] Error cuenta {nick}: {_amz_err}")
             finally:
@@ -3558,7 +3615,7 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
 
         if all_rows:
             await _upsert_oh(all_rows)
-            logger.info(f"[AMZ-BG] {len(all_rows)} filas guardadas en order_history")
+            logger.info(f"[AMZ-BG] {len(all_rows)} filas guardadas en order_history (Reports API)")
         _amz_bg_last_run = _time.time()
 
     except Exception as _amz_bg_err:
@@ -20510,6 +20567,59 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
         "recup_category": _recup_category(totals_avg_recup, target_pct=_RECOVERY_TARGET_OTHER),
     }
     return {"date": date, "totals": totals, "by_account": by_account}
+
+
+@app.post("/api/diag/amazon-orders-resync")
+async def diag_amazon_orders_resync(token: str = "", days: int = 3, wait: bool = False):
+    """Fuerza una corrida de _save_amazon_orders_bg (Reports API) sin esperar
+    el guard de 2h ni la ventana normal del loop de 1h -- para verificar el
+    fix de 2026-09-10 (ver DEVLOG) sin depender de sesión (mismo patrón que
+    /api/planning/sync-amazon, pero gateado con DIAG_TOKEN para poder probar
+    contra Railway con curl directo). Solo escribe en order_history (UPSERT,
+    idempotente) -- no toca listings/precios/stock de ninguna plataforma.
+
+    Por default (wait=False) es fire-and-forget, como /api/planning/sync-amazon
+    -- necesario para days grandes (backfill troceado en ventanas de 25 días
+    con 45s de espaciado entre ventanas de la misma cuenta, puede tardar
+    varios minutos y exceder el timeout del proxy de Railway si se espera la
+    respuesta). wait=True solo para days chicos (1-3) donde cabe holgado en
+    un solo request -- usar /api/diag/amazon-orders-resync-status para
+    checar cuándo termina una corrida en background."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    global _amz_bg_running, _amz_bg_last_run
+    from app.services.token_store import get_all_amazon_accounts as _get_amz_accts
+    amazon_accounts = await _get_amz_accts()
+    if not amazon_accounts:
+        return JSONResponse({"error": "No hay cuentas Amazon configuradas"}, status_code=400)
+    _amz_bg_running = False
+    _amz_bg_last_run = 0.0
+    if wait:
+        await _save_amazon_orders_bg(days=days)
+        status = "completado"
+    else:
+        asyncio.create_task(_save_amazon_orders_bg(days=days))
+        status = "iniciado"
+    return {
+        "status": status,
+        "accounts": len(amazon_accounts),
+        "nicknames": [a.get("nickname", a["seller_id"]) for a in amazon_accounts],
+        "days": days,
+    }
+
+
+@app.get("/api/diag/amazon-orders-resync-status")
+async def diag_amazon_orders_resync_status(token: str = ""):
+    """Estado de la corrida en background disparada por
+    /api/diag/amazon-orders-resync (wait=False) -- para saber cuándo terminó
+    sin adivinar un tiempo fijo de espera."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return {
+        "running": _amz_bg_running,
+        "last_run_epoch": _amz_bg_last_run,
+        "last_run_ago_s": round(_time.time() - _amz_bg_last_run, 1) if _amz_bg_last_run else None,
+    }
 
 
 @app.post("/api/diag/bulk-sku-lookup")

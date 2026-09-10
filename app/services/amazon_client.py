@@ -1353,6 +1353,100 @@ class AmazonClient:
         logger.warning(f"[Amazon Reports] Timeout esperando reporte de reembolsos {report_id} ({max_wait_secs}s)")
         return []
 
+    async def get_orders_report(self, date_from: str, date_to: str, max_wait_secs: int = 300) -> list:
+        """
+        Reporte GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL — reemplaza a
+        getOrders() (lista paginada) + get_order_items() por-orden como fuente
+        de order_history (ver DEVLOG 2026-09-10, diagnóstico "order_history
+        subestima ventas Amazon reales").
+
+        getOrders() (lista) tiene un bug de confiabilidad YA documentado en
+        este archivo (ver get_order(), nota 2026-08-18/19: orden VECKTOR
+        702-3480491-5024235 confirmada Unshipped vía getOrder puntual, pero
+        NUNCA devuelta por getOrders con la misma ventana de fecha/status).
+        Confirmado en vivo 2026-09-10 que el problema es mucho más severo de
+        lo que ese incidente sugería: VECKTOR devolvió 0 órdenes vía
+        getOrders() en una ventana de 48h que, según ESTE reporte, tenía 278
+        órdenes reales. Este reporte lo genera Amazon desde su propio
+        almacén de datos (no una consulta en vivo paginada) — no comparte
+        ese bug, y además trae orden+items en una sola descarga, eliminando
+        también la necesidad de un `get_order_items()` por orden (con su
+        Semaphore(1) y su riesgo de 429 bajo volumen alto).
+
+        Columnas confirmadas en vivo 2026-09-10 (VECKTOR, 3 y 30 días):
+        amazon-order-id, merchant-order-id, purchase-date, last-updated-date,
+        order-status (valores vistos: Shipped/Pending/Cancelled — OJO: usa
+        "Cancelled" con doble L, IGUAL que el filtro ya existente en
+        _save_amazon_orders_bg, a diferencia de otros endpoints de SP-API que
+        usan "Canceled"), fulfillment-channel, sales-channel, product-name,
+        sku, asin, item-status, quantity, currency, item-price, item-tax,
+        shipping-price, ship-city, ship-state, ship-postal-code, ship-country,
+        order-item-id, entre otras (34 columnas totales). NO incluye datos
+        de comprador (buyer-name/email) — ese dato requiere RDT, igual que
+        antes (ver DEVLOG "Amazon RDT pendiente").
+
+        Args:
+            date_from/date_to: "YYYY-MM-DD" (rango de purchase-date, inclusive).
+                                Probado en vivo hasta 30 días en una sola
+                                llamada sin error — para rangos más largos,
+                                encadenar llamadas (ver _save_amazon_orders_bg,
+                                que trocea en ventanas de 25 días por
+                                seguridad, con margen bajo ese límite probado).
+            max_wait_secs: tiempo máximo esperando que el reporte pase a DONE.
+                           300s por default -- reportes de 30 días con miles
+                           de filas pueden tardar más que los reportes de
+                           inventario (que usan 120s).
+
+        Returns:
+            Lista de dicts crudos (una fila por ITEM de orden — una orden
+            con 2 SKUs = 2 filas), con las columnas del TSV tal cual las
+            entrega Amazon (sin normalizar) — el caller decide qué mapear.
+
+        Rate limit de creación de reportes: igual que los demás reportes de
+        este archivo (~1 por 45s) — ver _save_amazon_orders_bg para el
+        espaciado entre ventanas troceadas de la MISMA cuenta.
+        """
+        import csv, io as _io
+
+        body = {
+            "reportType": "GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL",
+            "marketplaceIds": [self.marketplace_id],
+            "dataStartTime": f"{date_from}T00:00:00Z",
+            "dataEndTime": f"{date_to}T23:59:59Z",
+        }
+        logger.info(f"[Amazon Reports] Creando reporte de órdenes {date_from}→{date_to} para {self.seller_id}…")
+        result = await self._request("POST", "/reports/2021-06-30/reports", json_body=body)
+        report_id = result.get("reportId", "")
+        if not report_id:
+            raise ValueError(f"Amazon no devolvió reportId: {result}")
+
+        wait_interval = 10
+        attempts = max(6, max_wait_secs // wait_interval)
+
+        for attempt in range(attempts):
+            await asyncio.sleep(wait_interval)
+            status_data = await self.get_report_status(report_id)
+            proc_status = status_data.get("processingStatus", "")
+            logger.debug(f"[Amazon Reports] orders {report_id} → {proc_status} (intento {attempt+1}/{attempts})")
+
+            if proc_status == "DONE":
+                doc_id = status_data.get("reportDocumentId", "")
+                if not doc_id:
+                    raise ValueError("DONE pero sin reportDocumentId")
+                doc_info = await self.get_report_document_url(doc_id)
+                url = doc_info.get("url", "")
+                compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
+                content = await self.download_report_document(url, compressed)
+                reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                rows = list(reader)
+                logger.info(f"[Amazon Reports] {len(rows)} filas de órdenes para {self.seller_id} ({date_from}→{date_to})")
+                return rows
+
+            elif proc_status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
+
+        raise TimeoutError(f"Timeout esperando reporte de órdenes {report_id} ({max_wait_secs}s)")
+
     async def get_seller_feedback_report(self, date_from: str, date_to: str, max_wait_secs: int = 180) -> list:
         """
         Reporte GET_SELLER_FEEDBACK_DATA — calificación del comprador AL VENDEDOR
