@@ -24,23 +24,30 @@ MM_TEAM_NAME = os.getenv("MM_TEAM_NAME", "mi-technologies")
 _channel_id_cache: dict[str, str] = {}
 
 
+_last_error: dict = {}
+
+
 async def get_channel_id(channel_name: str, team_name: str = "") -> str:
     """Resuelve un nombre de canal (ej. 'requerimientos-dashboard') a su channel_id
     real de Mattermost. Cachea en memoria (los channel_id no cambian) para no
     pegarle a la API en cada mensaje. Retorna "" si no está configurado o falla
-    -- nunca lanza."""
-    if not (MM_URL and MM_DASHBOARD_BOT_TOKEN):
+    -- nunca lanza. Guarda el detalle del último error en _last_error (debug)."""
+    global _last_error
+    if not MM_URL:
+        _last_error = {"step": "config", "detail": "MM_URL vacío"}
+        return ""
+    if not MM_DASHBOARD_BOT_TOKEN:
+        _last_error = {"step": "config", "detail": "MM_DASHBOARD_BOT_TOKEN/MM_BOT_TOKEN vacío"}
         return ""
     if channel_name in _channel_id_cache:
         return _channel_id_cache[channel_name]
     team = team_name or MM_TEAM_NAME
+    url = f"{MM_URL}/api/v4/teams/name/{team}/channels/name/{channel_name}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"{MM_URL}/api/v4/teams/name/{team}/channels/name/{channel_name}",
-                headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"},
-            )
+            r = await client.get(url, headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"})
             if r.status_code != 200:
+                _last_error = {"step": "get_channel_id", "url": url, "status": r.status_code, "body": r.text[:300]}
                 logger.warning(f"[MattermostBot] get_channel_id({channel_name}) -> {r.status_code}: {r.text[:200]}")
                 return ""
             channel_id = r.json().get("id", "")
@@ -48,6 +55,7 @@ async def get_channel_id(channel_name: str, team_name: str = "") -> str:
                 _channel_id_cache[channel_name] = channel_id
             return channel_id
     except Exception as e:
+        _last_error = {"step": "get_channel_id", "url": url, "exception": str(e)}
         logger.warning(f"[MattermostBot] Error resolviendo channel_id de {channel_name}: {e}")
         return ""
 
@@ -61,6 +69,7 @@ async def post_message(channel_name: str, text: str, root_id: str = "") -> dict:
     if not (MM_URL and MM_DASHBOARD_BOT_TOKEN):
         logger.info(f"[MattermostBot] MM_URL/token no configurado -- mensaje no enviado: {text[:120]}")
         return {}
+    global _last_error
     channel_id = await get_channel_id(channel_name)
     if not channel_id:
         logger.warning(f"[MattermostBot] No se pudo resolver channel_id de {channel_name}")
@@ -76,9 +85,16 @@ async def post_message(channel_name: str, text: str, root_id: str = "") -> dict:
                 json=payload,
             )
             if r.status_code not in (200, 201):
+                _last_error = {"step": "post_message", "status": r.status_code, "body": r.text[:300]}
                 logger.warning(f"[MattermostBot] post_message -> {r.status_code}: {r.text[:200]}")
                 return {}
             return r.json()
     except Exception as e:
+        _last_error = {"step": "post_message", "exception": str(e)}
         logger.warning(f"[MattermostBot] Error posteando a {channel_name}: {e}")
         return {}
+
+
+def get_last_error() -> dict:
+    """Debug: detalle del último fallo de get_channel_id/post_message."""
+    return _last_error

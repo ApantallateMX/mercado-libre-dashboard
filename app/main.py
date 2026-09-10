@@ -20500,10 +20500,10 @@ async def diag_mattermost_post(channel: str = "", message: str = "", root_id: st
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not channel or not message:
         return JSONResponse({"error": "channel y message requeridos"}, status_code=400)
-    from app.services.mattermost_bot import post_message as _mm_post
+    from app.services.mattermost_bot import post_message as _mm_post, get_last_error as _mm_last_error
     result = await _mm_post(channel, message, root_id=root_id)
     if not result:
-        return JSONResponse({"error": "no se pudo publicar (ver logs: bot no configurado, canal no encontrado, o error de Mattermost)"}, status_code=502)
+        return JSONResponse({"error": "no se pudo publicar", "detail": _mm_last_error()}, status_code=502)
     return result
 
 
