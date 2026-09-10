@@ -7,6 +7,63 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FIX DE RAÍZ: order_history de Amazon reconstruido sobre Reports API (Ruta B completa) -- backfill de 90 días ejecutado, verificado contra Sales API real
+
+### Contexto
+Continuación del diagnóstico de hoy (ver entrada de abajo, "order_history subestima ventas Amazon reales"). Jovan, vía el coordinador: *"No quiero parches quiero soluciones finales"* -- autorizó la Ruta B completa: reemplazar el pipeline getOrders()+get_order_items() por Reports API como única fuente de order_history para Amazon, backfill si es razonable, y verificación con números reales antes de cerrar.
+
+### Fix implementado (3 partes, cada una encontrada y corregida verificando contra datos reales, no asumiendo)
+
+1. **`amazon_client.py`: nuevo `get_orders_report()`** -- usa `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL` (mismo mecanismo de Reports API ya usado para el backfill de ExclusiveBulbs). Trae orden+items en una sola descarga, sin llamadas por-orden ni el `Semaphore(1)` que antes serializaba `get_order_items()`.
+
+2. **`main.py`: `_save_amazon_orders_bg()` reescrito** para depender EXCLUSIVAMENTE de este reporte -- ya no compite con getOrders()+get_order_items() (un solo escritor confiable, mismo principio ya aplicado hoy a ganancia_neta/margen_pct). Trocea rangos largos en ventanas de 25 días con 45s de espaciado entre ventanas de la misma cuenta.
+
+3. **Dos bugs encontrados y corregidos DURANTE la verificación en vivo** (no se hubieran visto sin probar contra producción real):
+   - **Exclusión de "Pending" heredada sin querer** del filtro viejo de getOrders() -- Amazon SÍ cuenta Pending (no cancelado) como "Ordered Product Sales". Confirmado con `/api/diag/amazon-orders-report-raw` (nuevo, dump crudo del reporte): AUTOBOT 2026-09-09 tenía 66 Shipped + 38 Pending sin cancelar = 104 órdenes reales, pero el fix v1 solo contaba las 66 Shipped. Corregido: solo se excluye Cancelled/Canceled.
+   - **Bucketing de fecha en UTC crudo** en vez de Pacific (la misma zona que usa la Sales API de Amazon para "getOrderMetrics", ya documentado en este archivo). Medianoche UTC cae ~18:00 hora Ciudad de México -- justo en medio de las horas de más compra -- así que partía un día real de México en dos fechas de `order_history`, con swings de hasta +/-80% en revenue por día contra la referencia real. Nueva `_amz_purchase_date_to_pacific_day()` corrige esto.
+
+### Herramientas de diagnóstico nuevas (todas `DIAG_TOKEN`, solo lectura salvo donde se indica)
+- `GET /api/diag/amazon-sales-api-reference` -- referencia real (Sales API `getOrderMetrics`, el mismo cálculo del widget "Meta Diaria de Ventas Amazon"), por cuenta y día, sin necesitar sesión.
+- `GET /api/diag/amazon-orders-report-raw` -- dump crudo del reporte, con desglose de status y detección de pares (order_id, asin) duplicados dentro del mismo día.
+- `POST /api/diag/amazon-orders-resync` + `GET .../amazon-orders-resync-status` -- fuerza y monitorea una corrida sin esperar el guard de 2h.
+- `POST /api/diag/amazon-orders-report-reset` (requiere `confirm=si`) -- borra filas de `order_history` para Amazon (`scope=report_only` o `scope=all_amazon`); necesario porque `upsert_order_history` NO actualiza `data_source`/`order_date` en un UPDATE si la fila entrante no es `'real'` -- una fila vieja del pipeline viejo se hubiera quedado contaminada para siempre aunque el pipeline nuevo la reescribiera.
+
+### Backfill ejecutado
+`scope=all_amazon` borró **19,845 filas** viejas de `order_history` (platform='amazon', acumuladas desde julio con el pipeline getOrders(), con order_date en UTC crudo y sin incluir Pending) -- confirmado que NO tocó ninguna fila `platform='ml'`. Backfill limpio de 90 días ejecutado con el pipeline nuevo (3 cuentas en paralelo, ~4.5 minutos totales). `supplier_debt_ledger` no se tocó directamente (tabla distinta) -- su propio `ON CONFLICT` solo rellena campos si `amount_mxn=0`, nunca sobreescribe deuda ya calculada, así que el backfill solo puede completar huecos, no duplicar ni borrar deuda real.
+
+### Verificación con números reales (order_history vs Sales API, post-fix completo)
+
+**Día ya cerrado, sin más cambios de estado (2026-08-28, 13 días de antigüedad al momento de verificar) -- la comparación más confiable, sin el ruido de órdenes Pending todavía resolviéndose:**
+
+| Cuenta | order_history (órdenes/líneas) | Sales API real (órdenes) | order_history revenue | Sales API revenue | Diferencia revenue |
+|---|---|---|---|---|---|
+| VECKTOR IMPORTS | 50 | 50 | $173,514.64 MXN | $193,288.82 MXN | -10.2% |
+| AUTOBOT AMZ MX | 51 | 48 | $118,186.53 MXN | $118,431.46 MXN | **-0.2%** |
+| ExclusiveBulbs | 86 | 86 | $21,373.76 USD | $15,005.55 USD | +42.4% (pendiente, ver abajo) |
+
+**Día que originó el reclamo de Jovan (2026-09-09, AUTOBOT -- la fila exacta de la captura de pantalla, 105 órdenes/$366,122.35):**
+
+| Fuente | Órdenes | Revenue |
+|---|---|---|
+| order_history ANTES del fix (hoy, inicio de sesión) | 38 | $77,358.10 MXN |
+| order_history DESPUÉS del fix (Reports API + Pending + Pacific) | 104-109* | $363,255-$504,496* MXN |
+| Sales API real (verdad, mismo cálculo del widget) | 105 | $365,941.36 MXN |
+
+\* El conteo/revenue de AUTOBOT para 09-09 específicamente sigue fluctuando varios puntos porcentuales entre corridas porque, al momento de verificar (2026-09-10, mismo día siguiente), una fracción real de esas órdenes seguía en Pending sin resolver (pagos MX de confirmación lenta, OXXO/SPEI) -- cada vez que se regenera el reporte, Amazon devuelve un snapshot de status distinto (más o menos ya canceladas/enviadas). Es ruido real del lado de Amazon, no un bug del pipeline -- por eso la comparación de la tabla de arriba (día ya cerrado) es la que hay que tomar como representativa de la calidad real del fix.
+
+### Pendiente, NO resuelto en este fix (reportado, no oculto)
+**ExclusiveBulbs muestra un revenue consistentemente ~40-90% MÁS ALTO en order_history que en Sales API**, incluso en días ya cerrados y con conteo de órdenes EXACTO (86=86). Verificado que no es un problema de FX (comparación hecha en USD nativo de ambos lados, sin conversión). Causa no confirmada aún -- candidatos: `item-price` del flat-file podría incluir un componente (impuesto/promoción) que "Ordered Product Sales" de Sales API excluye para el marketplace US, o alguna diferencia de definición específica de ese reporte para USA vs MX. Requiere una sesión de investigación aparte enfocada solo en ExclusiveBulbs -- no se investigó a fondo aquí para no exceder el alcance ya grande de este fix. `/api/diag/amazon-orders-report-raw` (con `duplicate_order_asin_pairs`) y `/api/diag/amazon-sales-api-reference` ya están listos para esa investigación futura.
+
+### Decisión: NO se migró a Ruta A en los 2 endpoints de reporte
+`/api/diag/daily-sales-by-account` y `/api/diag/sku-sales-profit` siguen leyendo `order_history` (no se migraron a Sales API en vivo). Con `order_history` ya confiable (Reports API, un solo escritor, verificado contra la fuente real), agregar una segunda fuente en paralelo (Sales API) para el mismo dato violaría el mismo principio de "un solo escritor/una sola fuente" que motivó todo este fix -- sería una redundancia que puede desalinearse con el tiempo, no una mejora. Sales API SÍ queda disponible como herramienta de verificación puntual (`/api/diag/amazon-sales-api-reference`), no como fuente de reportes del día a día.
+
+### Riesgos aceptados y documentados
+- Trade-off de BuyerInfo (feature "Oportunidades Mayoreo" pierde `buyer_nickname` para Amazon en filas nuevas -- el reporte no lo trae sin RDT, que ya estaba pendiente antes de este fix).
+- La reversa de `supplier_debt_ledger` por cancelación sigue sin dispararse para Amazon (las filas Cancelled nunca llegan a `upsert_order_history`, mismo comportamiento que el pipeline viejo -- no es una regresión de este fix, es una limitación preexistente que queda documentada para atenderse aparte).
+- Rate limit de creación de reportes (~1/45s) respetado con espaciado explícito entre ventanas troceadas de una misma cuenta; cuentas distintas corren en paralelo sin conflicto (el límite de SP-API es por seller).
+
+---
+
 ## 2026-09-10 — OPERACION: intento de Outgoing Webhook para "enterado" instantáneo en #requerimientos-dashboard — BLOQUEADO por permisos
 
 ### Contexto
