@@ -20687,15 +20687,38 @@ async def diag_amazon_orders_report_raw(token: str = "", seller_id: str = "", da
         "status_breakdown": dict(status_counts),
     }
     if filter_date:
-        day_rows = [r for r in rows if (r.get("purchase-date") or "")[:10] == filter_date]
+        # Pacific-day (misma convención que order_date en order_history desde el
+        # fix de timezone) -- antes este filtro usaba UTC crudo, lo que comparaba
+        # dos ventanas de fecha distintas sin darse cuenta.
+        day_rows = [r for r in rows if _amz_purchase_date_to_pacific_day(r.get("purchase-date") or "") == filter_date]
         day_order_ids = set(r.get("amazon-order-id") for r in day_rows if r.get("amazon-order-id"))
-        active_day_rows = [r for r in day_rows if (r.get("order-status") or "") not in ("Cancelled", "Pending", "Canceled")]
+        active_day_rows = [r for r in day_rows if (r.get("order-status") or "") not in ("Cancelled", "Canceled")]
         active_day_order_ids = set(r.get("amazon-order-id") for r in active_day_rows if r.get("amazon-order-id"))
+        def _price(r):
+            try:
+                return float(r.get("item-price") or 0) * float(r.get("quantity") or 0)
+            except (ValueError, TypeError):
+                return 0.0
         result["filter_date"] = filter_date
         result["day_item_rows_all_statuses"] = len(day_rows)
         result["day_unique_orders_all_statuses"] = len(day_order_ids)
-        result["day_unique_orders_non_cancelled_non_pending"] = len(active_day_order_ids)
+        result["day_unique_orders_non_cancelled"] = len(active_day_order_ids)
+        result["day_item_rows_non_cancelled"] = len(active_day_rows)
+        result["day_revenue_non_cancelled"] = round(sum(_price(r) for r in active_day_rows), 2)
         result["day_status_breakdown"] = dict(Counter((r.get("order-status") or "") for r in day_rows))
+        # Duplicados reales: mismo order_id + mismo asin apareciendo mas de una
+        # vez en el dia -- si upsert_order_history los pisa (misma key), no
+        # deberian inflar nada, pero si el reporte mismo trae duplicados con
+        # PRECIOS DISTINTOS en cada aparicion, la ultima gana y puede no ser la
+        # correcta.
+        _seen = Counter((r.get("amazon-order-id"), r.get("asin")) for r in active_day_rows)
+        dupes = {k: v for k, v in _seen.items() if v > 1}
+        result["duplicate_order_asin_pairs"] = len(dupes)
+        result["duplicate_sample"] = [
+            {"order_id": k[0], "asin": k[1], "count": v,
+             "rows": [r for r in active_day_rows if r.get("amazon-order-id") == k[0] and r.get("asin") == k[1]]}
+            for k, v in list(dupes.items())[:3]
+        ]
         result["sample_rows"] = day_rows[:3]
     return result
 
