@@ -3545,7 +3545,20 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                         continue
                     for row in report_rows:
                         status = (row.get("order-status") or "").strip()
-                        if status in ("Cancelled", "Pending", "Canceled"):
+                        # Solo se excluye Cancelled -- verificado en vivo 2026-09-10
+                        # (AUTOBOT, /api/diag/amazon-orders-report-raw): excluir
+                        # también "Pending" (heredado sin querer del filtro viejo de
+                        # getOrders(), donde Pending se pedía aparte y no se
+                        # mezclaba) explicaba casi TODA la brecha restante contra
+                        # Sales API para cuentas con pagos MX de confirmación lenta
+                        # (OXXO/SPEI) -- AUTOBOT 2026-09-09: 66 Shipped vs 105
+                        # órdenes reales en Sales API, con 38 Pending sin cancelar
+                        # de por medio (66+38=104 ≈ 105). Amazon SÍ cuenta Pending
+                        # como "Ordered Product Sales" mientras no se cancele -- si
+                        # una Pending se cancela después, el próximo resync (mismo
+                        # order_id/item_id, ventana rodante de 3 días) la vuelve a
+                        # traer con status=Cancelled y SÍ se excluye entonces.
+                        if status in ("Cancelled", "Canceled"):
                             continue
                         order_id = (row.get("amazon-order-id") or "").strip()
                         order_date = (row.get("purchase-date") or "")[:10]
