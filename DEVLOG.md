@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — OPERACION: intento de Outgoing Webhook para "enterado" instantáneo en #requerimientos-dashboard — BLOQUEADO por permisos
+
+### Contexto
+Pedido urgente de Jovan (varias veces en el día): que el bot responda AL INSTANTE cuando alguien publique en `#requerimientos-dashboard` -- no esperar la rutina automática de 1h ni una revisión manual. Mecanismo elegido: Outgoing Webhook de Mattermost (push HTTP apenas se publica un mensaje), reusando el bot `@ecomops-agent` ya configurado (`app/services/mattermost_bot.py`, `MM_URL`/`MM_BOT_TOKEN` ya en Railway).
+
+### Intento y resultado real (probado contra la API real, no local)
+Se resolvió `team_id` (`mi-technologies` → `8n3yn8efyf868qwhjdmkfbwdsy`) y `channel_id` (`requerimientos-dashboard` → `qeuw3n6j8jneufzue7z3hg8hwa`) vía la API real de Mattermost, y se intentó `POST {MM_URL}/api/v4/hooks/outgoing` con el payload que pidió Jovan (`trigger_words: []`, `trigger_when: 1`, `call_back_urls` apuntando a `/api/webhooks/mattermost-enterado`, `content_type: application/json`).
+
+**Resultado: HTTP 403** — `{"id":"api.context.permissions.app_error","message":"No tienes los permisos apropiados."}`.
+
+Se verificaron los roles reales del bot (`GET /users/me`, `/teams/{id}/members/{id}`, `/channels/{id}/members/{id}`): `@ecomops-agent` es `system_user` / `team_user` / `channel_user` en los 3 niveles, sin `scheme_admin` en ninguno. Crear un Outgoing Webhook requiere el permiso `manage_outgoing_webhooks`, que Mattermost solo otorga por default a Team Admin o System Admin -- no a un miembro normal, aunque sea cuenta de bot. No se pudo verificar aparte si además el flag de sistema "Enable Outgoing Webhooks" está activo (esa consulta también exige permiso de admin, mismo 403) -- puede haber una segunda barrera detrás de esta, ya resuelta la primera.
+
+No se creó ningún webhook (falló antes de persistir nada -- nada que limpiar). No se tocó código de producción ni se construyó el endpoint receptor `/api/webhooks/mattermost-enterado` -- regla explícita del pedido: no tiene caso construirlo sin el webhook real funcionando.
+
+### Qué se necesita y a quién pedírselo
+Alguien con rol **Team Admin de "MI Technologies"** (o System Admin) en Mattermost necesita UNA de estas dos:
+1. Otorgar temporalmente el rol Team Admin a `@ecomops-agent` en el team `mi-technologies` (permite repetir este mismo POST con el bot, sin más cambios de código), o
+2. Crear el webhook ellos mismos (System Console → Integrations → Outgoing Webhooks, o el menú de integraciones del canal si son admin ahí) con:
+   - Canal: `requerimientos-dashboard` (team `mi-technologies`)
+   - Callback URL: `https://apantallatemx.up.railway.app/api/webhooks/mattermost-enterado`
+   - Trigger: sin trigger words, para que dispare en cualquier mensaje del canal -- sin confirmar si Mattermost acepta `trigger_words` vacío o exige otra configuración (no se pudo probar, bloqueado por el mismo 403)
+   - Content type: `application/json`
+   - Y devolvernos el `token`/`id` que Mattermost genera al crearlo.
+
+Solicitud enviada a `#support-mattermost-manager` (mismo canal usado hoy para otras gestiones de Mattermost). En cuanto llegue el `token` del webhook: el endpoint receptor ya está diseñado (valida `token` contra env var nueva `MM_WEBHOOK_TOKEN_REQUERIMIENTOS`, ignora el evento si `user_name == "ecomops-agent"` -- blindaje contra loop infinito -- y responde con `mattermost_bot.post_message(..., root_id=post_id)` un "Enterado, lo estamos revisando.") -- ~15 min de trabajo una vez desbloqueado.
+
+### Riesgo evitado (a propósito, no por omisión)
+No se otorgó admin al bot sin confirmar con Jovan/infra primero (un Team Admin puede modificar canales/miembros de todo el team, no solo crear este webhook -- alcance mucho más amplio que lo que se necesita). No se construyó el endpoint receptor sin webhook real (quedaría código sin forma de probarse, y sin token real que validar). Ninguna variable de entorno nueva se agregó todavía en Railway -- `MM_WEBHOOK_TOKEN_REQUERIMIENTOS` solo se necesitará cuando el webhook exista de verdad.
+
+---
+
 ## 2026-09-10 — FIX: colisión de rutas pre-existente bloqueaba /api/orders/export.csv, /api/orders/period-stats y /api/orders/platform-comparison (500 siempre)
 
 ### Contexto
