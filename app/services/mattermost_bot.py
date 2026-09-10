@@ -98,3 +98,61 @@ async def post_message(channel_name: str, text: str, root_id: str = "") -> dict:
 def get_last_error() -> dict:
     """Debug: detalle del último fallo de get_channel_id/post_message."""
     return _last_error
+
+
+async def get_channel_posts(channel_name: str, limit: int = 20) -> list:
+    """Trae los últimos posts REALES de un canal (con "id" real de Mattermost,
+    a diferencia del MCP que solo da texto/autor sin id usable como root_id).
+    Necesario para poder resolver a qué post_id responder en hilo cuando el
+    mensaje original no vino de una respuesta nuestra (ej. Jovan inicia la
+    conversación). Retorna lista de {id, user_id, message, create_at,
+    root_id} ordenada más reciente primero, o [] si falla."""
+    global _last_error
+    if not (MM_URL and MM_DASHBOARD_BOT_TOKEN):
+        return []
+    channel_id = await get_channel_id(channel_name)
+    if not channel_id:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{MM_URL}/api/v4/channels/{channel_id}/posts",
+                headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"},
+                params={"per_page": limit},
+            )
+            if r.status_code != 200:
+                _last_error = {"step": "get_channel_posts", "status": r.status_code, "body": r.text[:300]}
+                return []
+            data = r.json()
+            order = data.get("order") or []
+            posts = data.get("posts") or {}
+            return [
+                {
+                    "id": pid,
+                    "user_id": posts[pid].get("user_id"),
+                    "message": posts[pid].get("message"),
+                    "create_at": posts[pid].get("create_at"),
+                    "root_id": posts[pid].get("root_id"),
+                }
+                for pid in order if pid in posts
+            ]
+    except Exception as e:
+        _last_error = {"step": "get_channel_posts", "exception": str(e)}
+        return []
+
+
+async def get_username(user_id: str) -> str:
+    """Resuelve un user_id de Mattermost a su username real."""
+    if not (MM_URL and MM_DASHBOARD_BOT_TOKEN and user_id):
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{MM_URL}/api/v4/users/{user_id}",
+                headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"},
+            )
+            if r.status_code != 200:
+                return ""
+            return r.json().get("username", "")
+    except Exception:
+        return ""

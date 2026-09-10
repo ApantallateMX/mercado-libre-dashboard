@@ -17,6 +17,9 @@ Nuevo `app/services/mattermost_bot.py` -- cliente directo a la API real de Matte
 
 Nuevo endpoint `/api/diag/mattermost-post` (POST, gateado con `DIAG_TOKEN` igual que otros diag de escritura) para poder publicar/responder en hilo desde fuera de la app (sesión de Claude, futuras rutinas).
 
+### Ampliación (mismo día) — `get_channel_posts`/`get_username` + `/api/diag/mattermost-posts`
+El MCP compartido no da el `id` real de un post (necesario como `root_id` para responder en hilo) cuando la conversación la inicia otra persona (no una respuesta nuestra) -- solo da texto+autor con un ID interno feo sin utilidad como `root_id`. Se agregó lectura directa de la API real (`GET /api/v4/channels/{id}/posts`) para traer `id`/`user_id`/`message` reales, más `get_username()` para resolver `user_id` → username real, expuesto en `/api/diag/mattermost-posts` (solo lectura).
+
 ### Verificación
 `py_compile` limpio. Verificado en vivo contra producción: primer intento falló 403 "No tienes los permisos apropiados" -- causa real: `@ecomops-agent` no era miembro de `#requerimientos-dashboard` (agregar el bot al env no basta, Mattermost exige membresía del canal igual que a un usuario). Jovan agregó el bot al canal; reintentado y confirmado: publica con `"props":{"from_bot":"true"}` (identidad propia, no de un usuario) y con `root_id` real queda anidado como hilo verdadero (`reply_count` sube en el post original). Mensajes de prueba quedaron en el canal real, marcados explícitamente como ignorar.
 

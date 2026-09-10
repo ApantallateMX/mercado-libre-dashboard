@@ -20507,6 +20507,29 @@ async def diag_mattermost_post(channel: str = "", message: str = "", root_id: st
     return result
 
 
+@app.get("/api/diag/mattermost-posts")
+async def diag_mattermost_posts(channel: str = "", limit: int = 20, token: str = ""):
+    """FEATURE 2026-09-10: lee los ultimos posts REALES de un canal (con "id"
+    real y "user_id" resuelto a username) -- resuelve el problema de que el
+    MCP compartido solo da texto/autor sin id usable como root_id. Solo
+    lectura."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not channel:
+        return JSONResponse({"error": "channel requerido"}, status_code=400)
+    from app.services.mattermost_bot import get_channel_posts as _mm_posts, get_username as _mm_username, get_last_error as _mm_last_error
+    posts = await _mm_posts(channel, limit=limit)
+    if not posts and _mm_last_error():
+        return JSONResponse({"error": "no se pudo leer", "detail": _mm_last_error()}, status_code=502)
+    seen_users: dict = {}
+    for p in posts:
+        uid = p.get("user_id")
+        if uid and uid not in seen_users:
+            seen_users[uid] = await _mm_username(uid)
+        p["username"] = seen_users.get(uid, "")
+    return {"posts": posts}
+
+
 @app.post("/api/diag/amazon-bulk-delete-by-keyword")
 async def diag_amazon_bulk_delete_by_keyword(
     seller_id: str = "", keywords: str = "", statuses: str = "INACTIVE,INCOMPLETE",
