@@ -18,7 +18,7 @@ Nuevo `app/services/mattermost_bot.py` -- cliente directo a la API real de Matte
 Nuevo endpoint `/api/diag/mattermost-post` (POST, gateado con `DIAG_TOKEN` igual que otros diag de escritura) para poder publicar/responder en hilo desde fuera de la app (sesión de Claude, futuras rutinas).
 
 ### Verificación
-`py_compile` limpio. Servidor local levantado sin errores. No se pudo probar contra Mattermost real en local (`MM_URL`/`MM_BOT_TOKEN` solo existen en Railway) -- pendiente de verificar contra producción tras el deploy.
+`py_compile` limpio. Verificado en vivo contra producción: primer intento falló 403 "No tienes los permisos apropiados" -- causa real: `@ecomops-agent` no era miembro de `#requerimientos-dashboard` (agregar el bot al env no basta, Mattermost exige membresía del canal igual que a un usuario). Jovan agregó el bot al canal; reintentado y confirmado: publica con `"props":{"from_bot":"true"}` (identidad propia, no de un usuario) y con `root_id` real queda anidado como hilo verdadero (`reply_count` sube en el post original). Mensajes de prueba quedaron en el canal real, marcados explícitamente como ignorar.
 
 ---
 
