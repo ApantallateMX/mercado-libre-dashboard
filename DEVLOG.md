@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FIX DE RAÍZ: ganancia_neta/margen_pct en order_history seguían contra costo_mxn (AvgCost BM, no confiable) -- reemplazado por neto_plat + recup_retail_pct en todos lados
+
+### Contexto
+Jovan preguntó "¿cómo estás calculando la ganancia neta si no tenemos costos?" al ver un reporte de "ganancia neta de ayer por cuenta" ($274,986 MXN) armado con `/api/diag/daily-sales-by-account`. Regla de negocio ya establecida el 2026-08-13 (reconfirmada hoy con SNTV007410): `AvgCost`/`cost_usd` de BinManager NO es costo real confiable -- nunca calcular "ganancia/pérdida real" contra ese costo, siempre contra % de retail recuperado (`recup_retail_pct`). Ese fix de agosto solo se aplicó a la vista de Deals; quedó sin aplicar en la tabla `order_history` (historial real de órdenes) y en varios reportes que la consumen.
+
+### Bug encontrado (más amplio de lo reportado inicialmente)
+**Sitios que escribían el dato contaminado:**
+- `app/main.py` `_save_ml_orders_history_bg()` (~línea 2255) -- `ganancia = neto_plat*(1-comisión) - costo_mxn`.
+- `app/api/amazon_orders.py` `_save_amazon_items_history_bg()` (~línea 26) -- misma fórmula, se dispara al expandir el detalle de una orden Amazon en `/amazon/orders`. Dato nuevo: existe un TERCER sitio, `app/main.py` `_save_amazon_orders_bg()` (sync masivo cada 2h), que YA escribía `ganancia_neta=0.0` explícito -- dos caminos con criterio distinto poblando la misma tabla.
+
+**Sitios de decisión de negocio que aún preferían costo sobre recuperación de retail** (violaban la regla del 13-ago dentro de la propia pestaña Deals, que en apariencia ya estaba arreglada):
+- `_check_deal_negative_margin()` (~línea 14501): guardrail que evalúa si un precio de deal nuevo pierde dinero -- prefería `_ganancia_est` (costo BM) y solo caía a `_neto_ml_negative` si no había costo.
+- Motor de recomendaciones de Deals (~línea 10637 y 10689): score de oportunidad y criterio "vendiendo bien con buen margen" seguían usando `_margen_pct` (costo BM), mientras la alerta principal de "por debajo de meta de recuperación" ya usaba `_recup_retail_pct` desde agosto.
+
+**Reportes de solo lectura contaminados** (sumaban/promediaban `ganancia_neta`/`margen_pct`): dashboard `/api/orders/period-stats`, `/api/orders/export.csv`, `/api/orders/platform-comparison` + `/partials/platform-comparison`, `/api/diag/sku-sales-profit`, `/api/diag/daily-sales-by-account` (el mismo que originó la pregunta de Jovan), `/api/diag/order-sample`, y la agregación "Oportunidades Mayoreo" (`get_wholesale_candidates` en `token_store.py`, pintada en `orders.html`).
+
+### Fix
+1. Los 2 sitios de escritura ahora fijan `ganancia_neta=0.0`/`margen_pct=0.0` explícitos (mismo patrón ya usado en `_save_amazon_orders_bg`) -- `costo_mxn`/`costo_usd` se siguen guardando como snapshot informativo, pero ya no alimentan "ganancia". `recup_retail_pct` es el único indicador de salud de precio.
+2. `_check_deal_negative_margin()`: se quita la preferencia por `_ganancia_est`, único criterio ahora es `_neto_ml_negative`.
+3. Motor de recomendaciones de Deals: "margen disponible" (score) y "buen margen" (candidatos a deal) ahora usan `_recup_retail_pct` vs `_recup_target_pct` (60%/80% según categoría), igual criterio que el resto de Deals.
+4. Nuevo helper `_recup_category()` (junto a `_RECOVERY_TARGET_TV/_OTHER` en `app/main.py`): categoriza `recup_retail_pct` en 🟢 Excelente (≥100%) / 🟡 Bueno (≥ meta) / 🔴 Bajo objetivo (< meta) / ⚪ Sin dato. Diseño confirmado por Jovan: en los reportes, "ganancia_neta" se reemplaza por **neto_plat** (dinero real que entra, antes de costo de producto) + esta categoría, en vez de mostrar "$0" sin contexto.
+5. Los 6 reportes de sección C actualizados con ese mismo criterio (CSV re-etiquetado sin columnas Costo/Ganancia/Margen%, widget ML vs Amazon con "Recup. Retail" en vez de "Margen prom.", Oportunidades Mayoreo con `total_neto_plat` ponderado por línea + categoría ponderada por meta TV/otras según mezcla real de SKUs del comprador).
+6. Bug propio detectado al probar: promediar `avg_recup_pct` de varias cuentas/filas con `... or 0` convertía "sin dato" (None) en 0.0% -- que `_recup_category` lee como 🔴 -- exactamente el tipo de cero engañoso que este fix busca eliminar. Corregido en `daily-sales-by-account` y `sku-sales-profit`: se excluyen los `None` antes de promediar.
+
+### Verificación
+`py -m py_compile` limpio en los 3 archivos tocados. Servidor local levantado (`uvicorn --port 8004`); probado con curl + JWT de `make_jwt2.py`: `/partials/platform-comparison` (89.3% recup real, categoría 🟡, Amazon vacío maneja bien "Sin dato"), `/api/diag/daily-sales-by-account`, `/api/diag/sku-sales-profit`, `/api/diag/order-sample`, `/api/wholesale/opportunities` (end-to-end con datos reales de compradores). CSV export y `period-stats` no se pudieron probar vía HTTP -- ver bug separado abajo -- se validó su SQL y el loop de categorización directamente contra `tokens.db` real. Smoke-test de `_save_ml_orders_history_bg`/`_save_amazon_items_history_bg` con filas de prueba (limpiadas después): confirmado `ganancia_neta=0.0`, `margen_pct=0.0`, `neto_plat` calculado correctamente.
+
+### Hallazgo separado (NO tocado, reportado a Jovan): colisión de rutas pre-existente
+`/api/orders/export.csv`, `/api/orders/period-stats` y `/api/orders/platform-comparison` (JSON) devuelven 500 en cualquier ambiente: `app.include_router(orders_router)` (línea 1664, define `GET /api/orders/{order_id}`) se registra ANTES que estos `@app.get` literales definidos más abajo en `main.py`, así que Starlette los intercepta como si "export.csv"/"period-stats"/"platform-comparison" fueran un `order_id` y truena contra la API de ML (400 → 500 sin manejar). Confirmado con `git log`/`git diff` que es previo a esta sesión (no relacionado a este fix) -- probablemente explica por qué el banner de delta de periodo en Orders (`revenue_pct`/`neto_pct`) nunca se ve (el JS lo traga con `.catch(function(){})` silencioso). Pendiente de decisión de Jovan, no se tocó el orden de routers en este commit.
+
+### Pendiente de decisión: datos HISTÓRICOS de order_history
+NO se recalcularon filas ya existentes. `upsert_order_history()` sobreescribe `ganancia_neta`/`margen_pct` sin condición en cada UPSERT, así que las órdenes que vuelvan a tocar los loops normales (ML: ventana reciente re-fetcheada; Amazon: al abrir su detalle) se autocorrigen solas la próxima vez. Filas fuera de esa ventana se quedan con el valor viejo contaminado hasta un backfill explícito -- no se ejecutó ninguno, es una decisión de negocio (costo de recorrer toda la tabla) que Jovan debe aprobar aparte.
+
+### Fuera de alcance (mismo patrón de bug, explícitamente pospuesto por Jovan)
+`app/main.py` (~línea 13487, tab Ads Performance) clasifica anuncios `rentable`/`riesgo`/`quema_margen` comparando ACOS contra margen calculado con `_bm_cost_cache` (mismo AvgCost no confiable). No se tocó -- Jovan pidió atenderlo aparte.
+
+### Hallazgo adicional NO tocado (mayor alcance que todo lo anterior)
+Todo el tab Productos (`products_full.html`, `products_inventory.html`, `products_top_sellers.html`, `products_high_stock.html`, `products_stock_issues.html`) pinta `_margen_pct`/`_ganancia_est` -- el cálculo cost-based que sigue vivo dentro de `_calc_margins()` (líneas 217-258, en paralelo al correcto `_recup_retail_pct`). Es la superficie más grande de este mismo patrón de bug, fuera del alcance aprobado hoy (5 sitios + sección C). Reportado, no tocado.
+
+---
+
 ## 2026-09-10 — FIX DE RAÍZ: credenciales AUTOBOT (AMAZON2) ya usan su propia app, se quita el fallback a VECKTOR
 
 ### Contexto

@@ -495,7 +495,7 @@
                         <th class="text-right py-2.5 px-3">Órdenes</th>
                         <th class="text-right py-2.5 px-3">Piezas</th>
                         <th class="text-right py-2.5 px-3">Ingreso MXN</th>
-                        <th class="text-right py-2.5 px-3">Ganancia MXN</th>
+                        <th class="text-right py-2.5 px-3">Neto Plat. MXN</th>
                         <th class="text-left py-2.5 px-3">Top SKUs</th>
                         <th class="text-left py-2.5 px-3">Última compra</th>
                         <th class="text-center py-2.5 px-3">Acciones</th>
@@ -2670,17 +2670,24 @@ function _mayRowHtml(c, accountId) {
           topSkus + moreChip + '</td>'
         : '<td class="py-2.5 px-3 text-gray-300">—</td>';
 
+    // FIX 2026-09-10: total_ganancia_neta salia de un campo contaminado con
+    // costo_mxn/AvgCost de BM (no confiable, ver DEVLOG). Se muestra
+    // total_neto_plat (dinero real que entra, antes de costo de producto)
+    // + un badge de recup_category (🟢/🟡/🔴, mismo criterio que Deals).
     var revenue = (c.total_revenue_mxn || 0).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    var ganancia = c.total_ganancia_neta || 0;
-    var gananciaFmt = ganancia.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    var gananciaColor = ganancia < 0 ? 'text-red-600' : 'text-green-600';
+    var neto = c.total_neto_plat || 0;
+    var netoFmt = neto.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    var netoColor = neto < 0 ? 'text-red-600' : 'text-green-600';
+    var recupCat = c.recup_category || {emoji: '⚪', label: 'Sin dato'};
+    var recupTxt = (c.avg_recup_pct != null ? c.avg_recup_pct + '%' : 'Sin dato');
     return '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
         '<td class="py-2.5 px-4 font-medium text-gray-800">' + buyerLabel + '</td>' +
         '<td class="py-2.5 px-3 text-gray-600">' + _mayAccountNickname + '</td>' +
         '<td class="py-2.5 px-3 text-right">' + c.order_count + '</td>' +
         '<td class="py-2.5 px-3 text-right">' + c.total_qty + '</td>' +
         '<td class="py-2.5 px-3 text-right">$' + revenue + '</td>' +
-        '<td class="py-2.5 px-3 text-right ' + gananciaColor + ' font-semibold">$' + gananciaFmt + '</td>' +
+        '<td class="py-2.5 px-3 text-right ' + netoColor + ' font-semibold">$' + netoFmt +
+        '<div class="text-[10px] font-normal text-gray-400">' + recupCat.emoji + ' ' + recupTxt + ' retail (' + recupCat.label + ')</div></td>' +
         skusCellHtml +
         '<td class="py-2.5 px-3 text-gray-500">' + (c.last_order_date || '-') + '</td>' +
         '<td class="py-2.5 px-3 text-center whitespace-nowrap">' +

@@ -7102,13 +7102,37 @@ async def get_wholesale_candidates(account_id: str, platform: str = "ml", days: 
     sin RDT). Un comprador califica si tiene >= min_orders órdenes DISTINTAS en
     la ventana de `days`."""
     from datetime import datetime as _dt, timedelta as _td
+    # FIX 2026-09-10: total_ganancia_neta sumaba un campo contaminado con
+    # costo_mxn/AvgCost de BM (no confiable, ver DEVLOG). Reemplazado por
+    # total_neto_plat (dinero real que entra, antes de costo de producto) +
+    # avg_recup_pct/recup_category ponderados por ingreso de cada línea --
+    # un comprador mezcla SKUs con distinta meta (TV 80% / otras 60%), así
+    # que la meta efectiva también se pondera por ingreso en vez de asumir
+    # una sola. Import perezoso de app.main (evita import circular, mismo
+    # patrón ya usado en amazon_orders.py); si falla, cae a una versión
+    # local mínima -- nunca debe tumbar esta consulta de solo lectura.
+    try:
+        from app.main import _recup_category, _RECOVERY_TARGET_TV, _RECOVERY_TARGET_OTHER
+    except Exception:
+        _RECOVERY_TARGET_TV, _RECOVERY_TARGET_OTHER = 80.0, 60.0
+        def _recup_category(recup_pct, sku="", target_pct=None):
+            if recup_pct is None:
+                return {"emoji": "⚪", "label": "Sin dato", "color": "gray"}
+            target_pct = target_pct if target_pct is not None else _RECOVERY_TARGET_OTHER
+            if recup_pct >= 100:
+                return {"emoji": "🟢", "label": "Excelente", "color": "green"}
+            if recup_pct >= target_pct:
+                return {"emoji": "🟡", "label": "Bueno", "color": "yellow"}
+            return {"emoji": "🔴", "label": "Bajo objetivo", "color": "red"}
+
     cutoff = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         db.row_factory = aiosqlite.Row
         rows = await (await db.execute("""
             SELECT
                 CASE WHEN buyer_id != '' THEN buyer_id ELSE buyer_nickname END AS buyer_key,
-                buyer_nickname, order_id, sku, quantity, unit_price, ganancia_neta, order_date
+                buyer_nickname, order_id, sku, quantity, unit_price, neto_plat,
+                recup_retail_pct, order_date
             FROM order_history
             WHERE account_id = ? AND platform = ? AND order_date >= ?
               AND (buyer_id != '' OR buyer_nickname != '')
@@ -7120,12 +7144,20 @@ async def get_wholesale_candidates(account_id: str, platform: str = "ml", days: 
         b = buyers.setdefault(key, {
             "buyer_key": key, "buyer_nickname": r["buyer_nickname"] or "",
             "order_ids": set(), "total_qty": 0, "total_revenue_mxn": 0.0,
-            "total_ganancia_neta": 0.0, "last_order_date": "", "last_order_id": "", "skus": {},
+            "total_neto_plat": 0.0, "_recup_num": 0.0, "_recup_den": 0.0,
+            "_target_num": 0.0, "last_order_date": "", "last_order_id": "", "skus": {},
         })
+        line_revenue = (r["unit_price"] or 0) * (r["quantity"] or 0)
+        sku_upper = (r["sku"] or "").upper()
+        line_target = _RECOVERY_TARGET_TV if sku_upper.startswith("SNTV") else _RECOVERY_TARGET_OTHER
         b["order_ids"].add(r["order_id"])
         b["total_qty"] += r["quantity"] or 0
-        b["total_revenue_mxn"] += (r["unit_price"] or 0) * (r["quantity"] or 0)
-        b["total_ganancia_neta"] += r["ganancia_neta"] or 0
+        b["total_revenue_mxn"] += line_revenue
+        b["total_neto_plat"] += r["neto_plat"] or 0
+        b["_target_num"] += line_revenue * line_target
+        if r["recup_retail_pct"]:
+            b["_recup_num"] += line_revenue * r["recup_retail_pct"]
+            b["_recup_den"] += line_revenue
         if r["order_date"] and r["order_date"] > b["last_order_date"]:
             b["last_order_date"] = r["order_date"]
             b["last_order_id"] = r["order_id"]
@@ -7137,12 +7169,16 @@ async def get_wholesale_candidates(account_id: str, platform: str = "ml", days: 
         order_count = len(b["order_ids"])
         if order_count < min_orders:
             continue
+        avg_recup = round(b["_recup_num"] / b["_recup_den"], 1) if b["_recup_den"] > 0 else None
+        avg_target = round(b["_target_num"] / b["total_revenue_mxn"], 1) if b["total_revenue_mxn"] > 0 else _RECOVERY_TARGET_OTHER
         candidates.append({
             "buyer_key": b["buyer_key"], "buyer_nickname": b["buyer_nickname"],
             "order_count": order_count,
             "total_qty": b["total_qty"],
             "total_revenue_mxn": round(b["total_revenue_mxn"], 2),
-            "total_ganancia_neta": round(b["total_ganancia_neta"], 2),
+            "total_neto_plat": round(b["total_neto_plat"], 2),
+            "avg_recup_pct": avg_recup,
+            "recup_category": _recup_category(avg_recup, target_pct=avg_target),
             "last_order_date": b["last_order_date"],
             "last_order_id": b["last_order_id"],
             "order_ids": sorted(b["order_ids"], reverse=True),

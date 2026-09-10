@@ -35,10 +35,10 @@ def _save_amazon_items_history_bg(
             from app.services.sku_utils import normalize_to_bm_sku as _norm
             # Intentar leer FX y mapas de costo/retail de main (lazy import — evita circular)
             try:
-                from app.main import _last_fx_rate, _sku_cost_map, _sku_retail_map, _PARTNER_COMMISSION_PCT
+                from app.main import _last_fx_rate, _sku_cost_map, _sku_retail_map
                 fx = _last_fx_rate or 17.0
             except Exception:
-                fx, _sku_cost_map, _sku_retail_map, _PARTNER_COMMISSION_PCT = 17.0, {}, {}, 0.07
+                fx, _sku_cost_map, _sku_retail_map = 17.0, {}, {}
             # Fecha: "YYYY-MM-DD HH:MM" → "YYYY-MM-DD"
             order_date = (order_date_str or "")[:10]
             order_month = order_date[:7] if len(order_date) >= 7 else ""
@@ -65,12 +65,17 @@ def _save_amazon_items_history_bg(
                     sale_fee = subtotal * 0.10  # estimado 10%
                     data_src = "estimated"
                 neto_plat  = subtotal - sale_fee - taxes - ship
+                # costo_mxn/costo_usd se SIGUEN guardando (snapshot informativo),
+                # pero ya NO alimentan ganancia_neta/margen_pct -- mismo bug que
+                # su equivalente ML (_save_ml_orders_history_bg), encontrado y
+                # corregido 2026-09-10: AvgCostQTY de BM no es confiable (Jovan
+                # 2026-08-13, reconfirmado 2026-09-10). recup_retail_pct queda
+                # como único indicador de salud de precio (ver _recup_category
+                # en app.main, usado por los reportes que consumen esta tabla).
                 costo_mxn  = _sku_cost_map.get(sku, 0) if sku else 0
                 retail_mxn = _sku_retail_map.get(sku, 0) if sku else 0
                 retail_ph_usd = round(retail_mxn / fx, 2) if (retail_mxn > 0 and fx > 0) else 0
                 costo_usd  = round(costo_mxn / fx, 2) if (costo_mxn > 0 and fx > 0) else 0
-                ganancia   = neto_plat * (1 - _PARTNER_COMMISSION_PCT) - costo_mxn
-                margen_pct = round(ganancia / unit_price * 100, 1) if unit_price > 0 else 0
                 recup      = round(neto_plat / retail_mxn * 100, 1) if retail_mxn > 0 else 0
                 rows.append({
                     "order_id": order_id, "account_id": seller_id, "platform": "amazon",
@@ -79,8 +84,8 @@ def _save_amazon_items_history_bg(
                     "sale_fee": round(sale_fee, 2), "neto_plat": round(neto_plat, 2),
                     "costo_usd": costo_usd, "costo_mxn": round(costo_mxn, 2),
                     "retail_ph_usd": retail_ph_usd,
-                    "ganancia_neta": round(ganancia, 2),
-                    "margen_pct": margen_pct, "recup_retail_pct": recup,
+                    "ganancia_neta": 0.0,
+                    "margen_pct": 0.0, "recup_retail_pct": recup,
                     "fx_rate": round(fx, 4), "currency": currency or "MXN",
                     "order_date": order_date, "order_month": order_month,
                     "status": status_es, "data_source": data_src,

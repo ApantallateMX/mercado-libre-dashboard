@@ -191,6 +191,28 @@ _RECOVERY_TARGET_TV = 80.0
 _RECOVERY_TARGET_OTHER = 60.0
 
 
+def _recup_category(recup_pct: float | None, sku: str = "", target_pct: float | None = None) -> dict:
+    """Categoriza recup_retail_pct en 🟢/🟡/🔴 para reportes de ventas.
+
+    FIX 2026-09-10 (bug real: ganancia_neta/margen_pct en order_history
+    seguían calculándose contra costo_mxn/AvgCost de BM, confirmado NO
+    confiable desde 2026-08-13 -- ver DEVLOG). No hay costo real, así que no
+    hay "ganancia neta" que reportar; el indicador honesto de salud de
+    precio pasa a ser % de retail recuperado después de TODOS los gastos
+    reales (fee plataforma + retenciones + envío + comisión de socio),
+    mismas metas que ya usa Deals (_RECOVERY_TARGET_TV/_OTHER) -- no se
+    inventan umbrales nuevos para este reporte."""
+    if recup_pct is None:
+        return {"emoji": "⚪", "label": "Sin dato", "color": "gray"}
+    if target_pct is None:
+        target_pct = _RECOVERY_TARGET_TV if (sku or "").upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
+    if recup_pct >= 100:
+        return {"emoji": "🟢", "label": "Excelente", "color": "green"}
+    if recup_pct >= target_pct:
+        return {"emoji": "🟡", "label": "Bueno", "color": "yellow"}
+    return {"emoji": "🔴", "label": "Bajo objetivo", "color": "red"}
+
+
 def _price_risk_shortfall_mxn(p: dict) -> float:
     """FIX 2026-08-20 (auditoría de alertas): reemplaza el viejo "gap" de
     price_risk (_retail_ph_mxn - price, que medía la variable equivocada).
@@ -2286,13 +2308,19 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
                 taxes      = subtotal * 0.0905
                 ship       = 400 if subtotal >= 5000 else (250 if subtotal >= 2500 else (150 if subtotal >= 1000 else 100))
                 neto_plat  = subtotal - sale_fee - taxes - ship
-                # Snapshot de costos BM en este momento
+                # Snapshot de costos BM en este momento -- costo_mxn/costo_usd se
+                # SIGUEN guardando (por si algún día hay costo real confiable),
+                # pero YA NO alimentan ganancia_neta/margen_pct: AvgCostQTY de BM
+                # es un valor no confiable (confirmado por Jovan 2026-08-13,
+                # reconfirmado 2026-09-10 con SNTV007410) -- calcular "ganancia
+                # real" contra ese costo fue el bug encontrado 2026-09-10 (mismo
+                # patrón ya evitado en _save_amazon_orders_bg, que sigue este
+                # mismo criterio: ganancia_neta/margen_pct explícitos en 0,
+                # recup_retail_pct es el único indicador de salud de precio).
                 costo_mxn     = _sku_cost_map.get(sku, 0) if sku else 0
                 retail_mxn    = _sku_retail_map.get(sku, 0) if sku else 0
                 retail_ph_usd = round(retail_mxn / usd_to_mxn, 2) if (retail_mxn > 0 and usd_to_mxn > 0) else 0
                 costo_usd     = round(costo_mxn / usd_to_mxn, 2) if (costo_mxn > 0 and usd_to_mxn > 0) else 0
-                ganancia      = neto_plat * (1 - _PARTNER_COMMISSION_PCT) - costo_mxn
-                margen_pct    = round(ganancia / unit_price * 100, 1) if unit_price > 0 else 0
                 recup         = round(neto_plat / retail_mxn * 100, 1) if retail_mxn > 0 else 0
                 rows.append({
                     "order_id": order_id, "account_id": account_id, "platform": "ml",
@@ -2301,8 +2329,8 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
                     "sale_fee": round(sale_fee, 2), "neto_plat": round(neto_plat, 2),
                     "costo_usd": costo_usd, "costo_mxn": round(costo_mxn, 2),
                     "retail_ph_usd": retail_ph_usd,
-                    "ganancia_neta": round(ganancia, 2),
-                    "margen_pct": margen_pct, "recup_retail_pct": recup,
+                    "ganancia_neta": 0.0,
+                    "margen_pct": 0.0, "recup_retail_pct": recup,
                     "fx_rate": round(usd_to_mxn, 4), "currency": "MXN",
                     "order_date": order_date, "order_month": order_month,
                     "status": order.get("status", ""), "data_source": "estimated",
@@ -6249,11 +6277,18 @@ async def orders_period_stats(
         prior_to_s   = prior_to.isoformat()
     except Exception:
         return JSONResponse({"current": {}, "prior": {}, "delta": {}})
+    # FIX 2026-09-10: avg_margin venia de AVG(margen_pct) -- contaminado con
+    # costo_mxn/AvgCost de BM (no confiable). Se reemplaza por el promedio de
+    # recup_retail_pct (NULLIF 0 para no contar filas sin RetailPH como "0%
+    # recuperado", mismo patron ya usado en /api/orders/platform-comparison)
+    # + categoria 🟢/🟡/🔴 via _recup_category (ver definicion junto a
+    # _RECOVERY_TARGET_TV/_OTHER). Es un agregado de cuenta con SKUs mixtos
+    # TV/otros, asi que se categoriza contra la meta OTHER (60%) por default.
     SQL = """SELECT COUNT(*) as cnt,
-                    SUM(unit_price * quantity)      AS revenue,
-                    SUM(neto_plat)                  AS neto,
-                    SUM(neto_plat * 0.93)           AS neto_final,
-                    AVG(margen_pct)                 AS avg_margin
+                    SUM(unit_price * quantity)              AS revenue,
+                    SUM(neto_plat)                          AS neto,
+                    SUM(neto_plat * 0.93)                   AS neto_final,
+                    AVG(NULLIF(recup_retail_pct, 0))        AS avg_recup
              FROM order_history
              WHERE account_id=? AND platform='ml'
                AND status IN ('paid','delivered')
@@ -6263,10 +6298,13 @@ async def orders_period_stats(
         pri_r = await (await db.execute(SQL, (account_id, prior_from_s, prior_to_s))).fetchone()
     def _row(r):
         if not r or not r[0]:
-            return {"count": 0, "revenue": 0.0, "neto": 0.0, "neto_final": 0.0, "avg_margin": 0.0}
+            return {"count": 0, "revenue": 0.0, "neto": 0.0, "neto_final": 0.0,
+                    "avg_recup_pct": None, "recup_category": _recup_category(None)}
+        avg_recup = round(r[4], 1) if r[4] is not None else None
         return {"count": r[0] or 0, "revenue": round(r[1] or 0, 2),
                 "neto": round(r[2] or 0, 2), "neto_final": round(r[3] or 0, 2),
-                "avg_margin": round(r[4] or 0, 1)}
+                "avg_recup_pct": avg_recup,
+                "recup_category": _recup_category(avg_recup, target_pct=_RECOVERY_TARGET_OTHER)}
     def _pct(a, b):
         return round((a - b) / b * 100, 1) if b else None
     cur = _row(cur_r)
@@ -6307,9 +6345,14 @@ async def export_orders_csv(
         conds.append("order_date>=?"); params.append(date_from)
     if date_to:
         conds.append("order_date<=?"); params.append(date_to)
+    # FIX 2026-09-10: "Costo MXN"/"Ganancia"/"Margen %" salian de costo_mxn/
+    # AvgCost de BM (no confiable, ver DEVLOG) -- se quitan del CSV y se
+    # reemplazan por Recup. Retail % + Categoria (🟢/🟡/🔴 via
+    # _recup_category), el mismo indicador honesto que ya usa el resto de
+    # Deals desde 2026-08-13. Neto Plat. (dinero real que entra, antes de
+    # costo de producto) sigue siendo la cifra confiable en pesos.
     SQL = f"""SELECT order_id, order_date, sku, item_id, quantity,
-                     unit_price, sale_fee, neto_plat, costo_mxn,
-                     ganancia_neta, margen_pct, recup_retail_pct, status
+                     unit_price, sale_fee, neto_plat, recup_retail_pct, status
               FROM order_history WHERE {' AND '.join(conds)}
               ORDER BY order_date DESC LIMIT 5000"""
     async with _aio.connect(_DB) as db:
@@ -6317,9 +6360,12 @@ async def export_orders_csv(
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Orden", "Fecha", "SKU", "Item ML", "Cant.", "Precio",
-                "Cargos ML", "Neto Plat.", "Costo MXN", "Ganancia",
-                "Margen %", "Recup. Retail %", "Estado"])
-    w.writerows(rows)
+                "Cargos ML", "Neto Plat.", "Recup. Retail %", "Categoría", "Estado"])
+    for r in rows:
+        order_id, order_date, sku, item_id, quantity, unit_price, sale_fee, neto_plat, recup_pct, status = r
+        cat = _recup_category(recup_pct if recup_pct else None, sku=sku or "")
+        w.writerow([order_id, order_date, sku, item_id, quantity, unit_price,
+                    sale_fee, neto_plat, recup_pct, f"{cat['emoji']} {cat['label']}", status])
     fname = f"ordenes_{date_from or 'all'}_{date_to or 'all'}.csv"
     return _Resp(content=buf.getvalue().encode("utf-8-sig"),
                  media_type="text/csv",
@@ -6343,12 +6389,18 @@ async def orders_platform_comparison(
     date_to = _dt.utcnow().strftime("%Y-%m-%d")
     date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
 
+    # FIX 2026-09-10: avg_margin/ganancia salian de margen_pct/ganancia_neta
+    # (costo_mxn de BM, no confiable). Reemplazado por avg_recup_pct + su
+    # categoria 🟢/🟡/🔴 (_recup_category) y neto_plat (dinero real que entra
+    # despues de fee plataforma/retenciones/envio/comision de socio, ANTES de
+    # costo de producto -- que es justo lo que no se puede calcular sin costo
+    # real). Ver DEVLOG 2026-09-10.
     SQL = """
         SELECT platform,
                COUNT(*) AS orders,
                SUM(unit_price * quantity) AS revenue,
-               AVG(CASE WHEN margen_pct != 0 THEN margen_pct END) AS avg_margin,
-               SUM(ganancia_neta) AS ganancia
+               SUM(neto_plat) AS neto_plat,
+               AVG(NULLIF(recup_retail_pct, 0)) AS avg_recup
         FROM order_history
         WHERE order_date >= ? AND order_date <= ?
           AND status IN ('paid', 'delivered', 'shipped')
@@ -6359,13 +6411,15 @@ async def orders_platform_comparison(
 
     result = {"ml": {}, "amazon": {}, "date_from": date_from, "date_to": date_to, "days": days}
     for row in rows:
-        platform, orders, revenue, avg_margin, ganancia = row
+        platform, orders, revenue, neto_plat, avg_recup = row
         key = "amazon" if platform in ("amazon", "amz") else "ml"
+        avg_recup = round(avg_recup, 1) if avg_recup is not None else None
         result[key] = {
             "orders": orders or 0,
             "revenue": round(revenue or 0, 2),
-            "avg_margin": round(avg_margin or 0, 1),
-            "ganancia": round(ganancia or 0, 2),
+            "neto_plat": round(neto_plat or 0, 2),
+            "avg_recup_pct": avg_recup,
+            "recup_category": _recup_category(avg_recup, target_pct=_RECOVERY_TARGET_OTHER),
         }
     return result
 
@@ -6387,12 +6441,14 @@ async def platform_comparison_partial(
     date_to = _dt.utcnow().strftime("%Y-%m-%d")
     date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
 
+    # FIX 2026-09-10: mismo reemplazo que /api/orders/platform-comparison --
+    # avg_margin/ganancia (costo_mxn no confiable) -> avg_recup_pct + neto_plat.
     SQL = """
         SELECT platform,
                COUNT(*) AS orders,
                SUM(unit_price * quantity) AS revenue,
-               AVG(CASE WHEN margen_pct != 0 THEN margen_pct END) AS avg_margin,
-               SUM(ganancia_neta) AS ganancia
+               SUM(neto_plat) AS neto_plat,
+               AVG(NULLIF(recup_retail_pct, 0)) AS avg_recup
         FROM order_history
         WHERE order_date >= ? AND order_date <= ?
           AND status IN ('paid', 'delivered', 'shipped')
@@ -6403,13 +6459,15 @@ async def platform_comparison_partial(
 
     data: dict = {"ml": {}, "amazon": {}}
     for row in rows:
-        platform, orders, revenue, avg_margin, ganancia = row
+        platform, orders, revenue, neto_plat, avg_recup = row
         key = "amazon" if platform in ("amazon", "amz") else "ml"
+        avg_recup = round(avg_recup, 1) if avg_recup is not None else None
         data[key] = {
             "orders": orders or 0,
             "revenue": round(revenue or 0, 2),
-            "avg_margin": round(avg_margin or 0, 1),
-            "ganancia": round(ganancia or 0, 2),
+            "neto_plat": round(neto_plat or 0, 2),
+            "avg_recup_pct": avg_recup,
+            "recup_category": _recup_category(avg_recup, target_pct=_RECOVERY_TARGET_OTHER),
         }
 
     ml = data.get("ml", {})
@@ -6421,10 +6479,9 @@ async def platform_comparison_partial(
     def fmt_money(v):
         return f"${v:,.0f}"
 
-    def margin_class(v):
-        if v >= 30: return "text-green-600"
-        if v >= 15: return "text-yellow-600"
-        return "text-red-500"
+    def recup_class(cat: dict) -> str:
+        return {"green": "text-green-600", "yellow": "text-yellow-600",
+                "red": "text-red-500", "gray": "text-gray-400"}.get(cat.get("color"), "text-gray-400")
 
     ml_rev = ml.get("revenue", 0)
     amz_rev = amz.get("revenue", 0)
@@ -6460,11 +6517,11 @@ async def platform_comparison_partial(
             <div class="font-bold text-gray-700">{ml.get("orders", 0):,}</div>
           </div>
           <div>
-            <div class="text-[10px] text-gray-400">Margen prom.</div>
-            <div class="font-bold {margin_class(ml.get("avg_margin", 0))}">{ml.get("avg_margin", 0):.1f}%</div>
+            <div class="text-[10px] text-gray-400">Recup. Retail</div>
+            <div class="font-bold {recup_class(ml.get("recup_category") or {})}">{(ml.get("recup_category") or {}).get("emoji", "⚪")} {(str(ml.get("avg_recup_pct")) + "%") if ml.get("avg_recup_pct") is not None else "Sin dato"}</div>
           </div>
         </div>
-        <div class="text-[10px] text-gray-400">Ganancia neta: <span class="font-semibold text-gray-600">{fmt_money(ml.get("ganancia", 0))}</span></div>
+        <div class="text-[10px] text-gray-400">Neto Plat.: <span class="font-semibold text-gray-600">{fmt_money(ml.get("neto_plat", 0))}</span></div>
       </div>
     </div>
     <!-- Amazon -->
@@ -6485,11 +6542,11 @@ async def platform_comparison_partial(
             <div class="font-bold text-gray-700">{amz.get("orders", 0):,}</div>
           </div>
           <div>
-            <div class="text-[10px] text-gray-400">Margen prom.</div>
-            <div class="font-bold {margin_class(amz.get("avg_margin", 0))}">{amz.get("avg_margin", 0):.1f}%</div>
+            <div class="text-[10px] text-gray-400">Recup. Retail</div>
+            <div class="font-bold {recup_class(amz.get("recup_category") or {})}">{(amz.get("recup_category") or {}).get("emoji", "⚪")} {(str(amz.get("avg_recup_pct")) + "%") if amz.get("avg_recup_pct") is not None else "Sin dato"}</div>
           </div>
         </div>
-        <div class="text-[10px] text-gray-400">Ganancia neta: <span class="font-semibold text-gray-600">{fmt_money(amz.get("ganancia", 0))}</span></div>
+        <div class="text-[10px] text-gray-400">Neto Plat.: <span class="font-semibold text-gray-600">{fmt_money(amz.get("neto_plat", 0))}</span></div>
       </div>
     </div>
   </div>
@@ -10606,11 +10663,20 @@ async def products_deals_partial(request: Request):
 
         # Score de oportunidad para candidatos (ventas × peso + margen disponible + stock BM +
         # penalización si hoy no ganamos el catálogo contra competencia real)
+        # FIX 2026-09-10: "margen disponible" usaba _margen_pct (costo_mxn/AvgCost
+        # de BM, no confiable) -- mismo bug del guardrail de deals (ver
+        # _check_deal_negative_margin más arriba). Se reemplaza por cuántos
+        # puntos por ENCIMA de la meta de recuperación (_recup_retail_pct -
+        # _recup_target_pct) tiene el SKU hoy -- es la misma noción de "espacio
+        # para bajar precio sin perder salud de margen" pero con el número
+        # confiable que ya usa el resto de Deals.
         for p in candidates:
             ventas = p.get("units_30d", 0) or 0
-            margen = p.get("_margen_pct") or 0
+            _recup = p.get("_recup_retail_pct")
+            _recup_target = p.get("_recup_target_pct") or _RECOVERY_TARGET_OTHER
+            margen_disponible = (_recup - _recup_target) if _recup is not None else 0.0
             bm_stock = p.get("_bm_avail", 0) or 0
-            score = (ventas * 3.0) + (max(0.0, margen - 10.0) * 0.8) + (min(bm_stock, 60) * 0.25)
+            score = (ventas * 3.0) + (max(0.0, margen_disponible) * 0.8) + (min(bm_stock, 60) * 0.25)
             # Recomendar un deal agresivo no ayuda si de todos modos no se
             # gana el catálogo -- penalización proporcional a competidores
             # reales (tope en 10): -2 por 1 rival, hasta -20 con 10+.
@@ -10658,14 +10724,19 @@ async def products_deals_partial(request: Request):
                 "desc": "Mucho inventario parado. Un deal agresivo puede activar la demanda.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"Stock: {p['available_quantity']}"} for p in high_stock_no_sales[:5]],
             })
-        good_sellers_no_deal = [p for p in candidates if p.get("units_30d", 0) >= 3 and p.get("_margen_pct") is not None and p["_margen_pct"] >= 15]
+        # FIX 2026-09-10: "buen margen" usaba _margen_pct (costo_mxn no
+        # confiable) -- ahora exige ya cumplir/superar la meta de recuperación
+        # de retail (60% otras / 80% TV), igual criterio que el resto de Deals.
+        good_sellers_no_deal = [p for p in candidates if p.get("units_30d", 0) >= 3
+                                 and p.get("_recup_retail_pct") is not None
+                                 and p["_recup_retail_pct"] >= (p.get("_recup_target_pct") or _RECOVERY_TARGET_OTHER)]
         if good_sellers_no_deal:
             good_sellers_no_deal.sort(key=lambda p: p["units_30d"], reverse=True)
             recs.append({
                 "type": "success", "icon": "^",
                 "title": f"{len(good_sellers_no_deal)} producto(s) vendiendo bien con buen margen",
                 "desc": "Ya venden sin deal y tienen margen para descuento. Un deal los puede catapultar.",
-                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"{p['units_30d']} uds, margen {p['_margen_pct']:.0f}%"} for p in good_sellers_no_deal[:5]],
+                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"{p['units_30d']} uds, recupera {p['_recup_retail_pct']:.0f}% del retail"} for p in good_sellers_no_deal[:5]],
             })
         bm_available = [p for p in candidates if p.get("_bm_avail") is not None and p["_bm_avail"] > 20 and p.get("available_quantity", 0) <= 5]
         if bm_available:
@@ -14503,16 +14574,15 @@ async def _check_deal_negative_margin(item_id: str, deal_price: float, client) -
     _calc_margins([product], usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"],
                   shipping_avg_map=_ship_map)
 
-    # Preferir margen real contra costo BM (_ganancia_est) -- es lo que pide
-    # la auditoría explícitamente. Sin costo BM confiable, cae a
-    # _neto_ml_negative (mismo fallback ya usado en la alerta "deal por
-    # debajo de la meta de recuperación", FIX 2026-08-20 más arriba) --
-    # pierde dinero de plano después de fee ML/retenciones/envío, sin
-    # siquiera contar el costo del producto.
-    if product.get("_ganancia_est") is not None:
-        if product["_ganancia_est"] < 0:
-            return {"margen_mxn": product["_ganancia_est"], "margen_pct": product.get("_margen_pct")}
-        return None
+    # FIX 2026-09-10: este guardrail preferia _ganancia_est (margen contra
+    # costo_mxn/AvgCost de BM) y solo caia a _neto_ml_negative si no habia
+    # costo BM -- exactamente la regla que Jovan prohibio desde 2026-08-13
+    # (reconfirmada 2026-09-10, SNTV007410): "nunca calcular ganancia/perdida
+    # real contra un costo, siempre contra % de retail recuperado". Unico
+    # criterio ahora: _neto_ml_negative (pierde dinero de plano despues de
+    # fee ML/retenciones/envio/comision de socio, sin contar costo de
+    # producto) -- mismo fallback que ya usaba esta funcion, ahora sin el
+    # atajo de costo por delante.
     if product.get("_neto_ml_negative"):
         return {"margen_mxn": product.get("_neto_ml"), "margen_pct": None}
     return None
@@ -20282,12 +20352,18 @@ async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365)
     if not sku:
         return JSONResponse({"error": "sku requerido"}, status_code=400)
     bm_key = normalize_to_bm_sku(sku.strip().upper())
+    # FIX 2026-09-10: ganancia_neta_mxn sumaba un campo contaminado con
+    # costo_mxn/AvgCost de BM (no confiable, ver DEVLOG). Reemplazado por
+    # neto_plat_mxn (dinero real que entra, antes de costo de producto) +
+    # avg_recup_pct/recup_category (indicador honesto de salud de precio,
+    # meta segun sea SKU de TV o no -- mismas constantes que Deals).
     import aiosqlite as _aio_ssp
     async with _aio_ssp.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_ssp.Row
         rows = await (await db.execute(
             """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
-                      SUM(unit_price*quantity) revenue, SUM(ganancia_neta) ganancia,
+                      SUM(unit_price*quantity) revenue, SUM(neto_plat) neto_plat,
+                      AVG(NULLIF(recup_retail_pct, 0)) avg_recup,
                       MIN(order_date) d1, MAX(order_date) d2
                FROM order_history
                WHERE sku = ? AND order_date >= date('now', ?)
@@ -20297,22 +20373,34 @@ async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365)
         )).fetchall()
         recent_rows = await (await db.execute(
             """SELECT order_id, platform, account_id, order_date, quantity, unit_price,
-                      ganancia_neta, margen_pct, recup_retail_pct
+                      neto_plat, recup_retail_pct
                FROM order_history
                WHERE sku = ? AND status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
                ORDER BY order_date DESC LIMIT 10""",
             (bm_key,),
         )).fetchall()
     by_account = [dict(r) for r in rows]
+    _target = _RECOVERY_TARGET_TV if bm_key.upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
+    # Mismo cuidado que en daily-sales-by-account: excluir None (sin dato)
+    # antes de promediar, para no convertirlo en un 0.0% enganoso.
+    _recup_vals = [r["avg_recup"] for r in by_account if r["avg_recup"] is not None]
+    totals_avg_recup = round(sum(_recup_vals) / len(_recup_vals), 1) if _recup_vals else None
     totals = {
         "orders": sum(r["n"] for r in by_account),
         "qty": sum(r["qty"] or 0 for r in by_account),
         "revenue_mxn": round(sum(r["revenue"] or 0 for r in by_account), 2),
-        "ganancia_neta_mxn": round(sum(r["ganancia"] or 0 for r in by_account), 2),
+        "neto_plat_mxn": round(sum(r["neto_plat"] or 0 for r in by_account), 2),
+        "avg_recup_pct": totals_avg_recup,
+        "recup_category": _recup_category(totals_avg_recup, target_pct=_target),
     }
+    recent_orders = []
+    for r in recent_rows:
+        d = dict(r)
+        d["recup_category"] = _recup_category(d.get("recup_retail_pct") or None, sku=bm_key, target_pct=_target)
+        recent_orders.append(d)
     return {
         "sku": bm_key, "days": days, "totals": totals, "by_account": by_account,
-        "recent_orders": [dict(r) for r in recent_rows],
+        "recent_orders": recent_orders,
     }
 
 
@@ -20327,12 +20415,17 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
     if not date:
         import datetime as _dt
         date = (_dt.datetime.utcnow() - _dt.timedelta(hours=6, days=1)).strftime("%Y-%m-%d")
+    # FIX 2026-09-10: mismo reemplazo que sku-sales-profit -- ganancia_neta_mxn
+    # (costo_mxn no confiable) fuera; neto_plat_mxn + avg_recup_pct/categoria.
+    # Este es el endpoint que se uso 2026-09-10 para reportar "ganancia neta de
+    # ayer por cuenta" -- el numero que Jovan correctamente cuestiono.
     import aiosqlite as _aio_dsa
     async with _aio_dsa.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_dsa.Row
         rows = await (await db.execute(
             """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
-                      SUM(unit_price*quantity) revenue, SUM(ganancia_neta) ganancia
+                      SUM(unit_price*quantity) revenue, SUM(neto_plat) neto_plat,
+                      AVG(NULLIF(recup_retail_pct, 0)) avg_recup
                FROM order_history
                WHERE date(order_date) = ?
                  AND status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
@@ -20340,12 +20433,28 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
                ORDER BY revenue DESC""",
             (date,),
         )).fetchall()
-    by_account = [dict(r) for r in rows]
+    by_account = []
+    for r in rows:
+        d = dict(r)
+        avg_recup = round(d["avg_recup"], 1) if d["avg_recup"] is not None else None
+        d["avg_recup_pct"] = avg_recup
+        d["recup_category"] = _recup_category(avg_recup, target_pct=_RECOVERY_TARGET_OTHER)
+        del d["avg_recup"]
+        by_account.append(d)
+    # BUG evitado 2026-09-10 al probar este mismo fix: promediar con "or 0"
+    # convertia "sin dato" (None, cuenta sin RetailPH) en 0.0% -- que
+    # _recup_category lee como 🔴 Bajo objetivo, el mismo tipo de cero
+    # enganoso que este fix existe para eliminar. Se excluyen los None antes
+    # de promediar.
+    _recup_vals = [a["avg_recup_pct"] for a in by_account if a["avg_recup_pct"] is not None]
+    totals_avg_recup = round(sum(_recup_vals) / len(_recup_vals), 1) if _recup_vals else None
     totals = {
         "orders": sum(r["n"] for r in by_account),
         "qty": sum(r["qty"] or 0 for r in by_account),
         "revenue_mxn": round(sum(r["revenue"] or 0 for r in by_account), 2),
-        "ganancia_neta_mxn": round(sum(r["ganancia"] or 0 for r in by_account), 2),
+        "neto_plat_mxn": round(sum(r["neto_plat"] or 0 for r in by_account), 2),
+        "avg_recup_pct": totals_avg_recup,
+        "recup_category": _recup_category(totals_avg_recup, target_pct=_RECOVERY_TARGET_OTHER),
     }
     return {"date": date, "totals": totals, "by_account": by_account}
 
@@ -32261,7 +32370,17 @@ async def diag_order_sample(sku: str = "", token: str = "", limit: int = 3):
                    ORDER BY order_date DESC LIMIT ?""",
                 (f"%{sku}%", limit)
             )).fetchall()
-        return JSONResponse({"sku": sku, "found": len(rows), "orders": [dict(r) for r in rows]})
+        # Diag crudo -- se dejan ganancia_neta/margen_pct/costo_mxn tal cual
+        # (0.0 desde el fix 2026-09-10, ver DEVLOG) porque el propósito de
+        # este endpoint es ver "todos los campos financieros" para depurar,
+        # no presentar un reporte pulido. Se agrega recup_category como
+        # conveniencia -- mismo criterio que el resto de sección C.
+        orders = []
+        for r in rows:
+            d = dict(r)
+            d["recup_category"] = _recup_category(d.get("recup_retail_pct") or None, sku=sku)
+            orders.append(d)
+        return JSONResponse({"sku": sku, "found": len(rows), "orders": orders})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
