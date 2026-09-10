@@ -3441,6 +3441,37 @@ async def _process_ml_message_webhook(resource: str, user_id: str) -> None:
 _amz_bg_running: bool  = False
 _amz_bg_last_run: float = 0.0   # epoch seconds de la última corrida exitosa
 
+def _amz_purchase_date_to_pacific_day(purchase_date_iso: str) -> str:
+    """Convierte 'purchase-date' del reporte (ISO con offset, ej.
+    '2026-09-09T23:47:57+00:00') al día calendario en Pacific Time
+    ('YYYY-MM-DD') -- MISMA convención que usa la Sales API de Amazon
+    (getOrderMetrics) para bucketear "qué día fue esta venta", según ya
+    documentado en este archivo (_planning ~línea 15936, "Amazon Sales API
+    usa US/Pacific").
+
+    FIX 2026-09-10 (ver DEVLOG): antes se truncaban los primeros 10
+    caracteres del string UTC tal cual -- como la medianoche UTC cae
+    ~18:00 hora Ciudad de México (mitad de la tarde/noche, la ventana de
+    más compras), eso partía un solo día real de México en dos fechas de
+    order_history, y la fecha resultante casi nunca coincidía con la fila
+    del widget "Meta Diaria de Ventas Amazon" para el mismo día -- swings
+    de hasta +/-80% en revenue por día verificados en vivo (VECKTOR,
+    ExclusiveBulbs) aun con el fix de Pending ya aplicado. Medianoche
+    Pacific (que sí usa Sales API) cae ~01:00-02:00 hora México -- parte
+    el día en una hora de muy poca actividad, prácticamente sin efecto.
+    """
+    from datetime import datetime as _dt3
+    if not purchase_date_iso:
+        return ""
+    try:
+        import zoneinfo as _zi
+        dt = _dt3.fromisoformat(purchase_date_iso)
+        pacific = dt.astimezone(_zi.ZoneInfo("America/Los_Angeles"))
+        return pacific.strftime("%Y-%m-%d")
+    except Exception:
+        return (purchase_date_iso or "")[:10]
+
+
 def _chunk_date_range(date_from: str, date_to: str, max_days: int = 25) -> list:
     """Trocea un rango de fechas en ventanas de a lo más max_days días (inclusive).
     Usado por _save_amazon_orders_bg para respetar el límite de rango de
@@ -3561,7 +3592,7 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                         if status in ("Cancelled", "Canceled"):
                             continue
                         order_id = (row.get("amazon-order-id") or "").strip()
-                        order_date = (row.get("purchase-date") or "")[:10]
+                        order_date = _amz_purchase_date_to_pacific_day(row.get("purchase-date") or "")
                         sku_raw = (row.get("sku") or "").strip()
                         if not order_id or not order_date or not sku_raw:
                             continue
