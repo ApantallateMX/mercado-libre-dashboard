@@ -20316,6 +20316,40 @@ async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365)
     }
 
 
+@app.get("/api/diag/daily-sales-by-account")
+async def diag_daily_sales_by_account(date: str = "", token: str = ""):
+    """Ventas totales de un día (default: ayer, hora Monterrey) por
+    plataforma+cuenta, todas las cuentas (order_history). Solo lectura.
+    Respuesta rápida para preguntas directas tipo '¿cuánto vendimos ayer por
+    cuenta?'."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not date:
+        import datetime as _dt
+        date = (_dt.datetime.utcnow() - _dt.timedelta(hours=6, days=1)).strftime("%Y-%m-%d")
+    import aiosqlite as _aio_dsa
+    async with _aio_dsa.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio_dsa.Row
+        rows = await (await db.execute(
+            """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
+                      SUM(unit_price*quantity) revenue, SUM(ganancia_neta) ganancia
+               FROM order_history
+               WHERE date(order_date) = ?
+                 AND status NOT IN ('cancelled', 'Cancelado', 'refunded', 'Reembolsado')
+               GROUP BY platform, account_id
+               ORDER BY revenue DESC""",
+            (date,),
+        )).fetchall()
+    by_account = [dict(r) for r in rows]
+    totals = {
+        "orders": sum(r["n"] for r in by_account),
+        "qty": sum(r["qty"] or 0 for r in by_account),
+        "revenue_mxn": round(sum(r["revenue"] or 0 for r in by_account), 2),
+        "ganancia_neta_mxn": round(sum(r["ganancia"] or 0 for r in by_account), 2),
+    }
+    return {"date": date, "totals": totals, "by_account": by_account}
+
+
 @app.post("/api/diag/bulk-sku-lookup")
 async def diag_bulk_sku_lookup(token: str = "", payload: dict = Body(...)):
     """Diagnóstico externo: cruza un set arbitrario de SKUs contra

@@ -17,6 +17,9 @@ Nuevo `app/services/mattermost_bot.py` -- cliente directo a la API real de Matte
 
 Nuevo endpoint `/api/diag/mattermost-post` (POST, gateado con `DIAG_TOKEN` igual que otros diag de escritura) para poder publicar/responder en hilo desde fuera de la app (sesión de Claude, futuras rutinas).
 
+### Ampliación (mismo día) — `/api/diag/daily-sales-by-account`
+Jovan pidió ventas totales del día anterior por cuenta directo en Mattermost -- no había endpoint para eso (solo por SKU). Nuevo endpoint, mismo patrón que `sku-sales-profit` pero agrupado por fecha en vez de SKU (default: ayer, hora Monterrey).
+
 ### Ampliación (mismo día) — `get_channel_posts`/`get_username` + `/api/diag/mattermost-posts`
 El MCP compartido no da el `id` real de un post (necesario como `root_id` para responder en hilo) cuando la conversación la inicia otra persona (no una respuesta nuestra) -- solo da texto+autor con un ID interno feo sin utilidad como `root_id`. Se agregó lectura directa de la API real (`GET /api/v4/channels/{id}/posts`) para traer `id`/`user_id`/`message` reales, más `get_username()` para resolver `user_id` → username real, expuesto en `/api/diag/mattermost-posts` (solo lectura).
 
