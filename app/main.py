@@ -20614,31 +20614,43 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
 
 
 @app.post("/api/diag/amazon-orders-report-reset")
-async def diag_amazon_orders_report_reset(token: str = "", confirm: str = ""):
-    """Borra SOLO las filas de order_history escritas por el pipeline nuevo
-    (platform='amazon' AND data_source='report') -- necesario una vez,
-    2026-09-10: varias corridas de prueba de _save_amazon_orders_bg
-    escribieron order_date con el bug de truncar UTC crudo (ya corregido en
-    _amz_purchase_date_to_pacific_day) ANTES de que ese fix existiera, y
-    upsert_order_history NO actualiza order_date/order_month en un UPDATE
-    (solo en el INSERT inicial) -- esas filas se hubieran quedado con la
-    fecha vieja para siempre aunque se vuelva a correr el sync. data_source
-    'report' es exclusivo de este pipeline (no existía antes de hoy) --
-    borrar por ese criterio no toca ninguna fila de ML ni de la vía manual
-    de detalle de orden Amazon (_save_amazon_items_history_bg, data_source
-    'real'/'estimated'). Requiere confirm='si' -- operación destructiva,
-    aunque autocontenida y con re-sync inmediato después para reponer los
-    datos correctos."""
+async def diag_amazon_orders_report_reset(token: str = "", confirm: str = "", scope: str = "report_only"):
+    """Borra filas de order_history para Amazon -- necesario 2026-09-10 al
+    migrar de getOrders()+get_order_items() a Reports API (ver DEVLOG).
+
+    scope='report_only' (default): borra SOLO data_source='report' (filas
+    del pipeline nuevo) -- para limpiar corridas de prueba escritas ANTES
+    de un fix posterior (ej. bucketing de fecha a Pacific).
+
+    scope='all_amazon': borra TODO platform='amazon', sin importar
+    data_source -- usado UNA vez para el backfill definitivo, porque el
+    ON CONFLICT de upsert_order_history NO sobreescribe data_source salvo
+    que la fila nueva sea 'real' (`CASE WHEN excluded.data_source='real'
+    THEN 'real' ELSE order_history.data_source END`) -- una fila vieja
+    'estimated' del pipeline getOrders() (con su status/order_date
+    potencialmente equivocados, ver DEVLOG) se queda marcada 'estimated'
+    para siempre aunque el pipeline nuevo la vuelva a upsertear con datos
+    correctos, mezclando dos fuentes distintas en la misma fila -- rompe
+    el principio de "un solo escritor confiable". Nunca toca platform='ml'.
+    Requiere re-sync inmediato después (_save_amazon_orders_bg) para
+    reponer los datos -- Amazon es la fuente, no se pierde nada real.
+
+    Requiere confirm='si' en ambos casos -- operación destructiva."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if confirm != "si":
-        return JSONResponse({"error": "pasar confirm=si para ejecutar (borra order_history WHERE platform='amazon' AND data_source='report')"}, status_code=400)
+        return JSONResponse({"error": "pasar confirm=si para ejecutar"}, status_code=400)
+    if scope not in ("report_only", "all_amazon"):
+        return JSONResponse({"error": "scope debe ser 'report_only' o 'all_amazon'"}, status_code=400)
     import aiosqlite as _aio_reset
     async with _aio_reset.connect(DATABASE_PATH) as db:
-        cur = await db.execute("DELETE FROM order_history WHERE platform='amazon' AND data_source='report'")
+        if scope == "report_only":
+            cur = await db.execute("DELETE FROM order_history WHERE platform='amazon' AND data_source='report'")
+        else:
+            cur = await db.execute("DELETE FROM order_history WHERE platform='amazon'")
         await db.commit()
         deleted = cur.rowcount
-    return {"deleted_rows": deleted}
+    return {"scope": scope, "deleted_rows": deleted}
 
 
 @app.get("/api/diag/amazon-orders-report-raw")
