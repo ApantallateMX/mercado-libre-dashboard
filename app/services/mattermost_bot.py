@@ -1,0 +1,84 @@
+"""mattermost_bot.py — Cliente genérico de Mattermost (API real /api/v4) para que
+el dashboard (o Claude, vía los endpoints /api/diag/mattermost-*) responda con
+identidad propia y en hilo real, en vez de depender del MCP compartido (que no
+soporta hilos) o de la sesión de navegador de un usuario.
+
+FEATURE 2026-09-10 (pedido explícito de Jovan): usar por ahora el bot que ya
+existe (@ecomops-agent, MM_BOT_TOKEN/MM_URL, mismas variables que
+marketplace_alerts.py) y poder cambiar a un bot nuevo (@conmify-agent, pedido
+en #support-mattermost-manager el mismo día) sin tocar código -- basta con
+setear MM_DASHBOARD_BOT_TOKEN en Railway cuando llegue el token nuevo; si no
+está seteado, cae a MM_BOT_TOKEN (el compartido) automáticamente.
+"""
+
+import os
+import logging
+import httpx
+
+logger = logging.getLogger(__name__)
+
+MM_URL = os.getenv("MM_URL", "")
+MM_DASHBOARD_BOT_TOKEN = os.getenv("MM_DASHBOARD_BOT_TOKEN") or os.getenv("MM_BOT_TOKEN", "")
+MM_TEAM_NAME = os.getenv("MM_TEAM_NAME", "mi-technologies")
+
+_channel_id_cache: dict[str, str] = {}
+
+
+async def get_channel_id(channel_name: str, team_name: str = "") -> str:
+    """Resuelve un nombre de canal (ej. 'requerimientos-dashboard') a su channel_id
+    real de Mattermost. Cachea en memoria (los channel_id no cambian) para no
+    pegarle a la API en cada mensaje. Retorna "" si no está configurado o falla
+    -- nunca lanza."""
+    if not (MM_URL and MM_DASHBOARD_BOT_TOKEN):
+        return ""
+    if channel_name in _channel_id_cache:
+        return _channel_id_cache[channel_name]
+    team = team_name or MM_TEAM_NAME
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{MM_URL}/api/v4/teams/name/{team}/channels/name/{channel_name}",
+                headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"},
+            )
+            if r.status_code != 200:
+                logger.warning(f"[MattermostBot] get_channel_id({channel_name}) -> {r.status_code}: {r.text[:200]}")
+                return ""
+            channel_id = r.json().get("id", "")
+            if channel_id:
+                _channel_id_cache[channel_name] = channel_id
+            return channel_id
+    except Exception as e:
+        logger.warning(f"[MattermostBot] Error resolviendo channel_id de {channel_name}: {e}")
+        return ""
+
+
+async def post_message(channel_name: str, text: str, root_id: str = "") -> dict:
+    """Publica un mensaje en un canal por NOMBRE (resuelve el channel_id solo).
+    Si root_id viene lleno, el mensaje queda como respuesta EN HILO real de
+    Mattermost (root_id = el "id" del post original, no el permalink).
+    Retorna el post creado (incluye "id", útil como root_id para la siguiente
+    respuesta del mismo hilo) o {} si falla -- nunca lanza."""
+    if not (MM_URL and MM_DASHBOARD_BOT_TOKEN):
+        logger.info(f"[MattermostBot] MM_URL/token no configurado -- mensaje no enviado: {text[:120]}")
+        return {}
+    channel_id = await get_channel_id(channel_name)
+    if not channel_id:
+        logger.warning(f"[MattermostBot] No se pudo resolver channel_id de {channel_name}")
+        return {}
+    payload = {"channel_id": channel_id, "message": text}
+    if root_id:
+        payload["root_id"] = root_id
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"{MM_URL}/api/v4/posts",
+                headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"},
+                json=payload,
+            )
+            if r.status_code not in (200, 201):
+                logger.warning(f"[MattermostBot] post_message -> {r.status_code}: {r.text[:200]}")
+                return {}
+            return r.json()
+    except Exception as e:
+        logger.warning(f"[MattermostBot] Error posteando a {channel_name}: {e}")
+        return {}

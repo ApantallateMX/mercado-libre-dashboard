@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FEAT: bot propio de Mattermost (identidad + hilo real), reemplaza MCP compartido y postear desde sesión de usuario
+
+### Contexto
+Al automatizar respuestas en `#requerimientos-dashboard`, se probaron 2 caminos malos: (1) el MCP "MI Teams" compartido -- solo publica mensajes nuevos, sin `root_id`, así que cada respuesta salía como mensaje suelto en vez de hilo; (2) responder vía navegador con la sesión de Jovan -- sí generaba hilo real, pero el mensaje salía firmado como "Jovan Rodriguez", no como un bot. Jovan lo señaló directo dos veces: "de nuevo el detalle... me haces una respuesta nueva y no sigues en la pregunta inicial" y luego "estas mal aun estas utilizando google y mi cuenta para responder cuando tu deberias estar respondiendo".
+
+### Fix
+Nuevo `app/services/mattermost_bot.py` -- cliente directo a la API real de Mattermost (`/api/v4/posts`, `/api/v4/teams/name/{team}/channels/name/{channel}`), no el MCP. Reusa el bot ya existente `@ecomops-agent` (mismas `MM_URL`/`MM_BOT_TOKEN` que ya usa `marketplace_alerts.py` para `#alertas-marketplace`) mientras se aprovisiona un bot dedicado (`@conmify-agent`, pedido el mismo día en `#support-mattermost-manager`) -- variable nueva `MM_DASHBOARD_BOT_TOKEN` que cae a `MM_BOT_TOKEN` si no está seteada, para cambiar de bot después sin tocar código. `post_message(channel_name, text, root_id="")` resuelve el `channel_id` real por nombre (cacheado en memoria) y publica -- si se pasa `root_id` (el `id` del post original), la respuesta queda como hilo real de Mattermost, igual que hacen otros bots ya existentes en la plataforma (ej. `binmanager-agent`).
+
+Nuevo endpoint `/api/diag/mattermost-post` (POST, gateado con `DIAG_TOKEN` igual que otros diag de escritura) para poder publicar/responder en hilo desde fuera de la app (sesión de Claude, futuras rutinas).
+
+### Verificación
+`py_compile` limpio. Servidor local levantado sin errores. No se pudo probar contra Mattermost real en local (`MM_URL`/`MM_BOT_TOKEN` solo existen en Railway) -- pendiente de verificar contra producción tras el deploy.
+
+---
+
 ## 2026-09-09 — FIX DE RAÍZ: `supplier_declared_has_product_identifier_exemption=True` se mandaba SIEMPRE, contradiciendo el UPC real (causa real del error 8560 persistente)
 
 ### Contexto

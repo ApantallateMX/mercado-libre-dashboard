@@ -20488,6 +20488,25 @@ async def _run_amazon_bulk_delete(seller_id: str, keywords: str, statuses: str, 
     )
 
 
+@app.post("/api/diag/mattermost-post")
+async def diag_mattermost_post(channel: str = "", message: str = "", root_id: str = "", token: str = ""):
+    """FEATURE 2026-09-10: publica (o responde EN HILO real, si root_id viene
+    lleno) en un canal de Mattermost usando el bot propio del dashboard
+    (mattermost_bot.py) -- identidad propia y root_id real, a diferencia del
+    MCP compartido (sin hilos) o de postear desde la sesión de un usuario.
+    Devuelve el post creado (incluye "id", usable como root_id del siguiente
+    mensaje del mismo hilo)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not channel or not message:
+        return JSONResponse({"error": "channel y message requeridos"}, status_code=400)
+    from app.services.mattermost_bot import post_message as _mm_post
+    result = await _mm_post(channel, message, root_id=root_id)
+    if not result:
+        return JSONResponse({"error": "no se pudo publicar (ver logs: bot no configurado, canal no encontrado, o error de Mattermost)"}, status_code=502)
+    return result
+
+
 @app.post("/api/diag/amazon-bulk-delete-by-keyword")
 async def diag_amazon_bulk_delete_by_keyword(
     seller_id: str = "", keywords: str = "", statuses: str = "INACTIVE,INCOMPLETE",
