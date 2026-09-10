@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FIX DE RAÍZ: credenciales AUTOBOT (AMAZON2) ya usan su propia app, se quita el fallback a VECKTOR
+
+### Contexto
+Bug diagnosticado a fondo el 2026-08-31 (ver `.claude/memory/project_amazon2_credential_fallback_verification_2026-08-31.md`): el `refresh_token` de AUTOBOT AMZ MX (seller `A252KSQ687FNRO`, AMAZON2) estaba atado a la app VeKtorClaude (cuenta 1, VECKTOR) en vez de a su propia app "Claude Autobot Dashboard" (`app_solution_id 454ba70d-...`). Causa raíz real: `app/auth.py` (`amazon_callback`, rama `_is_acct2`) intercambiaba el `spapi_oauth_code` de AUTOBOT usando siempre `AMAZON_CLIENT_ID/SECRET` (cuenta 1) en vez de `AMAZON2_CLIENT_ID/SECRET`. Esto ya se había corregido el 31-ago (commit `affe1e4`), pero AUTOBOT no se había vuelto a autorizar todavía, así que `app/services/amazon_client.py` seguía con un fallback deliberado (`or client_id2`) para no romper producción con el refresh_token viejo.
+
+### Verificación de hoy
+Jovan reautorizó AUTOBOT vía `/auth/amazon/connect?seller_id=A252KSQ687FNRO` (con el fix de `auth.py` ya en producción). Confirmado por 2 vías:
+1. El `AMAZON2_REFRESH_TOKEN` vigente en Railway (leído en vivo vía API GraphQL, solo lectura) es distinto al que se probó el 31-ago.
+2. Prueba real contra LWA (`https://api.amazon.com/auth/o2/token`, `grant_type=refresh_token`, solo lectura) usando ese refresh_token + `AMAZON2_CLIENT_ID/SECRET` (propias, sin fallback) → **HTTP 200, access_token emitido normalmente**. Antes del re-authorize esto daba HTTP 400 `unauthorized_client`.
+
+### Fix
+`app/services/amazon_client.py` (`_seed_amazon_accounts`, sección AMAZON2 ~línea 2566-2568): se quita el fallback `_lwa_client_id = client_id or client_id2` / `_lwa_client_sec = client_sec or client_sec2` -- ahora `save_amazon_account` para AUTOBOT usa directamente `client_id2`/`client_sec2` (sus propias credenciales), sin caer nunca a las de VECKTOR. Cumple de raíz la regla de CLAUDE.md "cada cuenta Amazon usa sus propias credenciales, nunca mezclar". Comentario extenso junto al código actualizado con el cierre completo del hallazgo (quedaba obsoleto, seguía describiendo el paso de `auth.py` como pendiente).
+
+### Verificación
+`py -m py_compile app/services/amazon_client.py` limpio, `import app.main` sin errores. No se tocó `app/auth.py` (ya estaba corregido desde el 31-ago, sin cambios necesarios hoy).
+
+---
+
 ## 2026-09-10 — FEAT: bot propio de Mattermost (identidad + hilo real), reemplaza MCP compartido y postear desde sesión de usuario
 
 ### Contexto

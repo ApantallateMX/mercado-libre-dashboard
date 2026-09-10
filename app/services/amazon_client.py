@@ -2537,42 +2537,35 @@ async def _seed_amazon_accounts():
         # Si el env var tiene un token DIFERENTE al almacenado → actualizar (nueva autorización).
         # Si son iguales → preservar (no overwrite innecesario).
         token_to_save2 = refresh_rt2 if refresh_rt2 != stored_rt2 else ""
-        # VIOLACIÓN CONOCIDA de la regla "cada cuenta Amazon usa sus propias credenciales"
-        # (CLAUDE.md) — mantenida a propósito, NO por descuido. Ver
-        # .claude/memory/project_amazon2_credential_fallback_verification_2026-08-31.md
+        # RESUELTO 2026-09-10 (ver .claude/memory/
+        # project_amazon2_credential_fallback_verification_2026-08-31.md para el
+        # diagnóstico original y DEVLOG.md 2026-09-10 para el cierre):
         #
-        # AMAZON2_CLIENT_ID/SECRET SÍ existen y son válidas en Railway (verificado
-        # 2026-08-31: son distintas de AMAZON_CLIENT_ID/SECRET de cuenta 1, la app
-        # "Claude Autobot Dashboard" / app_solution_id 454ba70d-... está registrada).
-        # El problema NO es que falten credenciales — es que el refresh_token que
-        # AUTOBOT tiene guardado hoy (AMAZON2_REFRESH_TOKEN) fue emitido bajo la app
-        # VeKtorClaude (cuenta 1), no bajo Claude Autobot Dashboard. Un refresh_token
-        # de LWA queda atado a la app que lo emitió.
+        # Historial del problema — el refresh_token que AUTOBOT tenía guardado
+        # (AMAZON2_REFRESH_TOKEN) había sido emitido bajo la app VeKtorClaude
+        # (cuenta 1, VECKTOR) en vez de bajo su propia app "Claude Autobot
+        # Dashboard" (app_solution_id 454ba70d-...). Un refresh_token de LWA
+        # queda atado a la app que lo emitió, así que fallaba con
+        # AMAZON2_CLIENT_ID/SECRET (HTTP 400 unauthorized_client) y solo
+        # funcionaba con AMAZON_CLIENT_ID/SECRET de cuenta 1 — de ahí este
+        # fallback `or client_id2`, mantenido a propósito mientras tanto (no
+        # por descuido) para no romper AUTOBOT en producción.
         #
-        # Prueba real contra el endpoint de LWA (https://api.amazon.com/auth/o2/token,
-        # grant_type=refresh_token), usando los valores VIGENTES en Railway (no el
-        # .env.production local, que puede estar desactualizado):
-        #   - refresh_token de AUTOBOT + AMAZON2_CLIENT_ID/SECRET (propias) → HTTP 400
-        #     error=unauthorized_client, "Not authorized for requested operation"
-        #   - el MISMO refresh_token + AMAZON_CLIENT_ID/SECRET (cuenta 1, VECKTOR)  → HTTP 200,
-        #     access_token emitido normalmente
-        # Confirma que el fallback sigue siendo necesario HOY. Quitarlo rompería
-        # AUTOBOT en producción de inmediato (refresh_token inválido con credenciales nuevas).
+        # Causa raíz: app/auth.py (amazon_callback, rama _is_acct2) intercambiaba
+        # el spapi_oauth_code de AUTOBOT usando siempre las credenciales de
+        # cuenta 1. Corregido el 2026-08-31 (commit affe1e4) para usar
+        # AMAZON2_CLIENT_ID/SECRET propias en ese intercambio.
         #
-        # Para quitar este fallback de forma segura: 1) corregir también el bug gemelo
-        # en app/auth.py (amazon_callback, rama _is_acct2 ~línea 467-474) que hoy
-        # intercambia el código OAuth de AUTOBOT usando SIEMPRE AMAZON_CLIENT_ID/SECRET
-        # (cuenta 1) en vez de AMAZON2_CLIENT_ID/SECRET — si no se corrige primero, un
-        # nuevo re-authorize por /auth/amazon/connect?seller_id=... generaría OTRA VEZ
-        # un refresh_token atado a VeKtorClaude, no a Claude Autobot Dashboard;
-        # 2) re-autorizar AUTOBOT vía OAuth bajo su propia app para obtener un
-        # refresh_token nuevo compatible con AMAZON2_CLIENT_ID/SECRET; 3) solo entonces
-        # quitar el `or client_id2` / `or client_sec2` de abajo.
-        _lwa_client_id  = client_id  or client_id2
-        _lwa_client_sec = client_sec or client_sec2
+        # Jovan reautorizó AUTOBOT el 2026-09-10 con el fix de auth.py ya en
+        # producción → nuevo AMAZON2_REFRESH_TOKEN emitido bajo la app correcta.
+        # Verificado en vivo contra LWA (https://api.amazon.com/auth/o2/token,
+        # grant_type=refresh_token) usando el refresh_token vigente en Railway +
+        # AMAZON2_CLIENT_ID/SECRET (propias, sin fallback) → HTTP 200,
+        # access_token emitido normalmente. El fallback ya no es necesario:
+        # cada cuenta usa sus propias credenciales, como exige CLAUDE.md.
         await token_store.save_amazon_account(
             seller_id=seller_id2, nickname=nickname2,
-            client_id=_lwa_client_id, client_secret=_lwa_client_sec,
+            client_id=client_id2, client_secret=client_sec2,
             refresh_token=token_to_save2,
             marketplace_id=mkt_id2, marketplace_name=mkt_name2,
             app_solution_id=app_sol_id2,
