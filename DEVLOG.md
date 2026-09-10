@@ -66,6 +66,19 @@ Jovan reautorizó AUTOBOT vía `/auth/amazon/connect?seller_id=A252KSQ687FNRO` (
 
 ---
 
+## 2026-09-10 — FIX: revenue/neto_plat mezclaba USD y MXN sin convertir (Arely lo detectó en producción)
+
+### Contexto
+Arely reportó en `#requerimientos-dashboard` que los montos totales de Amazon del reporte de "ventas de ayer" eran incorrectos. Verificado: correcto -- `ExclusiveBulbs` (marketplace US) guarda `unit_price`/`neto_plat` en USD (moneda nativa de la orden), pero `/api/diag/sku-sales-profit` y `/api/diag/daily-sales-by-account` sumaban `unit_price*quantity` de todas las cuentas juntas sin distinguir moneda -- mezclaba USD y MXN como si fueran lo mismo, subestimando ExclusiveBulbs ~17x.
+
+### Fix (parcial -- normaliza en lectura, no en el origen)
+Ambos endpoints ahora multiplican por `fx_rate` (ya guardado por fila) cuando `currency='USD'` antes de sumar `revenue`/`neto_plat`. Esto corrige los 2 endpoints usados hoy para reportarle a Jovan/equipo.
+
+### Pendiente real (causa raíz, no corregida aquí)
+`neto_plat` y `recup_retail_pct` se CALCULAN en moneda nativa al escribir la fila (`amazon_orders.py` `_save_amazon_items_history_bg`) -- para órdenes en USD, `recup_retail_pct` compara `neto_plat` (USD) contra `retail_mxn` (siempre MXN), dando un % sin sentido (~17x subestimado) para cualquier orden de ExclusiveBulbs específicamente. El fix de este commit normaliza los TOTALES agregados, pero el `recup_retail_pct` por fila individual de ExclusiveBulbs sigue mal hasta que se corrija en el origen (escribir `neto_plat`/`retail` en la misma moneda antes de dividir). Marcado para el mismo especialista que está trabajando en el fix de fondo de márgenes.
+
+---
+
 ## 2026-09-10 — FEAT: bot propio de Mattermost (identidad + hilo real), reemplaza MCP compartido y postear desde sesión de usuario
 
 ### Contexto

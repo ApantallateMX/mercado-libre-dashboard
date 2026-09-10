@@ -1660,8 +1660,23 @@ async def set_password_submit(request: Request):
 
 
 # Routers
+# NOTA 2026-09-10 (bug real encontrado y corregido): orders_router (define
+# GET /api/orders/{order_id}) se registraba AQUÍ, antes de que este archivo
+# definiera /api/orders/export.csv, /api/orders/period-stats y
+# /api/orders/platform-comparison más abajo. FastAPI hace first-match-wins
+# por orden de registro (mismo mecanismo que ya documentó el barrido de
+# colisiones de 2026-08-31, ver _KNOWN_ROUTE_COLLISIONS) -- pero esto NO es
+# una colisión de path+método IDÉNTICO (lo que ese chequeo detecta), sino un
+# patrón con parámetro (`{order_id}`) haciendo match de cualquier segmento
+# literal registrado DESPUÉS, sin aparecer como colisión exacta. Esas 3
+# rutas literales devolvían 500 siempre (Starlette las trataba como
+# order_id y tronaban contra la API real de ML). Fix: orders_router se
+# incluye más abajo, DESPUÉS de que las 3 rutas literales ya quedaron
+# registradas (ver "app.include_router(orders_router)" cerca de
+# /api/orders/platform-comparison) -- patrón estándar de FastAPI: lo más
+# específico/literal debe registrarse antes que lo que tiene un path param
+# que pueda hacerle match por accidente.
 app.include_router(auth_router)
-app.include_router(orders_router)
 app.include_router(items_router)
 app.include_router(metrics_router)
 app.include_router(health_router)
@@ -6422,6 +6437,17 @@ async def orders_platform_comparison(
             "recup_category": _recup_category(avg_recup, target_pct=_RECOVERY_TARGET_OTHER),
         }
     return result
+
+
+# FIX 2026-09-10: orders_router (GET /api/orders/{order_id} y GET /api/orders,
+# app/api/orders.py) se incluye AQUÍ a propósito -- DESPUÉS de que
+# /api/orders/period-stats, /api/orders/export.csv y /api/orders/platform-comparison
+# (arriba) ya quedaron registrados. Antes se incluía junto a los demás routers
+# cerca del arranque del archivo (ver nota junto a "app.include_router(auth_router)")
+# y su `{order_id}` interceptaba esas 3 rutas literales por ser más genérico y
+# haber sido registrado primero -- las 3 devolvían 500 siempre (Starlette las
+# trataba como un order_id real y tronaba contra la API de ML). Ver DEVLOG.
+app.include_router(orders_router)
 
 
 @app.get("/partials/platform-comparison", response_class=HTMLResponse)
@@ -20357,12 +20383,21 @@ async def diag_sku_sales_profit(sku: str = "", token: str = "", days: int = 365)
     # neto_plat_mxn (dinero real que entra, antes de costo de producto) +
     # avg_recup_pct/recup_category (indicador honesto de salud de precio,
     # meta segun sea SKU de TV o no -- mismas constantes que Deals).
+    # FIX REAL 2026-09-10 (encontrado por Arely en produccion, canal
+    # #requerimientos-dashboard): unit_price/neto_plat se guardan en la
+    # MONEDA NATIVA de la orden (ExclusiveBulbs = USD, no MXN) -- sumarlos
+    # directo mezcla USD y MXN como si fueran lo mismo. fx_rate ya se guarda
+    # por fila (snapshot del momento del sync); se usa aqui para normalizar
+    # a MXN antes de sumar. No toca la causa raiz en amazon_orders.py
+    # (neto_plat/recup_retail_pct se calculan en moneda nativa al escribir) --
+    # eso queda para el fix de fondo, esto normaliza en el punto de lectura.
     import aiosqlite as _aio_ssp
     async with _aio_ssp.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_ssp.Row
         rows = await (await db.execute(
             """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
-                      SUM(unit_price*quantity) revenue, SUM(neto_plat) neto_plat,
+                      SUM(unit_price*quantity * CASE WHEN currency='USD' THEN COALESCE(NULLIF(fx_rate,0),17.0) ELSE 1 END) revenue,
+                      SUM(neto_plat * CASE WHEN currency='USD' THEN COALESCE(NULLIF(fx_rate,0),17.0) ELSE 1 END) neto_plat,
                       AVG(NULLIF(recup_retail_pct, 0)) avg_recup,
                       MIN(order_date) d1, MAX(order_date) d2
                FROM order_history
@@ -20419,12 +20454,15 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
     # (costo_mxn no confiable) fuera; neto_plat_mxn + avg_recup_pct/categoria.
     # Este es el endpoint que se uso 2026-09-10 para reportar "ganancia neta de
     # ayer por cuenta" -- el numero que Jovan correctamente cuestiono.
+    # FIX REAL 2026-09-10 (Arely, #requerimientos-dashboard): mismo fix de
+    # normalizacion de moneda que sku-sales-profit -- ver comentario ahi.
     import aiosqlite as _aio_dsa
     async with _aio_dsa.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_dsa.Row
         rows = await (await db.execute(
             """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
-                      SUM(unit_price*quantity) revenue, SUM(neto_plat) neto_plat,
+                      SUM(unit_price*quantity * CASE WHEN currency='USD' THEN COALESCE(NULLIF(fx_rate,0),17.0) ELSE 1 END) revenue,
+                      SUM(neto_plat * CASE WHEN currency='USD' THEN COALESCE(NULLIF(fx_rate,0),17.0) ELSE 1 END) neto_plat,
                       AVG(NULLIF(recup_retail_pct, 0)) avg_recup
                FROM order_history
                WHERE date(order_date) = ?
