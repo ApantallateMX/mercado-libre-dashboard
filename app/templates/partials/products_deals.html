@@ -538,13 +538,13 @@
                 <option value="{{ cat }}">{{ cat }} ({{ cat_counts[cat] }})</option>
                 {% endfor %}
             </select>
-            <p class="text-xs text-gray-500 font-medium">Margen:</p>
+            <p class="text-xs text-gray-500 font-medium">Recup. Retail:</p>
             <select id="margin-filter" onchange="filterByMargin()" class="text-xs border rounded px-2 py-1 bg-white text-gray-700">
                 <option value="0">Todos</option>
-                <option value="10">&gt;10%</option>
-                <option value="15">&gt;15%</option>
-                <option value="20">&gt;20%</option>
-                <option value="30">&gt;30%</option>
+                <option value="60">&gt;60%</option>
+                <option value="80">&gt;80%</option>
+                <option value="100">&gt;100%</option>
+                <option value="120">&gt;120%</option>
             </select>
         </div>
     </div>
@@ -658,7 +658,13 @@
                     data-sales="{{ p.get('units_30d', 0) }}"
                     data-account="{{ p.get('_account_id', '') }}"
                     data-margin="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
-                    data-margin-val="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+                    {# FIX 2026-09-10: quedó sin migrar en el barrido de 2026-08-20 (que sí
+                       migró el atributo "data-margin" de arriba) -- alimentaba el filtro
+                       #margin-filter con _margen_pct (costo BM no confiable, eliminado de
+                       _calc_margins). Mismo dato que "data-margin", se deja igual por si
+                       algún JS lo lee por separado (no se encontró ninguno, pero no hay
+                       riesgo en mantenerlos sincronizados). #}
+                    data-margin-val="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
                     data-score="{{ p.get('_opp_score', 0) }}"
                     data-price="{{ p.price }}"
                     data-bm-stock="{{ p.get('_bm_avail', 0) if p.get('_bm_avail') is not none else 0 }}"

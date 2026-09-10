@@ -113,3 +113,52 @@ compradores mayoritariamente-TV o mayoritariamente-otros.
 valor viejo contaminado hasta que el sync normal las vuelva a tocar (el UPSERT sobreescribe
 `ganancia_neta`/`margen_pct` sin condición) o hasta un backfill explícito -- no ejecutado,
 pendiente de aprobación de Jovan (ver DEVLOG).
+
+## 2026-09-10 — _calc_margins() (tab Productos): ELIMINAR _ganancia_est/_margen_pct por
+## completo en vez de dejarlos vivos marcados como "no confiable"
+
+**Contexto**: mismo bug que el de `order_history` (ver decisión de arriba), pero en
+`_calc_margins()` -- la función que calcula márgenes para TODA la pestaña Productos y Deals.
+Calculaba `_ganancia_est`/`_margen_pct` (restando `_costo_mxn`/AvgCost de BM) EN PARALELO al
+cálculo correcto (`_neto_ml`/`_recup_retail_pct`), que ya existía desde 2026-08-13. Jovan pidió
+explícitamente decidir: ¿eliminar el cálculo cost-based por completo, o dejarlo pero marcado
+como no confiable por si algo más lo necesita?
+
+**Alternativas consideradas**:
+1. Dejar `_ganancia_est`/`_margen_pct` vivos, poniéndolos en `None` siempre (o con un flag
+   `_no_confiable=True` al lado) -- "marcado explícito" que pidió Jovan como opción.
+2. (Elegida) Eliminar el cálculo por completo -- ni siquiera queda la clave en el dict.
+
+**Por qué NO la 1**: el mismo día de este fix, el mismo campo `_margen_pct` (ya documentado
+como "no confiable" desde el 13-ago, con comentario explícito en el código) se usó por error
+en 3 lugares distintos encontrados por el grep exhaustivo de hoy: el guardrail de precio de
+deals (`_check_deal_negative_margin`), y 2 sitios del motor de recomendaciones de Deals (score
+de oportunidad y "buen margen"). Un comentario de "no confiable" NO evitó que alguien (en este
+caso, código escrito en sesiones anteriores) volviera a usarlo. Dejarlo vivo -- aunque sea en
+`None` -- sigue siendo una clave con un nombre que suena útil (`_margen_pct`) invitando a que
+se vuelva a leer sin revisar el comentario.
+
+**Por qué SÍ la 2**: con la clave eliminada, cualquier código nuevo que intente leer
+`p["_margen_pct"]` falla con `KeyError` de inmediato (visible en desarrollo/testing), en vez
+de silenciosamente obtener `None` o -- peor -- un número contaminado si alguien reintroduce el
+cálculo sin darse cuenta de que ya existía y se quitó a propósito. `p.get("_margen_pct")`
+(el patrón usado en todos los templates, defensivo) sigue funcionando igual con clave ausente
+que con clave en `None` -- cero riesgo de romper un consumidor ya migrado, porque se hizo el
+grep exhaustivo ANTES de eliminar (ver DEVLOG) y se migraron los 8 consumidores reales/vivos
+encontrados primero.
+
+**Efecto cascada**: al eliminar `_ganancia_est`, otros 2 bloques quedaron sin insumo:
+`_ganancia_real`/`_margen_real_pct` (= `_ganancia_est` + aportación MeLi) y, de forma
+independiente pero mismo patrón, `_roi_pct`/`_margen_ph_pct` (margen si se vendiera al
+RetailPrice PH, también restaba `_costo_mxn`). Los 4 campos no tenían NINGÚN consumidor
+(confirmado por grep) -- se eliminaron también en vez de dejarlos como código muerto
+apuntando a una fórmula ya removida.
+
+**Impacto/pendiente**: 2 hallazgos del mismo patrón se dejaron fuera a propósito (reportados
+en DEVLOG, no en esta decisión porque no se tocaron): las calculadoras JS del modal de Deals
+(`updateDealCalc`, detalle de promoción) tienen su PROPIA fórmula de "ganancia" en JavaScript
+usando `_bm_eff_cost_usd` -- no leen `_ganancia_est`/`_margen_pct`, así que no se rompieron,
+pero tampoco se migraron (requieren portar la fórmula de Neto ML a JS, cambio de UI aparte); y
+`_precio_piso` (piso de precio en sugerencias de sobrestock) sigue usando `_costo_mxn` para
+poner un límite inferior a una sugerencia de precio -- mismo patrón, requiere diseñar el
+equivalente en `_recup_retail_pct`, decisión de negocio que no se tomó unilateralmente hoy.

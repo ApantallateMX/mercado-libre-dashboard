@@ -265,19 +265,20 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
         # ahora el margen usa la misma fuente de precio real.
         _sale_price = p.get("_promo_deal_price") or price or p.get("original_price") or 0
 
-        # ── Ganancia/margen vs precio de venta REAL (deal price si aplica) ──
-        if _sale_price > 0 and p["_costo_mxn"] > 0:
-            comision = _sale_price * _ml_fee(_sale_price)
-            iva_comision = comision * 0.16
-            # Envío: promedio real histórico por SKU si hay suficiente historial
-            # (get_avg_shipping_cost_map), si no, estimado fijo de siempre.
-            envio = shipping_avg_map.get(p.get("sku", ""), 150)
-            ganancia = _sale_price - p["_costo_mxn"] - comision - iva_comision - envio
-            p["_ganancia_est"] = round(ganancia, 2)
-            p["_margen_pct"] = round((ganancia / _sale_price) * 100, 1)
-        else:
-            p["_ganancia_est"] = None
-            p["_margen_pct"] = None
+        # FIX 2026-09-10: se ELIMINÓ por completo el cálculo de _ganancia_est/
+        # _margen_pct ("Ganancia/margen vs precio de venta REAL"), que restaba
+        # _costo_mxn (AvgCost de BM, confirmado NO confiable por Jovan desde
+        # 2026-08-13, reconfirmado 2026-09-10 con SNTV007410) -- mismo bug ya
+        # corregido hoy en order_history y en Deals (_check_deal_negative_margin,
+        # motor de recomendaciones). Se decidió ELIMINAR (no solo marcar como
+        # "no confiable") porque dejarlo vivo invitó a que se reintrodujera el
+        # mismo bug 3 veces en el mismo día (guardrail de deals + 2 sitios del
+        # motor de recomendaciones) pese a estar documentado desde agosto --
+        # un comentario no bastó, así que no queda el campo para que nadie más
+        # lo use por accidente. El bloque de abajo ("Neto ML y % Recuperación
+        # Retail") es el único indicador de salud de precio desde hoy en TODO
+        # el dashboard -- Deals, order_history y ahora también el tab Productos
+        # (ver DEVLOG). Decisión completa documentada en DECISIONS.md.
 
         # ── Neto ML y % Recuperación Retail ─────────────────────────────────
         _retail_mxn = p["_retail_mxn"]
@@ -323,21 +324,11 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_recup_below_target"] = None
             p["_neto_ml_negative"] = None
 
-        # ── Aportación MeLi (PRE_NEGOTIATED) — ML subsidia parte del descuento ──
-        _meli_pct = p.get("_meli_promo_pct", 0) or 0
-        _orig_p = p.get("original_price", 0) or 0
-        p["_meli_contribution_mxn"] = round(_orig_p * _meli_pct / 100, 2) if (_meli_pct > 0 and _orig_p > 0) else 0
-        # Ganancia real = ganancia_est + lo que ML aporta (gratis para el vendedor)
-        # FIX 2026-08-12: _eff_price ahora también usa _sale_price (precio real
-        # del deal) en vez de `price` (lista) -- consistente con el fix de
-        # _ganancia_est arriba, mismo bug, mismo lugar.
-        if p["_ganancia_est"] is not None:
-            p["_ganancia_real"] = round(p["_ganancia_est"] + p["_meli_contribution_mxn"], 2)
-            _eff_price = _sale_price + p["_meli_contribution_mxn"]
-            p["_margen_real_pct"] = round((p["_ganancia_real"] / _eff_price) * 100, 1) if _eff_price > 0 else None
-        else:
-            p["_ganancia_real"] = None
-            p["_margen_real_pct"] = None
+        # FIX 2026-09-10: se eliminó el bloque "Aportación MeLi" completo
+        # (_meli_contribution_mxn/_ganancia_real/_margen_real_pct) -- su único
+        # propósito era sumarle a _ganancia_est (ahora eliminado) lo que ML
+        # subsidia; sin _ganancia_est no queda ninguna fórmula de la que
+        # derivarlo, y no tenía ningún otro consumidor (confirmado por grep).
 
         # ── Comparativa vs RetailPrice PH ──────────────────────────────────
         rph = p["_retail_ph_mxn"]
@@ -349,23 +340,13 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             # Precio sugerido: RetailPrice PH + 15% mínimo de margen sobre PH
             p["_precio_sugerido_ph"] = round(rph * 1.15, 2)
 
-            # ROI potencial: (PH - costo) / costo × 100
-            costo = p["_costo_mxn"]
-            p["_roi_pct"] = round((rph - costo) / costo * 100, 1) if costo > 0 else None
-
-            # Margen neto si se vendiera al precio PH
-            if p["_costo_mxn"] > 0:
-                comision_ph = rph * _ml_fee(rph)
-                iva_ph = comision_ph * 0.16
-                ganancia_ph = rph - p["_costo_mxn"] - comision_ph - iva_ph - 150
-                p["_margen_ph_pct"] = round((ganancia_ph / rph) * 100, 1)
-            else:
-                p["_margen_ph_pct"] = None
+            # FIX 2026-09-10: se eliminaron _roi_pct y _margen_ph_pct de aquí
+            # (ambos restaban _costo_mxn/AvgCost de BM, no confiable) -- sin
+            # ningún consumidor en templates/JS (confirmado por grep), eran
+            # cómputo muerto que dependía del mismo dato no confiable.
         else:
             p["_vs_retail_ph_pct"] = None
             p["_precio_sugerido_ph"] = None
-            p["_roi_pct"] = None
-            p["_margen_ph_pct"] = None
 
         # Precios sugeridos: para recuperar retail BM (sin/con deal)
         _retail = p["_retail_mxn"]
@@ -462,10 +443,19 @@ def _apply_bundle_stock_override(products: list, bundles: dict):
 
 
 def _apply_bundle_margin_override(products: list, bundles: dict):
-    """Para productos-bundle, recalcula costo/margen como la SUMA de sus
+    """Para productos-bundle, recalcula costo/retail/neto como la SUMA de sus
     componentes (vía _sku_cost_map/_sku_retail_map, ya poblados por
     prewarm) contra own_price_mxn (o el precio ML actual si no se definió)
-    — reemplaza el margen calculado hoy con el costo de un solo componente."""
+    — reemplaza el cálculo de _calc_margins() (hecho con precio/retail de un
+    solo componente) por el del bundle completo.
+
+    FIX 2026-09-10: dejó de escribir _ganancia_est/_margen_pct (restaban
+    cost_mxn, AvgCost de BM, no confiable) -- ahora escribe _neto_ml/
+    _recup_retail_pct/_recup_target_pct/_recup_below_target/_neto_ml_negative,
+    exactamente el mismo criterio que _calc_margins() usa para productos no-
+    bundle, para que Deals/Productos no traten los bundles distinto al resto
+    (ver DEVLOG). costo_mxn/retail_mxn se siguen guardando (snapshot
+    informativo, ya no alimentan ninguna "ganancia")."""
     if not bundles:
         return
     for p in products:
@@ -485,15 +475,21 @@ def _apply_bundle_margin_override(products: list, bundles: dict):
         p["_retail_mxn"] = round(retail_mxn, 2)
         p["_is_bundle"] = True
         p["_bundle_own_price"] = bundle.get("own_price_mxn")
-        if sale_price > 0 and cost_mxn > 0:
-            comision = sale_price * _ml_fee(sale_price)
-            iva_comision = comision * 0.16
-            ganancia = sale_price - cost_mxn - comision - iva_comision - 150
-            p["_ganancia_est"] = round(ganancia, 2)
-            p["_margen_pct"] = round((ganancia / sale_price) * 100, 1)
+        if sale_price > 0:
+            _fee_pct = _ml_fee(sale_price)
+            _net_ml = sale_price * (1 - _fee_pct - 0.0905) - 150
+            _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)
+            p["_neto_ml"] = round(_neto, 2)
+            p["_recup_retail_pct"] = round((_neto / retail_mxn) * 100, 1) if retail_mxn > 0 else None
+            p["_recup_target_pct"] = _RECOVERY_TARGET_TV if raw_sku.upper().startswith("SNTV") else _RECOVERY_TARGET_OTHER
+            p["_recup_below_target"] = p["_recup_retail_pct"] is not None and p["_recup_retail_pct"] < p["_recup_target_pct"]
+            p["_neto_ml_negative"] = p["_neto_ml"] < 0
         else:
-            p["_ganancia_est"] = None
-            p["_margen_pct"] = None
+            p["_neto_ml"] = None
+            p["_recup_retail_pct"] = None
+            p["_recup_target_pct"] = None
+            p["_recup_below_target"] = None
+            p["_neto_ml_negative"] = None
 
 
 # Nicknames conocidos de cuentas propias — fallback cuando ML API rate-limita en
@@ -1192,6 +1188,10 @@ try:
 except Exception:
     _BUILD_ID = str(int(_time.time()))
 templates.env.globals["build_id"] = _BUILD_ID
+# FIX 2026-09-10: reusa la misma _recup_category() que ya usan order_history y
+# Deals -- los templates de Productos la llaman directo en vez de duplicar la
+# lógica de umbrales/colores en Jinja (regla del proyecto: reusar, no duplicar).
+templates.env.globals["recup_category"] = _recup_category
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
@@ -10101,7 +10101,10 @@ async def products_inventory_partial(
             "bm": lambda p: p.get("_bm_avail", 0),
             "price": lambda p: p.get("price", 0),
             "revenue": lambda p: p.get("revenue", 0),
-            "margin": lambda p: p.get("_margen_pct") if p.get("_margen_pct") is not None else -999,
+            # FIX 2026-09-10: ordenaba por _margen_pct (costo BM no confiable,
+            # eliminado de _calc_margins) -- ahora por _recup_retail_pct
+            # (% de retail recuperado, mismo criterio que el resto del dashboard).
+            "margin": lambda p: p.get("_recup_retail_pct") if p.get("_recup_retail_pct") is not None else -999,
             "photos": lambda p: p.get("pictures_count", 0),
         }
         products.sort(key=sort_keys.get(field, sort_keys["stock"]), reverse=reverse)

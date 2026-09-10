@@ -33,13 +33,14 @@
             </span>
             <span>Ventas 30d {% if p.units_30d > 0 %}<b class="text-gray-800">{{ p.units_30d }}</b>{% else %}<b class="text-red-500">0</b>{% endif %}</span>
             <span>Precio <b class="text-gray-700">${{ "{:,.0f}".format(p.price) }}</b></span>
-            {% if p.get('_margen_pct') is not none %}
+            {% if p.get('_recup_retail_pct') is not none %}
+            {% set cat = recup_category(p._recup_retail_pct, p.get('sku',''), p.get('_recup_target_pct')) %}
             <span class="inline-block px-1.5 py-0.5 rounded font-semibold
-                {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
-                {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
-                {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
-                {% else %}bg-red-100 text-red-700{% endif %}">
-                {{ "%.1f"|format(p._margen_pct) }}% margen
+                {% if cat.color == 'green' %}bg-green-100 text-green-700
+                {% elif cat.color == 'yellow' %}bg-yellow-100 text-yellow-700
+                {% else %}bg-red-100 text-red-700{% endif %}"
+                title="Meta {{ '%.0f'|format(p.get('_recup_target_pct', 60)) }}%">
+                {{ cat.emoji }} {{ "%.1f"|format(p._recup_retail_pct) }}% retail
             </span>
             {% endif %}
         </div>
@@ -63,7 +64,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas 30d</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Precio</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Costo BM</th>
-                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Margen</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Recup. Retail</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Deal</th>
             </tr>
         </thead>
@@ -153,16 +154,19 @@
                     {% endif %}
                 </td>
                 <td class="px-3 py-3 text-center">
-                    {% if p.get('_margen_pct') is not none %}
+                    {% if p.get('_recup_retail_pct') is not none %}
+                    {% set cat = recup_category(p._recup_retail_pct, p.get('sku',''), p.get('_recup_target_pct')) %}
                     <div class="flex flex-col items-center">
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
-                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
-                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
-                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
-                            {% else %}bg-red-100 text-red-700{% endif %}">
-                            {{ "%.1f"|format(p._margen_pct) }}%
+                            {% if cat.color == 'green' %}bg-green-100 text-green-700
+                            {% elif cat.color == 'yellow' %}bg-yellow-100 text-yellow-700
+                            {% else %}bg-red-100 text-red-700{% endif %}"
+                            title="Meta {{ '%.0f'|format(p.get('_recup_target_pct', 60)) }}%">
+                            {{ cat.emoji }} {{ "%.1f"|format(p._recup_retail_pct) }}%
                         </span>
-                        <span class="text-[10px] text-gray-400 mt-0.5">${{ "{:,.0f}".format(p._ganancia_est) }}</span>
+                        {% if p.get('_neto_ml') is not none %}
+                        <span class="text-[10px] text-gray-400 mt-0.5">Neto ${{ "{:,.0f}".format(p._neto_ml) }}</span>
+                        {% endif %}
                     </div>
                     {% else %}
                     <span class="text-gray-300 text-xs">-</span>

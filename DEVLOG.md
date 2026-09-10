@@ -7,6 +7,57 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FIX: colisión de rutas pre-existente bloqueaba /api/orders/export.csv, /api/orders/period-stats y /api/orders/platform-comparison (500 siempre)
+
+### Contexto
+Encontrado como hallazgo separado durante el fix de ganancia_neta de hoy (ver entrada siguiente) al probar esos 3 endpoints con curl+JWT -- devolvían 500 en cualquier ambiente, no solo local. `git log`/`git diff` confirmó que es previo a esta sesión, sin relación con el fix de ganancia_neta.
+
+### Causa raíz
+`app.include_router(orders_router)` (define `GET /api/orders` y `GET /api/orders/{order_id}`, `app/api/orders.py`) se registraba cerca del arranque de `main.py` (línea ~1663), ANTES de que este mismo archivo definiera `/api/orders/period-stats`, `/api/orders/export.csv` y `/api/orders/platform-comparison` mucho más abajo (~línea 6248+). FastAPI/Starlette hace first-match-wins por orden de registro: `{order_id}` es más genérico y quedó registrado primero, así que interceptaba esas 3 rutas literales tratándolas como si fueran un order_id real -- Starlette llamaba a `client.resolve_order("export.csv")` (etc.) contra la API de ML, que respondía 400, y eso quedaba sin manejar como 500.
+
+No es el mismo tipo de colisión que ya detecta `_find_route_collisions()` (chequeo de arranque agregado 2026-08-31): ese chequeo detecta path+método **idénticos** registrados dos veces; esto es un patrón con parámetro de path (`{order_id}`) haciendo match de cualquier segmento literal registrado después -- una clase de bug distinta, confirmado que no aparecía en ningún lugar documentado.
+
+### Fix
+Se movió `app.include_router(orders_router)` de su posición original (junto a los demás `include_router`, línea ~1663) a después de que las 3 rutas literales ya quedan registradas (justo antes de `/partials/platform-comparison`, ~línea 6442) -- patrón estándar de FastAPI: lo específico/literal se registra antes que lo que tiene un path param que pueda hacerle match por accidente. Cambio de una sola línea de posición, sin tocar lógica de ninguna ruta.
+
+### Verificación
+`py -m py_compile` limpio. Chequeo de colisiones al arrancar (`_check_route_collisions_at_startup`) sin colisiones nuevas. Probado con curl+JWT: los 3 endpoints devuelven 200 con JSON válido (`period-stats` con `delta` real: revenue_pct 30.4%, neto_pct 30.6%; `platform-comparison` con datos reales de 30 días). Confirmado que `GET /api/orders` (lista) y `GET /api/orders/{order_id}` (detalle real de una orden) siguen funcionando después de mover el include. No se verificó visualmente en navegador el banner de variación de periodo en Órdenes (no se hizo por tiempo, la API ya devuelve el `delta` correcto que ese banner consume vía fetch simple).
+
+---
+
+## 2026-09-10 — FIX DE RAÍZ: extendido a todo el tab Productos -- _calc_margins() dejó de calcular _ganancia_est/_margen_pct (mismo bug de costo_mxn no confiable)
+
+### Contexto
+Continuación del mismo hallazgo de hoy (ver entrada de order_history/reportes más abajo): `_calc_margins()` seguía calculando `_ganancia_est`/`_margen_pct` restando `_costo_mxn` (AvgCost de BM, no confiable) EN PARALELO al cálculo correcto (`_neto_ml`/`_recup_retail_pct`). Grep exhaustivo (pedido explícito de Jovan, "no dejar el mismo patrón vivo en otro lado sin querer") encontró más superficie de la reportada inicialmente:
+
+- **`_calc_margins()`** (`app/main.py`): además de `_ganancia_est`/`_margen_pct`, calculaba 4 campos derivados adicionales, todos cost-based: `_ganancia_real`/`_margen_real_pct` (= `_ganancia_est` + aportación MeLi) y `_roi_pct`/`_margen_ph_pct` (margen si se vendiera al RetailPrice PH). Los 4 sin ningún consumidor en templates/JS (confirmado por grep) -- cómputo muerto que dependía del mismo dato no confiable.
+- **`_apply_bundle_margin_override()`**: función separada que recalcula margen para productos-bundle (suma de componentes) -- tenía su PROPIA copia del mismo bug, con su propia fórmula cost-based, independiente de `_calc_margins()`.
+- **Motor de sort de Productos** (`sort_keys["margin"]`): ordenaba por `_margen_pct`.
+- **5 templates de Productos**: `products_stock_issues.html`, `products_inventory.html` (badges + banner "vendiéndose a pérdida" + columna/dropdown/checkbox "Margen" + atributo `data-margin`), y 3 archivos más (`products_full.html`, `products_top_sellers.html`, `products_high_stock.html`) que **resultaron ser código MUERTO** -- confirmado con grep exhaustivo de todo `app/`: ninguna ruta los renderiza. `products_inventory_partial()` (única función que sirve `/partials/products-{top-sellers,high-stock,full,full-candidates,low-sellers}`) renderiza siempre `products_inventory.html`, que absorbió todos los presets con `{{ 'hidden' if preset not in (...) }}`. Los 3 archivos no se tocan desde 2026-07-29 (git log). Se corrigieron de todos modos por higiene (sin riesgo, están inertes), pero la superficie REAL en producción eran solo `products_inventory.html` + `products_stock_issues.html` + `products_deals.html`.
+- **`products_deals.html`**: un `data-margin-val` (alimenta el filtro `#margin-filter` de candidatos) que escapó la migración de 2026-08-20 -- esa migración sí actualizó el atributo hermano `data-margin` a `_recup_retail_pct` pero dejó este otro sin tocar.
+
+### Decisión de diseño: ELIMINAR (no solo marcar) _ganancia_est/_margen_pct
+Documentada en detalle en DECISIONS.md. Resumen: se decidió **eliminar por completo** el cálculo (no dejarlo vivo con un comentario de "no confiable") porque dejarlo vivo YA falló una vez -- el mismo bug se reintrodujo 3 veces en un solo día (guardrail de deals + 2 sitios del motor de recomendaciones, fix de la entrada anterior de hoy) pese a estar documentado como no confiable desde 2026-08-13. Un comentario no bastó. Con el campo eliminado, cualquier reintroducción futura falla de forma visible (KeyError/None) en vez de calcular silenciosamente un número contaminado.
+
+### Fix
+1. `_calc_margins()`: eliminado el bloque "Ganancia/margen vs precio de venta REAL" (`_ganancia_est`/`_margen_pct`) y sus 2 bloques derivados (`_ganancia_real`/`_margen_real_pct`, `_roi_pct`/`_margen_ph_pct`). Se conservan intactos `_neto_ml`/`_recup_retail_pct`/`_recup_target_pct`/`_recup_below_target`/`_neto_ml_negative` (el cálculo correcto) y `_vs_retail_ph_pct`/`_precio_sugerido_ph` (no dependen de costo).
+2. `_apply_bundle_margin_override()`: reescrita para calcular `_neto_ml`/`_recup_retail_pct`/`_recup_target_pct`/`_recup_below_target`/`_neto_ml_negative` del bundle completo (suma de componentes), en vez de `_ganancia_est`/`_margen_pct`. `costo_mxn`/`retail_mxn` se siguen guardando como snapshot.
+3. Nuevo `templates.env.globals["recup_category"] = _recup_category` -- los templates reusan la MISMA función creada hoy para order_history (no se duplicó lógica de umbrales/colores en Jinja).
+4. `sort_keys["margin"]` ahora ordena por `_recup_retail_pct`.
+5. Los 8 templates (5 nombrados + `products_deals.html` + los 2 archivos muertos ya contados arriba) migrados a `recup_category(p._recup_retail_pct, p.sku, p._recup_target_pct)` + `_neto_ml` en vez de `_margen_pct`/`_ganancia_est`. Labels actualizados ("Margen" → "Recup. Retail" en headers/checkboxes/dropdowns). Banner "vendiéndose a pérdida" de `products_inventory.html` migrado de `_margen_pct<0` a `_neto_ml_negative` (mismo criterio honesto que ya usa Deals).
+
+### Verificación
+`py -m py_compile app/main.py` limpio. Grep exhaustivo final (`_margen_pct|_ganancia_est|_ganancia_real|_margen_real_pct|_roi_pct|_margen_ph_pct|_meli_contribution_mxn`) en todo `app/` (py+html+js): cero referencias vivas, solo comentarios. Servidor local levantado, probado con curl+JWT contra los 6 endpoints reales de Productos/Deals (`/partials/products-top-sellers`, `-high-stock`, `-full`, `-full-candidates`, `-low-sellers`, `-deals`): los 6 devuelven 200 con badges 🟢/🟡/🔴/⚪ reales y coherentes contra datos de producción (ej. "🟢 200%", "🟡 80%", "🔴 26%"). Sin tracebacks nuevos en el log (los únicos errores del log son de OAuth de Amazon, preexistentes, sin relación).
+
+### Hallazgo relacionado, NO tocado (reportado para decisión aparte)
+Las 2 calculadoras JS interactivas de `products_deals.html` (`updateDealCalc()`/modal "Activar Deal", y el modal de detalle de promoción) calculan su propia "Ganancia Neta"/"Margen" en JavaScript usando `_bm_eff_cost_usd` (costo BM crudo) directo -- mismo patrón de bug, pero NO son consumidores de `_ganancia_est`/`_margen_pct` (calculan su propia fórmula independiente en JS), así que no se rompieron con este fix, pero tampoco se corrigieron: es la calculadora que Jovan ve en vivo al decidir un precio de deal, y corregirla bien requiere portar a JS la fórmula de "Neto ML" (retenciones 9.05% que la versión JS actual ni siquiera resta hoy) -- cambio de UI/UX que merece su propio plan, no se mezcló aquí.
+
+También `app/main.py` (~línea 8594, sugerencia de precio por sobrestock/cobertura de stock) usa `_precio_piso` -- un piso de precio calculado con `_costo_mxn`, que limita qué tan bajo se sugiere un precio en `/api/coverage-alerts` (nunca auto-aplica, requiere confirmación). Mismo patrón de bug, no tocado -- requiere diseñar un piso equivalente basado en `_recup_retail_pct`, decisión de negocio aparte.
+
+Ads Performance (~línea 13487, mismo patrón con `_bm_cost_cache`) sigue fuera de alcance, como se acordó en la entrada anterior de hoy.
+
+---
+
 ## 2026-09-10 — FIX DE RAÍZ: ganancia_neta/margen_pct en order_history seguían contra costo_mxn (AvgCost BM, no confiable) -- reemplazado por neto_plat + recup_retail_pct en todos lados
 
 ### Contexto

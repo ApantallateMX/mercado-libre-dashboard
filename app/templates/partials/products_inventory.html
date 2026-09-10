@@ -1,16 +1,21 @@
-<!-- Banner: Precio por debajo del costo BM -->
-{% set below_cost = products | selectattr('_margen_pct', 'defined') | selectattr('_margen_pct', 'ne', none) | selectattr('_margen_pct', 'lt', 0) | list %}
+<!-- Banner: vendiendo con pérdida real -->
+{# FIX 2026-09-10: antes filtraba por _margen_pct<0 (costo BM/AvgCost, no
+   confiable, eliminado de _calc_margins) -- ahora usa _neto_ml_negative,
+   el mismo criterio honesto (pierde dinero de plano después de fee ML,
+   retenciones, envío y comisión de socio, SIN depender de costo) que ya
+   usa la alerta principal de Deals desde 2026-08-13. #}
+{% set below_cost = products | selectattr('_neto_ml_negative', 'defined') | selectattr('_neto_ml_negative', 'eq', true) | list %}
 {% if below_cost %}
 <div class="mb-3 bg-orange-50 border border-orange-300 rounded-lg px-4 py-3 flex items-start gap-3">
     <span class="text-orange-500 text-xl flex-shrink-0">⚠️</span>
     <div class="flex-1 min-w-0">
-        <p class="text-orange-800 font-bold text-sm">{{ below_cost|length }} producto{{ 's' if below_cost|length > 1 }} vendiéndose a pérdida</p>
-        <p class="text-orange-600 text-xs mt-0.5">El precio de venta es menor que costo BM + comisiones. Revisa precio o pausa el listing.</p>
+        <p class="text-orange-800 font-bold text-sm">{{ below_cost|length }} producto{{ 's' if below_cost|length > 1 }} perdiendo dinero</p>
+        <p class="text-orange-600 text-xs mt-0.5">El neto después de comisión ML, retenciones, envío y comisión de socio es negativo. Revisa precio o pausa el listing.</p>
         <div class="flex flex-wrap gap-2 mt-2">
             {% for p in below_cost[:5] %}
             <span class="bg-orange-100 text-orange-700 text-[10px] font-semibold px-2 py-0.5 rounded truncate max-w-[180px]"
                   title="{{ p.title }}">
-                {{ p.title[:28] }}… {{ "%.1f"|format(p._margen_pct) }}%
+                {{ p.title[:28] }}… Neto ${{ "{:,.0f}".format(p._neto_ml) }}
             </span>
             {% endfor %}
         </div>
@@ -288,7 +293,7 @@
                 <option value="price_desc" {{ 'selected' if sort_by == 'price_desc' }}>Precio (desc)</option>
                 <option value="price_asc" {{ 'selected' if sort_by == 'price_asc' }}>Precio (asc)</option>
                 <option value="revenue_desc" {{ 'selected' if sort_by == 'revenue_desc' }}>Revenue (desc)</option>
-                <option value="margin_desc" {{ 'selected' if sort_by == 'margin_desc' }}>Margen (desc)</option>
+                <option value="margin_desc" {{ 'selected' if sort_by == 'margin_desc' }}>Recup. Retail (desc)</option>
                 <option value="photos_asc" {{ 'selected' if sort_by == 'photos_asc' }}>Fotos (asc)</option>
             </select>
         </div>
@@ -343,7 +348,7 @@
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" class="col-toggle rounded" data-col="margin" {{ 'checked' if preset in ('top', 'stock', 'full', 'full_candidates') }} onchange="toggleColumn('margin', this.checked)">
-            <span>Margen</span>
+            <span>Recup. Retail</span>
         </label>
         <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
                 <input type="checkbox" class="col-toggle rounded" data-col="price_floor" onchange="toggleColumn('price_floor', this.checked)">
@@ -460,14 +465,15 @@
                 </span>
             </div>
             {% endif %}
-            {% if p.get('_margen_pct') is not none %}
+            {% if p.get('_recup_retail_pct') is not none %}
+            {% set cat = recup_category(p._recup_retail_pct, p.get('sku',''), p.get('_recup_target_pct')) %}
             <div>
                 <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold
-                    {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
-                    {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
-                    {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
-                    {% else %}bg-red-100 text-red-700{% endif %}">
-                    {{ "%.0f"|format(p._margen_pct) }}%
+                    {% if cat.color == 'green' %}bg-green-100 text-green-700
+                    {% elif cat.color == 'yellow' %}bg-yellow-100 text-yellow-700
+                    {% else %}bg-red-100 text-red-700{% endif %}"
+                    title="Meta {{ '%.0f'|format(p.get('_recup_target_pct', 60)) }}%">
+                    {{ cat.emoji }} {{ "%.0f"|format(p._recup_retail_pct) }}%
                 </span>
             </div>
             {% endif %}
@@ -526,7 +532,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="revenue">Revenue</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="cost">Costo BM</th>
-                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="margin">Margen</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="margin">Recup. Retail</th>
                     <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs hidden" data-col="price_floor">Precio Piso</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">Retail PH</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="photos">Fotos</th>
@@ -550,7 +556,7 @@
                 data-stock="{{ p.available_quantity }}"
                 data-bm="{{ p.get('_bm_avail', 0) or 0 }}"
                 data-price="{{ p.price }}"
-                data-margin="{{ p.get('_margen_pct', -999) or -999 }}"
+                data-margin="{{ p.get('_recup_retail_pct', -999) or -999 }}"
                 data-is-full="{{ '1' if p.is_full else '0' }}"
                 data-catalog="{{ '1' if p.get('catalog_listing') else '0' }}"
                 data-photos="{{ p.pictures_count }}"
@@ -780,18 +786,21 @@
                     <span class="text-gray-300 text-xs">-</span>
                     {% endif %}
                 </td>
-                <!-- Margen -->
+                <!-- Recup. Retail -->
                 <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="margin">
-                    {% if p.get('_margen_pct') is not none %}
+                    {% if p.get('_recup_retail_pct') is not none %}
+                    {% set cat = recup_category(p._recup_retail_pct, p.get('sku',''), p.get('_recup_target_pct')) %}
                     <div class="flex flex-col items-center">
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
-                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
-                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
-                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
-                            {% else %}bg-red-100 text-red-700{% endif %}">
-                            {{ "%.1f"|format(p._margen_pct) }}%
+                            {% if cat.color == 'green' %}bg-green-100 text-green-700
+                            {% elif cat.color == 'yellow' %}bg-yellow-100 text-yellow-700
+                            {% else %}bg-red-100 text-red-700{% endif %}"
+                            title="Meta {{ '%.0f'|format(p.get('_recup_target_pct', 60)) }}%">
+                            {{ cat.emoji }} {{ "%.1f"|format(p._recup_retail_pct) }}%
                         </span>
-                        <span class="text-[10px] text-gray-400 mt-0.5">${{ "{:,.0f}".format(p._ganancia_est) }}</span>
+                        {% if p.get('_neto_ml') is not none %}
+                        <span class="text-[10px] text-gray-400 mt-0.5">Neto ${{ "{:,.0f}".format(p._neto_ml) }}</span>
+                        {% endif %}
                     </div>
                     {% else %}
                     <span class="text-gray-300 text-xs">-</span>
