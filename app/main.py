@@ -20454,13 +20454,22 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
     # (costo_mxn no confiable) fuera; neto_plat_mxn + avg_recup_pct/categoria.
     # Este es el endpoint que se uso 2026-09-10 para reportar "ganancia neta de
     # ayer por cuenta" -- el numero que Jovan correctamente cuestiono.
-    # FIX REAL 2026-09-10 (Arely, #requerimientos-dashboard): mismo fix de
-    # normalizacion de moneda que sku-sales-profit -- ver comentario ahi.
+    # FIX REAL 2026-09-10 (Arely, #requerimientos-dashboard): normalizacion de
+    # moneda para el TOTAL combinado (revenue_mxn/neto_plat_mxn) -- ver
+    # comentario en sku-sales-profit. AMPLIACION 2026-09-10 (Jovan): cada
+    # cuenta debe mostrarse SIEMPRE en su moneda real de venta (donde vende
+    # de verdad -- USD si es EE.UU., MXN si es México, etc.), no forzada a
+    # una sola moneda -- por eso se agregan revenue_native/neto_plat_native
+    # (montos SIN convertir, tal cual se vendieron) junto con la version en
+    # MXN (solo para poder sumar un total combinado con sentido). "currency"
+    # por fila indica la moneda real de esa cuenta.
     import aiosqlite as _aio_dsa
     async with _aio_dsa.connect(DATABASE_PATH) as db:
         db.row_factory = _aio_dsa.Row
         rows = await (await db.execute(
-            """SELECT platform, account_id, COUNT(*) n, SUM(quantity) qty,
+            """SELECT platform, account_id, MAX(currency) currency, COUNT(*) n, SUM(quantity) qty,
+                      SUM(unit_price*quantity) revenue_native,
+                      SUM(neto_plat) neto_plat_native,
                       SUM(unit_price*quantity * CASE WHEN currency='USD' THEN COALESCE(NULLIF(fx_rate,0),17.0) ELSE 1 END) revenue,
                       SUM(neto_plat * CASE WHEN currency='USD' THEN COALESCE(NULLIF(fx_rate,0),17.0) ELSE 1 END) neto_plat,
                       AVG(NULLIF(recup_retail_pct, 0)) avg_recup
@@ -20477,6 +20486,9 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
         avg_recup = round(d["avg_recup"], 1) if d["avg_recup"] is not None else None
         d["avg_recup_pct"] = avg_recup
         d["recup_category"] = _recup_category(avg_recup, target_pct=_RECOVERY_TARGET_OTHER)
+        d["currency"] = d.get("currency") or "MXN"
+        d["revenue_native"] = round(d.get("revenue_native") or 0, 2)
+        d["neto_plat_native"] = round(d.get("neto_plat_native") or 0, 2)
         del d["avg_recup"]
         by_account.append(d)
     # BUG evitado 2026-09-10 al probar este mismo fix: promediar con "or 0"
