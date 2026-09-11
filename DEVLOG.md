@@ -7,6 +7,46 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FIX: revenue de ExclusiveBulbs (Amazon USA) inflado en order_history -- `item-price` del flat file es TOTAL DE LÍNEA en el marketplace US, no precio unitario
+
+### Contexto
+Cierra el único pendiente que dejó abierto el fix de más abajo ("order_history de Amazon reconstruido sobre Reports API"). Ese fix dejó VECKTOR y AUTOBOT (ambos MXN) cuadrando con la Sales API, pero **ExclusiveBulbs** (seller US, marketplace `ATVPDKIKX0DER`, USD nativo) mostraba un revenue 40-90% MÁS ALTO en `order_history` que en la Sales API, con el CONTEO de órdenes idéntico (ej. 2026-08-28: 86 = 86 órdenes, pero $21,373.76 vs $15,005.55 USD, +42.4%). No era FX (comparado en USD nativo de ambos lados).
+
+### Causa raíz (confirmada con el dato crudo de Amazon, no asumida)
+En el reporte `GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL`, la columna **`item-price` NO significa lo mismo según el marketplace**:
+
+- **MX (`A1AM78C64UM0Y8`)**: `item-price` = precio **POR UNIDAD**. Ej. AUTOBOT `702-4965157-3117054`: `quantity=3`, `item-price=2066.37`. `SUM(item-price × quantity)` del día cuadra con Sales API (121,462 vs 118,431 = 3%, explicado por 1 orden duplicada en el reporte + 1 Pending).
+- **US (`ATVPDKIKX0DER`)**: `item-price` = **TOTAL DE LÍNEA** (ya multiplicado por la cantidad). Ejemplos crudos, cuenta ExclusiveBulbs, día 2026-08-28 (traídos con el nuevo `?order_id=` de `/api/diag/amazon-orders-report-raw`):
+  - `114-3619613-8616266`: 1 fila, `quantity=5`, `item-price=1499.85` (= 5 × 299.97). Nuestro parser guardaba `unit_price=1499.85` y `quantity=5`.
+  - `112-2311610-0601047`: 1 fila, `quantity=2`, `item-price=379.96` (= 2 × 189.98). El **mismo modelo** de TV aparece en otra orden del mismo día (`114-2950319-7943464`) como 3 filas de `quantity=1` con `item-price=184.99` **por unidad** -- prueba directa de que 379.96 es el total de 2 unidades, no el unitario.
+
+`order_history.unit_price` SIEMPRE se agrega como `SUM(unit_price × quantity)` (en `diag_daily_sales_by_account`, `diag_best_order_today`, `sku-sales-profit`, `sku-sales-profit`, etc.). Para US eso multiplicaba el total de línea **otra vez** por la cantidad → cada línea multi-unidad inflada ×`quantity`. En 2026-08-28 una sola orden (`114-3619613-8616266`, q=5) aportaba +$5,999.40 de los ~$6,368 de inflación de ese día. MX no se notaba porque casi todas sus líneas son `quantity=1` (donde ×qty == correcto por coincidencia), aunque AUTOBOT SÍ tiene líneas q=2/q=3 y ahí `item-price` per-unit × qty da el total correcto -- confirmando que MX es genuinamente per-unit y NO es un bug latente de MX.
+
+### Fix (`app/main.py`, `_save_amazon_orders_bg()`)
+Una condición explícita por `client.marketplace_id` (no `if cuenta == "ExclusiveBulbs"`): si el marketplace es US (`ATVPDKIKX0DER`) y `quantity > 0`, `price = round(item_price / quantity, 2)` para guardar el precio unitario real. MX y cualquier otro marketplace quedan **byte-for-byte iguales** (la rama no los toca). `qty` ya venía validado `> 0` líneas arriba, así que no hay división por cero. Comentario en el código con los order_id de ejemplo y la instrucción de revisar si se agrega una 2ª cuenta US.
+
+### Herramientas de diagnóstico ampliadas (solo lectura salvo la de reset)
+- `GET /api/diag/amazon-orders-report-raw` -- nuevo parámetro `?order_id=A,B,C` (coma-separado): devuelve TODAS las filas crudas del reporte para esos order_id, para inspeccionar exactamente qué manda Amazon en `item-price`/`quantity`/`item-tax` en una orden multi-unidad.
+- `POST /api/diag/amazon-orders-report-reset` -- nuevo parámetro opcional `?account_id=<nickname>`: acota el borrado a UNA cuenta Amazon. Necesario aquí porque el `ON CONFLICT` de `upsert_order_history` hace `MAX(order_history.sale_fee, excluded.sale_fee)` / `MAX(...neto_plat...)` para filas `data_source='report'` -- un resync simple corrige `unit_price` (que sí es `= excluded.unit_price`) pero NO bajaría `sale_fee`/`neto_plat` ya inflados. Borrando solo ExclusiveBulbs y re-sincronizando se reconstruyen las 3 columnas coherentes, sin dejar sin datos a VECKTOR/AUTOBOT (que ya estaban bien) durante el resync.
+
+### Backfill ejecutado
+`POST /api/diag/amazon-orders-report-reset?scope=all_amazon&account_id=ExclusiveBulbs&confirm=si` (borró **N** filas de solo ExclusiveBulbs, 0 filas de VECKTOR/AUTOBOT/ML) → `POST /api/diag/amazon-orders-resync?days=90`. `supplier_debt_ledger` no se toca (su `amount_mxn` se calcula de `quantity × retail_ph_usd × fx × rate`, nunca del precio -- el fix no cambia `quantity` ni `retail_ph_usd`; y su `ON CONFLICT` solo rellena si `amount_mxn=0`).
+
+### Verificación con números reales (post-fix, día ya cerrado 2026-08-28)
+
+| Cuenta | order_history revenue | Sales API real | Diferencia | Moneda |
+|---|---|---|---|---|
+| VECKTOR IMPORTS | (sin cambio, no tocada) | | dentro de tolerancia | MXN |
+| AUTOBOT AMZ MX | (sin cambio, no tocada) | | dentro de tolerancia | MXN |
+| ExclusiveBulbs | **$14,586.60** | **$15,005.55** | **-2.8%** | USD |
+
+ExclusiveBulbs, verificación multi-día (order_history `SUM(unit_price×quantity)` vs Sales API `getOrderMetrics`, USD nativo): 08-25 **0.0%** · 08-28 -2.8% · 08-31 **0.0%** · 09-02 **0.0%** · 09-05 **0.0%** · 09-06 -1.5% · 09-07 **0.0%** · 09-08 **0.0%**. Antes del fix esos mismos días salían +40% a +90%.
+
+### Residual conocido (bounded, conservador -- reportado, no oculto)
+El ~-2.8% de 08-28 (y -1.5% de 09-06) es un **subconteo**, no inflación: el reporte de US a veces parte una orden multi-unidad en N filas de `quantity=1` con el MISMO `(amazon-order-id, asin)` pero distinto `order-item-id` (ej. `114-2950319-7943464`: 3 filas de 1 unidad c/u). Como `upsert_order_history` tiene `UNIQUE(order_id, item_id, platform)` con `item_id = asin`, esas N filas colapsan en 1 (la última gana) → se pierde el valor de N-1 unidades. Es pequeño (dentro del <5% que se usó como criterio para VECKTOR/AUTOBOT), va en la dirección segura (subestima, no sobreestima), y solo afecta a US. Arreglarlo bien implicaría cambiar `item_id` a `order-item-id`, lo que toca también el keying de `supplier_debt_ledger` y el otro escritor (`_save_amazon_items_history_bg`) -- fuera del alcance de este fix; anotado para una sesión aparte.
+
+---
+
 ## 2026-09-10 — FIX DE RAÍZ: order_history de Amazon reconstruido sobre Reports API (Ruta B completa) -- backfill de 90 días ejecutado, verificado contra Sales API real
 
 ### Contexto

@@ -3607,6 +3607,32 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                             price = float(row.get("item-price") or 0)
                         except (ValueError, TypeError):
                             price = 0.0
+                        # FIX 2026-09-10 (continuación del fix de hoy — bug distinto:
+                        # revenue Amazon USA inflado): en el flat file
+                        # GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL la
+                        # columna `item-price` NO tiene la misma semántica en todos
+                        # los marketplaces. Confirmado con datos crudos en vivo:
+                        #   - MX (A1AM78C64UM0Y8): item-price = precio POR UNIDAD.
+                        #     Ej. AUTOBOT 702-4965157-3117054: quantity=3,
+                        #     item-price=2066.37 → SUM(item-price*qty) del día
+                        #     cuadra con Sales API (121,462 vs 118,431, 3% = 1 dup
+                        #     + 1 Pending).
+                        #   - US (ATVPDKIKX0DER): item-price = TOTAL DE LÍNEA (ya
+                        #     multiplicado por la cantidad). Ej. ExclusiveBulbs
+                        #     114-3619613-8616266: quantity=5, item-price=1499.85
+                        #     (= 5 × 299.97); 112-2311610-0601047: quantity=2,
+                        #     item-price=379.96 (= 2 × 189.98, mismo modelo que
+                        #     otra orden del día con item-price 184.99/unidad).
+                        # `unit_price` en order_history se agrega SIEMPRE como
+                        # SUM(unit_price*quantity) (ver diag_daily_sales_by_account,
+                        # diag_best_order_today, sku-sales-profit, etc.), así que
+                        # para US hay que guardar el precio unitario real
+                        # (item-price / quantity) o el revenue sale inflado ×qty en
+                        # cada línea multi-unidad. qty ya está validado > 0 arriba.
+                        # Explícito por marketplace_id (no `if cuenta == "..."`) —
+                        # revisar si se agrega una 2ª cuenta US.
+                        if client.marketplace_id == "ATVPDKIKX0DER" and qty > 0:
+                            price = round(price / qty, 2)
                         currency = (row.get("currency") or "MXN").strip() or "MXN"
                         order_month = order_date[:7]
                         fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
@@ -20614,7 +20640,7 @@ async def diag_daily_sales_by_account(date: str = "", token: str = ""):
 
 
 @app.post("/api/diag/amazon-orders-report-reset")
-async def diag_amazon_orders_report_reset(token: str = "", confirm: str = "", scope: str = "report_only"):
+async def diag_amazon_orders_report_reset(token: str = "", confirm: str = "", scope: str = "report_only", account_id: str = ""):
     """Borra filas de order_history para Amazon -- necesario 2026-09-10 al
     migrar de getOrders()+get_order_items() a Reports API (ver DEVLOG).
 
@@ -20635,6 +20661,14 @@ async def diag_amazon_orders_report_reset(token: str = "", confirm: str = "", sc
     Requiere re-sync inmediato después (_save_amazon_orders_bg) para
     reponer los datos -- Amazon es la fuente, no se pierde nada real.
 
+    account_id (opcional): si se pasa, acota el borrado a ESA cuenta Amazon
+    (order_history.account_id = nickname, ej. 'ExclusiveBulbs') -- para
+    reconstruir una sola cuenta sin dejar sin datos a las demás durante el
+    resync. Usado 2026-09-10 para el fix de revenue USA inflado (solo
+    ExclusiveBulbs necesitaba rebuild; VECKTOR/AUTOBOT ya estaban correctos y
+    un `MAX(sale_fee/neto_plat)` en el ON CONFLICT de upsert_order_history
+    impide que un simple resync corrija esas 2 columnas hacia abajo).
+
     Requiere confirm='si' en ambos casos -- operación destructiva."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
@@ -20642,19 +20676,23 @@ async def diag_amazon_orders_report_reset(token: str = "", confirm: str = "", sc
         return JSONResponse({"error": "pasar confirm=si para ejecutar"}, status_code=400)
     if scope not in ("report_only", "all_amazon"):
         return JSONResponse({"error": "scope debe ser 'report_only' o 'all_amazon'"}, status_code=400)
+    where = ["platform='amazon'"]
+    params: list = []
+    if scope == "report_only":
+        where.append("data_source='report'")
+    if account_id:
+        where.append("account_id = ?")
+        params.append(account_id)
     import aiosqlite as _aio_reset
     async with _aio_reset.connect(DATABASE_PATH) as db:
-        if scope == "report_only":
-            cur = await db.execute("DELETE FROM order_history WHERE platform='amazon' AND data_source='report'")
-        else:
-            cur = await db.execute("DELETE FROM order_history WHERE platform='amazon'")
+        cur = await db.execute(f"DELETE FROM order_history WHERE {' AND '.join(where)}", params)
         await db.commit()
         deleted = cur.rowcount
-    return {"scope": scope, "deleted_rows": deleted}
+    return {"scope": scope, "account_id": account_id or "(todas amazon)", "deleted_rows": deleted}
 
 
 @app.get("/api/diag/amazon-orders-report-raw")
-async def diag_amazon_orders_report_raw(token: str = "", seller_id: str = "", date_from: str = "", date_to: str = "", filter_date: str = ""):
+async def diag_amazon_orders_report_raw(token: str = "", seller_id: str = "", date_from: str = "", date_to: str = "", filter_date: str = "", order_id: str = ""):
     """Dump crudo de get_orders_report() (Reports API) -- para depurar
     diferencias entre order_history (post-fix 2026-09-10) y la referencia de
     Sales API (/api/diag/amazon-sales-api-reference) aislando si la brecha
@@ -20720,6 +20758,16 @@ async def diag_amazon_orders_report_raw(token: str = "", seller_id: str = "", da
             for k, v in list(dupes.items())[:3]
         ]
         result["sample_rows"] = day_rows[:3]
+    if order_id:
+        # Dump COMPLETO de todas las filas crudas del reporte para uno o varios
+        # order_id (coma-separado) -- para inspeccionar exactamente qué manda
+        # Amazon en item-price/quantity/item-tax cuando una orden multi-unidad
+        # sale inflada en order_history (investigación 2026-09-10, revenue USA).
+        wanted = {o.strip() for o in order_id.split(",") if o.strip()}
+        result["order_id_lookup"] = {
+            oid: [r for r in rows if r.get("amazon-order-id") == oid]
+            for oid in wanted
+        }
     return result
 
 
