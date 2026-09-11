@@ -3591,14 +3591,43 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                         # una Pending se cancela después, el próximo resync (mismo
                         # order_id/item_id, ventana rodante de 3 días) la vuelve a
                         # traer con status=Cancelled y SÍ se excluye entonces.
-                        if status in ("Cancelled", "Canceled"):
-                            continue
                         order_id = (row.get("amazon-order-id") or "").strip()
                         order_date = _amz_purchase_date_to_pacific_day(row.get("purchase-date") or "")
                         sku_raw = (row.get("sku") or "").strip()
                         if not order_id or not order_date or not sku_raw:
                             continue
                         sku = _norm_sku(sku_raw) or sku_raw.upper()
+                        # FIX 2026-09-11: antes, una fila Cancelled hacía `continue`
+                        # AQUÍ (antes de siquiera calcular order_id/sku) -- si la
+                        # MISMA orden ya existía en order_history como
+                        # Pending/Shipped de un resync anterior, la cancelación
+                        # nunca se procesaba y la fila vieja se quedaba
+                        # indefinidamente contando revenue que Amazon ya no
+                        # cuenta (confirmado en vivo 2026-09-11: 2 de 54 órdenes
+                        # "Pending" de AUTOBOT 09-09 ya estaban Cancelled en el
+                        # reporte 2 días después, sin que order_history se
+                        # enterara). Ahora SÍ se upsertea con status='cancelled'
+                        # (minúscula -- convención real de este proyecto para
+                        # excluir de reportes, ver `status NOT IN ('cancelled',
+                        # ...)` en daily-sales-by-account/sku-sales-profit; ML
+                        # guarda su status tal cual porque la API de ML ya manda
+                        # minúsculas). upsert_order_history ya sabe revertir
+                        # supplier_debt_ledger cuando status cae en
+                        # _DEBT_CANCEL_STATUSES -- no se duplica esa lógica aquí.
+                        if status in ("Cancelled", "Canceled"):
+                            all_rows.append({
+                                "order_id": order_id, "account_id": nick, "platform": "amazon",
+                                "item_id": (row.get("asin") or "").strip(), "sku": sku,
+                                "unit_price": 0.0, "quantity": 0, "sale_fee": 0.0, "neto_plat": 0.0,
+                                "costo_usd": 0.0, "costo_mxn": 0.0, "retail_ph_usd": 0.0,
+                                "ganancia_neta": 0.0, "margen_pct": 0.0, "recup_retail_pct": 0.0,
+                                "fx_rate": round(_last_fx_rate if _last_fx_rate > 0 else 17.0, 4),
+                                "currency": (row.get("currency") or "MXN").strip() or "MXN",
+                                "order_date": order_date, "order_month": order_date[:7],
+                                "status": "cancelled", "data_source": "report",
+                                "buyer_id": "", "buyer_nickname": "",
+                            })
+                            continue
                         try:
                             qty = int(float(row.get("quantity") or 0))
                         except (ValueError, TypeError):
@@ -3609,32 +3638,40 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                             price = float(row.get("item-price") or 0)
                         except (ValueError, TypeError):
                             price = 0.0
-                        # FIX 2026-09-10 (continuación del fix de hoy — bug distinto:
-                        # revenue Amazon USA inflado): en el flat file
-                        # GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL la
-                        # columna `item-price` NO tiene la misma semántica en todos
-                        # los marketplaces. Confirmado con datos crudos en vivo:
-                        #   - MX (A1AM78C64UM0Y8): item-price = precio POR UNIDAD.
-                        #     Ej. AUTOBOT 702-4965157-3117054: quantity=3,
-                        #     item-price=2066.37 → SUM(item-price*qty) del día
-                        #     cuadra con Sales API (121,462 vs 118,431, 3% = 1 dup
-                        #     + 1 Pending).
-                        #   - US (ATVPDKIKX0DER): item-price = TOTAL DE LÍNEA (ya
-                        #     multiplicado por la cantidad). Ej. ExclusiveBulbs
-                        #     114-3619613-8616266: quantity=5, item-price=1499.85
-                        #     (= 5 × 299.97); 112-2311610-0601047: quantity=2,
-                        #     item-price=379.96 (= 2 × 189.98, mismo modelo que
-                        #     otra orden del día con item-price 184.99/unidad).
+                        # FIX 2026-09-11 (corrige el FIX 2026-09-10 de arriba, que
+                        # quedó INCOMPLETO): el 09-10 se concluyó, con UN solo
+                        # ejemplo (AUTOBOT 702-4965157-3117054), que en MX
+                        # (A1AM78C64UM0Y8) `item-price` es precio POR UNIDAD y
+                        # que solo US (ATVPDKIKX0DER) trae el TOTAL DE LÍNEA —
+                        # exactamente el tipo de generalización desde un solo caso
+                        # que este proyecto ya aprendió a no hacer (ver
+                        # feedback_no_generalizar_regla_desde_un_solo_caso.md).
+                        # Reportado 2026-09-11 (Arely + Adrian, con el dato REAL
+                        # de Seller Central en mano): AUTOBOT y VECKTOR aparecían
+                        # infladas +41.5%/+33.6% contra Sales API mientras
+                        # ExclusiveBulbs (US, ya dividía qty) cuadraba casi exacto
+                        # — la pista de que el bug era justo el `if` de abajo.
+                        # Confirmado con aritmética exacta al centavo cruzando el
+                        # MISMO sku vendido el MISMO día a qty=1 vs qty>1 en MX
+                        # (AUTOBOT 09-09): SHIL000541 qty=10 item-price=5985.50 =
+                        # 598.55×10 (ref. qty=1 del mismo día: 598.55); SHIL000541
+                        # qty=9 item-price=5386.95 = 598.55×9; SNHT000165 qty=8
+                        # item-price=1729.04 = 216.13×8; SHIL000536 qty=4
+                        # item-price=2363.88 = 590.97×4 — MX también trae TOTAL DE
+                        # LÍNEA, no precio unitario, en cuanto quantity>1. El
+                        # ejemplo original de MX (qty=3) probablemente coincidió
+                        # por casualidad o esa orden en particular sí tenía
+                        # item-price unitario — no se pudo re-verificar, pero la
+                        # evidencia nueva (4+ SKUs independientes, match exacto al
+                        # centavo) pesa mucho más que 1 caso sin contraste directo.
                         # `unit_price` en order_history se agrega SIEMPRE como
                         # SUM(unit_price*quantity) (ver diag_daily_sales_by_account,
                         # diag_best_order_today, sku-sales-profit, etc.), así que
-                        # para US hay que guardar el precio unitario real
-                        # (item-price / quantity) o el revenue sale inflado ×qty en
-                        # cada línea multi-unidad. qty ya está validado > 0 arriba.
-                        # Explícito por marketplace_id (no `if cuenta == "..."`) —
-                        # revisar si se agrega una 2ª cuenta US.
-                        if client.marketplace_id == "ATVPDKIKX0DER" and qty > 0:
-                            price = round(price / qty, 2)
+                        # dividir aquí por quantity es obligatorio para CUALQUIER
+                        # marketplace — para qty=1 la división es un no-op (mismo
+                        # valor), así que aplicarla siempre es seguro. qty ya está
+                        # validado > 0 arriba.
+                        price = round(price / qty, 2)
                         currency = (row.get("currency") or "MXN").strip() or "MXN"
                         order_month = order_date[:7]
                         fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
