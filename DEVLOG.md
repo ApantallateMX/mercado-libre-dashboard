@@ -29,18 +29,24 @@ Una condición explícita por `client.marketplace_id` (no `if cuenta == "Exclusi
 - `GET /api/diag/amazon-orders-report-raw` -- nuevo parámetro `?order_id=A,B,C` (coma-separado): devuelve TODAS las filas crudas del reporte para esos order_id, para inspeccionar exactamente qué manda Amazon en `item-price`/`quantity`/`item-tax` en una orden multi-unidad.
 - `POST /api/diag/amazon-orders-report-reset` -- nuevo parámetro opcional `?account_id=<nickname>`: acota el borrado a UNA cuenta Amazon. Necesario aquí porque el `ON CONFLICT` de `upsert_order_history` hace `MAX(order_history.sale_fee, excluded.sale_fee)` / `MAX(...neto_plat...)` para filas `data_source='report'` -- un resync simple corrige `unit_price` (que sí es `= excluded.unit_price`) pero NO bajaría `sale_fee`/`neto_plat` ya inflados. Borrando solo ExclusiveBulbs y re-sincronizando se reconstruyen las 3 columnas coherentes, sin dejar sin datos a VECKTOR/AUTOBOT (que ya estaban bien) durante el resync.
 
-### Backfill ejecutado
-`POST /api/diag/amazon-orders-report-reset?scope=all_amazon&account_id=ExclusiveBulbs&confirm=si` (borró **N** filas de solo ExclusiveBulbs, 0 filas de VECKTOR/AUTOBOT/ML) → `POST /api/diag/amazon-orders-resync?days=90`. `supplier_debt_ledger` no se toca (su `amount_mxn` se calcula de `quantity × retail_ph_usd × fx × rate`, nunca del precio -- el fix no cambia `quantity` ni `retail_ph_usd`; y su `ON CONFLICT` solo rellena si `amount_mxn=0`).
+### Backfill ejecutado (producción, Railway)
+`POST /api/diag/amazon-orders-report-reset?scope=all_amazon&account_id=ExclusiveBulbs&confirm=si` → **10,388 filas borradas, todas de ExclusiveBulbs** (verificado en el acto: VECKTOR n=50 y AUTOBOT n=51 para 2026-08-28 quedaron byte-idénticos antes/después, y `platform='ml'` intacto). Luego `POST /api/diag/amazon-orders-resync?days=90` (fire-and-forget, las 3 cuentas; MX solo re-upsertea el mismo `unit_price` porque la rama del fix no las toca). Corrida completa en ~4.5 min. `supplier_debt_ledger` no se toca (su `amount_mxn` se calcula de `quantity × retail_ph_usd × fx × rate`, nunca del precio -- el fix no cambia `quantity` ni `retail_ph_usd`; y su `ON CONFLICT` solo rellena si `amount_mxn=0`).
 
-### Verificación con números reales (post-fix, día ya cerrado 2026-08-28)
+### Verificación con números reales (PRODUCCIÓN, post-backfill)
 
-| Cuenta | order_history revenue | Sales API real | Diferencia | Moneda |
+**Día ya cerrado 2026-08-28 (13 días de antigüedad -- la comparación más limpia):**
+
+| Cuenta | order_history rev nativo | Sales API real | Diferencia | Moneda |
 |---|---|---|---|---|
-| VECKTOR IMPORTS | (sin cambio, no tocada) | | dentro de tolerancia | MXN |
-| AUTOBOT AMZ MX | (sin cambio, no tocada) | | dentro de tolerancia | MXN |
-| ExclusiveBulbs | **$14,586.60** | **$15,005.55** | **-2.8%** | USD |
+| VECKTOR IMPORTS | $173,514.64 | $193,288.82 | -10.2% (preexistente, no tocada por este fix -- ver entrada de abajo) | MXN |
+| AUTOBOT AMZ MX | $118,186.53 | $118,431.46 | **-0.2%** (no tocada por este fix) | MXN |
+| ExclusiveBulbs | **$14,586.60** | **$15,005.55** | **-2.8%** (antes: **+42.4%**) | USD |
 
-ExclusiveBulbs, verificación multi-día (order_history `SUM(unit_price×quantity)` vs Sales API `getOrderMetrics`, USD nativo): 08-25 **0.0%** · 08-28 -2.8% · 08-31 **0.0%** · 09-02 **0.0%** · 09-05 **0.0%** · 09-06 -1.5% · 09-07 **0.0%** · 09-08 **0.0%**. Antes del fix esos mismos días salían +40% a +90%.
+**ExclusiveBulbs, barrido de 9 días (order_history `SUM(unit_price×quantity)` vs Sales API `getOrderMetrics`, USD nativo):**
+08-20 **+0.0%** · 08-25 **+0.0%** · 08-28 -2.8% · 08-31 **+0.0%** · 09-02 **+0.0%** · 09-05 **+0.0%** · 09-06 -1.5% · 09-07 **+0.0%** · 09-09 **+0.0%**.
+6 de 9 días con match EXACTO, peor caso -2.8%, **ningún día inflado**. Antes del fix esos mismos días salían +40% a +90%.
+
+Nota: los residuales de VECKTOR/AUTOBOT en días recientes (-5% a -13%) son el mismo ruido preexistente de órdenes Pending MX (OXXO/SPEI de confirmación lenta) ya documentado en la entrada de abajo -- este fix NO cambia el código de MX (rama `if client.marketplace_id == "ATVPDKIKX0DER"`), y las cifras MX de 2026-08-28 quedaron idénticas antes/después del backfill.
 
 ### Residual conocido (bounded, conservador -- reportado, no oculto)
 El ~-2.8% de 08-28 (y -1.5% de 09-06) es un **subconteo**, no inflación: el reporte de US a veces parte una orden multi-unidad en N filas de `quantity=1` con el MISMO `(amazon-order-id, asin)` pero distinto `order-item-id` (ej. `114-2950319-7943464`: 3 filas de 1 unidad c/u). Como `upsert_order_history` tiene `UNIQUE(order_id, item_id, platform)` con `item_id = asin`, esas N filas colapsan en 1 (la última gana) → se pierde el valor de N-1 unidades. Es pequeño (dentro del <5% que se usó como criterio para VECKTOR/AUTOBOT), va en la dirección segura (subestima, no sobreestima), y solo afecta a US. Arreglarlo bien implicaría cambiar `item_id` a `order-item-id`, lo que toca también el keying de `supplier_debt_ledger` y el otro escritor (`_save_amazon_items_history_bg`) -- fuera del alcance de este fix; anotado para una sesión aparte.
