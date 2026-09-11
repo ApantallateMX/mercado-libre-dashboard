@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-11 — FIX: listing eliminado en ML seguía pegado en "Riesgo Sobreventa" para siempre (huérfanos nunca corregían `ml_listings.status`)
+
+### Contexto
+Luis Aguilar reportó en Mattermost que MLM1661005976 (SKU SNTV000790, cuenta APANTALLATEMX/523916436) sigue apareciendo en "Riesgo Sobreventa" pese a estar eliminado de verdad en Mercado Libre (ya no aparece en ninguna búsqueda de status active/paused/inactive de la API real) y no lo podía quitar.
+
+### Causa raíz
+`app/services/ml_listing_sync.py` (`_sync_account_full`) SÍ detecta listings huérfanos (en DB pero ya no en la respuesta fresca de ML) y los guardaba en la tabla lateral `orphan_listings` -- pero nunca corregía `ml_listings.status`, que es la fuente real que lee `_get_all_products_cached()`/`_prewarm_caches()` (`app/main.py`) para las 6 listas de alertas de stock (restock/oversell_risk/activate/critical/full_no_stock/stagnant), de las 4 cuentas ML. La fila quedaba congelada en `status='active'` para siempre. Segundo factor: el poller de qty cada 3 min (`_sync_qty_only_account`) seguía reconsultando `available_quantity` de items ya eliminados indefinidamente (ML responde 200 con datos viejos para un item borrado, no 404 -- nunca se hubiera auto-corregido solo).
+
+### Fix
+- `app/services/token_store.py`: nueva función `mark_ml_listings_closed(account_id, item_ids)` -- `UPDATE ml_listings SET status='closed'` para los item_ids detectados como huérfanos. `'closed'` no cae en ningún filtro de las 6 listas (todas exigen `status in ("active","paused","inactive")`, mismo set que ya usaba `_get_all_products_cached`) -- desaparecen solas del próximo prewarm, sin tocar la lógica de ninguna lista.
+- `app/services/ml_listing_sync.py`:
+  - `_sync_account_full`: tras detectar huérfanos y guardarlos en `orphan_listings` (sin cambios), ahora también llama `mark_ml_listings_closed(uid, orphan_ids)` e invalida caché vía `_on_listings_updated(uid)`. La comparación de huérfanos ahora excluye de `db_rows` los items que ya están `closed` (statuses=["active","paused","inactive"]) -- si no, un item ya cerrado se re-detectaría como "huérfano" en cada full sync (cada 6h) para siempre sin necesidad.
+  - `_sync_qty_only_account`: mismo filtro de statuses al leer `ml_listings` -- deja de reconsultar `available_quantity` de items ya cerrados cada 3 min.
+
+### Alivio inmediato (producción, antes del deploy de este fix)
+El item de Luis (MLM1661005976) ya tenía `status='closed'` en `ml_listings` en Railway al momento de retomar esta tarea -- confirmado con `GET /api/stock/search-listings?q=SNTV000790` en producción (`{"item_id":"MLM1661005976","sku":"SNTV000790",...,"status":"closed",...}`) y con `GET /api/listings/orphans?account_id=523916436` (`count: 0`, ya no vuelve a aparecer como huérfano). Como `_get_all_products_cached` ya filtraba por `status in (active,paused,inactive)` desde antes de este fix, la corrección manual de esa fila ya excluyó el item de las 6 listas de forma inmediata -- este fix de código evita que el mismo problema se repita para cualquier otro listing eliminado, en cualquiera de las 4 cuentas ML.
+
+### Verificación
+- `py -m py_compile` limpio en ambos archivos.
+- Servidor local (`py -m uvicorn app.main:app --port 8017`) + `POST /api/stock/force-prewarm` con datos reales de las 4 cuentas ML: log confirma `[ML-SYNC] uid=292395685: 1913 listings huérfanos detectados y marcados 'closed'` seguido de `[ML-SYNC] Full sync uid=292395685: 741 items` sin excepción -- la ruta nueva corrió de punta a punta contra ML real. (El número alto de huérfanos es esperado: `tokens.db` local está desactualizada frente a producción, no es una regresión.)
+- Las 6 listas se siguieron generando sin error tras el cambio: `GET /api/sync/alerts-count` devolvió `{"count":7}` (292395685) y `{"count":54}` (523916436) -- `risk_count` (oversell_risk) calculado por el mismo bloque de `_prewarm_caches` que construye las otras 5 listas, sin tracebacks en ese bloque.
+- Errores no relacionados vistos en el log local (`database is locked` en `_record_presence`/`_seed_amazon_accounts` por contención de escritura local, 400 en refresh token de Amazon SP-API) son preexistentes del entorno local, no originados por este cambio -- ninguno con traza en `ml_listing_sync.py`/`token_store.py`.
+
+### Riesgo cubierto
+Este cambio toca la única fuente que alimenta las 6 listas de alertas de stock para las 4 cuentas ML -- se verificó explícitamente que las 5 listas restantes (no solo oversell_risk) siguen construyéndose sin excepción tras el cambio, no solo que compila.
+
 ## 2026-09-10 — FEAT: "Enterado" instantáneo en #requerimientos-dashboard (loop de polling, fallback al Outgoing Webhook bloqueado)
 
 ### Contexto

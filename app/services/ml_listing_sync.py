@@ -114,7 +114,11 @@ async def _sync_account_full(uid: str, client) -> int:
         # Los que están en DB pero no en la respuesta API = eliminados en ML.
         try:
             fresh_ids = {r["item_id"] for r in rows}
-            db_rows = await token_store.get_ml_listings(uid)
+            # Comparar solo contra active/paused/inactive -- un item ya marcado 'closed'
+            # en una vuelta anterior no puede "volver a desaparecer"; incluirlo aquí solo
+            # lo re-detectaría como huérfano en cada full sync (cada 6h) para siempre,
+            # sin necesidad (ver mark_ml_listings_closed más abajo).
+            db_rows = await token_store.get_ml_listings(uid, statuses=["active", "paused", "inactive"])
             db_ids  = {r["item_id"] for r in db_rows}
             orphan_ids = db_ids - fresh_ids
             await token_store.clear_orphans_for_account("ml", uid)
@@ -132,7 +136,21 @@ async def _sync_account_full(uid: str, client) -> int:
                     for iid in orphan_ids
                 ]
                 await token_store.save_orphan_listings(orphan_entries)
-                logger.info(f"[ML-SYNC] uid={uid}: {len(orphan_ids)} listings huérfanos detectados")
+                # FIX 2026-09-11 (Luis reportó MLM1661005976 pegado en "Riesgo Sobreventa"
+                # pese a estar eliminado en ML, confirmado vía GET /items/{id} en vivo):
+                # antes solo se guardaba el hallazgo en orphan_listings (tabla lateral de
+                # reporte) -- nunca se corregía ml_listings.status, la fuente real que lee
+                # _get_all_products_cached()/_prewarm_caches() para las 6 listas de alertas
+                # de stock. La fila quedaba congelada en "active" para siempre aunque el
+                # propio sync ya supiera que el item no existe. 'closed' no está en ningún
+                # filtro de esas 6 listas -- desaparecen solas del próximo prewarm.
+                await token_store.mark_ml_listings_closed(uid, list(orphan_ids))
+                logger.info(f"[ML-SYNC] uid={uid}: {len(orphan_ids)} listings huérfanos detectados y marcados 'closed'")
+                if _on_listings_updated:
+                    try:
+                        _on_listings_updated(uid)
+                    except Exception:
+                        pass
         except Exception as _oe:
             logger.warning(f"[ML-SYNC] Error detectando huérfanos uid={uid}: {_oe}")
 
@@ -269,7 +287,12 @@ async def _sync_qty_only_account(uid: str, client) -> int:
     """
     from app.services import token_store
     try:
-        rows = await token_store.get_ml_listings(uid)
+        # FIX 2026-09-11 (mismo caso MLM1661005976): sin filtro de status, este poller
+        # de 3 min seguía reconsultando available_quantity de items ya cerrados/eliminados
+        # en ML para siempre (ML sigue respondiendo 200 con datos viejos para un item
+        # borrado, no 404 -- nunca se hubiera "auto-corregido" solo). Alinea con el resto
+        # del módulo: solo los status que de verdad necesitan vigilancia de stock.
+        rows = await token_store.get_ml_listings(uid, statuses=["active", "paused", "inactive"])
         if not rows:
             return 0
 

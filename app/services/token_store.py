@@ -5279,6 +5279,35 @@ async def get_ml_listings(account_id: str, statuses: list[str] | None = None) ->
     return [dict(r) for r in rows]
 
 
+async def mark_ml_listings_closed(account_id: str, item_ids: list[str]) -> int:
+    """Marca item_ids como status='closed' en ml_listings -- para listings confirmados
+    eliminados/cerrados en ML (detectados como huérfanos: ya no aparecen en ninguna
+    búsqueda de status active/paused/inactive de la API real).
+
+    FIX 2026-09-11 (Luis reportó MLM1661005976 pegado en "Riesgo Sobreventa" pese a
+    estar eliminado en ML): antes la detección de huérfanos en ml_listing_sync.py
+    solo guardaba el hallazgo en orphan_listings (tabla lateral de reporte) -- nunca
+    corregía esta tabla, que es la fuente real que lee _get_all_products_cached()/
+    _prewarm_caches() para las 6 listas de alertas de stock (oversell_risk/restock/
+    activate/critical/full_no_stock/stagnant). La fila quedaba congelada en su
+    último status conocido ("active") para siempre.
+
+    'closed' no está en ningún filtro de esas 6 listas (todas exigen status in
+    ("active","paused","inactive")) -- por eso basta con esta corrección de datos,
+    sin tocar la lógica de ninguna lista de alertas. Retorna el número de filas
+    afectadas (rowcount)."""
+    if not item_ids:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        placeholders = ",".join("?" for _ in item_ids)
+        cur = await db.execute(
+            f"UPDATE ml_listings SET status = 'closed' WHERE account_id = ? AND item_id IN ({placeholders})",
+            [account_id] + list(item_ids),
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_ml_listings_all_accounts(statuses: list[str] | None = None) -> list[dict]:
     """Retorna todos los listings de todas las cuentas."""
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
