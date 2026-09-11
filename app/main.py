@@ -31782,6 +31782,85 @@ async def diag_amazon_rdt_probe(token: str = "", seller_id: str = "A20NFIUQNEYZ1
     return JSONResponse(result)
 
 
+@app.get("/api/diag/amazon-lwa-raw-probe")
+async def diag_amazon_lwa_raw_probe(token: str = "", seller_id: str = ""):  # noqa
+    """
+    DIAGNÓSTICO TEMPORAL 2026-09-11 (investigación VECKTOR 500 en getOrders/
+    get_orders_report): generalización de diag_exclusivebulbs_probe para
+    cualquier seller_id -- llama LWA + orders/v0/orders directo con httpx
+    crudo, capturando el body de error REAL de Amazon en vez del 500
+    genérico de FastAPI (que oculta el httpx.HTTPStatusError sin loggear
+    el detalle en ningún lado accesible -- no hay acceso a logs de Railway
+    desde este entorno, ver DEVLOG). Solo lectura, no escribe nada. Borrar
+    cuando se cierre la investigación."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id requerido"}, status_code=400)
+
+    import httpx as _hx
+
+    LWA_URL = "https://api.amazon.com/auth/o2/token"
+    SP_BASE = "https://sellingpartnerapi-na.amazon.com"
+
+    acct = await token_store.get_amazon_account(seller_id)
+    if not acct:
+        return JSONResponse({"error": "cuenta no encontrada", "seller_id": seller_id}, status_code=404)
+
+    client_id     = acct.get("client_id", "")
+    client_secret = acct.get("client_secret", "")
+    refresh_token = acct.get("refresh_token", "")
+    marketplace   = acct.get("marketplace_id", "A1AM78C64UM0Y8")
+    result = {
+        "seller_id": seller_id,
+        "nickname": acct.get("nickname", ""),
+        "marketplace": marketplace,
+        "client_id_prefix": client_id[:45] if client_id else "",
+        "refresh_token_len": len(refresh_token),
+    }
+    if not refresh_token:
+        result["error"] = "refresh_token vacío"
+        return JSONResponse(result)
+
+    async with _hx.AsyncClient(timeout=20) as http:
+        try:
+            lwa_resp = await http.post(LWA_URL, data={
+                "grant_type":    "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id":     client_id,
+                "client_secret": client_secret,
+            })
+            result["lwa_status"] = lwa_resp.status_code
+            if lwa_resp.status_code != 200:
+                result["lwa_error_body"] = lwa_resp.text[:500]
+                return JSONResponse(result)
+            access_token = lwa_resp.json()["access_token"]
+        except Exception as e:
+            result["lwa_exception"] = str(e)
+            return JSONResponse(result)
+
+        headers = {"x-amz-access-token": access_token, "Content-Type": "application/json"}
+        from datetime import datetime as _dt_probe, timedelta as _td_probe
+        created_after = (_dt_probe.utcnow() - _td_probe(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            ord_resp = await http.get(
+                f"{SP_BASE}/orders/v0/orders",
+                headers=headers,
+                params=[
+                    ("MarketplaceIds", marketplace),
+                    ("CreatedAfter", created_after),
+                    ("OrderStatuses", "Shipped"),
+                ],
+                timeout=20,
+            )
+            result["orders_status"] = ord_resp.status_code
+            result["orders_body"] = ord_resp.text[:600]
+        except Exception as e:
+            result["orders_exception"] = str(e)
+
+    return JSONResponse(result)
+
+
 @app.get("/api/diag/refresh-ml-tokens")
 async def diag_refresh_ml_tokens(token: str = ""):
     """Fuerza re-seed de tokens ML. Solo accesible con diag token."""
