@@ -31817,6 +31817,7 @@ async def diag_amazon_lwa_raw_probe(token: str = "", seller_id: str = ""):  # no
         "marketplace": marketplace,
         "client_id_prefix": client_id[:45] if client_id else "",
         "refresh_token_len": len(refresh_token),
+        "client_secret_suffix": client_secret[-10:] if client_secret else "",
     }
     if not refresh_token:
         result["error"] = "refresh_token vacío"
