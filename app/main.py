@@ -3592,6 +3592,28 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                         # order_id/item_id, ventana rodante de 3 días) la vuelve a
                         # traer con status=Cancelled y SÍ se excluye entonces.
                         order_id = (row.get("amazon-order-id") or "").strip()
+                        # FIX 2026-09-11: el flat file trae, además de órdenes
+                        # reales del marketplace, filas con `amazon-order-id`
+                        # tipo "S01-XXXXXXX-XXXXXXX" (NO el formato estándar
+                        # "7XX-XXXXXXX-XXXXXXX" de una orden real) y `sku` en
+                        # texto suelto ("RUBBERMAID", "LTM", "RM" -- no el
+                        # formato de catálogo SNxxxxx/SHxxxxx) con `item-price`
+                        # SIEMPRE vacío -- todo apunta a Multi-Channel
+                        # Fulfillment (Amazon cumpliendo un pedido de OTRO canal,
+                        # no una venta del marketplace). Encontrado 2026-09-11
+                        # investigando por qué `qty` salía inflada +58% (228 vs
+                        # 144 reales) en AUTOBOT 09-09 mientras el revenue ya
+                        # cuadraba -- 3 de estas filas (qty 43+24+18=85) inflaban
+                        # unidades sin tocar precio (item-price vacío = 0). Sales
+                        # API NO las cuenta (confirmado: excluyéndolas, unidades
+                        # pasan de 228→143 vs 144 reales -- match casi exacto).
+                        # Se excluyen por formato de order_id, no por SKU (más
+                        # robusto -- un SKU real también podría venir mal
+                        # cargado, pero el formato de AmazonOrderId es un
+                        # estándar fijo de Amazon, no algo que varíe por
+                        # producto).
+                        if not _re.match(r"^\d{3}-\d{7}-\d{7}$", order_id):
+                            continue
                         order_date = _amz_purchase_date_to_pacific_day(row.get("purchase-date") or "")
                         sku_raw = (row.get("sku") or "").strip()
                         if not order_id or not order_date or not sku_raw:
