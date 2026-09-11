@@ -3671,6 +3671,37 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
                         # marketplace — para qty=1 la división es un no-op (mismo
                         # valor), así que aplicarla siempre es seguro. qty ya está
                         # validado > 0 arriba.
+                        #
+                        # FIX 2026-09-11 (segundo hallazgo del mismo día, tras
+                        # resincronizar con el fix de arriba): con SOLO item-price
+                        # dividido por qty, AUTOBOT seguía -13.8% a -15% por debajo
+                        # de Sales API incluso en un día YA CERRADO y estable
+                        # (2026-08-28, 13 días de antigüedad, sin churn de
+                        # Pending/Cancelled pendiente) -- con order/item/unit COUNT
+                        # exactos (48 órdenes/49 items/61 unidades = igual en ambos
+                        # lados), la única explicación posible era precio por línea
+                        # incompleto, no cobertura. Confirmado: `item-tax` (IVA) del
+                        # flat file NO está incluido en `item-price`, y Sales API
+                        # (getOrderMetrics) para MX SÍ lo incluye en "Ordered
+                        # Product Sales" -- verificado sumando item-price+item-tax
+                        # de las 49 líneas no-canceladas de AUTOBOT 08-28:
+                        # $118,272.67 vs Sales API real $118,431.46 (diff $158.79,
+                        # 0.13% -- el residual es el límite YA conocido y documentado
+                        # de líneas duplicadas mismo order_id+asin, ver DEVLOG
+                        # 2026-09-10 "Residual conocido"). Re-verificado en 09-09
+                        # (día MUY reciente, con más ruido de Pending/Cancelled en
+                        # curso): -13.7% con solo item-price -> -7.0% con
+                        # item-price+item-tax, misma dirección de mejora. Explícito
+                        # por marketplace_id (A1AM78C64UM0Y8, MX) -- NO se aplica a
+                        # US (ATVPDKIKX0DER), que ya cuadraba casi exacto ayer SOLO
+                        # con item-price (ver DEVLOG 2026-09-10 ExclusiveBulbs);
+                        # aplicarlo también ahí sin verificar sería repetir el
+                        # mismo error de generalizar sin evidencia.
+                        if client.marketplace_id == "A1AM78C64UM0Y8":
+                            try:
+                                price += float(row.get("item-tax") or 0)
+                            except (ValueError, TypeError):
+                                pass
                         price = round(price / qty, 2)
                         currency = (row.get("currency") or "MXN").strip() or "MXN"
                         order_month = order_date[:7]
