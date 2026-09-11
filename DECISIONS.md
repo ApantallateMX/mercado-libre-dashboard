@@ -2,6 +2,20 @@
 # Registro de POR QUÉ se tomó una decisión de arquitectura/implementación no trivial.
 # Distinto de DEVLOG.md (que registra QUÉ se hizo).
 
+## 2026-09-10 — Loop de "Enterado" instantáneo en #requerimientos-dashboard: polling 30s, solo root posts, set en memoria sin persistencia
+
+**Contexto**: Jovan pidió que el ciclo de atención de reportes en Mattermost fuera instantáneo. La rutina de 1h ya investiga y responde de verdad; se necesitaba solo el acuse de recibo rápido. Un Outgoing Webhook real (push instantáneo) quedó bloqueado por permisos de Mattermost (ver DEVLOG 2026-09-10, HTTP 403). Se implementó un loop de polling como fallback.
+
+**Decisión 1 — Intervalo 30s (rango pedido 30-60s)**: se eligió el extremo más agresivo del rango porque el objetivo explícito es "instantáneo" y el canal es de bajo volumen (no compite con nada de BM/ML, es solo 2 llamadas HTTP a Mattermost por ciclo). 60s habría sido igual de seguro pero menos alineado con la urgencia del pedido.
+
+**Decisión 2 — Solo responder a root posts (`root_id == ""`), nunca a replies**: alternativa considerada fue acusar recibo también a respuestas dentro de un hilo ya existente. Se descartó porque una respuesta dentro de un hilo casi siempre es parte de una conversación en curso (Jovan respondiéndole a la rutina de 1h, u otro humano continuando el hilo) -- auto-responder "Enterado" a cada reply sería ruido, y peor, podría intercalarse confusamente con la respuesta real de investigación de la rutina de 1h en el MISMO hilo. Un post nuevo (root) es inequívocamente "llegó un reporte que nadie ha visto todavía", que es el caso que de verdad urge acusar al instante.
+
+**Decisión 3 — Set en memoria (`set[str]`) sin tabla nueva en SQLite, con siembra silenciosa en el primer ciclo tras cada arranque**: alternativa considerada fue una tabla persistente (`mattermost_processed_posts` o similar) para sobrevivir redeploys sin re-sembrar. Se descartó por ahora porque: (a) el pedido explícito dijo que sobrevivir un restart "no es crítico para esto", (b) el riesgo real sin persistencia no es "responder de más" sino "no responder a un post que llegó exactamente durante el redeploy" -- ventana de segundos, tolerable. El problema real que SÍ había que resolver era que, sin la siembra silenciosa del primer ciclo, cada redeploy de Railway (frecuente, ver flujo de `git push` de CLAUDE.md) haría que el loop tratara los últimos 20 posts existentes como "nuevos" y les respondiera "Enterado" retroactivamente -- spam confuso en el canal cada vez que se hace deploy de cualquier cosa, no solo de este feature. La siembra silenciosa (marcar como vistos sin responder en la primera pasada tras cada arranque) resuelve esto sin necesitar persistencia.
+
+**Decisión 4 — No hardcodear el `user_id` del bot**: se sugirió como opción `w5yspgpmf3bd5kyiweoqd9ikfa` (visto en instrucciones previas), pero no aparece en ningún archivo del repo y no se pudo verificar contra la API real de Mattermost en esta sesión (sin `MM_BOT_TOKEN` en `.env`/`.env.production` local). Un ID incorrecto en el filtro anti-loop sería el peor tipo de bug posible aquí (el bot respondiéndose a sí mismo en cascada). Se resolvió en runtime vía `GET /users/me` (nueva `mattermost_bot.get_my_user_id()`, cacheada en memoria) -- garantiza que el filtro siempre compara contra la cuenta que esté configurada de verdad, sin importar cuál sea.
+
+---
+
 ## 2026-09-09 — No escribir room_type/size/recommended_uses_for_product/item_depth_width_height
 ## en amz_product_type_templates.defaults para ELECTRIC_FAN (BIRTMAN BT-42i, ExclusiveBulbs)
 

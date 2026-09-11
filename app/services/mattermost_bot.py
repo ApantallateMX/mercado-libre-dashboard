@@ -156,3 +156,38 @@ async def get_username(user_id: str) -> str:
             return r.json().get("username", "")
     except Exception:
         return ""
+
+
+_my_user_id_cache: str = ""
+
+
+async def get_my_user_id() -> str:
+    """Resuelve el user_id propio del bot (@ecomops-agent o el que esté seteado
+    en MM_DASHBOARD_BOT_TOKEN) vía GET /users/me. Cacheado en memoria -- no
+    cambia durante la vida del proceso. Usado por el loop de "enterado"
+    instantáneo (FEATURE 2026-09-10) para filtrar sus propios posts y evitar
+    responderse a sí mismo (nunca hardcodear este id -- no se pudo verificar
+    de forma independiente que w5yspgpmf3bd5kyiweoqd9ikfa sea estable/correcto,
+    mejor resolverlo en runtime contra la cuenta real que esté configurada).
+    Retorna "" si no está configurado o falla -- nunca lanza."""
+    global _my_user_id_cache
+    if _my_user_id_cache:
+        return _my_user_id_cache
+    if not (MM_URL and MM_DASHBOARD_BOT_TOKEN):
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{MM_URL}/api/v4/users/me",
+                headers={"Authorization": f"Bearer {MM_DASHBOARD_BOT_TOKEN}"},
+            )
+            if r.status_code != 200:
+                logger.warning(f"[MattermostBot] get_my_user_id -> {r.status_code}: {r.text[:200]}")
+                return ""
+            uid = r.json().get("id", "")
+            if uid:
+                _my_user_id_cache = uid
+            return uid
+    except Exception as e:
+        logger.warning(f"[MattermostBot] Error resolviendo user_id propio: {e}")
+        return ""

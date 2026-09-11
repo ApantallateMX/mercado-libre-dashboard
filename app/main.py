@@ -55,6 +55,7 @@ from app.api.supplier_debt import router as supplier_debt_router
 from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
+from app.services import mattermost_bot
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
 from app.services.sku_utils import base_sku as _normalize_sku_imported  # canónica — base_sku maneja bundles, sufijos y paréntesis
@@ -969,6 +970,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_item_experience_sync_loop())
     start_token_refresh()
     start_supplier_debt_sync()
+    start_requerimientos_dashboard_instant_ack()
     start_realtime_alerts_reconcile()
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
@@ -17287,6 +17289,90 @@ async def _supplier_debt_sync_loop():
 def start_supplier_debt_sync():
     """Inicia el loop de captura de ventas para el ledger de deuda."""
     asyncio.create_task(_supplier_debt_sync_loop())
+
+
+# ── "Enterado" instantáneo en #requerimientos-dashboard (FEATURE 2026-09-10) ──
+# Contexto: la investigación real (clasificar, investigar con datos reales,
+# decidir/preguntar, responder) la sigue haciendo la rutina cloud de Claude Code
+# cada hora (trig_01EXSF8a6KerJKYercx5AmvT, cron "31 * * * *") -- ESTE loop no
+# la reemplaza ni la duplica, solo acorta la espera de "¿ya lo vieron?" de hasta
+# 1h a <60s con un acuse de recibo fijo. Se intentó primero un Outgoing Webhook
+# de Mattermost (push real, instantáneo de verdad) pero quedó bloqueado por
+# permisos (HTTP 403, @ecomops-agent no es Team Admin -- ver DEVLOG.md
+# 2026-09-10). Este polling es el fallback 100% construible con lo que ya
+# tenemos mientras se resuelve el permiso de Mattermost.
+_REQ_DASHBOARD_CHANNEL = "requerimientos-dashboard"
+_REQ_DASHBOARD_ACK_INTERVAL = 30  # segundos -- instantáneo sin ser agresivo con la API
+_REQ_DASHBOARD_ACK_TEXT = "Enterado, lo estamos revisando."
+_req_dashboard_seen_ids: set = set()
+_req_dashboard_seeded = False  # primera pasada: solo marcar como vistos, no responder
+
+
+async def _requerimientos_dashboard_instant_ack_loop():
+    """Cada 30s revisa los últimos posts de #requerimientos-dashboard y responde
+    'Enterado' en hilo al primer post NUEVO que sea root (no reply) y que no
+    venga del propio bot -- la investigación real la sigue haciendo la rutina
+    de 1h, esto solo es el acuse de recibo instantáneo que pidió Jovan.
+
+    Decisiones de diseño (registradas también en DECISIONS.md):
+    - Solo root posts (root_id==""): una respuesta dentro de un hilo ya
+      existente suele ser parte de una conversación en curso (Jovan
+      respondiéndole a la rutina de 1h, u otro humano) -- auto-acusar recibo
+      en cada reply sería ruido y podría cruzarse con la respuesta real de la
+      rutina en el mismo hilo. Un post nuevo (root) es inequívocamente "llegó
+      un reporte nuevo", que es el caso que urge acusar recibo al instante.
+    - Set en memoria, sin tabla nueva: se pierde en cada redeploy de Railway
+      (frecuente, ver flujo de git push en CLAUDE.md) -- aceptable, no es
+      crítico que sobreviva un restart.
+    - Primera pasada tras cada arranque SOLO siembra el set (marca como
+      vistos) sin responder -- evita saludar retroactivamente mensajes viejos
+      cada vez que la app redeploya, que sería confuso y ruidoso en el canal.
+    """
+    global _req_dashboard_seeded
+    await asyncio.sleep(15)  # dejar que el resto del startup termine primero
+    while True:
+        try:
+            bot_uid = await mattermost_bot.get_my_user_id()
+            posts = await mattermost_bot.get_channel_posts(_REQ_DASHBOARD_CHANNEL, limit=20)
+            if not posts:
+                # canal vacío, no configurado, o Mattermost caído -- no es un error
+                # del loop, seguir intentando en el próximo ciclo.
+                await asyncio.sleep(_REQ_DASHBOARD_ACK_INTERVAL)
+                continue
+            # Orden real de get_channel_posts es más reciente primero -- procesar
+            # en orden cronológico para no responder "fuera de orden" si hay >1 nuevo.
+            for post in reversed(posts):
+                pid = post.get("id", "")
+                if not pid or pid in _req_dashboard_seen_ids:
+                    continue
+                _req_dashboard_seen_ids.add(pid)
+                if not _req_dashboard_seeded:
+                    continue  # primera pasada: solo sembrar, no responder a historial viejo
+                if bot_uid and post.get("user_id") == bot_uid:
+                    continue  # nunca procesar/responder posts propios -- filtro anti-loop
+                if post.get("root_id"):
+                    continue  # solo root posts (ver decisión de diseño arriba)
+                result = await mattermost_bot.post_message(
+                    _REQ_DASHBOARD_CHANNEL, _REQ_DASHBOARD_ACK_TEXT, root_id=pid
+                )
+                if result:
+                    logger.info(f"[REQ-DASHBOARD-ACK] Enterado enviado -- post_id={pid}")
+                else:
+                    logger.warning(f"[REQ-DASHBOARD-ACK] Fallo enviando enterado -- post_id={pid}")
+            _req_dashboard_seeded = True
+            # Poda del set en memoria -- no crecer sin límite en una sesión larga
+            # entre redeploys (el canal no es de alto volumen, pero es higiene barata).
+            if len(_req_dashboard_seen_ids) > 500:
+                _req_dashboard_seen_ids.clear()
+                _req_dashboard_seeded = False  # re-sembrar en el próximo ciclo, no responder de golpe
+        except Exception as e:
+            logger.warning(f"[REQ-DASHBOARD-ACK] Error: {e}")
+        await asyncio.sleep(_REQ_DASHBOARD_ACK_INTERVAL)
+
+
+def start_requerimientos_dashboard_instant_ack():
+    """Inicia el loop de 'enterado' instantáneo en #requerimientos-dashboard."""
+    asyncio.create_task(_requerimientos_dashboard_instant_ack_loop())
 
 
 # ── Reconciliación de Alertas de Stock — no depende solo de notificaciones ──

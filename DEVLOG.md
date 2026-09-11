@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-10 — FEAT: "Enterado" instantáneo en #requerimientos-dashboard (loop de polling, fallback al Outgoing Webhook bloqueado)
+
+### Contexto
+Mismo pedido urgente de Jovan que el intento de Outgoing Webhook documentado más abajo (2026-09-10, bloqueado por permisos 403). La investigación real completa (clasificar, investigar con datos reales, delegar a especialistas, decidir/preguntar, responder) la sigue haciendo la rutina cloud de Claude Code cada hora (`trig_01EXSF8a6KerJKYercx5AmvT`, cron `31 * * * *`) -- eso NO se toca ni se duplica. Lo que se construyó aquí es solo el acuse de recibo instantáneo mientras se resuelve el permiso del webhook real.
+
+### Investigación: ¿se puede disparar la rutina de 1h al instante desde código externo?
+Sí existe una API pública real y documentada: `POST https://api.anthropic.com/v1/claude_code/routines/{routine_id}/fire` ([docs](https://platform.claude.com/docs/en/api/claude-code/routines-fire)). Requiere headers `Authorization: Bearer <token>` (token específico de ESA rutina, prefijo `sk-ant-oat01-...`), `anthropic-version` y `anthropic-beta: experimental-cc-routine-2026-04-01`.
+
+**Bloqueada por falta de credencial, no por falta de API**: el token no es un API key genérico -- se genera a mano, una sola vez, abriendo la rutina en `claude.ai/code/routines` → "Add another trigger" → "API" → "Generate token". Ese token no existe hoy en este proyecto (no está en `.env`/`.env.production`/Railway) y no se improvisó ninguno.
+
+**Pendiente para activar esto** (cuando Jovan quiera): 1) generar el token en `claude.ai/code/routines` para `trig_01EXSF8a6KerJKYercx5AmvT`, 2) agregarlo a Railway como `CC_ROUTINE_TOKEN_REQUERIMIENTOS` (o nombre similar), 3) agregar ~10 líneas al loop de abajo: después de postear el "Enterado", un `httpx.post` a ese endpoint con el `text` del reporte nuevo. Es trabajo chico una vez que exista el token -- no vale la pena construirlo sin poder probarlo contra la API real.
+
+### Qué se construyó (`app/main.py`, `app/services/mattermost_bot.py`)
+- `mattermost_bot.get_my_user_id()` -- nuevo, resuelve el `user_id` propio del bot vía `GET /users/me`, cacheado en memoria. No se hardcodeó el `w5yspgpmf3bd5kyiweoqd9ikfa` mencionado como posible porque no se pudo verificar de forma independiente contra la API real (sin `MM_BOT_TOKEN` en local) -- más seguro resolverlo en runtime contra la cuenta que esté configurada de verdad.
+- `_requerimientos_dashboard_instant_ack_loop()` + `start_requerimientos_dashboard_instant_ack()` (`app/main.py`, junto a `_supplier_debt_sync_loop`, registrado en el startup junto a los demás loops): cada 30s trae los últimos 20 posts del canal (`mattermost_bot.get_channel_posts`), y responde "Enterado, lo estamos revisando." en hilo (`root_id`) al primer post NUEVO que sea root (no reply) y no venga del propio bot.
+
+### Decisiones de diseño (detalle completo en DECISIONS.md)
+1. Intervalo 30s (no 60s) -- priorizar "instantáneo" sobre ahorrar llamadas, canal de bajo volumen.
+2. Solo responde a root posts, nunca a replies dentro de un hilo -- evita ruido/choque con la rutina de 1h respondiendo en el mismo hilo.
+3. Set en memoria (no tabla nueva) con siembra silenciosa en el primer ciclo tras cada arranque -- evita saludar retroactivamente mensajes viejos en cada redeploy de Railway.
+
+### Verificación
+Local: `py -m py_compile` limpio, servidor local (`py -m uvicorn app.main:app --port 8004`) arrancó sin errores ("Application startup complete", sin tracebacks) con el loop registrado -- sin `MM_URL`/`MM_BOT_TOKEN` en local, el loop hace no-op silencioso cada ciclo (comportamiento esperado, `get_channel_posts` regresa `[]` sin lanzar). Verificación real contra producción (mensaje de prueba de un humano real -> respuesta del bot en <60s) pendiente de confirmar post-deploy, con timestamps, en cuanto el mensaje de prueba se publique.
+
+---
+
 ## 2026-09-10 — FIX: revenue de ExclusiveBulbs (Amazon USA) inflado en order_history -- `item-price` del flat file es TOTAL DE LÍNEA en el marketplace US, no precio unitario
 
 ### Contexto
