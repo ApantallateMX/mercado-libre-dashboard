@@ -33,14 +33,17 @@
             <div class="px-5 text-center">
                 <p class="text-xs text-orange-400">AMZ hoy</p>
                 <p class="font-bold text-orange-600 text-lg" id="md-amz-today">—</p>
+                <p class="text-xs text-gray-400" id="md-amz-today-usd"></p>
             </div>
             <div class="px-5 text-center">
                 <p class="text-xs text-orange-400">AMZ semana</p>
                 <p class="font-bold text-orange-500 text-lg" id="md-amz-week">—</p>
+                <p class="text-xs text-gray-400" id="md-amz-week-usd"></p>
             </div>
             <div class="pl-5 text-center">
                 <p class="text-xs text-orange-400">AMZ mes</p>
                 <p class="font-bold text-orange-600 text-lg" id="md-amz-month">—</p>
+                <p class="text-xs text-gray-400" id="md-amz-month-usd"></p>
             </div>
             {% endif %}
         </div>
@@ -394,6 +397,15 @@ function fmt(n) {
     return '$' + n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 function fmtN(n) { return n != null ? n.toLocaleString() : '—'; }
+// FIX 2026-09-12: helper para las tarjetas "AMZ hoy/semana/mes" -- MXN es la
+// cifra grande principal, USD (si hay, hoy solo ExclusiveBulbs) va como linea
+// gris pequeña debajo con su propio simbolo -- nunca sumados en un solo numero.
+function _setAmzTotal(mainEl, period) {
+    if (!mainEl || !period) return;
+    mainEl.textContent = fmt(period.revenue_mxn || 0);
+    const usdEl = document.getElementById(mainEl.id + '-usd');
+    if (usdEl) usdEl.textContent = period.revenue_usd ? ('USD ' + fmt(period.revenue_usd)) : '';
+}
 
 // ─── Date helpers ─────────────────────────────────────────────────────────
 function today() { return new Date().toISOString().slice(0,10); }
@@ -1072,11 +1084,16 @@ async function loadAmazonSection() {
         const data = await resp.json();
         renderAmazonCards(data.amazon_accounts);
         if (data.totals) {
-            if (amzMonthEl) amzMonthEl.textContent = fmt(data.totals.month.revenue);
+            // FIX 2026-09-12: antes se mostraba data.totals.X.revenue, que mezclaba
+            // MXN (VECKTOR/AUTOBOT) + USD (ExclusiveBulbs) en un solo numero sin
+            // convertir. Ahora el backend separa revenue_mxn/revenue_usd -- se
+            // muestra MXN como cifra principal y, si hay USD, como linea secundaria
+            // gris debajo (misma convencion que el resto del dashboard).
             const amzTodayEl = document.getElementById('md-amz-today');
             const amzWeekEl  = document.getElementById('md-amz-week');
-            if (amzTodayEl) amzTodayEl.textContent = fmt(data.totals.today.revenue);
-            if (amzWeekEl)  amzWeekEl.textContent  = fmt(data.totals.week.revenue);
+            _setAmzTotal(amzTodayEl, data.totals.today);
+            _setAmzTotal(amzWeekEl,  data.totals.week);
+            _setAmzTotal(amzMonthEl, data.totals.month);
         }
     } catch(e) {
         amzCards.innerHTML = `<div class="col-span-4 text-center py-4 text-orange-400 text-sm">Error cargando cuentas Amazon: ${escapeHtml(e.message)}</div>`;
@@ -1094,6 +1111,10 @@ function renderAmazonCards(accounts) {
         const color = '#F97316';
         const initials = (acc.nickname || 'AMZ').slice(0, 2).toUpperCase();
         const errorBanner = acc.error ? `<div class="text-xs text-red-400 mt-2 truncate">⚠ ${escapeHtml(acc.error)}</div>` : '';
+        // FIX 2026-09-12: mostrar la moneda real de la cuenta junto al monto --
+        // antes ExclusiveBulbs (USD) se mostraba con el mismo "$" que las
+        // cuentas MXN, sin distincion, prestandose a leerse como si fuera MXN.
+        const curLabel = acc.currency === 'USD' ? 'USD ' : '';
         return `
         <div class="bg-white rounded-xl shadow overflow-hidden border-l-4" style="border-left-color:${color}">
             <div class="p-4">
@@ -1104,28 +1125,28 @@ function renderAmazonCards(accounts) {
                             <span class="text-xs font-bold bg-orange-500 text-white px-1 py-0.5 rounded">AMZ</span>
                             <p class="font-semibold text-gray-800 text-sm truncate">${escapeHtml(acc.nickname)}</p>
                         </div>
-                        <p class="text-xs text-gray-400">${acc.marketplace || 'MX'}</p>
+                        <p class="text-xs text-gray-400">${acc.marketplace || 'MX'}${acc.currency === 'USD' ? ' · USD' : ''}</p>
                     </div>
                 </div>
                 <div class="space-y-2">
                     <div class="flex justify-between items-center">
                         <span class="text-xs text-gray-500">Hoy</span>
                         <div class="text-right">
-                            <span class="font-bold text-gray-800 text-sm">${fmt(acc.today.revenue)}</span>
+                            <span class="font-bold text-gray-800 text-sm">${curLabel}${fmt(acc.today.revenue)}</span>
                             <span class="text-xs text-gray-400 ml-1">${acc.today.orders} órd.</span>
                         </div>
                     </div>
                     <div class="flex justify-between items-center">
                         <span class="text-xs text-gray-500">Semana</span>
                         <div class="text-right">
-                            <span class="font-bold text-gray-700 text-sm">${fmt(acc.week.revenue)}</span>
+                            <span class="font-bold text-gray-700 text-sm">${curLabel}${fmt(acc.week.revenue)}</span>
                             <span class="text-xs text-gray-400 ml-1">${acc.week.orders} órd.</span>
                         </div>
                     </div>
                     <div class="flex justify-between items-center pt-1 border-t border-gray-100">
                         <span class="text-xs text-gray-500">Mes</span>
                         <div class="text-right">
-                            <span class="font-bold text-sm" style="color:${color}">${fmt(acc.month.revenue)}</span>
+                            <span class="font-bold text-sm" style="color:${color}">${curLabel}${fmt(acc.month.revenue)}</span>
                             <span class="text-xs text-gray-400 ml-1">${acc.month.orders} órd.</span>
                         </div>
                     </div>

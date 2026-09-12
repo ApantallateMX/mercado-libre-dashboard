@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-12 — FIX: Multi Dashboard mezclaba MXN+USD en un solo total (`/api/dashboard/multi-account-amazon`)
+
+### Contexto
+Detectado durante la construcción del handover de migración a ecomops-stack (documentando la lógica real del Multi Dashboard sección por sección, ver `.claude/agents` y `ecomops-stack/legacy-reference/HANDOVER.md` §9.2). ExclusiveBulbs (AMAZON3, cuenta USA) reporta en USD; VECKTOR y AUTOBOT AMZ MX reportan en MXN -- la regla dura del proyecto es nunca forzar cuentas de distinta moneda a un solo total sin convertir (ya corregido antes en `/api/diag/daily-sales-by-account`, pero nunca se propagó a este endpoint del Multi Dashboard).
+
+### Causa raíz
+`get_multi_account_amazon_dashboard()` (`app/main.py` ~16055) traía el revenue de cada cuenta ya en su moneda nativa (correcto, vía Sales API), pero `_sum_p()` sumaba `revenue` de TODAS las cuentas sin distinguir moneda -- el campo `totals.today/week/month.revenue` mezclaba pesos y dólares como si fueran la misma unidad. Mismo patrón de bug replicado en `app/static/js/amazon_dashboard.js` (`loadAmzCompare()`, widget de comparativa del Amazon Dashboard): formateaba el revenue de TODAS las cuentas con `Intl.NumberFormat('es-MX', currency:'MXN')`, incluyendo ExclusiveBulbs en USD.
+
+### Fix
+- `app/main.py`: `_fetch_amz_data()` ahora calcula `currency` por cuenta (`"USD"` si `marketplace_id != "A1AM78C64UM0Y8"`, si no `"MXN"` -- misma regla ya usada en `/api/diag/amazon-accounts`). `_sum_p()` separa `revenue_mxn`/`revenue_usd` en vez de un solo `revenue` mezclado (`orders`/`units` sí se siguen sumando juntos, son conteos, no dinero).
+- `app/templates/multi_dashboard.html`: tarjetas "AMZ hoy/semana/mes" ahora muestran MXN como cifra principal grande y USD (si hay) como línea secundaria gris debajo (`_setAmzTotal()`, misma convención de CLAUDE.md "MXN primario/USD secundario"). Tarjetas por cuenta (`renderAmazonCards`) ahora muestran "USD" junto al monto cuando la cuenta es ExclusiveBulbs.
+- `app/static/js/amazon_dashboard.js`: `loadAmzCompare()` usa `fmtCur(v, cur)` con la moneda real de cada cuenta en vez de forzar `'MXN'` siempre.
+
+### Verificación
+- `py -c "import ast; ast.parse(...)"` limpio en `main.py`.
+- Servidor local (`py -m uvicorn app.main:app --port 8004`) + `GET /api/dashboard/multi-account-amazon` con datos reales: respuesta confirma `"currency":"MXN"` para VECKTOR/AUTOBOT y `"currency":"USD"` para ExclusiveBulbs, y `"totals"` ya separado (`revenue_mxn`/`revenue_usd`) en vez de un solo campo mezclado. VECKTOR/AUTOBOT dieron error 400 de LWA en esta prueba local por token desactualizado en el `tokens.db` de pruebas local (no relacionado a este cambio); ExclusiveBulbs sí trajo datos reales completos y se reflejó correctamente en `revenue_usd` sin tocar `revenue_mxn`.
+
+---
+
 ## 2026-09-11 — FIX: listing eliminado en ML seguía pegado en "Riesgo Sobreventa" para siempre (huérfanos nunca corregían `ml_listings.status`)
 
 ### Contexto

@@ -16135,11 +16135,17 @@ async def get_multi_account_amazon_dashboard(
                     except (TypeError, ValueError):
                         pass
 
+            # FIX 2026-09-12: moneda real de la cuenta (marketplace_id != MX ⇒ USD,
+            # hoy solo ExclusiveBulbs) -- necesario para que _sum_p() no sume
+            # MXN+USD como si fueran la misma moneda (bug real detectado durante
+            # el handover de la migración a ecomops-stack, ver DECISIONS.md).
+            currency = "USD" if account.get("marketplace_id") != "A1AM78C64UM0Y8" else "MXN"
             return {
                 "seller_id":      seller_id,
                 "nickname":       nickname,
                 "marketplace":    marketplace,
                 "platform":       "amazon",
+                "currency":       currency,
                 "color":          "#F97316",
                 "today":          _sum_period(today_pst),
                 "week":           _sum_period(week_start),
@@ -16149,11 +16155,13 @@ async def get_multi_account_amazon_dashboard(
                 "error":          None,
             }
         except Exception as exc:
+            currency = "USD" if account.get("marketplace_id") != "A1AM78C64UM0Y8" else "MXN"
             return {
                 "seller_id":      seller_id,
                 "nickname":       nickname,
                 "marketplace":    marketplace,
                 "platform":       "amazon",
+                "currency":       currency,
                 "color":          "#F97316",
                 "today":          {"orders": 0, "units": 0, "revenue": 0},
                 "week":           {"orders": 0, "units": 0, "revenue": 0},
@@ -16168,11 +16176,19 @@ async def get_multi_account_amazon_dashboard(
     for _acct in amazon_accounts_list:
         amazon_data.append(await _fetch_amz_data(_acct))
 
+    # FIX 2026-09-12: antes sumaba revenue de TODAS las cuentas sin importar
+    # moneda (MXN de VECKTOR/AUTOBOT + USD de ExclusiveBulbs mezclados en un
+    # solo numero) -- bug real detectado durante el handover de ecomops-stack.
+    # Ahora se separa revenue_mxn/revenue_usd; orders/units si se suman juntos
+    # porque son conteos, no dinero.
     def _sum_p(period: str) -> dict:
+        mxn_accts = [a for a in amazon_data if a.get("currency", "MXN") == "MXN"]
+        usd_accts = [a for a in amazon_data if a.get("currency") == "USD"]
         return {
-            "orders":  sum(a[period]["orders"]  for a in amazon_data),
-            "units":   sum(a[period]["units"]   for a in amazon_data),
-            "revenue": round(sum(a[period]["revenue"] for a in amazon_data), 2),
+            "orders":      sum(a[period]["orders"]  for a in amazon_data),
+            "units":       sum(a[period]["units"]   for a in amazon_data),
+            "revenue_mxn": round(sum(a[period]["revenue"] for a in mxn_accts), 2),
+            "revenue_usd": round(sum(a[period]["revenue"] for a in usd_accts), 2),
         }
 
     result = {

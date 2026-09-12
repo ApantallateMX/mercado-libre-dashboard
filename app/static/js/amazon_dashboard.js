@@ -468,25 +468,30 @@ async function loadAmzCompare() {
     var d = await r.json();
     var accounts = (d.amazon_accounts || d.accounts || []);
     if (!accounts.length) { el.innerHTML = '<div class="text-center py-4 text-gray-400 text-xs">Sin cuentas disponibles</div>'; return; }
-    var fmt = function(v) { return new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',minimumFractionDigits:0,maximumFractionDigits:0}).format(v||0); };
+    // FIX 2026-09-12: antes formateaba TODAS las cuentas como MXN aunque
+    // ExclusiveBulbs (USA) reporte en USD -- mismo bug de moneda detectado
+    // durante el handover de ecomops-stack, corregido aqui tambien (mismo
+    // patron, distinto archivo, ver /api/dashboard/multi-account-amazon).
+    var fmtCur = function(v, cur) { return new Intl.NumberFormat('en-US',{style:'currency',currency:cur||'MXN',minimumFractionDigits:0,maximumFractionDigits:0}).format(v||0); };
     var cards = accounts.map(function(acc) {
       var m = acc.month || {};
       var t = acc.today || {};
+      var cur = acc.currency || 'MXN';
       return '<div class="flex-1 min-w-0 bg-orange-50 rounded-xl p-4 border border-orange-100">' +
         '<div class="flex items-center gap-2 mb-2">' +
           '<span class="w-2 h-2 rounded-full bg-orange-500 shrink-0"></span>' +
           '<span class="font-semibold text-gray-800 text-sm truncate">' + (acc.nickname||acc.seller_id) + '</span>' +
-          '<span class="text-xs text-gray-400 shrink-0">' + (acc.marketplace||'MX') + '</span>' +
+          '<span class="text-xs text-gray-400 shrink-0">' + (acc.marketplace||'MX') + (cur === 'USD' ? ' · USD' : '') + '</span>' +
         '</div>' +
         '<div class="grid grid-cols-2 gap-2 text-xs">' +
           '<div class="bg-white rounded-lg p-2">' +
             '<p class="text-gray-400 mb-0.5">Hoy</p>' +
-            '<p class="font-bold text-orange-700">' + fmt(t.revenue) + '</p>' +
+            '<p class="font-bold text-orange-700">' + fmtCur(t.revenue, cur) + '</p>' +
             '<p class="text-gray-400">' + (t.orders||0) + ' órd</p>' +
           '</div>' +
           '<div class="bg-white rounded-lg p-2">' +
             '<p class="text-gray-400 mb-0.5">Mes</p>' +
-            '<p class="font-bold text-gray-800">' + fmt(m.revenue) + '</p>' +
+            '<p class="font-bold text-gray-800">' + fmtCur(m.revenue, cur) + '</p>' +
             '<p class="text-gray-400">' + (m.orders||0) + ' órd</p>' +
           '</div>' +
         '</div>' +
