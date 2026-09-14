@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-14 — FIX: 4ta crisis de disco Railway (93.2% usado) rompía silenciosamente el full-sync de huérfanos ML para 3/4 cuentas
+
+### Contexto
+Ivana Talavera reportó 10 MLM de BLOWTECHNOLOGIES eliminados de verdad en ML pero pegados en "Riesgo Sobreventa"/"SKU no registrado". Investigando la causa raíz real (no solo respondiendo "enterado"), se encontró que el mecanismo de detección de huérfanos (fix `f4edfd8`, 2026-09-11) nunca corrió con éxito para APANTALLATEMX, BLOWTECHNOLOGIES ni AUTOBOT desde que se desplegó -- confirmado en logs reales de Railway (GraphQL `deploymentLogs`): el full-sync de esas 3 cuentas falla con `database or disk is full` en CADA ciclo de 6h desde 2026-09-12 09:55 UTC, sin excepción. Solo LUTEMAMEXICO (catálogo más chico) pasa.
+
+De paso se descartó una alarma falsa: un mensaje llegado por el MCP viejo (identidad `miteams-mcp`, de la rutina automática de 1h, NO de esta sesión) afirmaba que "ningún fix llega a producción" por bloqueo de acceso a GitHub. Verificado con `git log origin/main` + metadata de deploy de Railway (`commitHash` del deploy SUCCESS más reciente coincide exacto con el HEAD de este checkout): FALSO para esta sesión -- todos los fixes recientes sí están en producción. El bloqueo real (si existe) es de un checkout aislado de esa rutina automática, nunca llegó a integrarse a este repo (el endpoint `/api/diag/ml-full-sync-health` que esa rutina decía haber creado no existe en ningún lado del código real).
+
+### Causa raíz del disco lleno
+`audit_log` había vuelto a crecer a 23,954 filas (peor que las 21,638 que causaron la crisis original de julio) porque el job nocturno de poda (`ApantallateMX-ArchiveAuditLog`, Task Scheduler local, 3am) llevaba semanas fallando en silencio: `LastTaskResult: 2147942402` (0x80070002, FILE_NOT_FOUND) en cada corrida desde mediados de agosto. La Action de la tarea llamaba al comando `py` sin ruta completa -- resuelve bien en una terminal interactiva del usuario, pero el contexto en que Windows Task Scheduler ejecuta la tarea no encuentra ese launcher (vive en `AppData\Local\Programs\Python\Launcher\py.exe`, instalación por-usuario, no en el PATH del sistema).
+
+### Fix
+1. **Task Scheduler**: `Set-ScheduledTask` para que la Action use la ruta completa del ejecutable en vez de `py` a secas. Probado con `Start-ScheduledTask` manual -- `LastTaskResult: 0` (éxito), primera vez desde agosto.
+2. **Purga de `audit_log`**: export (`/api/diag/audit-log-export?before_days=30`, respaldado en `backups/audit_log/audit_log_export_20260914.json`, gitignored) + purge con `expected_count` para evitar borrar filas nuevas entre ambas llamadas -- 9,368 filas eliminadas. Esto detiene el crecimiento futuro pero **no** reduce el archivo `.db` ya existente (DELETE en SQLite no encoge el archivo).
+3. **Nuevo endpoint `POST /api/diag/vacuum-compact-db`** (`app/main.py`, junto a `/api/system/disk-usage`): compacta el `.db` real hacia el disco efímero del contenedor (`tempfile.gettempdir()`, NO el volumen persistente lleno) vía `VACUUM INTO`, verifica `PRAGMA integrity_check` + conteos de filas de `order_history`/`ml_listings`/`amazon_listings`/`bm_sku_master` contra el archivo original ANTES de tocar nada real, y solo entonces hace el swap (borrar el archivo viejo del volumen + copiar el compactado) en un bloque 100% síncrono (`asyncio.to_thread`, sin ningún `await` en medio) para que ninguna otra corutina pueda escribir a mitad del cambio -- asyncio de un solo hilo garantiza que nada se intercala mientras ese bloque corre. Guarda además una copia de seguridad del archivo pre-vacuum en el mismo disco efímero antes de borrarlo del volumen, y limpia `-wal`/`-shm` viejos tras un `PRAGMA wal_checkpoint(TRUNCATE)` previo.
+
+Aprobado explícitamente por Jovan como ventana breve de mantenimiento, después de confirmar que la palanca más segura (migrar más fotos/facturas locales a S3, mismo mecanismo de la crisis de agosto) ya estaba agotada (0 archivos locales pendientes).
+
+### Verificación
+- **Local, contra una copia completa y real de producción** (no datos sintéticos): se descargó `tokens.db` de Railway vía `/api/diag/download-raw-db` (422.9MB) y se corrió el endpoint nuevo apuntando `DATABASE_PATH` a esa copia. Resultado: `orig_size_mb: 403.3, new_size_mb: 244.0, freed_mb: 159.3, post_swap_integrity: "ok", post_swap_order_history_count: 47821` (coincide exacto con el conteo real de la tabla antes del swap). Verificación independiente por fuera del endpoint con `sqlite3 -readonly` sobre el archivo ya swapeado: `audit_log`/`ml_listings`/`amazon_listings`/`bm_sku_master`/`order_history` -- los 5 conteos coinciden exactos con los del archivo original.
+- Solo después de esta verificación exitosa se ejecutó contra producción real.
+
+### Riesgo cubierto
+Esta es la 4ta vez que este disco se acerca a la crisis (2026-07-17, 2026-07-18, 2026-08-03, ahora). A diferencia de las anteriores, esta vez la causa (job de retención roto) queda corregida de raíz, no solo mitigada -- y se documenta la mecánica exacta del VACUUM seguro para la próxima vez que el disco vuelva a acercarse al límite antes de que vuelva a tumbar el full-sync de alguna cuenta en silencio.
+
+---
+
 ## 2026-09-12 — FIX: Multi Dashboard mezclaba MXN+USD en un solo total (`/api/dashboard/multi-account-amazon`)
 
 ### Contexto

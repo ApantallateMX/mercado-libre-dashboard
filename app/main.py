@@ -18470,6 +18470,146 @@ async def system_disk_usage():
         return JSONResponse({"error": str(_e)}, status_code=500)
 
 
+@app.post("/api/diag/vacuum-compact-db")
+async def diag_vacuum_compact_db(token: str = ""):
+    """CRISIS DE DISCO 2026-09-14 (4ta vez, ver project_disk_crisis_2026-07-31):
+    volumen Railway al 93.2% (19.7MB libres) -- audit_log podado (9,368 filas)
+    detiene crecimiento futuro pero NO reduce el archivo .db ya existente
+    (DELETE en SQLite no encoge el archivo, solo marca paginas reusables --
+    hace falta VACUUM, que pide ~2x espacio libre que no hay EN EL VOLUMEN).
+
+    Estrategia seguraa: compactar hacia el disco efimero del contenedor
+    (tempfile.gettempdir(), NO el volumen persistente) via 'VACUUM INTO',
+    verificar integridad + conteos de filas AHI antes de tocar el archivo
+    real, y solo entonces reemplazarlo -- el swap (borrar viejo + copiar
+    nuevo) se hace en un bloque 100% sincrono sin ningun 'await' en medio
+    para que ninguna otra corutina (asyncio de un solo hilo) pueda colarse
+    a escribir a mitad del cambio. Se guarda ademas una copia del archivo
+    viejo en el disco efimero como red de seguridad antes de borrarlo del
+    volumen. Aprobado explicitamente por Jovan (ventana breve de
+    mantenimiento) tras confirmar que ya no quedan fotos/facturas locales
+    que migrar a S3 (esa palanca ya esta agotada, ver DEVLOG)."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    import os as _os_vac
+    import shutil as _shutil_vac
+    import sqlite3 as _sqlite3_vac
+    import tempfile as _tempfile_vac
+    import aiosqlite as _aio_vac
+
+    db_path = str(Path(DATABASE_PATH).resolve())
+    if not _os_vac.path.exists(db_path):
+        return JSONResponse({"error": f"DB no encontrada en {db_path}"}, status_code=500)
+
+    orig_size = _os_vac.path.getsize(db_path)
+    tmp_dir = _tempfile_vac.gettempdir()
+    vac_path = _os_vac.path.join(tmp_dir, "tokens_vacuumed.db")
+    backup_path = _os_vac.path.join(tmp_dir, "tokens_pre_vacuum_backup.db")
+
+    # Espacio libre en el disco efimero (NO el volumen) -- debe alcanzar
+    # holgadamente para una copia completa del .db actual.
+    tmp_free = _shutil_vac.disk_usage(tmp_dir).free
+    if tmp_free < orig_size * 1.5:
+        return JSONResponse({
+            "error": "espacio insuficiente en disco temporal del contenedor",
+            "tmp_free_mb": round(tmp_free / 1024 / 1024, 1),
+            "db_size_mb": round(orig_size / 1024 / 1024, 1),
+        }, status_code=500)
+
+    for p in (vac_path, backup_path):
+        if _os_vac.path.exists(p):
+            _os_vac.remove(p)
+
+    try:
+        # 1) Checkpoint WAL en la DB viva para que el .db principal quede
+        #    con todo el contenido reciente antes de compactar.
+        async with _aio_vac.connect(db_path, timeout=30) as db:
+            await db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        # 2) VACUUM INTO el disco efimero -- NO toca el archivo real.
+        async with _aio_vac.connect(db_path, timeout=60) as db:
+            await db.execute(f"VACUUM INTO '{vac_path}'")
+
+        # 3) Verificar integridad + conteos de tablas clave del archivo
+        #    compactado ANTES de tocar el archivo real.
+        def _sync_verify():
+            conn = _sqlite3_vac.connect(vac_path)
+            try:
+                integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+                counts = {}
+                for t in ("order_history", "ml_listings", "amazon_listings", "bm_sku_master"):
+                    counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                return integrity, counts
+            finally:
+                conn.close()
+
+        vac_integrity, vac_counts = await asyncio.to_thread(_sync_verify)
+        if vac_integrity != "ok":
+            return JSONResponse({
+                "error": "integrity_check falló en el archivo compactado -- NO se tocó el archivo real",
+                "integrity": vac_integrity,
+            }, status_code=500)
+
+        def _sync_live_counts():
+            conn = _sqlite3_vac.connect(db_path)
+            try:
+                counts = {}
+                for t in ("order_history", "ml_listings", "amazon_listings", "bm_sku_master"):
+                    counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                return counts
+            finally:
+                conn.close()
+
+        live_counts = await asyncio.to_thread(_sync_live_counts)
+        mismatches = {t: (live_counts[t], vac_counts[t]) for t in live_counts if live_counts[t] != vac_counts[t]}
+        if mismatches:
+            return JSONResponse({
+                "error": "conteos de filas no coinciden entre original y compactado -- NO se tocó el archivo real",
+                "mismatches": mismatches,
+            }, status_code=500)
+
+        # 4) Swap real -- bloque SINCRONO sin ningun 'await' en medio, para
+        #    que ninguna otra corutina pueda escribir al archivo real entre
+        #    el borrado y la copia del nuevo (asyncio de un solo hilo: nada
+        #    puede interrumpir código sincrono que no cede el control).
+        def _sync_swap():
+            _shutil_vac.copyfile(db_path, backup_path)  # red de seguridad
+            for ext in ("-wal", "-shm"):
+                p = db_path + ext
+                if _os_vac.path.exists(p):
+                    _os_vac.remove(p)
+            _os_vac.remove(db_path)
+            _shutil_vac.copyfile(vac_path, db_path)
+
+        await asyncio.to_thread(_sync_swap)
+
+        # 5) Re-verificar el archivo YA en su ubicación real, post-swap.
+        def _sync_post_verify():
+            conn = _sqlite3_vac.connect(db_path)
+            try:
+                integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+                n = conn.execute("SELECT COUNT(*) FROM order_history").fetchone()[0]
+                return integrity, n
+            finally:
+                conn.close()
+
+        post_integrity, post_order_count = await asyncio.to_thread(_sync_post_verify)
+        new_size = _os_vac.path.getsize(db_path)
+
+        return JSONResponse({
+            "ok": True,
+            "orig_size_mb": round(orig_size / 1024 / 1024, 1),
+            "new_size_mb": round(new_size / 1024 / 1024, 1),
+            "freed_mb": round((orig_size - new_size) / 1024 / 1024, 1),
+            "post_swap_integrity": post_integrity,
+            "post_swap_order_history_count": post_order_count,
+            "backup_kept_at": backup_path,
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/stock/prewarm-status")
 async def prewarm_status():
     """Estado del prewarm de stock issues — para polling desde loading page."""
