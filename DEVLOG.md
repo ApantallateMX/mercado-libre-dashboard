@@ -29,7 +29,25 @@ Aprobado explícitamente por Jovan como ventana breve de mantenimiento, después
 - Solo después de esta verificación exitosa se ejecutó contra producción real.
 
 ### Riesgo cubierto
-Esta es la 4ta vez que este disco se acerca a la crisis (2026-07-17, 2026-07-18, 2026-08-03, ahora). A diferencia de las anteriores, esta vez la causa (job de retención roto) queda corregida de raíz, no solo mitigada -- y se documenta la mecánica exacta del VACUUM seguro para la próxima vez que el disco vuelva a acercarse al límite antes de que vuelva a tumbar el full-sync de alguna cuenta en silencio.
+Esta es la 4ta vez que este disco se acerca a la crisis (2026-07-17, 2026-07-18, 2026-08-03, ahora). A diferencia de las anteriores, esta vez la causa (job de retención roto) queda corregida de raíz, no solo mitigada.
+
+### ACTUALIZACIÓN 2026-09-14 (mismo día) — el VACUUM en caliente SÍ causó una caída real de producción, ya recuperada
+
+A pesar de la verificación exhaustiva local (contra una copia completa y real de producción, con integridad + conteos de fila idénticos confirmados antes de correrlo en vivo), al ejecutar `/api/diag/vacuum-compact-db` contra producción el paso final falló:
+
+```
+{"error":"[Errno 28] No space left on device: '/tmp/tokens_vacuumed.db' -> '/app/data/tokens.db'"}
+```
+
+**Causa real del fallo**: el código asumía que `os.remove(db_path)` liberaba de inmediato los ~404MB del archivo viejo en el volumen, dejando espacio de sobra para copiar el archivo compactado (~244MB). En la práctica, el filesystem del volumen de Railway no liberó ese espacio a tiempo dentro del mismo bloque síncrono -- casi seguro porque algún loop de fondo (ML-SYNC, AMZ-LISTING-SYNC, etc.) tenía un file handle abierto sobre el archivo en ese instante, y en POSIX un `unlink()` no libera los bloques de disco hasta que TODOS los descriptores abiertos se cierran. El resultado: el archivo viejo se borró, pero solo ~20.6MB del archivo nuevo lograron escribirse antes de toparse otra vez con "disco lleno" -- dejando `tokens.db` en un estado truncado e inválido. **Todos los endpoints que tocan la base de datos devolvieron "Internal Server Error" durante este lapso** (confirmado con `/api/diag/cache-health`, `/api/diag/sku`, `/api/system/disk-usage`).
+
+**Recuperación**: se exploró brevemente si la API de Railway permitía ejecutar un comando en el contenedor vivo (`deploymentInstanceExecutionCreate`) para rescatar el respaldo que el propio endpoint había guardado en `/tmp/tokens_pre_vacuum_backup.db` antes del swap -- requiere una sesión de shell interactiva no viable con las herramientas disponibles en el momento, y cualquier nuevo `git push`/deploy reemplaza el contenedor completo (perdiendo ese `/tmp`). Se descartó esa vía por el riesgo de alargar la caída sin garantía de éxito. En su lugar, se usó `/api/diag/upload-recovered-db` -- endpoint de emergencia ya existente de un incidente similar (2026-08-27) -- para subir la copia local completa y ya verificada (la misma usada en la prueba previa, descargada de producción minutos antes vía `/api/diag/download-raw-db`). Verificado con `PRAGMA quick_check` antes de reemplazar, `os.replace()` atómico. Resultado: `{"ok":true,"bytes_written":255844352}`.
+
+**Verificación post-recuperación**: `/api/system/disk-usage` → 56.5% usado, 179.0MB libres (el objetivo original de liberar espacio SÍ se logró, aunque por la vía de emergencia). `/api/diag/daily-sales-by-account` devolvió datos reales y coherentes (468 órdenes, $1,265,851.13 MXN, 2026-09-13).
+
+**Impacto real en datos**: la base restaurada refleja el estado de unos minutos antes de la caída (el momento de la descarga previa para investigar el caso de Ivana). Cualquier orden ML/Amazon nueva en ese lapso se re-sincroniza sola en el próximo ciclo automático (source of truth real son las plataformas, no `order_history`) -- no hay pérdida real de negocio. Efecto secundario menor: la purga de `audit_log` de más arriba en este mismo log quedó revertida por la restauración (23,954 filas de vuelta) -- sin impacto real, el job de retención ya corregido la vuelve a podar esta noche 3am sin intervención.
+
+**Acción tomada**: se eliminó por completo el endpoint `/api/diag/vacuum-compact-db` de `app/main.py` -- no se reintentará este enfoque de VACUUM en caliente sin resolver primero cómo garantizar que el espacio se libera de verdad (ej. forzar el cierre de toda conexión/loop de fondo antes del swap, o hacerlo en una ventana con la app genuinamente detenida vía Railway, no solo un bloque síncrono dentro del mismo proceso).
 
 ---
 
