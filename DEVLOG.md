@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-15 — FEAT: digest de salud ML 2x/día (5 AM / 3 PM CDMX) con escalones de atención
+
+### Contexto
+Pedido explícito de Jovan. El color oficial de ML solo cambia cuando ya perdiste: entre el umbral de MercadoLíder (reclamos ≤1%) y el límite de Verde (≤1.5%) cabe **todo** el margen de maniobra, y ahí no se disparaba absolutamente nada. Caso real del mismo día: BLOWTECHNOLOGIES en 1.27%, a 0.23 pts de caer a amarillo, sin una sola alerta. La alerta existente (`_reputation_alert_loop`, solo en transición de color) es reactiva por diseño.
+
+Jovan definió los escalones sobre reclamos: ≤1% "buen trabajo", 1–1.2% "poner atención", 1.2–1.5% rojo ("estamos a punto de perder todo por mala atención"), >1.5% urgencia total. Se le señaló y aceptó cerrar el hueco 1.4–1.5 que dejaba su propuesta original (rojo cubre hasta 1.5, que es el corte real de ML).
+
+### Decisión de diseño: los escalones aplican a las 3 métricas, no solo reclamos
+El color de ML es **la PEOR de 3 métricas** (reclamos, cancelaciones, demora en manejo), nunca un promedio. Con escalones solo sobre reclamos, una cuenta se pondría amarilla por cancelaciones sin que nadie hubiera recibido un aviso previo. El corte intermedio de Jovan (1.2) cae al **40% del tramo Líder→Verde**, así que se aplica esa misma proporción a las otras dos en su propia escala: cancelaciones 0.5→0.7→1.0, demora 8→8.8→10. El escalón de la cuenta es el peor de sus 3.
+
+### Decisión de diseño: qué mide cada corrida
+El % de ML usa ventana de 60 días — **en un día casi nunca se mueve**. Si el mensaje de la tarde midiera el trabajo del día por el porcentaje, diría "sin cambio" todos los días y parecería que el equipo no hizo nada. Por eso:
+- **5:00 AM** — estado + qué reclamos se pueden excluir (1 llamada de IA, solo en cuentas que no están en verde; en las sanas no se gasta).
+- **3:00 PM** — qué se movió hoy: reclamos nuevos, cerrados y cuántos llevan todo el día parados. Eso sí depende del equipo y sí se mueve diario.
+
+Un solo mensaje con todas las cuentas por corrida, no uno por cuenta (4 × 2 = 8 posts diarios y la gente deja de leerlos).
+
+### Implementación
+- `app/services/marketplace_alerts.py`: `metric_tier()` / `account_tier()` (escalones), `build_morning_digest()` / `build_afternoon_digest()`, `digest_mentions()`. Se extrajo `classify_open_claims()` de `build_actionable_claims_summary` para que el digest reuse la MISMA clasificación de IA en vez de duplicar la llamada; `build_claims_digest_line()` es la versión de una línea.
+- `app/services/token_store.py`: columna `claims_history.closed_date` (migración aditiva) + tabla nueva `digest_runs` + `save_digest_run()`/`get_digest_run()`/`has_digest_run()`/`count_claims_today()`.
+- `app/main.py`: `_run_marketplace_digest()`, `_collect_digest_account()`, `_maybe_run_scheduled_digests()` (enganchado al final de `_reputation_alert_loop`, que ya corre cada 30 min) y `/api/diag/marketplace-digest-preview?slot=am|pm` (sin side-effects, no manda ni registra).
+
+### Por qué `closed_date` se sella por observación
+ML no expone fecha de cierre del reclamo. Se sella cuando el sync ve la transición `opened`→cerrado, y **nunca en el INSERT inicial**: un reclamo que ya estaba cerrado la primera vez que se sincronizó no se cerró hoy, y marcarlo así mentiría en el conteo "cerrados hoy". Consecuencia honesta: el contador arranca en 0 y se va poblando desde el deploy hacia adelante.
+
+### Por qué NO se tocó `reputation_snapshots`
+Tiene `UNIQUE(account_id, captured_date)` — una sola foto por día, insuficiente para comparar AM vs PM. Quitar ese candado en SQLite obliga a recrear la tabla, con riesgo real sobre datos existentes. `digest_runs` hace el mismo trabajo siendo puramente aditiva.
+
+### Bug real encontrado durante la verificación en vivo
+La corrida PM devolvió **2 de 4 cuentas**. Causa: `count_claims_today()` chocó con `database is locked` (SQLite ocupado por los loops de fondo) y la excepción tumbaba la cuenta completa del reporte, sin que el mensaje dijera nada. Un reporte de salud que omite cuentas en silencio es peor que uno incompleto que lo admite — quien lo lee asume que la cuenta está sana y deja de vigilarla justo cuando nadie la está viendo. Corregido en dos niveles: el conteo del día degrada a "no se pudo calcular" sin tumbar la cuenta (y NO reporta 0, que se leería como "no hicieron nada"), y cualquier cuenta que falle por completo aparece igual marcada `⚪ no se pudo consultar`.
+
+### Verificación
+Local contra la API real de ML: ambas corridas HTTP 200 con las 4 cuentas. Escalones confirmados con datos reales — AUTOBOT 1.86% `critico`, BLOWTECHNOLOGIES 1.27% `riesgo`, LUTEMAMEXICO 0.79% y APANTALLATEMX 0.65% `ok`. Detalle corregido al ver datos vivos: APANTALLATEMX tiene 33 reclamos abiertos pero la IA solo revisa los 15 más recientes; el mensaje decía "33 abiertos / 0 de 15" y se leía como error de cuentas — ahora dice "de los 15 más recientes".
+
+### Estado
+**Sigue apagado.** `MARKETPLACE_ALERTS_ENABLED` continúa en `false` desde el 25-ago, así que nadie recibe nada todavía; las corridas se registran igual en `digest_runs` para que el comparativo AM↔PM funcione desde el día 1 cuando se encienda. Destinatarios confirmados por Jovan: Vianey, Alejandro, Said y Vanessa. La alerta por cambio de color se queda viva a propósito (avisa de una caída repentina sin esperar a la siguiente corrida).
+
+---
+
 ## 2026-09-15 — FEAT: snapshot de Preguntas, Stock Sync y score de Salud (continuación migración ecomops-stack)
 
 ### Contexto
