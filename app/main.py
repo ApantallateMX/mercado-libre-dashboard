@@ -28601,16 +28601,20 @@ async def diag_reset_attachments_checked_no_attachment(token: str = "", seller_i
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not seller_id:
         return JSONResponse({"error": "seller_id requerido"}, status_code=400)
-    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
-        cur = await db.execute(
-            """UPDATE amazon_buyer_messages SET attachments_checked = 0
-               WHERE seller_id = ? AND direction = 'inbound' AND attachments_checked = 1
-                 AND id NOT IN (SELECT DISTINCT message_row_id FROM amazon_buyer_message_attachments)""",
-            (seller_id,),
-        )
-        await db.commit()
-        reset_count = cur.rowcount
-    return JSONResponse({"ok": True, "reset_count": reset_count, "seller_id": seller_id})
+    import aiosqlite as _aio_reset_att
+    try:
+        async with _aio_reset_att.connect(DATABASE_PATH, timeout=15) as db:
+            cur = await db.execute(
+                """UPDATE amazon_buyer_messages SET attachments_checked = 0
+                   WHERE seller_id = ? AND direction = 'inbound' AND attachments_checked = 1
+                     AND id NOT IN (SELECT DISTINCT message_row_id FROM amazon_buyer_message_attachments)""",
+                (seller_id,),
+            )
+            await db.commit()
+            reset_count = cur.rowcount
+        return JSONResponse({"ok": True, "reset_count": reset_count, "seller_id": seller_id})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/amazon/buyer-messages/{message_id}/attachments/{attachment_id}")
