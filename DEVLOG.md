@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-15 — FIX: `account_id` en el UNIQUE de `order_history` y `supplier_debt_ledger` + backfill de `fx_rate`
+
+### Contexto
+La sesión de `ecomops-stack` reportó 5 `order_id` de Amazon que aparecían con dos `account_id` distintos (AUTOBOT y VECKTOR), con SKU/ASIN/importe diferentes cada uno. Investigado contra los reportes crudos de cada cuenta.
+
+### Veredicto: NO era bug de atribución
+`AmazonOrderId` es del **comprador**, no del vendedor. Un solo checkout con artículos de dos de nuestras tiendas produce el **mismo número de orden para ambos sellers**, cada uno con su propio `order-item-id`. Confirmado: mismas marcas de tiempo al segundo (`2026-08-31T22:00:50Z`, `2026-04-13T02:18:37Z`), productos y montos distintos, ventas reales ambas. `account_id` sale de `nick` (`app/main.py:3556`), local a cada invocación — descartada la hipótesis de contaminación entre las corridas paralelas.
+
+### El riesgo latente que SÍ era real
+`UNIQUE(order_id, item_id, platform)` **no incluía la cuenta**, y `account_id` tampoco estaba en el `DO UPDATE SET`. Esos 5 casos se salvaron solo porque sus ASIN diferían. Si dos cuentas venden el **mismo ASIN en la misma orden del comprador**, las dos filas colapsan en una: se queda el `account_id` del primer escritor y los importes los pisa el segundo — línea de venta perdida e ingreso mal atribuido, en silencio. VECKTOR y AUTOBOT traslapan catálogo (SNTV/SHIL). Medido antes de migrar: 0 casos ya colapsados, o sea se atajó antes de perder nada.
+
+### Alcance: 2 tablas, no 1
+`supplier_debt_ledger` tenía exactamente el mismo `UNIQUE` (36,231 filas). Arreglar solo `order_history` habría dejado la deuda con el proveedor fusionándose igual. Se migraron ambas.
+
+### Implementación
+SQLite no permite `ALTER` de un constraint: hay que recrear la tabla. `_migrate_account_id_into_unique()` (`token_store.py`) lee el esquema **REAL en runtime** — varias columnas se agregaron por `ALTER` y no aparecen en el `CREATE TABLE` del código, así que copiar la lista "de memoria" habría perdido datos. Todo en una transacción con verificación de conteo antes de soltar la tabla vieja; si algo falla, `ROLLBACK` y la tabla original queda intacta, reintentando en el siguiente arranque. Idempotente. Los `ON CONFLICT` de ambas tablas se actualizaron a la clave nueva — el target **debe** coincidir con el UNIQUE real o SQLite falla en cada escritura.
+
+### Dos bugs atrapados por probar contra datos reales (no llegaron a producción)
+Se probó contra una **copia real de producción** (48,351 + 36,231 filas), no contra datos de juguete:
+1. `aiosqlite` mantiene una transacción implícita → `BEGIN IMMEDIATE` tronaba con *"cannot start a transaction within a transaction"* y la migración se saltaba **en silencio**.
+2. `isolation_level` no se puede tocar desde otro hilo con `aiosqlite` (*"SQLite objects created in a thread can only be used in that same thread"*).
+
+Solución: la migración corre con una conexión `sqlite3` síncrona vía `asyncio.to_thread`.
+
+### Backfill de `fx_rate`
+Endpoint one-shot `/api/diag/backfill-fx-rate` (`dry_run=true` por default). Corrige las filas históricas en USD que quedaron en 17.0 por el bug del `global` (ver entrada anterior), usando como referencia el `fx_rate` **real que las filas de ML ya guardaron ese mismo día** — mismo par USD/MXN, dato propio, sin API externa. No toca `unit_price`/`neto_plat`: van en moneda nativa y siempre fueron correctos.
+
+**Ejecutado en producción**: 11,182 filas corregidas, 0 quedan en 17.0, 164 días de referencia, 0 filas sin referencia. MXN equivalente $25,251,136.83 → $25,621,455.86 (**+$370,319.03, +1.47%**). Re-corrida confirma idempotencia (0 filas pendientes).
+
+**Nota**: el impacto real (+1.47%) resultó mucho menor que el ~15% estimado inicialmente — en el periodo de las filas afectadas (2026-06-12 a 2026-09-15, todas de ExclusiveBulbs) el tipo de cambio real anduvo entre 16.87 y 18.14, cerca del 17.0 que se usaba.
+
+### Verificación
+- Migración: 1.2s, cero filas perdidas, sumas idénticas, idempotente en 2ª corrida.
+- `upsert_order_history` con la clave nueva: dos cuentas en la misma orden **coexisten**; re-upsert de la misma cuenta **actualiza sin duplicar**.
+- Producción post-deploy: ambas tablas con `account_id` en el UNIQUE, recorrido completo sin error (48,353 y 36,233 filas), digest de alertas sin regresión.
+
+### Nota sobre `/api/diag/download-raw-db`
+Una de las descargas de verificación reportó errores de `integrity_check`. **No es corrupción de producción**: ese endpoint copia el archivo crudo mientras la app escribe, y la base está en WAL — copiar así produce un snapshot inconsistente (por eso el respaldo nocturno usa la API de backup de SQLite, ver entrada del 2026-08-25). Verificado: las tablas migradas se recorren completas sin un solo error; el ruido está en árboles de tablas de alta rotación que se escribían durante la copia. Tenerlo presente al usar ese endpoint para auditorías.
+
+---
+
 ## 2026-09-15 — FIX: `_last_fx_rate` nunca se actualizaba (faltaba `global`) — USD→MXN iba a 17.0 plano
 
 ### Contexto
