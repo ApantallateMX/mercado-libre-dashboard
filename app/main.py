@@ -8556,7 +8556,20 @@ async def _prewarm_caches(user_id: str = None):
     Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
     _prewarm_queued=True y el prewarm activo lanza otro al terminar.
     user_id: cuenta a precalentar explícitamente. None = usar ContextVar / default."""
+    # FIX 2026-09-15 (bug real, encontrado investigando por qué TODAS las filas
+    # Amazon de order_history traían fx_rate=17.0 exacto -- 19,353 filas, un
+    # solo valor, mientras las de ML sí variaban por día):
+    # `_last_fx_rate` faltaba en este `global`. La asignación de abajo
+    # (`_last_fx_rate = fx`, tras _get_usd_to_mxn) creaba una variable LOCAL
+    # que moría al salir de la función, así que el módulo nunca se actualizaba
+    # y se quedaba para siempre en su valor inicial de 17.0 (línea 160), pese
+    # al comentario que decía "actualizada en prewarm c/15 min".
+    # Lo leen ~10 lugares como tipo de cambio "real" sin cliente ML vivo
+    # (incluido el escritor de order_history de Amazon), así que todos
+    # convertían USD->MXN a 17.0 plano. ExclusiveBulbs es la única cuenta en
+    # USD: su equivalente en pesos venía subestimado hasta ~15%.
     global _prewarm_running, _prewarm_queued, _prewarm_queued_uid, _prewarm_error, _prewarm_source
+    global _last_fx_rate
     if _prewarm_running:
         _prewarm_queued = True
         if user_id:
