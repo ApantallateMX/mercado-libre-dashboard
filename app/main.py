@@ -21975,6 +21975,79 @@ async def _build_account_health_context(account_id: str):
     return nickname, client, color, metrics
 
 
+@app.get("/api/diag/backfill-fx-rate")
+async def diag_backfill_fx_rate(token: str = "", dry_run: bool = True):
+    """FIX 2026-09-15 (one-shot): corrige el fx_rate de las filas históricas en
+    USD de order_history, que quedaron todas en 17.0 por el bug del `global`
+    faltante en _prewarm_caches (ver DEVLOG).
+
+    Referencia: el fx_rate REAL que las filas de ML ya guardaron para ese mismo
+    día (mismo par USD/MXN, dato propio, sin API externa). Verificado contra una
+    copia real de producción: las 11,179 filas en USD (todas ExclusiveBulbs,
+    2026-06-12 a 2026-09-15) tienen 100% de cobertura de día.
+
+    NO toca `unit_price`/`neto_plat`: esos se guardan en moneda nativa y siempre
+    fueron correctos. Solo se corrige la columna de conversión.
+
+    dry_run=true (default) reporta qué haría sin escribir nada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_bf
+    from app.config import DATABASE_PATH as _DB_BF
+    try:
+        async with _aio_bf.connect(_DB_BF, timeout=60) as _db:
+            await _db.execute("""
+                CREATE TEMP TABLE _fxref AS
+                SELECT order_date, AVG(fx_rate) AS fx FROM order_history
+                WHERE platform='ml' AND fx_rate>0 AND fx_rate!=17.0 AND order_date!=''
+                GROUP BY order_date
+            """)
+            _dias = (await (await _db.execute("SELECT COUNT(*) FROM _fxref")).fetchone())[0]
+            _cand = (await (await _db.execute("""
+                SELECT COUNT(*) FROM order_history o
+                WHERE o.currency='USD' AND o.fx_rate=17.0
+                  AND EXISTS (SELECT 1 FROM _fxref f WHERE f.order_date=o.order_date)
+            """)).fetchone())[0]
+            _sin_ref = (await (await _db.execute("""
+                SELECT COUNT(*) FROM order_history o
+                WHERE o.currency='USD' AND o.fx_rate=17.0
+                  AND NOT EXISTS (SELECT 1 FROM _fxref f WHERE f.order_date=o.order_date)
+            """)).fetchone())[0]
+            _antes = (await (await _db.execute(
+                "SELECT ROUND(SUM(unit_price*quantity*fx_rate),2) FROM order_history WHERE currency='USD'"
+            )).fetchone())[0] or 0
+            if dry_run:
+                return JSONResponse({
+                    "dry_run": True, "dias_referencia": _dias,
+                    "filas_a_corregir": _cand, "filas_sin_referencia": _sin_ref,
+                    "mxn_equivalente_actual": _antes,
+                })
+            _cur_up = await _db.execute("""
+                UPDATE order_history
+                SET fx_rate = (SELECT ROUND(f.fx,4) FROM _fxref f WHERE f.order_date=order_history.order_date)
+                WHERE currency='USD' AND fx_rate=17.0
+                  AND EXISTS (SELECT 1 FROM _fxref f WHERE f.order_date=order_history.order_date)
+            """)
+            _n = _cur_up.rowcount
+            await _db.commit()
+            _despues = (await (await _db.execute(
+                "SELECT ROUND(SUM(unit_price*quantity*fx_rate),2) FROM order_history WHERE currency='USD'"
+            )).fetchone())[0] or 0
+            _quedan = (await (await _db.execute(
+                "SELECT COUNT(*) FROM order_history WHERE currency='USD' AND fx_rate=17.0"
+            )).fetchone())[0]
+            logger.info(f"[BACKFILL-FX] {_n} filas corregidas, MXN {_antes} -> {_despues}")
+            return JSONResponse({
+                "dry_run": False, "filas_corregidas": _n, "quedan_en_17": _quedan,
+                "mxn_antes": _antes, "mxn_despues": _despues,
+                "diferencia": round(_despues - _antes, 2),
+                "pct": round((_despues / _antes - 1) * 100, 2) if _antes else 0,
+            })
+    except Exception as e:
+        logger.warning(f"[BACKFILL-FX] Error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/marketplace-digest-preview")
 async def diag_marketplace_digest_preview(token: str = "", slot: str = "am"):
     """FEATURE 2026-09-15: arma el digest completo de una corrida ('am' 5 AM /

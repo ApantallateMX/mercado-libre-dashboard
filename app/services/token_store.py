@@ -55,6 +55,65 @@ def _with_amazon_nickname_fallback(row: dict) -> dict:
     return row
 
 
+_OH_UNIQUE_OLD = "UNIQUE(order_id, item_id, platform)"
+_OH_UNIQUE_NEW = "UNIQUE(order_id, item_id, platform, account_id)"
+
+# Las 2 tablas que llevaban el MISMO UNIQUE sin la cuenta. Se migran juntas:
+# arreglar solo una dejaría la deuda con el proveedor colapsando igual.
+_UNIQUE_MIGRATION_TABLES = ("order_history", "supplier_debt_ledger")
+
+
+def _migrate_account_id_into_unique(db_path: str, table: str) -> None:
+    """Migración 2026-09-15 (síncrona, se llama con asyncio.to_thread desde
+    init_db). Agrega account_id al UNIQUE. Idempotente: si ya lo trae, no hace
+    nada.
+
+    Recrea la tabla leyendo su esquema REAL en runtime -- varias columnas se
+    agregaron por ALTER y no aparecen en el CREATE TABLE del código, así que
+    copiar la lista de columnas "de memoria" perdería datos. Todo dentro de una
+    transacción con verificación de conteo antes de soltar la tabla vieja: si
+    algo falla, ROLLBACK y la tabla original queda intacta.
+
+    Probado contra copia real de producción (order_history 48,351 filas):
+    1.2s, cero filas perdidas, sumas idénticas, idempotente al repetirse."""
+    import sqlite3 as _sq
+    conn = _sq.connect(db_path, timeout=60)
+    conn.isolation_level = None          # control manual de transacción
+    tmp = f"{table}_mig"
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        sql = (row[0] if row else "") or ""
+        if not sql or _OH_UNIQUE_NEW in sql or _OH_UNIQUE_OLD not in sql:
+            return                       # ya migrada, o esquema inesperado
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+        collist = ", ".join(cols)
+        idx = [r[0] for r in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND tbl_name=? AND sql IS NOT NULL", (table,))]
+        before = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(sql.replace(_OH_UNIQUE_OLD, _OH_UNIQUE_NEW)
+                            .replace(f"CREATE TABLE {table}", f"CREATE TABLE {tmp}", 1))
+            conn.execute(f"INSERT INTO {tmp} ({collist}) SELECT {collist} FROM {table}")
+            after = conn.execute(f"SELECT COUNT(*) FROM {tmp}").fetchone()[0]
+            if after != before:
+                raise RuntimeError(f"conteo no cuadra: {after} vs {before}")
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {tmp} RENAME TO {table}")
+            for i in idx:
+                conn.execute(i)
+            conn.execute("COMMIT")
+            logger.info(f"[MIGRACION] {table}: account_id agregado al UNIQUE "
+                        f"({before} filas intactas)")
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            logger.error(f"[MIGRACION] {table} UNIQUE falló, tabla original intacta: {e}")
+    finally:
+        conn.close()
+
+
 async def init_db():
     """Inicializa la base de datos SQLite. Crea el directorio si no existe (Railway Volume)."""
     db_path = Path(DATABASE_PATH)
@@ -1182,6 +1241,42 @@ async def init_db():
             await db.commit()
         except Exception:
             pass
+        # ─────────────────────────────────────────────────────────────────
+        # Migración 2026-09-15: agregar account_id al UNIQUE de order_history.
+        #
+        # El UNIQUE original era (order_id, item_id, platform). El número de
+        # orden de Amazon (`AmazonOrderId`) es del COMPRADOR, no del vendedor:
+        # un solo checkout con artículos de dos de nuestras tiendas produce el
+        # MISMO order_id para ambos sellers (confirmado 2026-09-15 contra los
+        # reportes crudos de cada cuenta -- 5 casos reales, misma marca de
+        # tiempo al segundo, productos y montos distintos).
+        #
+        # Esos 5 casos no se perdieron porque sus ASIN diferían. Pero si dos
+        # cuentas venden el MISMO ASIN en la misma orden del comprador, las dos
+        # filas colapsan en una: se queda el account_id del primer escritor y
+        # los importes los pisa el segundo (account_id ni siquiera está en el
+        # DO UPDATE SET de upsert_order_history). Se pierde una línea de venta
+        # real y el ingreso queda mal atribuido, en silencio. VECKTOR y AUTOBOT
+        # traslapan catálogo (SNTV/SHIL), así que es cuestión de tiempo.
+        #
+        # SQLite no permite ALTER de un constraint: hay que recrear la tabla.
+        # Se hace leyendo el esquema REAL en runtime (no el CREATE TABLE de
+        # arriba) porque 5 columnas se agregaron por ALTER y no aparecen ahí.
+        # Todo en una transacción: si algo falla, ROLLBACK y la tabla original
+        # queda intacta. Probado contra una copia real de producción
+        # (48,351 filas): 1.2s, cero filas perdidas, sumas idénticas.
+        # ─────────────────────────────────────────────────────────────────
+        # Corre con una conexión sqlite3 SÍNCRONA en un hilo aparte, no con
+        # aiosqlite: aiosqlite mantiene su conexión en su propio hilo y no deja
+        # manipular isolation_level desde fuera (ni permite BEGIN explícito
+        # sobre su transacción implícita). Ambos problemas se detectaron
+        # probando contra la copia real de producción, no en producción.
+        await db.commit()   # soltar cualquier lock antes de migrar
+        for _tbl_mig in _UNIQUE_MIGRATION_TABLES:
+            try:
+                await asyncio.to_thread(_migrate_account_id_into_unique, DATABASE_PATH, _tbl_mig)
+            except Exception as _e_oh:
+                logger.warning(f"[MIGRACION] No se pudo evaluar el UNIQUE de {_tbl_mig}: {_e_oh}")
         # ─────────────────────────────────────────────────────────────────
         # TABLA: stagnation_cascade — "memoria" de la cascada de SKUs
         # estancados (plan 2026-08-26, enriquecido con marketplace-ads-strategist).
@@ -7446,7 +7541,12 @@ async def upsert_order_history(rows: list[dict]) -> int:
                      status, data_source, created_at, shipping_cost_mxn,
                      buyer_id, buyer_nickname)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
+                -- account_id agregado al conflict target 2026-09-15 junto con la
+                -- migración del UNIQUE (ver _migrate_order_history_unique). El
+                -- order_id de Amazon es del COMPRADOR: sin la cuenta en la clave,
+                -- dos tiendas nuestras en el mismo checkout colapsaban en una fila.
+                -- Este target DEBE coincidir con el UNIQUE real o SQLite falla.
+                ON CONFLICT(order_id, item_id, platform, account_id) DO UPDATE SET
                     unit_price       = excluded.unit_price,
                     sale_fee         = CASE WHEN excluded.data_source = 'real' THEN excluded.sale_fee ELSE MAX(order_history.sale_fee, excluded.sale_fee) END,
                     neto_plat        = CASE WHEN excluded.data_source = 'real' THEN excluded.neto_plat ELSE MAX(order_history.neto_plat, excluded.neto_plat) END,
@@ -7494,7 +7594,11 @@ async def upsert_order_history(rows: list[dict]) -> int:
                          category_rate, quantity, retail_ph_usd, fx_rate,
                          amount_mxn, order_date, iso_week, created_at)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
+                    -- account_id en el conflict target 2026-09-15: misma razón y
+                    -- misma migración que order_history (ver
+                    -- _migrate_account_id_into_unique). Sin la cuenta, dos tiendas
+                    -- nuestras en el mismo checkout de Amazon fusionaban su deuda.
+                    ON CONFLICT(order_id, item_id, platform, account_id) DO UPDATE SET
                         retail_ph_usd = CASE WHEN supplier_debt_ledger.amount_mxn = 0 AND excluded.retail_ph_usd > 0
                                              THEN excluded.retail_ph_usd ELSE supplier_debt_ledger.retail_ph_usd END,
                         fx_rate       = CASE WHEN supplier_debt_ledger.amount_mxn = 0 AND excluded.amount_mxn > 0
