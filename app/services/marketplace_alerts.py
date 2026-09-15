@@ -144,6 +144,65 @@ def _metric_status(metric_key: str, value_pct: float) -> str:
     return "rojo"
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ESCALONES DE ATENCIÓN — FEATURE 2026-09-15 (pedido de Jovan)
+#
+# El color oficial de ML solo tiene 2 estados útiles antes del desastre
+# (Líder y Verde), y entre ellos cabe TODO el margen de maniobra: para
+# reclamos, de 1.0% a 1.5%. Cuando ML por fin cambia el color, ya perdiste.
+# Estos 4 escalones parten ese tramo para avisar ANTES.
+#
+# Jovan los definió sobre reclamos: ≤1% buen trabajo, 1-1.2% atención,
+# 1.2-1.5% rojo ("estamos a punto de perder todo"), >1.5% urgencia total.
+# El corte intermedio (1.2) cae al 40% del tramo Líder→Verde, así que la
+# MISMA proporción se aplica a las otras 2 métricas en su propia escala --
+# si no, una cuenta se pondría amarilla por cancelaciones sin que nadie
+# hubiera recibido un solo aviso (el color de ML es la PEOR de las 3).
+#
+#   Reclamos:      1.0 → 1.2 → 1.5      Cancelaciones: 0.5 → 0.7 → 1.0
+#   Demora manejo: 8.0 → 8.8 → 10.0
+# ─────────────────────────────────────────────────────────────────────────
+_TIER_MID_FRACTION = 0.4
+
+# 'sin_dato' NO es un escalón de salud: es "no se pudo consultar esta cuenta".
+# Existe para que una cuenta nunca desaparezca del mensaje en silencio (ver
+# _run_marketplace_digest). Se ordena junto a 'atencion' -- visible, pero sin
+# desplazar a una cuenta que sí tiene una emergencia real confirmada.
+TIER_RANK = {"ok": 0, "sin_dato": 1, "atencion": 1, "riesgo": 2, "critico": 3}
+TIER_EMOJI = {"ok": "🟢", "atencion": "🟡", "riesgo": "🔴", "critico": "🚨", "sin_dato": "⚪"}
+TIER_LABEL = {
+    "ok": "buen trabajo",
+    "atencion": "poner atención",
+    "riesgo": "a punto de perderlo",
+    "critico": "ATENDER HOY MISMO",
+    "sin_dato": "no se pudo consultar",
+}
+
+
+def metric_tier(metric_key: str, value_pct: float) -> str:
+    """Escalón de UNA métrica: ok / atencion / riesgo / critico."""
+    t = METRIC_THRESHOLDS[metric_key]
+    lider, verde = t["lideres"], t["verde"]
+    if value_pct <= lider:
+        return "ok"
+    if value_pct <= lider + (verde - lider) * _TIER_MID_FRACTION:
+        return "atencion"
+    if value_pct <= verde:
+        return "riesgo"
+    return "critico"
+
+
+def account_tier(metrics: dict) -> tuple[str, str]:
+    """Escalón de la CUENTA = el peor de sus 3 métricas (mismo criterio que
+    usa ML para el color: nunca un promedio). Retorna (tier, metrica_culpable)."""
+    worst_tier, worst_key = "ok", "reclamos"
+    for key in ("reclamos", "cancelaciones", "demora_manejo"):
+        tier = metric_tier(key, metrics.get(key, 0) or 0)
+        if TIER_RANK[tier] > TIER_RANK[worst_tier]:
+            worst_tier, worst_key = tier, key
+    return worst_tier, worst_key
+
+
 def extract_metrics(user: dict) -> dict:
     """De seller_reputation.metrics (ya viene de get_user_info) a
     {reclamos, cancelaciones, demora_manejo} en % (0-100), listo para
@@ -179,28 +238,21 @@ def build_metrics_table(metrics: dict) -> str:
     return table
 
 
-async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_claims: int = 15) -> str:
-    """FEATURE 2026-08-25 (pedido de Jovan: "que reclamos podria atender para
-    tenerla al 100%"). Trae reclamos abiertos, los clasifica en 1 sola
-    llamada de IA contra la regla OFICIAL completa (ver
-    health_ai.build_claims_batch_exclusion_prompt) y arma un resumen
-    accionable: cuantos son excluibles + cuantos hacen falta resolver para
-    volver al umbral objetivo. Nunca lanza -- si algo falla, regresa texto
-    explicando que no se pudo generar, para que la alerta principal (cambio
-    de color) siga saliendo igual."""
+async def classify_open_claims(client, max_claims: int = 15) -> tuple[list, dict]:
+    """Trae los reclamos abiertos y los clasifica contra la regla oficial de
+    exclusión de ML (1 sola llamada de IA para todos). Retorna
+    (claims, verdicts). Extraído 2026-09-15 de build_actionable_claims_summary
+    para que el digest programado reuse la MISMA clasificación en vez de
+    duplicar la llamada -- nunca lanza, si algo falla regresa lo que pudo."""
     from datetime import datetime, timezone
     from app.main import _claim_reason_label
     from app.services import openrouter_client
     from app.services.health_ai import build_claims_batch_exclusion_prompt, parse_claims_batch_exclusion
 
-    try:
-        data = await client.get_claims(status="opened", limit=max_claims)
-        raw_claims = data.get("results", []) or []
-    except Exception as e:
-        return f"_No se pudo traer los reclamos abiertos ({e})._"
-
+    data = await client.get_claims(status="opened", limit=max_claims)
+    raw_claims = data.get("results", []) or []
     if not raw_claims:
-        return "Sin reclamos abiertos ahora mismo. 🎉"
+        return [], {}
 
     now = datetime.now(timezone.utc)
     claims = []
@@ -208,10 +260,9 @@ async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_c
         cid = str(c.get("id", ""))
         if not cid:
             continue
-        dc = c.get("date_created", "")
         days_open = 0
         try:
-            dt_obj = datetime.fromisoformat(dc.replace("Z", "+00:00"))
+            dt_obj = datetime.fromisoformat((c.get("date_created", "") or "").replace("Z", "+00:00"))
             days_open = max(0, (now - dt_obj).days)
         except Exception:
             pass
@@ -222,13 +273,56 @@ async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_c
         })
 
     verdicts = {}
-    if openrouter_client.is_available():
+    if claims and openrouter_client.is_available():
         try:
             system, prompt, max_tokens = build_claims_batch_exclusion_prompt(claims)
             raw = await openrouter_client.generate(prompt, system=system, max_tokens=max_tokens)
             verdicts = parse_claims_batch_exclusion(raw, [c["id"] for c in claims])
         except Exception as e:
             logger.warning(f"[MarketplaceAlerts] Error clasificando reclamos: {e}")
+    return claims, verdicts
+
+
+async def build_claims_digest_line(client, max_claims: int = 15, total_open: int = 0) -> str:
+    """Versión de UNA línea del análisis de exclusión, para el digest de la
+    mañana (el mensaje largo con la lista completa sigue siendo
+    build_actionable_claims_summary, que usa la alerta por cambio de color).
+
+    `total_open` es el conteo REAL de reclamos abiertos de la cuenta, que
+    puede ser mayor que los que alcanza a revisar la IA (max_claims). Se usa
+    para decirlo explícito -- con datos reales salió "34 abiertos / 0 de 15",
+    que leído en frío parece un error de cuentas."""
+    try:
+        claims, verdicts = await classify_open_claims(client, max_claims=max_claims)
+    except Exception as e:
+        return f"• _No se pudo revisar los reclamos ({e})._"
+    if not claims:
+        return "• Sin reclamos abiertos 🎉"
+    n = len(claims)
+    ambito = f"los {n} más recientes" if total_open > n else f"{n}"
+    excludable = sum(1 for c in claims if verdicts.get(c["id"], {}).get("exclusion_eligible") == "si")
+    if excludable:
+        return (f"• {excludable} de {ambito} podrían pedir exclusión "
+                f"→ revisar en Métricas → Atención a tus compradores")
+    return f"• 0 de {ambito} califican para exclusión → hay que resolverlos con el comprador"
+
+
+async def build_actionable_claims_summary(client, target_pct: float = 1.5, max_claims: int = 15) -> str:
+    """FEATURE 2026-08-25 (pedido de Jovan: "que reclamos podria atender para
+    tenerla al 100%"). Trae reclamos abiertos, los clasifica en 1 sola
+    llamada de IA contra la regla OFICIAL completa (ver
+    health_ai.build_claims_batch_exclusion_prompt) y arma un resumen
+    accionable: cuantos son excluibles + cuantos hacen falta resolver para
+    volver al umbral objetivo. Nunca lanza -- si algo falla, regresa texto
+    explicando que no se pudo generar, para que la alerta principal (cambio
+    de color) siga saliendo igual."""
+    try:
+        claims, verdicts = await classify_open_claims(client, max_claims=max_claims)
+    except Exception as e:
+        return f"_No se pudo traer los reclamos abiertos ({e})._"
+
+    if not claims:
+        return "Sin reclamos abiertos ahora mismo. 🎉"
 
     excludable = [c for c in claims if verdicts.get(c["id"], {}).get("exclusion_eligible") == "si"]
     manual = [c for c in claims if verdicts.get(c["id"], {}).get("exclusion_eligible") == "revisar_manualmente"]
@@ -290,3 +384,175 @@ async def notify_reputation_change(account_id: str, nickname: str, old_color: st
                                     metrics: dict | None = None, client=None) -> bool:
     text = await build_health_alert_message(account_id, nickname, old_color, new_color, metrics=metrics, client=client)
     return await post_marketplace_alert(text)
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# DIGEST PROGRAMADO — 5:00 AM y 3:00 PM (CDMX), FEATURE 2026-09-15
+#
+# Un SOLO mensaje con todas las cuentas ML, no uno por cuenta (4 cuentas x 2
+# corridas serían 8 posts diarios -- la gente deja de leerlos).
+#
+#   5:00 AM  "con qué te vas a encontrar hoy"  -> estado + reclamos accionables
+#   3:00 PM  "qué se movió hoy"                -> diferencia contra la mañana
+#
+# El % de ML se mueve con ventana de 60 días: en un día casi nunca cambia.
+# Por eso el de la tarde NO mide el trabajo del día por el porcentaje (diría
+# "sin cambio" siempre y parecería que nadie hizo nada) sino por los
+# reclamos: cuántos entraron, cuántos se cerraron, cuántos siguen parados.
+# ═════════════════════════════════════════════════════════════════════════
+_DIGEST_DAYS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_DIGEST_MONTHS = ("ene", "feb", "mar", "abr", "may", "jun",
+                  "jul", "ago", "sep", "oct", "nov", "dic")
+
+
+def digest_mentions(account_ids: list[str]) -> str:
+    """Área + equipo de salud + dueños de las cuentas incluidas, sin repetir.
+    Jovan confirmó 2026-09-15 que van los 4 (Vianey, Alejandro, Said y
+    Vanessa como dueña de las cuentas ML)."""
+    mentions = [AREA_LEAD] + list(HEALTH_TEAM)
+    for aid in account_ids:
+        owner = ACCOUNT_OWNERS.get(str(aid))
+        if owner and owner not in mentions:
+            mentions.append(owner)
+    return " ".join(mentions)
+
+
+def _digest_date_label(dt) -> str:
+    return f"{_DIGEST_DAYS[dt.weekday()]} {dt.day}/{_DIGEST_MONTHS[dt.month - 1]}"
+
+
+def _fmt_delta(now_val: float, prev_val, ref_label: str) -> str:
+    """Texto del cambio contra una corrida previa. Vacío si no hay con qué
+    comparar (primer día, o la corrida anterior no se registró)."""
+    if prev_val is None:
+        return ""
+    d = round(float(now_val) - float(prev_val), 2)
+    if abs(d) < 0.005:
+        return f" · igual que {ref_label}"
+    return f" · {'↑' if d > 0 else '↓'}{abs(d):.2f} desde {ref_label}"
+
+
+def _sorted_worst_first(accounts: list[dict]) -> list[dict]:
+    return sorted(accounts, key=lambda a: -TIER_RANK.get(a.get("tier", "ok"), 0))
+
+
+def _plural(n: int, singular: str, plural: str) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = None) -> str:
+    """Corrida de las 5 AM. `accounts`: dicts con account_id, nickname,
+    metrics, open_claims y (opcional) claims_summary. `prev_run`: fila 'pm'
+    del día anterior, para el comparativo."""
+    prev_run = prev_run or {}
+    parts = [f"## ☀️ Salud de cuentas ML — {_digest_date_label(now_mx)}, 5:00 AM"]
+
+    for a in _sorted_worst_first(accounts):
+        tier = a.get("tier", "ok")
+        if tier == "sin_dato":
+            parts.append(f"{TIER_EMOJI['sin_dato']} **{a['nickname']}** — {TIER_LABEL['sin_dato']}\n"
+                         f"   _{a.get('error', 'error desconocido')}_ — revisar a mano.")
+            continue
+        m = a.get("metrics") or {}
+        reclamos = m.get("reclamos", 0)
+        prev = prev_run.get(str(a.get("account_id", "")))
+        delta = _fmt_delta(reclamos, (prev or {}).get("claims_rate"), "ayer")
+        emoji, label = TIER_EMOJI[tier], TIER_LABEL[tier]
+        limite = METRIC_THRESHOLDS["reclamos"]["verde"]
+
+        if tier == "ok":
+            parts.append(
+                f"{emoji} **{a['nickname']}** — {label}\n"
+                f"   Reclamos {reclamos}%{delta} · {a.get('open_claims', 0)} abiertos"
+            )
+            continue
+
+        block = [f"{emoji} **{a['nickname']}** — {label}"]
+        if tier == "critico":
+            block.append(f"   Reclamos **{reclamos}%** (límite verde {limite}%){delta}")
+            block.append("   La cuenta YA está en amarillo con ML. Cada día así")
+            block.append("   cuesta exposición y ventas.")
+        elif tier == "riesgo":
+            faltan = round(limite - reclamos, 2)
+            block.append(f"   Reclamos **{reclamos}%** (te faltan {faltan} pts para caer){delta}")
+            block.append("   Estamos a un pelo de perder el verde por mala atención.")
+        else:
+            meta = METRIC_THRESHOLDS["reclamos"]["lideres"]
+            block.append(f"   Reclamos **{reclamos}%** (meta Líder ≤{meta}%){delta}")
+            block.append("   Ya perdimos el umbral de MercadoLíder — todavía se recupera.")
+        block.append(f"   • {_plural(a.get('open_claims', 0), 'reclamo abierto', 'reclamos abiertos')}")
+        if a.get("claims_summary"):
+            block.append(f"   {a['claims_summary']}")
+        parts.append("\n".join(block))
+
+    dashboard_url = os.getenv("DASHBOARD_BASE_URL", "https://apantallatemx.up.railway.app")
+    parts.append(f"[Ver detalle en el dashboard]({dashboard_url}/health)")
+    parts.append(digest_mentions([a.get("account_id", "") for a in accounts]))
+    return "\n\n".join(parts)
+
+
+def build_afternoon_digest(accounts: list[dict], now_mx, am_run: dict | None = None) -> str:
+    """Corrida de las 3 PM -- el cierre del día. Compara contra la corrida de
+    las 5 AM del MISMO día: qué se movió, qué sigue parado."""
+    am_run = am_run or {}
+    header = f"## 🔔 Cierre del día — {_digest_date_label(now_mx)}, 3:00 PM"
+    sub = "Contra cómo amanecimos a las 5:00 AM:" if am_run else \
+          "_(no hubo corrida de la mañana hoy, no hay con qué comparar)_"
+    parts = [f"{header}\n{sub}"]
+
+    tot_nuevos = tot_cerrados = tot_abiertos = 0
+    sin_conteo = []
+    for a in _sorted_worst_first(accounts):
+        tier = a.get("tier", "ok")
+        if tier == "sin_dato":
+            parts.append(f"{TIER_EMOJI['sin_dato']} **{a['nickname']}** — {TIER_LABEL['sin_dato']}\n"
+                         f"   _{a.get('error', 'error desconocido')}_ — revisar a mano.")
+            continue
+        m = a.get("metrics") or {}
+        reclamos = m.get("reclamos", 0)
+        prev = am_run.get(str(a.get("account_id", "")))
+        delta = _fmt_delta(reclamos, (prev or {}).get("claims_rate"), "la mañana")
+        abiertos = a.get("open_claims", 0)
+        tot_abiertos += abiertos
+        emoji = TIER_EMOJI[tier]
+
+        # claims_today None = no se pudo contar (no es lo mismo que "0 hoy").
+        # Se dice explícito en vez de reportar ceros que se leerían como
+        # "no hicieron nada en todo el día", que sería acusar en falso.
+        hoy = a.get("claims_today")
+        if hoy is None:
+            sin_conteo.append(a["nickname"])
+            parts.append(f"{emoji} **{a['nickname']}** — Reclamos {reclamos}%{delta}\n"
+                         f"   {abiertos} abiertos · _no se pudo calcular el movimiento de hoy_")
+            continue
+        nuevos, cerrados = hoy.get("nuevos", 0), hoy.get("cerrados", 0)
+        tot_nuevos += nuevos
+        tot_cerrados += cerrados
+
+        if tier == "ok" and nuevos == 0 and cerrados == 0:
+            parts.append(f"{emoji} **{a['nickname']}** — {reclamos}%{delta} · {abiertos} abiertos, sin movimiento")
+            continue
+
+        block = [f"{emoji} **{a['nickname']}** — Reclamos {reclamos}%{delta}",
+                 f"   Hoy: {_plural(nuevos, 'nuevo', 'nuevos')} · "
+                 f"{_plural(cerrados, 'cerrado', 'cerrados')} · "
+                 f"{_plural(abiertos, 'abierto', 'abiertos')}"]
+        # Lectura del día, en función de lo que de verdad controlan
+        if tier in ("critico", "riesgo") and cerrados == 0 and abiertos > 0:
+            block.append(f"   ⚠️ {'El mismo reclamo lleva' if abiertos == 1 else f'Los mismos {abiertos} reclamos llevan'} todo el día sin moverse.")
+        elif cerrados > nuevos:
+            block.append(f"   👏 Bajaron el pendiente en {cerrados - nuevos} hoy.")
+        elif cerrados and cerrados == nuevos:
+            block.append("   Se mantuvieron parejos, pero no bajaron.")
+        elif nuevos > cerrados:
+            block.append(f"   ⚠️ Entraron {nuevos - cerrados} más de los que se cerraron.")
+        parts.append("\n".join(block))
+
+    total_line = (f"📋 Del día: {_plural(tot_nuevos, 'nuevo', 'nuevos')} · "
+                  f"{_plural(tot_cerrados, 'cerrado', 'cerrados')} · "
+                  f"{tot_abiertos} siguen abiertos")
+    if sin_conteo:
+        total_line += f"\n_(sin contar {', '.join(sin_conteo)} — no se pudo leer su movimiento de hoy)_"
+    parts.append(total_line)
+    parts.append(digest_mentions([a.get("account_id", "") for a in accounts]))
+    return "\n\n".join(parts)

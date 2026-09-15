@@ -21797,7 +21797,149 @@ async def _reputation_alert_loop():
                     logger.warning(f"[REPUTATION-ALERT] {nickname}: {_acc_e}")
         except Exception as _e:
             logger.warning(f"[REPUTATION-ALERT] Error en chequeo periódico: {_e}")
+        # Corridas programadas (5 AM / 3 PM CDMX) -- aparte de la alerta por
+        # cambio de color de arriba, que sigue viva para caídas repentinas.
+        await _maybe_run_scheduled_digests()
         await asyncio.sleep(_REPUTATION_ALERT_INTERVAL)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# DIGEST PROGRAMADO 5:00 AM / 3:00 PM (CDMX) — FEATURE 2026-09-15
+# (pedido de Jovan: escalones de atención ANTES de que ML tumbe el color, y
+# un cierre de día que diga qué se movió). Ver marketplace_alerts.py para la
+# lógica de escalones y el armado de los 2 mensajes.
+#
+# Convive con la alerta por cambio de color de _reputation_alert_loop, que
+# se queda viva a propósito (confirmado por Jovan): esa avisa de una caída
+# repentina sin esperar a la siguiente corrida programada.
+# ─────────────────────────────────────────────────────────────────────────
+_DIGEST_SLOTS = {"am": 5, "pm": 15}   # hora local CDMX
+_DIGEST_GRACE_HOURS = 3               # ventana para recuperar una corrida perdida
+                                      # (reinicio del proceso justo a la hora)
+
+
+def _now_mx():
+    """Ahora en hora de CDMX. México ya no aplica horario de verano, pero se
+    usa ZoneInfo igual en vez de un -6 hardcodeado."""
+    from datetime import datetime as _dt_mx
+    try:
+        from zoneinfo import ZoneInfo as _ZI_mx
+        return _dt_mx.now(_ZI_mx("America/Mexico_City"))
+    except Exception:
+        return _dt_mx.utcnow()
+
+
+async def _collect_digest_account(acc: dict, slot: str, today_mx: str) -> dict | None:
+    """Estado de UNA cuenta ML para el digest. Solo lectura -- get_user_info y
+    fetch_all_claims, nunca escribe nada en ML."""
+    from app.services import marketplace_alerts as _ma
+    uid = str(acc.get("user_id", ""))
+    if not uid:
+        return None
+    client = await get_meli_client(user_id=uid)
+    if not client:
+        return None
+    user = await client.get_user_info()
+    metrics = _ma.extract_metrics(user)
+    tier, worst_key = _ma.account_tier(metrics)
+    try:
+        open_claims = len(await client.fetch_all_claims(status="opened"))
+    except Exception as _e_cl:
+        logger.warning(f"[DIGEST] {uid}: no se pudo contar reclamos abiertos: {_e_cl}")
+        open_claims = 0
+    entry = {
+        "account_id": uid,
+        "nickname": acc.get("nickname") or uid,
+        "metrics": metrics,
+        "tier": tier,
+        "worst_metric": worst_key,
+        "open_claims": open_claims,
+    }
+    # El análisis de exclusión (1 llamada de IA) solo en la mañana y solo
+    # donde hay algo que decidir -- en cuentas sanas no se gasta.
+    if slot == "am" and tier != "ok":
+        entry["claims_summary"] = await _ma.build_claims_digest_line(client, total_open=open_claims)
+    if slot == "pm":
+        # Degradar, NO tumbar la cuenta: el conteo del día es secundario frente
+        # a la reputación. Visto en vivo 2026-09-15 -- 'database is locked'
+        # (SQLite ocupado por los loops de fondo) sacaba 2 de 4 cuentas del
+        # reporte sin que el mensaje dijera nada. Un reporte de salud que
+        # omite cuentas en silencio es peor que uno incompleto que lo admite.
+        try:
+            entry["claims_today"] = await token_store.count_claims_today(uid, today_mx)
+        except Exception as _e_ct:
+            logger.warning(f"[DIGEST] {uid}: sin conteo de reclamos del día: {_e_ct}")
+            entry["claims_today"] = None
+    return entry
+
+
+async def _run_marketplace_digest(slot: str, dry_run: bool = False) -> dict:
+    """Arma el digest de una corrida ('am'/'pm') y lo manda. Con dry_run solo
+    regresa el texto, sin mandar y sin registrar la corrida (preview)."""
+    from app.services import marketplace_alerts as _ma
+    now_mx = _now_mx()
+    today_mx = now_mx.strftime("%Y-%m-%d")
+
+    entries = []
+    for acc in (await token_store.get_all_tokens()):
+        _nick = acc.get("nickname") or str(acc.get("user_id", "?"))
+        try:
+            e = await _collect_digest_account(acc, slot, today_mx)
+            if e:
+                entries.append(e)
+        except Exception as _e_acc:
+            # La cuenta SIEMPRE aparece en el mensaje, aunque no se haya podido
+            # consultar -- si se omite en silencio, quien lo lee asume que está
+            # sana y deja de vigilarla justo cuando nadie la está viendo.
+            logger.warning(f"[DIGEST] Error en cuenta {_nick}: {_e_acc}")
+            entries.append({
+                "account_id": str(acc.get("user_id", "")), "nickname": _nick,
+                "metrics": None, "tier": "sin_dato", "open_claims": 0,
+                "error": str(_e_acc)[:120],
+            })
+    if not entries:
+        return {"ok": False, "error": "no se pudo armar ninguna cuenta ML"}
+
+    if slot == "am":
+        from datetime import timedelta as _td_mx
+        prev = await token_store.get_digest_run((now_mx - _td_mx(days=1)).strftime("%Y-%m-%d"), "pm")
+        text = _ma.build_morning_digest(entries, now_mx, prev_run=prev)
+    else:
+        am_run = await token_store.get_digest_run(today_mx, "am")
+        text = _ma.build_afternoon_digest(entries, now_mx, am_run=am_run)
+
+    if dry_run:
+        return {"ok": True, "slot": slot, "accounts": len(entries), "preview": text}
+
+    sent = await _ma.post_marketplace_alert(text)
+    # Se registra SIEMPRE, aunque MARKETPLACE_ALERTS_ENABLED esté apagado --
+    # así el digest de la tarde tiene contra qué comparar desde el día 1.
+    await token_store.save_digest_run(today_mx, slot, [{
+        "account_id": e["account_id"], "tier": e["tier"],
+        "claims_rate": (e["metrics"] or {}).get("reclamos", 0),
+        "cancel_rate": (e["metrics"] or {}).get("cancelaciones", 0),
+        "delay_rate": (e["metrics"] or {}).get("demora_manejo", 0),
+        "open_claims": e.get("open_claims", 0),
+    } for e in entries])
+    logger.info(f"[DIGEST] Corrida {slot} {today_mx}: {len(entries)} cuentas, enviado={sent}")
+    return {"ok": True, "slot": slot, "accounts": len(entries), "sent": sent}
+
+
+async def _maybe_run_scheduled_digests() -> None:
+    """Dispara la corrida de 5 AM o 3 PM si toca y no se ha mandado hoy.
+    Llamado desde _reputation_alert_loop (cada 30 min), así que normalmente
+    sale dentro de los 30 min de la hora objetivo."""
+    now_mx = _now_mx()
+    today_mx = now_mx.strftime("%Y-%m-%d")
+    for slot, target_hour in _DIGEST_SLOTS.items():
+        if not (target_hour <= now_mx.hour < target_hour + _DIGEST_GRACE_HOURS):
+            continue
+        try:
+            if await token_store.has_digest_run(today_mx, slot):
+                continue
+            await _run_marketplace_digest(slot)
+        except Exception as _e_dg:
+            logger.warning(f"[DIGEST] Error en corrida {slot}: {_e_dg}")
 
 
 async def _build_account_health_context(account_id: str):
@@ -21818,6 +21960,23 @@ async def _build_account_health_context(account_id: str):
     color = _ma.level_id_to_color(level_id)
     metrics = _ma.extract_metrics(user)
     return nickname, client, color, metrics
+
+
+@app.get("/api/diag/marketplace-digest-preview")
+async def diag_marketplace_digest_preview(token: str = "", slot: str = "am"):
+    """FEATURE 2026-09-15: arma el digest completo de una corrida ('am' 5 AM /
+    'pm' 3 PM) SIN mandarlo a Mattermost y SIN registrar la corrida -- cero
+    side-effects, igual que marketplace-alert-preview. Para ver exactamente
+    qué texto saldría antes de encender MARKETPLACE_ALERTS_ENABLED."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if slot not in ("am", "pm"):
+        return JSONResponse({"error": "slot debe ser 'am' o 'pm'"}, status_code=400)
+    try:
+        result = await _run_marketplace_digest(slot, dry_run=True)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse(result)
 
 
 @app.get("/api/diag/marketplace-alert-preview")

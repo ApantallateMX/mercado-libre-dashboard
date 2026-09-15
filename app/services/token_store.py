@@ -1734,14 +1734,47 @@ async def init_db():
         # enviado (status de la orden no cambia en ese caso, la única señal
         # real es resolution.reason=="payment_refunded" del reclamo). Ver
         # reverse_debt_for_refunded_claims().
+        # Migración 2026-09-15: closed_date -- fecha (local CDMX) en que ESTE
+        # sistema vio el reclamo pasar de 'opened' a cerrado. ML no expone la
+        # fecha de cierre, así que se sella por observación: solo se escribe
+        # cuando el sync detecta la transición, nunca en el INSERT inicial (un
+        # reclamo que ya nace cerrado no se cerró hoy -- marcarlo así mentiría
+        # en el conteo "cerrados hoy" del digest de la tarde).
         for _col, _def in (
             ("resolution_reason", "TEXT NOT NULL DEFAULT ''"),
             ("refunded_buyer", "INTEGER NOT NULL DEFAULT 0"),
+            ("closed_date", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 await db.execute(f"ALTER TABLE claims_history ADD COLUMN {_col} {_def}")
             except Exception:
                 pass
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: digest_runs — qué se mandó en cada corrida programada de
+        # #alertas-marketplace (5 AM y 3 PM CDMX, ver _reputation_alert_loop).
+        # El digest de la tarde compara contra la fila 'am' del mismo día para
+        # poder decir "subió/bajó/sigue igual desde la mañana".
+        #
+        # Por qué tabla nueva y no reputation_snapshots: esa tiene
+        # UNIQUE(account_id, captured_date) -- 1 sola foto por día, y quitarle
+        # ese candado en SQLite obliga a recrear la tabla (riesgo real sobre
+        # datos que ya existen). Esta es puramente aditiva.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS digest_runs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_date     TEXT NOT NULL,
+                slot         TEXT NOT NULL,
+                account_id   TEXT NOT NULL,
+                tier         TEXT NOT NULL DEFAULT '',
+                claims_rate  REAL NOT NULL DEFAULT 0,
+                cancel_rate  REAL NOT NULL DEFAULT 0,
+                delay_rate   REAL NOT NULL DEFAULT 0,
+                open_claims  INTEGER NOT NULL DEFAULT 0,
+                created_at   REAL NOT NULL DEFAULT 0,
+                UNIQUE(run_date, slot, account_id)
+            )
+        """)
         # ─────────────────────────────────────────────────────────────────
         # TABLA: claim_photos — fotos de reclamos, mirror local en /app/data/claim_photos/
         # (Railway Volume persistente — ver reference_railway_volume_persistence).
@@ -7870,6 +7903,14 @@ async def upsert_claims_history(rows: list[dict]) -> int:
     import time as _t
     if not rows:
         return 0
+    # Fecha local CDMX para sellar closed_date -- el digest de la tarde cuenta
+    # "cerrados hoy" contra el día del equipo, no contra UTC (a las 6 PM CDMX
+    # UTC ya va en el día siguiente y partiría el conteo a la mitad).
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        _today_mx = datetime.now(_ZI("America/Mexico_City")).strftime("%Y-%m-%d")
+    except Exception:
+        _today_mx = datetime.utcnow().strftime("%Y-%m-%d")
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         for r in rows:
             await db.execute("""
@@ -7889,7 +7930,12 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                     item_id       = CASE WHEN excluded.item_id != '' THEN excluded.item_id ELSE claims_history.item_id END,
                     synced_at     = excluded.synced_at,
                     resolution_reason = CASE WHEN excluded.resolution_reason != '' THEN excluded.resolution_reason ELSE claims_history.resolution_reason END,
-                    refunded_buyer    = CASE WHEN excluded.refunded_buyer = 1 THEN 1 ELSE claims_history.refunded_buyer END
+                    refunded_buyer    = CASE WHEN excluded.refunded_buyer = 1 THEN 1 ELSE claims_history.refunded_buyer END,
+                    closed_date   = CASE
+                                        WHEN claims_history.closed_date != '' THEN claims_history.closed_date
+                                        WHEN claims_history.status = 'opened' AND excluded.status != 'opened' THEN ?
+                                        ELSE claims_history.closed_date
+                                    END
             """, (
                 r.get("claim_id", ""), r.get("platform", "ml"), r.get("account_id", ""),
                 r.get("order_id", ""), r.get("item_id", ""), r.get("sku", ""),
@@ -7897,6 +7943,7 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                 r.get("quantity", 1), r.get("amount_mxn", 0),
                 r.get("buyer_comment", ""), r.get("date_created", ""), _t.time(),
                 r.get("resolution_reason", ""), 1 if r.get("refunded_buyer") else 0,
+                _today_mx,
             ))
             if r.get("refunded_buyer") and r.get("order_id"):
                 try:
@@ -7911,6 +7958,84 @@ async def upsert_claims_history(rows: list[dict]) -> int:
                     logger.warning(f"[SUPPLIER-DEBT] Error reversando por reembolso claim {r.get('claim_id')}: {_e_rev}")
         await db.commit()
     return len(rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# DIGEST de #alertas-marketplace (5 AM / 3 PM CDMX) — FEATURE 2026-09-15
+# (pedido de Jovan: escalones de atención antes de que ML tumbe el color, y
+# un cierre de día que diga qué se movió). Ver marketplace_alerts.py.
+# ─────────────────────────────────────────────────────────────────────────
+async def save_digest_run(run_date: str, slot: str, rows: list[dict]) -> int:
+    """Guarda lo que se reportó por cuenta en una corrida ('am'/'pm').
+    Se guarda SIEMPRE, aunque MARKETPLACE_ALERTS_ENABLED esté apagado -- así
+    el digest de la tarde tiene contra qué comparar desde el primer día y no
+    hay que esperar a encender los envíos para que el histórico exista."""
+    import time as _t
+    if not rows:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        for r in rows:
+            await db.execute("""
+                INSERT INTO digest_runs
+                    (run_date, slot, account_id, tier, claims_rate, cancel_rate,
+                     delay_rate, open_claims, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_date, slot, account_id) DO UPDATE SET
+                    tier        = excluded.tier,
+                    claims_rate = excluded.claims_rate,
+                    cancel_rate = excluded.cancel_rate,
+                    delay_rate  = excluded.delay_rate,
+                    open_claims = excluded.open_claims,
+                    created_at  = excluded.created_at
+            """, (
+                run_date, slot, str(r.get("account_id", "")), r.get("tier", ""),
+                float(r.get("claims_rate", 0) or 0), float(r.get("cancel_rate", 0) or 0),
+                float(r.get("delay_rate", 0) or 0), int(r.get("open_claims", 0) or 0),
+                _t.time(),
+            ))
+        await db.commit()
+    return len(rows)
+
+
+async def get_digest_run(run_date: str, slot: str) -> dict:
+    """Devuelve {account_id: {...}} de una corrida previa, {} si no existe."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM digest_runs WHERE run_date = ? AND slot = ?",
+            (run_date, slot),
+        )
+        return {str(r["account_id"]): dict(r) for r in await cur.fetchall()}
+
+
+async def has_digest_run(run_date: str, slot: str) -> bool:
+    """True si esa corrida ya se ejecutó hoy — evita mandarla dos veces si el
+    loop pasa varias veces dentro de la ventana de gracia."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM digest_runs WHERE run_date = ? AND slot = ? LIMIT 1",
+            (run_date, slot),
+        )
+        return await cur.fetchone() is not None
+
+
+async def count_claims_today(account_id: str, day: str, platform: str = "ml") -> dict:
+    """{'nuevos': N, 'cerrados': N} para el día dado (fecha local CDMX).
+
+    'cerrados' sale de closed_date, que solo se sella cuando ESTE sistema ve
+    la transición opened->cerrado (ver upsert_claims_history). Los reclamos
+    que ya estaban cerrados la primera vez que se sincronizaron no cuentan --
+    es la lectura honesta: no sabemos qué día se cerraron."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute("""
+            SELECT
+                SUM(CASE WHEN date_created = ? THEN 1 ELSE 0 END) AS nuevos,
+                SUM(CASE WHEN closed_date  = ? THEN 1 ELSE 0 END) AS cerrados
+            FROM claims_history
+            WHERE account_id = ? AND platform = ?
+        """, (day, day, str(account_id), platform))
+        row = await cur.fetchone()
+    return {"nuevos": int((row[0] if row else 0) or 0), "cerrados": int((row[1] if row else 0) or 0)}
 
 
 async def get_order_ids_with_open_claims(order_ids: list) -> set:
