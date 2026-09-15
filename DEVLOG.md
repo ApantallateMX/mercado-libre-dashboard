@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-14 — FIX: adjuntos PDF de compradores Amazon se descartaban en silencio
+
+### Contexto
+Vianey Ramirez reportó que AUTOBOT AMZ MX no adjunta los archivos que los clientes mandan en mensajes originales de la plataforma. Verificado con datos reales del buzón de AUTOBOT (`autobsamx@gmail.com`, IMAP read-only): el poller está sano (369 mensajes indexados, 0 fallos de parseo), pero 29 correos reales traen un PDF (mayoría constancias de situación fiscal para pedir factura) que nunca se guardaba.
+
+### Causa raíz
+`app/services/buyer_messages_client.py` (`_get_attachments`, línea ~123): el filtro solo aceptaba `image/*` y descartaba CUALQUIER otro tipo sin loguear nada -- a diferencia del descarte por tamaño (que sí deja `logger.warning`), este caso no dejaba rastro.
+
+### Fix
+- `_get_attachments()`: ahora acepta también `application/pdf` (constante `_ATTACHMENT_ALLOWED_TYPES`), y cualquier tipo no soportado se loguea con `logger.info` en vez de descartarse mudo.
+- `app/static/js/amazon_dashboard.js`: el render de adjuntos en el hilo de mensajes siempre pintaba `<img>`, aunque el archivo fuera un PDF (se veía como icono roto) -- ahora distingue por `content_type` y muestra un link con ícono 📄 + nombre de archivo para PDFs.
+- Aplica a las 3 cuentas Amazon (VECKTOR/AUTOBOT/ExclusiveBulbs) -- función compartida, un solo fix las cubre a las tres.
+- Pendiente (no urgente, out of scope de este fix): correr `/api/diag/backfill-buyer-attachments` para recuperar retroactivamente los 29 PDFs de AUTOBOT ya marcados `attachments_checked=1` -- requiere resetear ese flag o extender la query de backfill, se hará en un pase aparte si Jovan lo pide.
+
+### Verificación
+- `py -c "import ast; ast.parse(...)"` limpio en `main.py`; import directo de `buyer_messages_client` confirma `_ATTACHMENT_ALLOWED_TYPES = ('image/', 'application/pdf')`.
+- `node --check` limpio en `amazon_dashboard.js`.
+
+---
+
 ## 2026-09-14 — FIX: 4ta crisis de disco Railway (93.2% usado) rompía silenciosamente el full-sync de huérfanos ML para 3/4 cuentas
 
 ### Contexto

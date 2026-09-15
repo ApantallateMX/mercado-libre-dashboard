@@ -3472,8 +3472,18 @@ function _renderAmzBuyerMessages(data) {
                 // verla sin entrar directo a Seller Central real (justo lo
                 // que este dashboard existe para evitar). Se sirve on-demand
                 // desde el BLOB guardado, nunca se persiste a disco.
+                // FIX 2026-09-14: antes siempre pintaba <img>, aunque el
+                // adjunto fuera un PDF (constancia fiscal para facturar) --
+                // se veia como icono roto. Ahora distingue por content_type.
                 var attachmentsHtml = (m.attachments || []).map(function(a) {
                     var url = '/api/amazon/buyer-messages/' + m.id + '/attachments/' + a.id;
+                    var isPdf = (a.content_type || '').indexOf('pdf') !== -1;
+                    if (isPdf) {
+                        return '<a href="' + url + '" target="_blank" rel="noopener" ' +
+                            'class="mt-1.5 flex items-center gap-1.5 text-xs px-2 py-1.5 rounded border border-gray-200 bg-white w-fit hover:bg-gray-50">' +
+                            '📄 <span class="underline">' + _amzMsgsEscAttr(a.filename || 'documento.pdf') + '</span>' +
+                            '</a>';
+                    }
                     return '<a href="' + url + '" target="_blank" rel="noopener" class="block mt-1.5">' +
                         '<img src="' + url + '" alt="' + _amzMsgsEscAttr(a.filename) + '" ' +
                         'class="max-w-[220px] max-h-[220px] rounded border border-gray-200 object-contain bg-white" loading="lazy">' +

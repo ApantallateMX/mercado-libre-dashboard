@@ -120,8 +120,11 @@ def _get_text_body(msg: email.message.Message) -> str | None:
 _ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024  # 5MB — son capturas de pantalla, no debería pasar
 
 
+_ATTACHMENT_ALLOWED_TYPES = ("image/", "application/pdf")
+
+
 def _get_attachments(msg: email.message.Message) -> list[dict]:
-    """Recolecta partes MIME de imagen (adjuntas o inline) del correo
+    """Recolecta partes MIME de imagen/PDF (adjuntas o inline) del correo
     reenviado por Amazon. FIX 2026-08-27: hasta ahora se descartaban en
     silencio -- _get_text_body() solo mira text/plain y hace return en
     cuanto encuentra la primera, sin recorrer el resto de las partes.
@@ -132,13 +135,25 @@ def _get_attachments(msg: email.message.Message) -> list[dict]:
     Central. NUNCA se persiste a disco -- los bytes viven en memoria hasta
     que se insertan como BLOB en SQLite (mismo criterio que _build_mime_message
     para adjuntos salientes, y misma razón: este proyecto ya tuvo 2
-    incidentes reales de disco lleno en Railway)."""
+    incidentes reales de disco lleno en Railway).
+
+    FIX 2026-09-14 (Vianey, AUTOBOT AMZ MX): el filtro solo aceptaba
+    image/* y descartaba CUALQUIER OTRO tipo sin dejar rastro -- a
+    diferencia del descarte por tamaño (que sí loguea), este caso no
+    dejaba ningún log. Confirmado con 29 correos reales de AUTOBOT: los
+    clientes mandan su Constancia de Situación Fiscal en PDF para pedir
+    factura, y esos PDFs se perdían en silencio. Ahora también se acepta
+    application/pdf, y cualquier otro tipo no soportado se loguea en vez
+    de descartarse mudo, para no repetir el mismo agujero con un tercer
+    tipo de archivo el día de mañana."""
     out = []
     if not msg.is_multipart():
         return out
     for part in msg.walk():
         ctype = part.get_content_type()
-        if not ctype.startswith("image/"):
+        if not any(ctype.startswith(t) for t in _ATTACHMENT_ALLOWED_TYPES):
+            if part.get_filename():
+                logger.info(f"[BUYER-MSG] adjunto de tipo no soportado descartado ({ctype}): {part.get_filename()}")
             continue
         payload = part.get_payload(decode=True)
         if not payload:
