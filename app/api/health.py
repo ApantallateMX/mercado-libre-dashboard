@@ -319,6 +319,14 @@ async def list_questions(
         dt = date_to or None
         data = await client.get_questions(status=status, offset=offset, limit=limit,
                                           date_from=df, date_to=dt)
+        # Snapshot 2026-09-15 (migración ecomops-stack): solo la vista por
+        # defecto (sin paginar/filtrar) -- evita explotar en filas por cada
+        # combinación que pida la UI. Best-effort, nunca rompe la respuesta.
+        if offset == 0 and not df and not dt:
+            try:
+                await _ts.save_ml_questions_snapshot(str(client.user_id), status, data)
+            except Exception:
+                pass
         return data
     finally:
         await client.close()

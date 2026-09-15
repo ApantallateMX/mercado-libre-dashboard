@@ -28639,7 +28639,52 @@ async def diag_populate_ads_returns_snapshots(token: str = "", days: int = 30):
         except Exception as e:
             returns_results[sid] = {"error": str(e)}
 
-    return JSONResponse({"ads": ads_results, "amazon_returns": returns_results, "days": days})
+    # Preguntas (vista por defecto UNANSWERED) -- ver save_ml_questions_snapshot
+    questions_results = {}
+    for acc in ml_accounts:
+        uid = acc.get("user_id", "")
+        if not uid:
+            continue
+        try:
+            client = await get_meli_client(user_id=uid)
+            if not client:
+                questions_results[uid] = {"error": "sin cliente"}
+                continue
+            try:
+                data = await client.get_questions(status="UNANSWERED", offset=0, limit=20)
+                await token_store.save_ml_questions_snapshot(uid, "UNANSWERED", data)
+                questions_results[uid] = {"ok": True, "total": data.get("paging", {}).get("total", 0)}
+            finally:
+                await client.close()
+        except Exception as e:
+            questions_results[uid] = {"error": str(e)}
+
+    # Stock Sync + Health Check -- dispara un ciclo real ahora mismo en vez
+    # de esperar al próximo loop automático (5 min / 10 min respectivamente).
+    # Ambos ya persisten su propio snapshot al terminar (best-effort).
+    stock_sync_triggered = False
+    health_check_triggered = False
+    try:
+        from app.services.stock_sync_multi import run_multi_stock_sync as _run_mss
+        asyncio.create_task(_run_mss())
+        stock_sync_triggered = True
+    except Exception:
+        pass
+    try:
+        from app.api.system_health import run_all_checks as _run_health
+        asyncio.create_task(_run_health())
+        health_check_triggered = True
+    except Exception:
+        pass
+
+    return JSONResponse({
+        "ads": ads_results,
+        "amazon_returns": returns_results,
+        "questions": questions_results,
+        "stock_sync_triggered": stock_sync_triggered,
+        "health_check_triggered": health_check_triggered,
+        "days": days,
+    })
 
 
 @app.post("/api/diag/reset-attachments-checked-no-attachment")

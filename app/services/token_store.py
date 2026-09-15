@@ -733,6 +733,44 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLAS: ml_questions_snapshot / stock_sync_snapshot /
+        # system_health_snapshot — 2026-09-15 (Jovan, continuación migración
+        # ecomops-stack, mismo mecanismo "opción b" que ads_campaigns_snapshot/
+        # amazon_returns_snapshot arriba). Cada una solo agrega una copia de lo
+        # último calculado/consultado en vivo -- no cambia ningún comportamiento
+        # actual de este dashboard.
+        # - ml_questions_snapshot: solo la vista por defecto (status=UNANSWERED,
+        #   sin filtros de fecha) -- evita explotar en filas por cada
+        #   combinación de paginación/fecha que pida la UI.
+        # - stock_sync_snapshot / system_health_snapshot: fila única (id=1),
+        #   sobreescrita en cada ciclo de sus loops automáticos existentes
+        #   (multi-sync cada 5 min, health check cada 10 min).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_questions_snapshot (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'UNANSWERED',
+                data_json   TEXT NOT NULL,
+                fetched_at  REAL NOT NULL DEFAULT 0,
+                UNIQUE(user_id, status)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_sync_snapshot (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                data_json   TEXT NOT NULL,
+                fetched_at  REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS system_health_snapshot (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                data_json   TEXT NOT NULL,
+                fetched_at  REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_stock_cache — persiste el caché de BM entre reinicios
         # Permite que el prewarm lea BM en <100ms después de un restart
         # ─────────────────────────────────────────────────────────────────
@@ -5868,6 +5906,59 @@ async def save_amazon_returns_snapshot(seller_id: str, days: int, data: list) ->
             await db.commit()
     except Exception as e:
         logger.warning(f"[RETURNS-SNAPSHOT] No se pudo guardar snapshot de seller_id={seller_id}: {e}")
+
+
+async def save_ml_questions_snapshot(user_id: str, status: str, data: dict) -> None:
+    """Guarda copia de la última consulta real de get_questions() en su vista
+    por defecto -- ver 2026-09-15 (migración ecomops-stack). Nunca lanza."""
+    import json as _json_q
+    import time as _t_q
+    try:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            await db.execute(
+                "INSERT INTO ml_questions_snapshot (user_id, status, data_json, fetched_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, status) DO UPDATE SET "
+                "data_json=excluded.data_json, fetched_at=excluded.fetched_at",
+                (user_id, status, _json_q.dumps(data), _t_q.time()),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"[QUESTIONS-SNAPSHOT] No se pudo guardar snapshot de user_id={user_id}: {e}")
+
+
+async def save_stock_sync_snapshot(data: dict) -> None:
+    """Guarda copia del último resultado real de run_multi_stock_sync() --
+    ver 2026-09-15 (migración ecomops-stack). Nunca lanza."""
+    import json as _json_ss
+    import time as _t_ss
+    try:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            await db.execute(
+                "INSERT INTO stock_sync_snapshot (id, data_json, fetched_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, fetched_at=excluded.fetched_at",
+                (_json_ss.dumps(data), _t_ss.time()),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"[STOCK-SYNC-SNAPSHOT] No se pudo guardar snapshot: {e}")
+
+
+async def save_system_health_snapshot(data: dict) -> None:
+    """Guarda copia del último cálculo real de run_all_checks() (system_health)
+    -- ver 2026-09-15 (migración ecomops-stack). Nunca lanza."""
+    import json as _json_sh
+    import time as _t_sh
+    try:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            await db.execute(
+                "INSERT INTO system_health_snapshot (id, data_json, fetched_at) VALUES (1, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, fetched_at=excluded.fetched_at",
+                (_json_sh.dumps(data), _t_sh.time()),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"[HEALTH-SNAPSHOT] No se pudo guardar snapshot: {e}")
 
 
 async def get_orphan_listings(platform: str = None, account_id: str = None) -> list[dict]:

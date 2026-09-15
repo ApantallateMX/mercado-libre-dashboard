@@ -1043,6 +1043,13 @@ async def run_multi_stock_sync() -> dict:
         _last_sync_ts     = _time.time()
         _last_sync_result = summary
         _sync_progress    = {}
+        # Snapshot 2026-09-15 (migración ecomops-stack): persiste el estado
+        # ya calculado por get_sync_status() -- solo lectura desde otro
+        # proceso, cero llamadas nuevas a BM/ML/Amazon. Best-effort.
+        try:
+            await token_store.save_stock_sync_snapshot(get_sync_status())
+        except Exception as _snap_e:
+            logger.warning(f"[MULTI-SYNC] Error guardando snapshot: {_snap_e}")
 
     return summary
 

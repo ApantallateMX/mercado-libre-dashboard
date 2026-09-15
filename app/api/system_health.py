@@ -439,6 +439,14 @@ async def run_all_checks():
 
         _state["last_run"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         print(f"[HEALTH] Check completo — overall: {_state['overall']}")
+        # Snapshot 2026-09-15 (migración ecomops-stack): persiste el score
+        # compuesto ya calculado -- solo lectura desde otro proceso, cero
+        # llamadas nuevas. Best-effort.
+        try:
+            from app.services import token_store as _ts_health
+            await _ts_health.save_system_health_snapshot(_state)
+        except Exception as _snap_e:
+            print(f"[HEALTH] Error guardando snapshot: {_snap_e}")
     finally:
         _state["running"] = False
 
