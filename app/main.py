@@ -22048,6 +22048,31 @@ async def diag_backfill_fx_rate(token: str = "", dry_run: bool = True):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/diag/marketplace-digest-send")
+async def diag_marketplace_digest_send(token: str = "", slot: str = "pm"):
+    """Dispara AHORA una corrida del digest y la MANDA de verdad al canal, sin
+    esperar a la hora programada. Respeta MARKETPLACE_ALERTS_ENABLED igual que
+    todo lo demás (post_marketplace_alert es el único punto de envío real), así
+    que si la bandera está apagada arma el mensaje y no manda nada.
+
+    Separado del preview a propósito: ese endpoint garantiza cero side-effects
+    y esa propiedad no se toca. Este sí registra la corrida en digest_runs, que
+    es justo lo que permite comparar contra ella en la siguiente."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if slot not in ("am", "pm"):
+        return JSONResponse({"error": "slot debe ser 'am' o 'pm'"}, status_code=400)
+    from app.services import marketplace_alerts as _ma
+    try:
+        result = await _run_marketplace_digest(slot, dry_run=False)
+    except Exception as e:
+        logger.warning(f"[DIGEST] Error en envío manual {slot}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    result["alerts_enabled"] = _ma.ALERTS_ENABLED
+    result["mm_configured"] = bool(_ma.MM_URL and _ma.MM_BOT_TOKEN and _ma.MM_CHANNEL_ID)
+    return JSONResponse(result)
+
+
 @app.get("/api/diag/marketplace-digest-preview")
 async def diag_marketplace_digest_preview(token: str = "", slot: str = "am"):
     """FEATURE 2026-09-15: arma el digest completo de una corrida ('am' 5 AM /
