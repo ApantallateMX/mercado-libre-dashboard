@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-15 — FIX: `_last_fx_rate` nunca se actualizaba (faltaba `global`) — USD→MXN iba a 17.0 plano
+
+### Contexto
+La sesión de `ecomops-stack` reportó que en `order_history` **todas** las filas de Amazon traían `fx_rate = 17.000000` — un solo valor distinto en 19,353 filas — mientras las de ML tenían 52 valores reales entre 16.8748 y 20.0.
+
+### Causa raíz
+En `_prewarm_caches` (`app/main.py`), la línea `_last_fx_rate = fx` (justo después de `_get_usd_to_mxn`) **no estaba cubierta por ninguna declaración `global`**. La función sí declara `global` para otras 5 variables de módulo, pero `_last_fx_rate` no estaba en la lista. Sin eso, Python trata la asignación como variable LOCAL: se creaba, se usaba dentro de la función y moría al salir. El `_last_fx_rate` del módulo jamás cambiaba y se quedaba para siempre en su valor inicial de `17.0`, a pesar del comentario que decía "actualizada en prewarm c/15 min". Confirmado que no existía ningún otro `global _last_fx_rate` en todo el repo.
+
+### Por qué solo se veía en Amazon
+ML no depende de ese caché: `_save_ml_orders_history_bg` recibe `usd_to_mxn` como **parámetro**, calculado en vivo con un cliente ML real en cada sync. El escritor de Amazon (`_save_amazon_orders_bg`) es un loop independiente sin cliente ML a la mano, así que cae al caché roto (`_last_fx_rate if _last_fx_rate > 0 else 17.0`).
+
+### Impacto
+~10 lugares leen `_last_fx_rate` como tipo de cambio "real" cuando no hay cliente ML vivo: precios sugeridos de `bm_sku_gaps`, mapas de costo/retail, márgenes de Deals, Ads, potencial de ingreso de no-lanzados, `stock_winner.py`, `items.py`, `supplier_debt.py` y el `order_history` de Amazon. Todos convertían USD→MXN a 17.0 plano. **ExclusiveBulbs es la única cuenta en USD**: su equivalente en pesos venía subestimado hasta ~15%. Los montos en dólares siempre fueron correctos — solo la conversión estaba mal.
+
+### Fix
+Agregado `global _last_fx_rate` en `_prewarm_caches`. Verificado con AST (no solo leyendo el diff) que la asignación ahora sí escribe el atributo del módulo.
+
+### Consecuencia esperada y visible
+Las cifras que involucran conversión USD→MXN van a **subir** respecto a lo que mostraban antes, porque venían subestimadas. No es un cambio de fórmula: es que ahora usan el tipo de cambio real en vez de 17.0 fijo.
+
+### NO incluido
+Backfill de las filas históricas de `order_history`. `unit_price`/`neto_plat` se guardan en moneda nativa (no pre-convertidos), así que un backfill sería solo corregir la columna `fx_rate` por fecha — viable y de bajo riesgo — pero mueve cifras ya reportadas, así que es decisión de negocio aparte, pendiente de Jovan.
+
+---
+
 ## 2026-09-15 — FEAT: digest de salud ML 2x/día (5 AM / 3 PM CDMX) con escalones de atención
 
 ### Contexto
