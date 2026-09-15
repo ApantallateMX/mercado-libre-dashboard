@@ -28592,6 +28592,56 @@ async def diag_backfill_buyer_attachments(token: str = "", seller_id: str = "", 
     return JSONResponse(result)
 
 
+@app.post("/api/diag/populate-ads-returns-snapshots")
+async def diag_populate_ads_returns_snapshots(token: str = "", days: int = 30):
+    """Puntual 2026-09-15 (migración ecomops-stack, poblar snapshots recién
+    creados): dispara una consulta real de Ads (las 4 cuentas ML) y de
+    Amazon Returns (las 3 cuentas Amazon) para que ads_campaigns_snapshot/
+    amazon_returns_snapshot tengan datos desde ya, en vez de esperar a que
+    alguien entre manualmente a esas tabs. Cada llamada ya guarda su propio
+    snapshot (ver get_ads_campaigns/_fetch_amazon_returns_report_cached) --
+    este endpoint solo las dispara en lote. Solo lectura contra ML/Amazon,
+    no escribe nada en las plataformas."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from datetime import datetime as _dt_pop, timedelta as _td_pop
+    date_to = _dt_pop.utcnow().strftime("%Y-%m-%d")
+    date_from = (_dt_pop.utcnow() - _td_pop(days=days)).strftime("%Y-%m-%d")
+
+    ads_results = {}
+    ml_accounts = await token_store.get_all_tokens()
+    for acc in ml_accounts:
+        uid = acc.get("user_id", "")
+        if not uid:
+            continue
+        try:
+            client = await get_meli_client(user_id=uid)
+            if not client:
+                ads_results[uid] = {"error": "sin cliente"}
+                continue
+            try:
+                data = await client.get_ads_campaigns(date_from, date_to)
+                ads_results[uid] = {"ok": True, "n_results": len(data.get("results", []))}
+            finally:
+                await client.close()
+        except Exception as e:
+            ads_results[uid] = {"error": str(e)}
+
+    returns_results = {}
+    amz_accounts = await token_store.get_all_amazon_accounts()
+    for acc in amz_accounts:
+        sid = acc.get("seller_id", "")
+        if not sid:
+            continue
+        try:
+            items = await _fetch_amazon_returns_report_cached(sid, days)
+            returns_results[sid] = {"ok": True, "n_items": len(items)}
+        except Exception as e:
+            returns_results[sid] = {"error": str(e)}
+
+    return JSONResponse({"ads": ads_results, "amazon_returns": returns_results, "days": days})
+
+
 @app.post("/api/diag/reset-attachments-checked-no-attachment")
 async def diag_reset_attachments_checked_no_attachment(token: str = "", seller_id: str = ""):
     """Puntual 2026-09-14 (fix de PDFs descartados en silencio, ver DEVLOG):
