@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-15 — FEAT: snapshot de Preguntas, Stock Sync y score de Salud (continuación migración ecomops-stack)
+
+### Contexto
+Continuación del mismo pedido de Jovan del punto anterior. Al revisar qué más de la tab Salud le faltaba persistencia a ecomops-stack, se encontró que **Feedback/Reseñas ya estaba resuelto** desde antes -- `ml_item_reviews` y `amazon_seller_feedback` ya son tablas reales en `tokens.db` (usadas por `get_ml_feedback_tab()`/`set_feedback_status()` en `app/api/health.py`), así que no requirió ningún cambio. Lo que sí faltaba: Preguntas (`list_questions()` llama a ML en vivo cada vez, cero persistencia), Stock Sync manual (`get_sync_status()` en `stock_sync_multi.py` solo vive en variables globales en memoria) y el score compuesto de Salud (`_state` en `system_health.py`, mismo problema).
+
+### Fix
+- `app/services/token_store.py`: 3 tablas nuevas -- `ml_questions_snapshot` (user_id, status, data_json, fetched_at; UNIQUE por user_id+status, solo la vista por defecto `status=UNANSWERED` sin paginar/filtrar por fecha, para no explotar en filas por cada combinación que pida la UI), `stock_sync_snapshot` y `system_health_snapshot` (ambas fila única `id=1`, sobreescrita en cada ciclo). Funciones `save_ml_questions_snapshot()`/`save_stock_sync_snapshot()`/`save_system_health_snapshot()`, todas best-effort (try/except).
+- `app/api/health.py` (`list_questions`): persiste tras cada consulta real, solo cuando `offset=0` y sin filtros de fecha (la vista por defecto).
+- `app/services/stock_sync_multi.py` (`run_multi_stock_sync`, bloque `finally`): persiste `get_sync_status()` al terminar cada ciclo -- el loop ya corre solo cada 5 min, no se agregan llamadas nuevas.
+- `app/api/system_health.py` (`run_all_checks`): persiste `_state` tras calcular `overall` -- el loop ya corre solo cada 10 min.
+- `app/main.py`: extendido `/api/diag/populate-ads-returns-snapshots` para también disparar Preguntas (las 4 cuentas ML) y forzar un ciclo inmediato de stock-sync + health-check, en vez de esperar al próximo loop natural.
+- **No cambia ningún comportamiento actual de este dashboard** -- todo sigue calculándose en vivo/en memoria exactamente igual, solo se agrega una escritura extra tras cada resultado real.
+
+### Verificación
+- `py -c "import ast; ast.parse(...)"` limpio en los 5 archivos tocados.
+- Local (`uvicorn` puerto 8004, JWT vía `make_jwt2.py`): `curl -X POST /api/diag/populate-ads-returns-snapshots` → 200 con JSON válido (`questions`, `stock_sync_triggered: true`, `health_check_triggered: true`).
+- Confirmado en `tokens.db` local tras el ciclo en background: `ml_questions_snapshot` 4 filas (una por cuenta ML), `stock_sync_snapshot` y `system_health_snapshot` 1 fila cada una, con `data_json` real (no vacío) -- `system_health_snapshot.overall` reflejó el estado real del entorno local (`error`, por checks de Amazon/BM que no aplican fuera de producción).
+- Push a `origin` y `mi2` (`8803f43`). Confirmado deploy en Railway (~5 min después del push): `curl -X POST /api/diag/populate-ads-returns-snapshots` en producción devolvió las nuevas claves (`questions`, `stock_sync_triggered`, `health_check_triggered`) con `ok:true` en las 4 cuentas ML.
+
+---
+
 ## 2026-09-15 — FEAT: snapshot de Ads/Amazon Returns en tokens.db (migración ecomops-stack, opción "b" de Jovan)
 
 ### Contexto
