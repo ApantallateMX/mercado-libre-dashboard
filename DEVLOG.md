@@ -19,11 +19,14 @@ Vianey Ramirez reportó que AUTOBOT AMZ MX no adjunta los archivos que los clien
 - `_get_attachments()`: ahora acepta también `application/pdf` (constante `_ATTACHMENT_ALLOWED_TYPES`), y cualquier tipo no soportado se loguea con `logger.info` en vez de descartarse mudo.
 - `app/static/js/amazon_dashboard.js`: el render de adjuntos en el hilo de mensajes siempre pintaba `<img>`, aunque el archivo fuera un PDF (se veía como icono roto) -- ahora distingue por `content_type` y muestra un link con ícono 📄 + nombre de archivo para PDFs.
 - Aplica a las 3 cuentas Amazon (VECKTOR/AUTOBOT/ExclusiveBulbs) -- función compartida, un solo fix las cubre a las tres.
-- Pendiente (no urgente, out of scope de este fix): correr `/api/diag/backfill-buyer-attachments` para recuperar retroactivamente los 29 PDFs de AUTOBOT ya marcados `attachments_checked=1` -- requiere resetear ese flag o extender la query de backfill, se hará en un pase aparte si Jovan lo pide.
+- Nuevo endpoint puntual `/api/diag/reset-attachments-checked-no-attachment` (`app/main.py`): resetea `attachments_checked=0` solo para mensajes inbound de un seller_id que hoy no tienen NINGÚN adjunto guardado (candidatos reales a tener un PDF perdido) -- nunca toca mensajes que ya recuperaron una imagen correctamente. Necesario porque el backfill normal (`get_inbound_messages_needing_attachment_check`) solo revisa `attachments_checked=0`, y estos mensajes ya habían pasado por el backfill de 2026-08-27 quedando marcados como "revisados" antes de que existiera el soporte de PDF.
+  - **Bug propio, corregido en el momento**: la primera versión de este endpoint olvidó el `import aiosqlite` local (patrón que sí siguen otros endpoints del archivo) -- `NameError` sin capturar → 500 genérico. Fix de una línea + `try/except`, verificado con `ast.parse` antes de subir de nuevo.
+- Corrido contra producción para AUTOBOT (A252KSQ687FNRO): reset marcó 354 mensajes candidatos, backfill los revisó todos vía IMAP y **recuperó 38 adjuntos** (más de los 29 estimados en la investigación inicial -- algunos mensajes traían más de un PDF).
 
 ### Verificación
 - `py -c "import ast; ast.parse(...)"` limpio en `main.py`; import directo de `buyer_messages_client` confirma `_ATTACHMENT_ALLOWED_TYPES = ('image/', 'application/pdf')`.
 - `node --check` limpio en `amazon_dashboard.js`.
+- Producción: `POST /api/diag/reset-attachments-checked-no-attachment?seller_id=A252KSQ687FNRO` → `{"ok":true,"reset_count":354}`; `POST /api/diag/backfill-buyer-attachments?seller_id=A252KSQ687FNRO&limit=500` → `{"checked":354,"recovered_messages":38,"recovered_attachments":38}`.
 
 ---
 
