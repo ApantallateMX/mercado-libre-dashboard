@@ -27493,6 +27493,12 @@ async def _fetch_amazon_returns_report_cached(seller_id: str, days: int) -> list
                 await asyncio.sleep(1)  # espaciar llamadas — Reports API es estricta con rate limits
 
         _amz_returns_report_cache[key] = (_trr.time(), items)
+        # 2026-09-15 (migración ecomops-stack, opción "b" de Jovan): además del
+        # cache en memoria de siempre, persiste una copia en tokens.db para que
+        # un proceso separado (ecomops-stack) la pueda leer sin llamar nunca a
+        # esta API ni tocar credenciales -- no cambia el comportamiento de este
+        # dashboard.
+        await token_store.save_amazon_returns_snapshot(seller_id, days, items)
         return items
     except Exception as _exc:
         logger.warning(f"[AMZ-RETURNS-REPORT] Error {seller_id}: {_exc}")

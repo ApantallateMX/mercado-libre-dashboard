@@ -700,6 +700,39 @@ async def init_db():
             "ON orphan_listings(platform, account_id)"
         )
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: ads_campaigns_snapshot / amazon_returns_snapshot — 2026-09-15
+        # (Jovan, migración ecomops-stack, opción "b"): mercado-libre-dashboard
+        # sigue llamando Ads/Amazon Returns EN VIVO igual que siempre -- estas
+        # tablas solo agregan una copia de lo último consultado, para que un
+        # proceso SEPARADO (ecomops-stack) pueda leerla sin llamar nunca a las
+        # APIs ni tocar credenciales/BM. No cambia ningún comportamiento actual
+        # de este dashboard, solo agrega una escritura extra tras cada fetch
+        # exitoso. UNIQUE por cuenta+ventana consultada -- cada nueva consulta
+        # sobreescribe la anterior de esa misma ventana (siempre el último dato
+        # real conocido, no un histórico).
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ads_campaigns_snapshot (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     TEXT NOT NULL,
+                date_from   TEXT DEFAULT '',
+                date_to     TEXT DEFAULT '',
+                data_json   TEXT NOT NULL,
+                fetched_at  REAL NOT NULL DEFAULT 0,
+                UNIQUE(user_id, date_from, date_to)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_returns_snapshot (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id   TEXT NOT NULL,
+                days        INTEGER NOT NULL,
+                data_json   TEXT NOT NULL,
+                fetched_at  REAL NOT NULL DEFAULT 0,
+                UNIQUE(seller_id, days)
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_stock_cache — persiste el caché de BM entre reinicios
         # Permite que el prewarm lea BM en <100ms después de un restart
         # ─────────────────────────────────────────────────────────────────
@@ -5796,6 +5829,45 @@ async def clear_orphans_for_account(platform: str, account_id: str) -> None:
             (platform, account_id),
         )
         await db.commit()
+
+
+async def save_ads_campaigns_snapshot(user_id: str, date_from: str, date_to: str, data: dict) -> None:
+    """Guarda copia del último resultado real de get_ads_campaigns() -- ver
+    2026-09-15 (migración ecomops-stack, opción "b"). Nunca lanza: un fallo
+    al guardar el snapshot no debe romper la respuesta real al usuario."""
+    import json as _json_ads
+    import time as _t_ads
+    try:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            await db.execute(
+                "INSERT INTO ads_campaigns_snapshot (user_id, date_from, date_to, data_json, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id, date_from, date_to) DO UPDATE SET "
+                "data_json=excluded.data_json, fetched_at=excluded.fetched_at",
+                (user_id, date_from or "", date_to or "", _json_ads.dumps(data), _t_ads.time()),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"[ADS-SNAPSHOT] No se pudo guardar snapshot de user_id={user_id}: {e}")
+
+
+async def save_amazon_returns_snapshot(seller_id: str, days: int, data: list) -> None:
+    """Guarda copia del último resultado real de _fetch_amazon_returns_report_cached()
+    -- ver 2026-09-15 (migración ecomops-stack, opción "b"). Nunca lanza."""
+    import json as _json_ret
+    import time as _t_ret
+    try:
+        async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+            await db.execute(
+                "INSERT INTO amazon_returns_snapshot (seller_id, days, data_json, fetched_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(seller_id, days) DO UPDATE SET "
+                "data_json=excluded.data_json, fetched_at=excluded.fetched_at",
+                (seller_id, days, _json_ret.dumps(data), _t_ret.time()),
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"[RETURNS-SNAPSHOT] No se pudo guardar snapshot de seller_id={seller_id}: {e}")
 
 
 async def get_orphan_listings(platform: str = None, account_id: str = None) -> list[dict]:

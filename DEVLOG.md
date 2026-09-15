@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-15 — FEAT: snapshot de Ads/Amazon Returns en tokens.db (migración ecomops-stack, opción "b" de Jovan)
+
+### Contexto
+Jovan pidió que ecomops-stack use SOLO los datos que ya sincroniza este dashboard, sin llamadas en vivo ni tocar cuentas/BM. La sesión de ecomops-stack verificó (correcto, contra el código real) que Ads y Amazon Returns no tienen ninguna persistencia hoy: `get_ads_campaigns()` llama a la API de Mercado Ads en vivo cada vez, sin ninguna tabla; `_fetch_amazon_returns_report_cached()` solo tiene un cache EN MEMORIA de 6h dentro de este mismo proceso (`_amz_returns_report_cache`, un dict de Python) -- ecomops-stack, al correr en un proceso separado, no puede leer esa memoria aunque quisiera. Se le presentaron 3 opciones a Jovan (dejar fuera / agregar persistencia aquí / otra cosa) -- eligió "b": agregar persistencia.
+
+### Fix
+- `app/services/token_store.py`: 2 tablas nuevas, `ads_campaigns_snapshot` (user_id, date_from, date_to, data_json, fetched_at) y `amazon_returns_snapshot` (seller_id, days, data_json, fetched_at) -- UNIQUE por cuenta+ventana, cada consulta nueva sobreescribe la anterior de esa misma ventana (siempre el último dato real conocido). Funciones `save_ads_campaigns_snapshot()`/`save_amazon_returns_snapshot()`, ambas con `try/except` -- un fallo al guardar el snapshot NUNCA debe romper la respuesta real al usuario de este dashboard.
+- `app/services/meli_client.py` (`get_ads_campaigns`): además de devolver el resultado en vivo como siempre, ahora también lo persiste.
+- `app/main.py` (`_fetch_amazon_returns_report_cached`): mismo patrón, persiste junto con el cache en memoria existente.
+- **No cambia ningún comportamiento actual de este dashboard** -- ambas rutas siguen llamando a las APIs en vivo exactamente igual, solo se agrega una escritura extra tras cada fetch exitoso.
+
+### Verificación
+- `py -c "import ast; ast.parse(...)"` limpio en los 3 archivos.
+- Prueba local de punta a punta contra una DB de prueba: `init_db()` crea ambas tablas, `save_ads_campaigns_snapshot()`/`save_amazon_returns_snapshot()` escriben y se leen de vuelta correctamente.
+
+---
+
 ## 2026-09-14 — FIX: adjuntos PDF de compradores Amazon se descartaban en silencio
 
 ### Contexto

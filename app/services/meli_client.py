@@ -786,10 +786,17 @@ class MeliClient:
             params["date_from"] = date_from
         if date_to:
             params["date_to"] = date_to
-        return await self._ads_get(
+        result = await self._ads_get(
             f"/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns/search",
             params=params
         )
+        # 2026-09-15 (migración ecomops-stack, opción "b" de Jovan): además de
+        # devolver el resultado en vivo como siempre, guarda una copia para que
+        # un proceso separado (ecomops-stack) la pueda leer sin llamar nunca a
+        # esta API ni tocar credenciales -- no cambia el comportamiento de este
+        # dashboard, solo agrega una escritura extra.
+        await token_store.save_ads_campaigns_snapshot(self.user_id, date_from, date_to, result)
+        return result
 
     async def get_ads_campaign_detail(self, campaign_id: str, date_from: str = None, date_to: str = None) -> dict:
         """Obtiene detalle de una campana con metricas (nuevo endpoint API v2)."""
