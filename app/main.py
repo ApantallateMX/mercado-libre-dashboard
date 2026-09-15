@@ -28586,6 +28586,33 @@ async def diag_backfill_buyer_attachments(token: str = "", seller_id: str = "", 
     return JSONResponse(result)
 
 
+@app.post("/api/diag/reset-attachments-checked-no-attachment")
+async def diag_reset_attachments_checked_no_attachment(token: str = "", seller_id: str = ""):
+    """Puntual 2026-09-14 (fix de PDFs descartados en silencio, ver DEVLOG):
+    los mensajes que ya pasaron por el backfill de 2026-08-27 quedaron
+    attachments_checked=1 aunque el correo trajera un PDF (el filtro viejo
+    solo aceptaba imágenes) -- el backfill normal los saltaría por ya
+    "revisados". Resetea a 0 SOLO los inbound de seller_id que hoy no
+    tienen NINGÚN adjunto guardado (los candidatos reales a tener un PDF
+    perdido) -- nunca toca mensajes que ya recuperaron una imagen
+    correctamente. Después de esto, correr /api/diag/backfill-buyer-attachments
+    normal para que los vuelva a revisar con el filtro ya corregido."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not seller_id:
+        return JSONResponse({"error": "seller_id requerido"}, status_code=400)
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(
+            """UPDATE amazon_buyer_messages SET attachments_checked = 0
+               WHERE seller_id = ? AND direction = 'inbound' AND attachments_checked = 1
+                 AND id NOT IN (SELECT DISTINCT message_row_id FROM amazon_buyer_message_attachments)""",
+            (seller_id,),
+        )
+        await db.commit()
+        reset_count = cur.rowcount
+    return JSONResponse({"ok": True, "reset_count": reset_count, "seller_id": seller_id})
+
+
 @app.get("/api/amazon/buyer-messages/{message_id}/attachments/{attachment_id}")
 async def amazon_buyer_message_attachment(request: Request, message_id: int, attachment_id: int):
     """Sirve el BLOB de una imagen adjunta que el comprador mandó -- on-demand,
