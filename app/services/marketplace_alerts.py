@@ -538,7 +538,14 @@ def build_afternoon_digest(accounts: list[dict], now_mx, am_run: dict | None = N
                  f"{_plural(cerrados, 'cerrado', 'cerrados')} · "
                  f"{_plural(abiertos, 'abierto', 'abiertos')}"]
         # Lectura del día, en función de lo que de verdad controlan
-        if tier in ("critico", "riesgo") and cerrados == 0 and abiertos > 0:
+        # El juicio sobre el día SOLO se emite si hubo corrida de la mañana con
+        # qué comparar. Sin esa base no sabemos si se movieron o no, y decir
+        # "llevan todo el día sin moverse" sería acusar en falso al equipo --
+        # pasaría literalmente el primer día, cuando closed_date todavía está
+        # vacío por diseño (se sella por observación hacia adelante).
+        if not am_run:
+            pass
+        elif tier in ("critico", "riesgo") and cerrados == 0 and abiertos > 0:
             block.append(f"   ⚠️ {'El mismo reclamo lleva' if abiertos == 1 else f'Los mismos {abiertos} reclamos llevan'} todo el día sin moverse.")
         elif cerrados > nuevos:
             block.append(f"   👏 Bajaron el pendiente en {cerrados - nuevos} hoy.")
