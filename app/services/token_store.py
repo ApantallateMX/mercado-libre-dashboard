@@ -697,6 +697,20 @@ async def init_db():
             await db.execute("ALTER TABLE ml_listings ADD COLUMN base_sku TEXT DEFAULT ''")
         except Exception:
             pass  # column already exists
+        # Migración 2026-09-15: sub_status -- distingue "pausado por ML por falta
+        # de stock" de "pausado a mano", que es la señal de la alerta "Sin stock
+        # en MeLi" y hasta hoy solo vivía dentro de data_json.
+        #
+        # ML NO usa status='inactive' para esto (verificado en vivo contra la API:
+        # /users/{id}/items/search?status=inactive devuelve total=0 en todas las
+        # cuentas). Lo que hace es dejar status='paused' y poner
+        # sub_status=['out_of_stock'] -- confirmado con MLM748113371 y
+        # MLM748432759 de AUTOBOT, ambos qty=0. Se guarda como lista separada por
+        # comas para poder filtrar con LIKE '%out_of_stock%' sin parsear JSON.
+        try:
+            await db.execute("ALTER TABLE ml_listings ADD COLUMN sub_status TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists
         try:
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ml_listings_base_sku ON ml_listings(account_id, base_sku)"
@@ -5447,12 +5461,13 @@ async def upsert_ml_listings(rows: list[dict]) -> None:
     for row in rows:
         if not row.get("base_sku"):
             row["base_sku"] = normalize_to_bm_sku(row.get("sku", "")) or ""
+        row.setdefault("sub_status", "")   # filas de callers viejos no lo traen
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO ml_listings
-               (item_id, account_id, title, status, price, available_qty, sold_qty,
+               (item_id, account_id, title, status, sub_status, price, available_qty, sold_qty,
                 sku, base_sku, logistic_type, catalog_listing, is_full, last_updated, synced_at, data_json)
-               VALUES (:item_id,:account_id,:title,:status,:price,:available_qty,:sold_qty,
+               VALUES (:item_id,:account_id,:title,:status,:sub_status,:price,:available_qty,:sold_qty,
                        :sku,:base_sku,:logistic_type,:catalog_listing,:is_full,:last_updated,:synced_at,
                        :data_json)""",
             rows,

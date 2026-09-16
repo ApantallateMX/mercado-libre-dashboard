@@ -56,6 +56,12 @@ def _item_to_row(item: dict, account_id: str) -> dict:
         "account_id":     account_id,
         "title":          (item.get("title") or "")[:200],
         "status":         item.get("status", "active"),
+        # ML deja status='paused' y marca el motivo real aquí: 'out_of_stock'
+        # cuando lo pausó ÉL por falta de stock, vacío cuando lo pausamos
+        # nosotros a mano. Sin esta columna los dos casos son indistinguibles
+        # fuera de data_json, y la alerta "Sin stock en MeLi" no se puede
+        # calcular desde un espejo de la base (ver migración en token_store).
+        "sub_status":     ",".join(item.get("sub_status") or []),
         "price":          float(item.get("price") or 0),
         "available_qty":  int(item.get("available_quantity") or 0),
         "sold_qty":       int(item.get("sold_quantity") or 0),
