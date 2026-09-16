@@ -403,7 +403,13 @@ class MeliClient:
         ids = ",".join(item_ids[:20])  # Max 20 items por request
         return await self.get("/items", params={
             "ids": ids,
-            "attributes": "id,title,price,original_price,available_quantity,sold_quantity,shipping,thumbnail,permalink,pictures,video_id,category_id,seller_custom_field,attributes,variations,status,catalog_listing,warnings",
+            # sub_status agregado 2026-09-15: sin él, ML no lo devuelve por esta
+            # vía (la proyección es explícita) y no había forma de distinguir
+            # "ML lo pausó por falta de stock" (sub_status=['out_of_stock']) de
+            # "lo pausamos a mano". Verificado en vivo: el fetch de UN item sí
+            # lo trae, el multiget con proyección no lo traía -- por eso
+            # ml_listings.sub_status salía vacío aunque el dato existiera.
+            "attributes": "id,title,price,original_price,available_quantity,sold_quantity,shipping,thumbnail,permalink,pictures,video_id,category_id,seller_custom_field,attributes,variations,status,sub_status,catalog_listing,warnings",
             "include_attributes": "all",
         })
 
