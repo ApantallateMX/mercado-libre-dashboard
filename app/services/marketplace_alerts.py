@@ -15,6 +15,7 @@ módulo son no-op silenciosas -- nunca deben tumbar el resto de la app.
 """
 
 import os
+import math as _math
 import logging
 import httpx
 
@@ -213,6 +214,48 @@ def extract_metrics(user: dict) -> dict:
         "cancelaciones": round((m.get("cancellations") or {}).get("rate", 0) * 100, 2),
         "demora_manejo": round((m.get("delayed_handling_time") or {}).get("rate", 0) * 100, 2),
     }
+
+
+def extract_metric_counts(user: dict) -> dict:
+    """Conteos crudos (no tasas) de seller_reputation.metrics. `value` es el
+    NÚMERO de reclamos/cancelaciones/demoras del período, no el total de
+    ventas -- confundirlos fue un bug real corregido el 2026-08-28 (ver
+    _margin_count en app/main.py)."""
+    m = (user.get("seller_reputation") or {}).get("metrics") or {}
+    return {
+        "reclamos": int((m.get("claims") or {}).get("value", 0) or 0),
+        "cancelaciones": int((m.get("cancellations") or {}).get("value", 0) or 0),
+        "demora_manejo": int((m.get("delayed_handling_time") or {}).get("value", 0) or 0),
+    }
+
+
+def claims_headroom(metric_key: str, rate_pct: float, count: int) -> dict:
+    """Traduce el % a un número accionable. Devuelve
+    {"total": ventas_del_periodo, "excluir": N, "margen": N}.
+
+    - `excluir`: cuántos hay que sacar de la cuenta para volver al límite
+      verde (>0 solo si la cuenta ya lo cruzó).
+    - `margen`: cuántos más aguanta antes de cruzarlo (>0 solo si todavía
+      está por debajo).
+
+    El total de ventas del período no viene directo en la respuesta de ML,
+    pero `rate = value/total` con ambos del MISMO período, así que
+    `total = value/rate` se deriva sin otra llamada a la API (mismo criterio
+    ya usado por _margin_count en app/main.py desde el 2026-08-28).
+
+    Es una foto al volumen de ventas ACTUAL: el denominador se mueve solo
+    conforme entran ventas nuevas, así que el número baja aunque nadie toque
+    un reclamo. Por eso se presenta como referencia de hoy, no como promesa."""
+    limite = METRIC_THRESHOLDS[metric_key]["verde"] / 100.0
+    rate = (rate_pct or 0) / 100.0
+    if rate <= 0 or count <= 0:
+        return {"total": 0, "excluir": 0, "margen": 0}
+    total = count / rate
+    if rate > limite:
+        # cuántos sobran por encima del límite (redondeado hacia arriba: con
+        # la parte fraccionaria todavía se sigue estando por encima)
+        return {"total": int(round(total)), "excluir": int(_math.ceil(count - limite * total)), "margen": 0}
+    return {"total": int(round(total)), "excluir": 0, "margen": int(_math.floor(limite * total) - count)}
 
 
 def build_metrics_table(metrics: dict) -> str:
@@ -468,6 +511,12 @@ def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = N
             continue
 
         block = [f"{emoji} **{a['nickname']}** — {label}"]
+        # Traducción del % a un número que el equipo puede accionar hoy.
+        # OJO: resolver un reclamo NO lo saca de la métrica -- ML cuenta los
+        # reclamos abiertos en la ventana. Lo que sí baja la tasa es que ML
+        # los EXCLUYA (regla oficial) o que salgan de la ventana de 60 días.
+        # Decir "resuelve N para volver a verde" sería falso.
+        hr = a.get("headroom") or {}
         if tier == "critico":
             block.append(f"   Reclamos **{reclamos}%** (límite verde {limite}%){delta}")
             block.append("   La cuenta YA está en amarillo con ML. Cada día así")
@@ -483,6 +532,19 @@ def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = N
         block.append(f"   • {_plural(a.get('open_claims', 0), 'reclamo abierto', 'reclamos abiertos')}")
         if a.get("claims_summary"):
             block.append(f"   {a['claims_summary']}")
+        # El número accionable va AL FINAL, después del análisis de exclusión:
+        # puesto antes se contradecía con él ("excluir 4" seguido de "0
+        # califican para exclusión" se lee como error). Aquí se presenta como
+        # el TAMAÑO DE LA BRECHA, que es compatible con que hoy ninguno
+        # califique -- en ese caso la vía real es que salgan de la ventana.
+        if tier == "critico" and hr.get("excluir"):
+            block.append(f"   👉 La brecha son **{_plural(hr['excluir'], 'reclamo', 'reclamos')}**: "
+                         f"esa cantidad tiene que salir de la cuenta (por exclusión aprobada "
+                         f"o al cumplir 60 días) para volver a verde.")
+        elif tier in ("riesgo", "atencion") and hr.get("total"):
+            block.append(f"   👉 Con el volumen de ventas de hoy, **aguanta "
+                         f"{_plural(hr.get('margen', 0), 'reclamo más', 'reclamos más')}** "
+                         f"antes de cruzar a amarillo.")
         parts.append("\n".join(block))
 
     dashboard_url = os.getenv("DASHBOARD_BASE_URL", "https://apantallatemx.up.railway.app")

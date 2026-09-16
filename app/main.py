@@ -21854,6 +21854,7 @@ async def _collect_digest_account(acc: dict, slot: str, today_mx: str) -> dict |
         return None
     user = await client.get_user_info()
     metrics = _ma.extract_metrics(user)
+    counts = _ma.extract_metric_counts(user)
     tier, worst_key = _ma.account_tier(metrics)
     try:
         open_claims = len(await client.fetch_all_claims(status="opened"))
@@ -21867,6 +21868,9 @@ async def _collect_digest_account(acc: dict, slot: str, today_mx: str) -> dict |
         "tier": tier,
         "worst_metric": worst_key,
         "open_claims": open_claims,
+        # Traduce el % a un número accionable (cuántos excluir / cuánto margen
+        # queda). Solo se pinta en el digest de la mañana.
+        "headroom": _ma.claims_headroom("reclamos", metrics.get("reclamos", 0), counts.get("reclamos", 0)),
     }
     # El análisis de exclusión (1 llamada de IA) solo en la mañana y solo
     # donde hay algo que decidir -- en cuentas sanas no se gasta.
