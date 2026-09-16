@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-09-15 — FEAT: el digest de la mañana traduce el % de reclamos a un número accionable
+
+### Contexto
+Jovan pidió comparativas en el mensaje de apertura. Se le planteó el problema real: la métrica de ML usa ventana de 60 días, así que un comparativo día a día va a decir "igual que ayer" casi siempre — técnicamente correcto pero inútil para decidir. Lo que sí mueve la aguja es traducir el porcentaje a unidades que el equipo pueda accionar. Jovan aprobó esa ruta y dejó el comparativo de tendencia multi-día para cuando `digest_runs` tenga una semana acumulada (hoy solo tiene la corrida de arranque).
+
+### Qué se agregó
+`claims_headroom()` en `marketplace_alerts.py`, en dos direcciones según dónde esté la cuenta:
+- **Ya cruzó el límite verde** → "la brecha son N reclamos" (cuántos tienen que salir de la cuenta para volver a verde).
+- **Todavía por debajo** → "aguanta N reclamos más antes de cruzar a amarillo".
+
+### Cómo se deriva el denominador
+El total de ventas del período no viene directo en la respuesta de ML, pero `rate = value/total` con ambos del MISMO período, así que `total = value/rate`. Mismo criterio que ya usaba `_margin_count` en `main.py` desde el fix del 2026-08-28 — ese fix documentó que `metrics.<x>.value` es el **conteo de reclamos**, no el total de ventas, y confundirlos había producido un cálculo de reclamos/reclamos (siempre ~1). Se reutiliza ese criterio en vez de inventar otro.
+
+### Verificado con datos reales de producción
+- AUTOBOT 2.00% (14 reclamos / 700 ventas) → excluir 4 deja **1.429%** ✓
+- BLOWTECHNOLOGIES 1.27% (37 / 2913) → +6 deja **1.476%**, +7 cruza a **1.510%** ✓ (el límite cae exacto donde debe)
+- LUTEMAMEXICO 0.78% (7 / 897) → margen 6 · APANTALLATEMX 0.65% (34 / 5231) → margen 44
+
+### Dos decisiones de redacción que importan
+1. **No dice "resuelve N reclamos"**. Resolver un reclamo NO lo saca de la métrica — ML cuenta los abiertos en la ventana. Lo que baja la tasa es la **exclusión aprobada** o que cumplan 60 días. Decir "resuelve N para volver a verde" sería falso y mandaría al equipo a trabajar en algo que no mueve el número.
+2. **El número va DESPUÉS del análisis de exclusión**. Puesto antes se contradecía con él: "excluir 4 reclamos" seguido de "0 califican para exclusión" se lee como error de cálculo. Ahora se presenta como el **tamaño de la brecha**, que es compatible con que hoy ninguno califique (en ese caso la vía real es la ventana de 60 días).
+
+### Nota sobre la naturaleza del número
+Es una foto al volumen de ventas actual: el denominador crece solo conforme entran ventas, así que la tasa baja aunque nadie toque un reclamo. Por eso se presenta como referencia de hoy ("con el volumen de ventas de hoy"), no como promesa.
+
+---
+
 ## 2026-09-15 — FIX: `account_id` en el UNIQUE de `order_history` y `supplier_debt_ledger` + backfill de `fx_rate`
 
 ### Contexto
