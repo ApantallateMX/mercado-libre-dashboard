@@ -21979,6 +21979,71 @@ async def _build_account_health_context(account_id: str):
     return nickname, client, color, metrics
 
 
+@app.post("/api/diag/backfill-ml-orders")
+async def diag_backfill_ml_orders(token: str = "", date_from: str = "", date_to: str = "",
+                                   account_id: str = "", dry_run: bool = True):
+    """FIX 2026-09-15 (autorizado por Jovan): recupera órdenes ML históricas que
+    nunca llegaron a `order_history`.
+
+    CAUSA RAÍZ (confirmada en el código, ver _supplier_debt_sync_loop ~17342):
+    antes de que existiera ese loop, `order_history` SOLO se llenaba si alguien
+    navegaba a Deals (ML) o Planeación→Velocidad. La cobertura dependía de que
+    un humano visitara la pestaña. Por eso el hueco es un degradado
+    (BLOWTECHNOLOGIES: 69% faltante en mayo, 68% en junio, 0.4% en julio, 0% de
+    agosto en adelante) y no un corte por fecha: no se borró nada, nunca se
+    llenó.
+
+    NO INVENTA LÓGICA: usa exactamente el mismo camino que producción
+    (`fetch_all_orders` -> `_save_ml_orders_history_bg`), solo que con una
+    ventana de fechas más amplia. Mismas comisiones, mismo upsert, misma
+    generación de deuda de proveedor. Idempotente por el UNIQUE de
+    order_history.
+
+    GUARDA CONTRA RESPUESTA VACÍA: si ML devuelve 0 órdenes para una cuenta,
+    NO escribe nada y lo reporta como aviso -- nunca asume que "vacío" significa
+    "no hubo ventas" (ver incidente 2026-08-21, 2,590 SKUs zereados por
+    confiar en un vacío).
+
+    dry_run=true (default) reporta cuántas traería sin escribir nada."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not date_from or not date_to:
+        return JSONResponse({"error": "date_from y date_to requeridos (YYYY-MM-DD)"}, status_code=400)
+    resultados: dict = {}
+    avisos: list = []
+    for acc in (await token_store.get_all_tokens()):
+        uid = str(acc.get("user_id", ""))
+        nick = acc.get("nickname") or uid
+        if not uid or (account_id and uid != account_id):
+            continue
+        try:
+            client = await get_meli_client(user_id=uid)
+            if not client:
+                avisos.append(f"{nick}: sin cliente ML -- OMITIDA, no se escribe nada")
+                continue
+            orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
+            if not orders:
+                # Guarda dura: vacío != "no hubo ventas"
+                avisos.append(f"{nick}: ML devolvió 0 órdenes -- OMITIDA, no se escribe nada")
+                resultados[nick] = {"traidas": 0, "escritas": 0, "omitida": True}
+                continue
+            vendibles = [o for o in orders if o.get("status") in ("paid", "delivered")]
+            if dry_run:
+                resultados[nick] = {"traidas": len(orders), "paid_delivered": len(vendibles),
+                                    "escritas": 0, "dry_run": True}
+                continue
+            usd_to_mxn = await _get_usd_to_mxn(client)
+            _save_ml_orders_history_bg(orders, uid, usd_to_mxn)
+            resultados[nick] = {"traidas": len(orders), "paid_delivered": len(vendibles),
+                                "escritas": len(vendibles)}
+            logger.info(f"[BACKFILL-ML] {nick}: {len(vendibles)} órdenes vendibles enviadas a order_history")
+        except Exception as e:
+            avisos.append(f"{nick}: ERROR -- {str(e)[:120]} (no se escribió nada para esta cuenta)")
+        await asyncio.sleep(5)   # separar llamadas entre cuentas, evitar 429
+    return JSONResponse({"dry_run": dry_run, "date_from": date_from, "date_to": date_to,
+                         "resultados": resultados, "avisos": avisos})
+
+
 @app.get("/api/diag/backfill-fx-rate")
 async def diag_backfill_fx_rate(token: str = "", dry_run: bool = True):
     """FIX 2026-09-15 (one-shot): corrige el fx_rate de las filas históricas en
