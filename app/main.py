@@ -24132,6 +24132,76 @@ async def diag_bm_master_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/bm-mcp-compare")
+async def diag_bm_mcp_compare(token: str = "", limit: int = 60, solo_apagados: bool = True):
+    """Compara el vendible calculado por MCP contra lo que hoy tiene bm_sku_master.
+
+    2026-09-17. Jovan verificó EN VIVO contra BinManager que los números del
+    MCP son los correctos (SNTV007756=22, SNTV007863=21, SNTV008058=6,
+    SNTV007630=2) y que nuestro available_qty está en 0 en esos mismos SKUs.
+    El 96% de las filas del bulk viejo llegan con AvailableQTY=0.
+
+    ESTE ENDPOINT NO ESCRIBE NADA. Solo lee y reporta. La razón es que subir
+    available_qty de 0 a su valor real en ~1,400 SKUs empujaría stock hacia ML
+    y Amazon automáticamente -- eso lo revisa Jovan antes, no se hace solo.
+
+    solo_apagados=True (default): lista únicamente los SKUs donde el MCP dice
+    que hay stock y nosotros publicamos 0. Esos son los que están costando
+    ventas hoy. Con False lista todas las diferencias, en los dos sentidos.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import binmanager_mcp as _mcp
+    try:
+        resultado = await _mcp.construir_mapa_vendible()
+    except _mcp.McpIncompleto as e:
+        # Datos parciales = no opinamos. Ver el incidente de 2026-08-21.
+        return JSONResponse({"error": "datos incompletos del MCP, no se compara",
+                             "detalle": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
+    mcp_skus = resultado["skus"]
+    conocidos = set(await token_store.get_all_known_base_skus())
+    filas = await token_store.get_bm_master_rows_for_skus(sorted(mcp_skus))
+
+    apagados, sobran, unidades_apagadas = [], [], 0
+    for sku, datos in mcp_skus.items():
+        # Solo cuenta lo que de verdad publicamos: un SKU que no está en
+        # ml_listings/amazon_listings no representa venta perdida.
+        if sku not in conocidos:
+            continue
+        nuestro = (filas.get(sku) or {}).get("available_qty")
+        real = datos["available_qty"]
+        if nuestro == real:
+            continue
+        item = {
+            "sku": sku, "mcp": real, "nuestro": nuestro,
+            "mty": datos["mty_qty"], "cdmx": datos["cdmx_qty"],
+            "mejor_condicion": datos["best_condition_sku"],
+        }
+        if real > (nuestro or 0):
+            apagados.append(item)
+            unidades_apagadas += real - (nuestro or 0)
+        else:
+            sobran.append(item)
+
+    apagados.sort(key=lambda x: -(x["mcp"] - (x["nuestro"] or 0)))
+    sobran.sort(key=lambda x: -((x["nuestro"] or 0) - x["mcp"]))
+    return JSONResponse({
+        "meta": resultado["meta"],
+        "resumen": {
+            "skus_publicados_revisados": len(conocidos),
+            "apagados_con_stock_real": len(apagados),
+            "unidades_apagadas": unidades_apagadas,
+            "nosotros_decimos_mas_que_el_mcp": len(sobran),
+        },
+        "apagados": apagados[:limit],
+        "sobran": [] if solo_apagados else sobran[:limit],
+        "nota": "Solo lectura. No se escribió nada en bm_sku_master ni se tocó ML/Amazon.",
+    })
+
+
 @app.get("/api/diag/bm-master-compare")
 async def diag_bm_master_compare(token: str = "", sample_n: int = 20):
     """Fase C — compara bm_sku_master (nuevo camino) contra _bm_stock_cache
