@@ -21872,6 +21872,17 @@ async def _collect_digest_account(acc: dict, slot: str, today_mx: str) -> dict |
         # queda). Solo se pinta en el digest de la mañana.
         "headroom": _ma.claims_headroom("reclamos", metrics.get("reclamos", 0), counts.get("reclamos", 0)),
     }
+    # Dinero en juego + racha de silencio. Ambos best-effort: si fallan, la
+    # alerta sale igual (sin cifra o sin racha) en vez de no salir.
+    try:
+        entry["revenue"] = await token_store.get_account_daily_revenue(uid, days=30)
+    except Exception as _e_rev:
+        logger.warning(f"[DIGEST] {uid}: sin cifra de ventas: {_e_rev}")
+    try:
+        _hist = await token_store.get_recent_digest_runs(uid, limit=6)
+        entry["racha"] = _ma.racha_sin_movimiento(_hist, tier, open_claims)
+    except Exception as _e_r:
+        logger.warning(f"[DIGEST] {uid}: sin racha: {_e_r}")
     # El análisis de exclusión (1 llamada de IA) solo en la mañana y solo
     # donde hay algo que decidir -- en cuentas sanas no se gasta.
     if slot == "am" and tier != "ok":
@@ -21920,7 +21931,8 @@ async def _run_marketplace_digest(slot: str, dry_run: bool = False) -> dict:
     if slot == "am":
         from datetime import timedelta as _td_mx
         prev = await token_store.get_digest_run((now_mx - _td_mx(days=1)).strftime("%Y-%m-%d"), "pm")
-        text = _ma.build_morning_digest(entries, now_mx, prev_run=prev)
+        _sin_resp = await _ma.aviso_corrida_sin_respuesta()
+        text = _ma.build_morning_digest(entries, now_mx, prev_run=prev, sin_respuesta=_sin_resp)
     else:
         am_run = await token_store.get_digest_run(today_mx, "am")
         text = _ma.build_afternoon_digest(entries, now_mx, am_run=am_run)

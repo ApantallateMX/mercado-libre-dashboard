@@ -448,6 +448,40 @@ _DIGEST_MONTHS = ("ene", "feb", "mar", "abr", "may", "jun",
                   "jul", "ago", "sep", "oct", "nov", "dic")
 
 
+async def aviso_corrida_sin_respuesta(channel_name: str = "alertas-marketplace") -> str:
+    """¿La última corrida publicada tuvo respuesta de un HUMANO en su hilo?
+
+    Nace de un caso real (2026-09-17): salieron 3 corridas seguidas sin una sola
+    respuesta y nadie lo notó hasta que Jovan lo preguntó. Convertir el silencio
+    en un dato del propio mensaje evita depender de que alguien se dé cuenta.
+
+    Solo cuenta respuestas de personas: un post del bot en el hilo (un
+    complemento nuestro) NO es acuse de recibo. Nunca lanza -- si Mattermost no
+    responde, devuelve "" y el digest sale igual."""
+    try:
+        from app.services.mattermost_bot import get_channel_posts, get_my_user_id
+        posts = await get_channel_posts(channel_name, limit=40)
+        if not posts:
+            return ""
+        yo = await get_my_user_id()
+        raiz = next((p for p in posts
+                     if not p.get("root_id")
+                     and p.get("user_id") == yo
+                     and ("Salud de cuentas ML" in (p.get("message") or "")
+                          or "Cierre del día" in (p.get("message") or ""))), None)
+        if not raiz:
+            return ""
+        humanas = [p for p in posts
+                   if p.get("root_id") == raiz.get("id") and p.get("user_id") != yo]
+        if humanas:
+            return ""
+        return ("La corrida anterior quedó sin respuesta de nadie. "
+                "Con un \"visto\" en el hilo basta para saber que esto se está leyendo.")
+    except Exception as e:
+        logger.warning(f"[MarketplaceAlerts] No se pudo revisar respuestas del hilo: {e}")
+        return ""
+
+
 def digest_mentions(account_ids: list[str]) -> str:
     """Área + equipo de salud + dueños de las cuentas incluidas, sin repetir.
     Jovan confirmó 2026-09-15 que van los 4 (Vianey, Alejandro, Said y
@@ -476,19 +510,78 @@ def _fmt_delta(now_val: float, prev_val, ref_label: str) -> str:
 
 
 def _sorted_worst_first(accounts: list[dict]) -> list[dict]:
-    return sorted(accounts, key=lambda a: -TIER_RANK.get(a.get("tier", "ok"), 0))
+    """Orden del digest. Cambiado 2026-09-17 por un caso real: ordenar solo por
+    gravedad ponía arriba a AUTOBOT (🚨 ya caída, $1.2M/mes) y debajo a
+    BLOWTECHNOLOGIES (🔴 a 6 reclamos de caer, $4.5M/mes). El mensaje era
+    correcto y aun así dirigía la atención a la cuenta equivocada.
+
+    Ahora, entre las cuentas que necesitan atención, manda el DINERO EN RIESGO.
+    Las sanas siempre van al final."""
+    def clave(a):
+        tier = a.get("tier", "ok")
+        rev = ((a.get("revenue") or {}).get("diario") or 0)
+        if tier == "ok":
+            return (2, 0, 0)               # sanas al final
+        if tier == "sin_dato":
+            return (1, 0, 0)               # no consultadas, antes de las sanas
+        return (0, -rev, -TIER_RANK.get(tier, 0))
+    return sorted(accounts, key=clave)
+
+
+def _es_prevenible(tier: str) -> bool:
+    """'critico' = ya cruzó el límite de ML: es recuperación. 'riesgo'/'atencion'
+    = todavía no cruza: es prevención, y prevenir cuesta menos."""
+    return tier in ("riesgo", "atencion")
+
+
+def _mxn(v) -> str:
+    return f"${v:,.0f}"
+
+
+def racha_sin_movimiento(historial: list[dict], tier_actual: str, abiertos_actual: int) -> int:
+    """Cuántas corridas consecutivas lleva la cuenta en el mismo escalón SIN que
+    bajen los reclamos abiertos. `historial` viene de get_recent_digest_runs
+    (más reciente primero) y NO incluye la corrida en curso.
+
+    Devuelve 0 si no hay racha que reportar. Solo cuenta si el escalón es el
+    mismo: una cuenta que empeoró no está "estancada", está cayendo."""
+    if tier_actual in ("ok", "sin_dato"):
+        return 0
+    n = 1
+    for h in historial:
+        if h.get("tier") != tier_actual:
+            break
+        if int(h.get("open_claims") or 0) < abiertos_actual:
+            break          # los reclamos SÍ bajaron en algún momento
+        n += 1
+    return n if n >= 2 else 0
 
 
 def _plural(n: int, singular: str, plural: str) -> str:
     return f"{n} {singular if n == 1 else plural}"
 
 
-def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = None) -> str:
+def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = None,
+                         sin_respuesta: str = "") -> str:
     """Corrida de las 5 AM. `accounts`: dicts con account_id, nickname,
-    metrics, open_claims y (opcional) claims_summary. `prev_run`: fila 'pm'
-    del día anterior, para el comparativo."""
+    metrics, open_claims, revenue, racha y (opcional) claims_summary.
+    `prev_run`: fila 'pm' del día anterior, para el comparativo.
+    `sin_respuesta`: aviso si la corrida anterior no tuvo respuesta humana."""
     prev_run = prev_run or {}
     parts = [f"## ☀️ Salud de cuentas ML — {_digest_date_label(now_mx)}, 5:00 AM"]
+
+    # Encabezado de dinero: lo EVITABLE primero, porque prevenir cuesta menos
+    # que recuperar. Sin esto, una cuenta chica ya caída tapaba a una grande
+    # que todavía se podía salvar (caso real 2026-09-17).
+    _evit = [a for a in accounts if _es_prevenible(a.get("tier", "ok"))
+             and (a.get("revenue") or {}).get("diario")]
+    if _evit:
+        _top = max(_evit, key=lambda a: a["revenue"]["diario"])
+        parts.append(f"⚠️ **Lo más urgente por dinero: {_top['nickname']}** — vende "
+                     f"**{_mxn(_top['revenue']['diario'])}/día** y **todavía no cae**. "
+                     f"Es lo único de esta lista que aún se puede evitar.")
+    if sin_respuesta:
+        parts.append(f"🔇 _{sin_respuesta}_")
 
     for a in _sorted_worst_first(accounts):
         tier = a.get("tier", "ok")
@@ -517,6 +610,14 @@ def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = N
         # los EXCLUYA (regla oficial) o que salgan de la ventana de 60 días.
         # Decir "resuelve N para volver a verde" sería falso.
         hr = a.get("headroom") or {}
+        rev = a.get("revenue") or {}
+        # Lo que está en juego, en pesos. Un % no mueve a nadie; "$144,289 al
+        # día a 6 reclamos del borde" sí.
+        if rev.get("diario"):
+            etiqueta = ("🛡️ EVITABLE — todavía no cae" if _es_prevenible(tier)
+                        else "💸 YA CAYÓ — esto se está pagando")
+            block.append(f"   {etiqueta} · vende **{_mxn(rev['diario'])}/día** "
+                         f"({_mxn(rev.get('total', 0))} en {rev.get('dias', 0)} días)")
         if tier == "critico":
             block.append(f"   Reclamos **{reclamos}%** (límite verde {limite}%){delta}")
             block.append("   La cuenta YA está en amarillo con ML. Cada día así")
@@ -545,6 +646,11 @@ def build_morning_digest(accounts: list[dict], now_mx, prev_run: dict | None = N
             block.append(f"   👉 Con el volumen de ventas de hoy, **aguanta "
                          f"{_plural(hr.get('margen', 0), 'reclamo más', 'reclamos más')}** "
                          f"antes de cruzar a amarillo.")
+        # El silencio como dato: si lleva varias corridas igual, que lo diga el
+        # mensaje en vez de depender de que alguien lo note.
+        racha = a.get("racha") or 0
+        if racha >= 2:
+            block.append(f"   ⏳ **{racha}ª corrida sin movimiento** — mismos reclamos, mismo escalón.")
         parts.append("\n".join(block))
 
     dashboard_url = os.getenv("DASHBOARD_BASE_URL", "https://apantallatemx.up.railway.app")

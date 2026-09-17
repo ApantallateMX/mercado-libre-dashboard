@@ -8138,6 +8138,42 @@ async def has_digest_run(run_date: str, slot: str) -> bool:
         return await cur.fetchone() is not None
 
 
+async def get_account_daily_revenue(account_id: str, days: int = 30, platform: str = "ml") -> dict:
+    """Ventas reales del período y promedio diario, para poner en PESOS lo que
+    está en juego en una alerta. Sin un número de dinero, "1.27%" no mueve a
+    nadie; "$144,289 al día a 6 reclamos del borde" sí.
+
+    Lee order_history, que ya está poblado -- cero llamadas nuevas a ML."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        cur = await db.execute(f"""
+            SELECT COALESCE(SUM(unit_price * quantity), 0),
+                   COUNT(DISTINCT order_id),
+                   COUNT(DISTINCT order_date)
+            FROM order_history
+            WHERE platform = ? AND account_id = ?
+              AND order_date >= date('now', '-{int(days)} day')
+              AND status IN ('paid', 'delivered')
+        """, (platform, str(account_id)))
+        row = await cur.fetchone()
+    total = float((row[0] if row else 0) or 0)
+    dias = int((row[2] if row else 0) or 0)
+    return {"total": round(total, 2), "ordenes": int((row[1] if row else 0) or 0),
+            "dias": dias, "diario": round(total / dias, 2) if dias else 0.0}
+
+
+async def get_recent_digest_runs(account_id: str, limit: int = 6) -> list[dict]:
+    """Últimas corridas de una cuenta, de la más reciente hacia atrás. Sirve
+    para detectar "N corridas sin movimiento" -- convierte el silencio en un
+    dato visible en vez de depender de que alguien lo note."""
+    async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT * FROM digest_runs WHERE account_id = ?
+            ORDER BY run_date DESC, (slot = 'pm') DESC LIMIT ?
+        """, (str(account_id), int(limit)))
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def count_claims_today(account_id: str, day: str, platform: str = "ml") -> dict:
     """{'nuevos': N, 'cerrados': N} para el día dado (fecha local CDMX).
 
