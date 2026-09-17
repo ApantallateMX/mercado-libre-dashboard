@@ -133,6 +133,12 @@ async def get_channel_posts(channel_name: str, limit: int = 20) -> list:
                     "message": posts[pid].get("message"),
                     "create_at": posts[pid].get("create_at"),
                     "root_id": posts[pid].get("root_id"),
+                    # 2026-09-17: se descartaba `metadata`, que es donde
+                    # Mattermost pone las REACCIONES. Sin esto, un 👍 o un ✅ es
+                    # invisible para nosotros -- y acusar de "nadie respondió" a
+                    # quien sí reaccionó es peor que no avisar. Cada reacción
+                    # trae {user_id, emoji_name, post_id, create_at}.
+                    "reactions": ((posts[pid].get("metadata") or {}).get("reactions") or []),
                 }
                 for pid in order if pid in posts
             ]

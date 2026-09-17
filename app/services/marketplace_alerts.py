@@ -455,9 +455,18 @@ async def aviso_corrida_sin_respuesta(channel_name: str = "alertas-marketplace")
     respuesta y nadie lo notó hasta que Jovan lo preguntó. Convertir el silencio
     en un dato del propio mensaje evita depender de que alguien se dé cuenta.
 
-    Solo cuenta respuestas de personas: un post del bot en el hilo (un
-    complemento nuestro) NO es acuse de recibo. Nunca lanza -- si Mattermost no
-    responde, devuelve "" y el digest sale igual."""
+    Cuenta como acuse de recibo CUALQUIERA de estas dos, de una persona:
+      - una respuesta escrita en el hilo, o
+      - una REACCIÓN (👍, ✅, lo que sea) sobre la corrida o sobre cualquier
+        mensaje de su hilo.
+
+    Lo segundo lo pidió Jovan explícitamente (2026-09-17): "a veces las
+    respuestas pueden ser con un emoji o un like". Decirle "nadie respondió" a
+    alguien que sí reaccionó es peor que no avisar nada -- acusa en falso y
+    quema la credibilidad de la alerta.
+
+    Un post o una reacción del propio bot NO cuentan. Nunca lanza: si Mattermost
+    no responde, devuelve "" y el digest sale igual."""
     try:
         from app.services.mattermost_bot import get_channel_posts, get_my_user_id
         posts = await get_channel_posts(channel_name, limit=40)
@@ -471,12 +480,22 @@ async def aviso_corrida_sin_respuesta(channel_name: str = "alertas-marketplace")
                           or "Cierre del día" in (p.get("message") or ""))), None)
         if not raiz:
             return ""
-        humanas = [p for p in posts
-                   if p.get("root_id") == raiz.get("id") and p.get("user_id") != yo]
-        if humanas:
+
+        # El hilo completo: la corrida + todo lo que cuelga de ella.
+        hilo = [raiz] + [p for p in posts if p.get("root_id") == raiz.get("id")]
+
+        # a) respuesta escrita de una persona
+        if any(p.get("user_id") != yo for p in hilo if p is not raiz):
             return ""
+        # b) reacción de una persona sobre cualquier mensaje del hilo
+        for p in hilo:
+            for reac in (p.get("reactions") or []):
+                if reac.get("user_id") and reac.get("user_id") != yo:
+                    return ""
+
         return ("La corrida anterior quedó sin respuesta de nadie. "
-                "Con un \"visto\" en el hilo basta para saber que esto se está leyendo.")
+                "Con un \"visto\" o una reacción en el hilo basta para saber "
+                "que esto se está leyendo.")
     except Exception as e:
         logger.warning(f"[MarketplaceAlerts] No se pudo revisar respuestas del hilo: {e}")
         return ""
