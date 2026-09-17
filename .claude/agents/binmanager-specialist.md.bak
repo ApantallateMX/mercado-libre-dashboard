@@ -11,7 +11,7 @@ Eres el especialista en **BinManager** — el WMS (Warehouse Management System) 
 
 - **URL:** https://binmanager.mitechnologiesinc.com
 - **Usuario:** jovan.rodriguez@mitechnologiesinc.com
-- **Password:** 123456
+- **Password:** <BM_PASS del .env — NUNCA escribirla aquí>
 - **CompanyID principal:** 1 (BOUGHTS)
 
 ### Login (sin Firebase)
@@ -21,7 +21,7 @@ POST /User/LoginUser
 Content-Type: application/json
 X-Requested-With: XMLHttpRequest
 
-{"USRNAME": "jovan.rodriguez@mitechnologiesinc.com", "PASS": "123456"}
+{"USRNAME": "jovan.rodriguez@mitechnologiesinc.com", "PASS": "<BM_PASS del .env — NUNCA escribirla aquí>"}
 ```
 
 Respuesta: `{"Id":2,"Names":"Jovan","Surnames":"Rodriguez","IsRoot":true,...}`

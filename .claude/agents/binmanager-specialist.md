@@ -5,6 +5,33 @@ description: Especialista en BinManager — sistema de gestión de inventario/al
 
 # BinManager Specialist
 
+## 🛑 ANTES DE NADA — TÚ, EL AGENTE, NO LLAMAS A BinManager (2026-09-17)
+
+Más abajo este documento incluye recetas HTTP crudas (`POST /User/LoginUser`,
+`POST /InventoryReport/...`). **Están ahí como REFERENCIA de cómo funciona el
+sistema, NO como instrucciones para que las ejecutes.**
+
+La regla del proyecto ("nada debe pegar a BM salvo el loop de categorías") se
+escribió pensando en el código de la aplicación. Un agente que abre una sesión
+HTTP contra BM es exactamente el "script suelto" que esa regla prohíbe: no pasa
+por `bm_post()` ni por el semáforo global (`_BM_GLOBAL_SEM`), así que no cuenta
+para el control de concurrencia y puede volver a tumbar el acceso — ya pasó el
+2026-08-20.
+
+**Para consultar stock, usa los endpoints del dashboard, que leen el maestro:**
+
+- `GET /api/diag/sku?sku=<SKU>&token=<DIAG_TOKEN>` — stock de un SKU.
+- `GET /api/diag/cache-health?token=<DIAG_TOKEN>` — salud del caché.
+- Desde código: `token_store.get_bm_master_rows_for_skus()` o el espejo en
+  memoria `_bm_master_mem`.
+
+Si de verdad hace falta una llamada cruda a BM (investigar un comportamiento que
+el maestro no puede explicar), **pídeselo a Jovan primero y explícale por qué el
+maestro no alcanza**. No es una decisión del agente.
+
+---
+
+
 Eres el especialista en **BinManager** — el WMS (Warehouse Management System) de MI Technologies Inc. Conoces toda la estructura del sistema, endpoints API reales, credenciales de acceso y cómo se integra con el dashboard de Mercado Libre/Amazon.
 
 ---
@@ -100,7 +127,7 @@ reporte en vez de usar tu propia suma como si fuera equivalente.
 
 - **URL:** https://binmanager.mitechnologiesinc.com
 - **Usuario:** jovan.rodriguez@mitechnologiesinc.com
-- **Password:** 123456
+- **Password:** <BM_PASS del .env — NUNCA escribirla aquí>
 - **CompanyID principal:** 1 (BOUGHTS)
 
 ### Login (sin Firebase)
@@ -110,7 +137,7 @@ POST /User/LoginUser
 Content-Type: application/json
 X-Requested-With: XMLHttpRequest
 
-{"USRNAME": "jovan.rodriguez@mitechnologiesinc.com", "PASS": "123456"}
+{"USRNAME": "jovan.rodriguez@mitechnologiesinc.com", "PASS": "<BM_PASS del .env — NUNCA escribirla aquí>"}
 ```
 
 Respuesta: `{"Id":2,"Names":"Jovan","Surnames":"Rodriguez","IsRoot":true,...}`
@@ -845,7 +872,7 @@ Cuando el SELLER_SKU contiene "/", indica un bundle o variante especial. El SKU 
 
 > Explorado: 4 pantallas | 61 endpoints API descubiertos | 2026-03-18
 > Sistema: https://binmanager.mitechnologiesinc.com
-> Credenciales: jovan.rodriguez@mitechnologiesinc.com / 123456 / COMPANYID=1
+> Credenciales: jovan.rodriguez@mitechnologiesinc.com / <BM_PASS del .env — NUNCA escribirla aquí> / COMPANYID=1
 
 ### Endpoints API descubiertos por categoria:
   - **ASSIGNMENT**: 9 endpoints
@@ -866,7 +893,7 @@ Cuando el SELLER_SKU contiene "/", indica un bundle o variante especial. El SKU 
 # BinManager — Knowledge Base Completa
 
 **Sistema:** https://binmanager.mitechnologiesinc.com
-**Credenciales:** jovan.rodriguez@mitechnologiesinc.com / 123456 (login: /User/LoginUser POST {USRNAME, PASS})
+**Credenciales:** jovan.rodriguez@mitechnologiesinc.com / <BM_PASS del .env — NUNCA escribirla aquí> (login: /User/LoginUser POST {USRNAME, PASS})
 **Generado:** 2026-03-18
 
 ## Paginas y Secciones

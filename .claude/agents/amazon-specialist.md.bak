@@ -52,7 +52,7 @@ Devuelve por cuenta Amazon: `today.revenue`, `week.revenue`, `month.revenue`, `t
 **Login:**
 ```http
 POST https://binmanager.mitechnologiesinc.com/User/LoginUser
-{"USRNAME": "jovan.rodriguez@mitechnologiesinc.com", "PASS": "123456"}
+{"USRNAME": "jovan.rodriguez@mitechnologiesinc.com", "PASS": "<BM_PASS del .env — NUNCA escribirla aquí>"}
 ```
 Guarda cookie `ASP.NET_SessionId`.
 
