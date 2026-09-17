@@ -45,29 +45,45 @@
         });
     }
 
-    // File input handler
-    document.getElementById('file-input').addEventListener('change', function(e) {
-        var file = e.target.files[0];
-        if (file) {
-            document.getElementById('file-name').textContent = 'Archivo: ' + file.name;
-        }
-    });
+    // FIX 2026-09-17: este bloque engancha la UI de carga de archivo, que SOLO
+    // existe en sku_inventory.html. productos.html carga este mismo .js pero no
+    // tiene #file-input / #btn-comparar / #btn-limpiar / #search-sku, así que
+    // estas líneas lanzaban TypeError y **detenían la ejecución del archivo
+    // entero** -- dejando sin definir openCreateModal (L439), publishItem
+    // (L1909), openOptimizeModal (L2006) y saveOptimization (L2307), todas
+    // declaradas más abajo. Resultado en producción: los botones "Lanzar" y
+    // "Optimizar" de Productos se veían pero no hacían nada.
+    //
+    // No basta con proteger #file-input: sin la guarda completa el error solo
+    // se movía a #btn-comparar. Se envuelve todo el cableado de esa pantalla.
+    if (document.getElementById('file-input')) {
+        // File input handler
+        document.getElementById('file-input').addEventListener('change', function(e) {
+            var file = e.target.files[0];
+            if (file) {
+                document.getElementById('file-name').textContent = 'Archivo: ' + file.name;
+            }
+        });
 
-    // Comparar button
-    document.getElementById('btn-comparar').addEventListener('click', doCompare);
-    document.getElementById('btn-limpiar').addEventListener('click', function() {
-        document.getElementById('file-input').value = '';
-        document.getElementById('file-name').textContent = '';
-        document.getElementById('text-skus').value = '';
-        document.getElementById('sku-count').textContent = '';
-        document.getElementById('loading').classList.add('hidden');
-        document.getElementById('summary-section').classList.add('hidden');
-        document.getElementById('results-section').classList.add('hidden');
-        document.getElementById('empty-state').classList.remove('hidden');
-        allResults = [];
-    });
+        // Comparar button
+        document.getElementById('btn-comparar').addEventListener('click', doCompare);
+        document.getElementById('btn-limpiar').addEventListener('click', function() {
+            document.getElementById('file-input').value = '';
+            document.getElementById('file-name').textContent = '';
+            document.getElementById('text-skus').value = '';
+            document.getElementById('sku-count').textContent = '';
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('summary-section').classList.add('hidden');
+            document.getElementById('results-section').classList.add('hidden');
+            document.getElementById('empty-state').classList.remove('hidden');
+            allResults = [];
+        });
 
-    // Filter buttons
+        // Search
+        document.getElementById('search-sku').addEventListener('input', renderTable);
+    }
+
+    // Filter buttons (querySelectorAll no lanza si no hay coincidencias)
     document.querySelectorAll('.filter-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
             currentFilter = this.getAttribute('data-filter');
@@ -75,9 +91,6 @@
             renderTable();
         });
     });
-
-    // Search
-    document.getElementById('search-sku').addEventListener('input', renderTable);
 
     // Title character counter
     var titleInput = document.getElementById('item-title');
@@ -1882,8 +1895,12 @@
 
             if (!payload.sale_terms) payload.sale_terms = [];
             payload.sale_terms.push({
+                // FIX 2026-09-17: estaba invertido. Elegir "de fábrica" mandaba
+                // warranty="Garantia de fabrica" (línea de arriba, correcta) pero
+                // WARRANTY_TYPE="Garantia del vendedor" -- dos datos que se
+                // contradicen en la misma publicación de ML.
                 id: 'WARRANTY_TYPE',
-                value_name: warrantyType.value === 'manufacturer' ? 'Garantia del vendedor' : 'Garantia de fabrica'
+                value_name: warrantyType.value === 'manufacturer' ? 'Garantia de fabrica' : 'Garantia del vendedor'
             });
             payload.sale_terms.push({
                 id: 'WARRANTY_TIME',
