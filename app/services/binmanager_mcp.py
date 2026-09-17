@@ -106,9 +106,27 @@ def _get_sem() -> asyncio.Semaphore:
 # con isInventory=1 son: PRODUCTO TERMINADO, PRODUCTO INCOMPLETO, Finished
 # Good, WAREHOSE, Accesorios WIP, Accesorios FG, BTSFBA01.
 #
-# ECOMMERCE y Released se conservan de la lista previa por instrucción
-# explícita de Jovan ("no te estoy diciendo que es esa lista, que mires y
-# agregues a lo que ya tienes") -- ver feedback_complementar_no_eliminar.
+# ECOMMERCE y Released estuvieron aquí un rato: venían de una lista que
+# armé por ingeniería inversa y se conservaron al principio por la regla de
+# complementar en vez de reemplazar (feedback_complementar_no_eliminar).
+# SALIERON el mismo día con evidencia dura, contrastando contra BinManager en
+# vivo (filtro guardado "BOUGHTS Teles Celestica Monterrey CDMX Apantallate"):
+#
+#   SNTV007889 -> BM dice 434. PRODUCTO TERMINADO GRB 429 + ICB 4 + GRC 1 =
+#                 434 exacto. La unidad que sobraba era un bin `Released`.
+#   SNTV007867 -> BM dice 265. PRODUCTO TERMINADO NEW = 265 exacto. De las 3
+#                 que sobraban, 2 eran bins `Released`.
+#
+# Con `isInventory` sola: 4 de 5 SKUs exactos y +1 unidad sobre 2,058 (0.05%).
+# Con ECOMMERCE/Released: 3 de 5 y +4 (0.2%). La bandera de la tabla manda.
+# (De ECOMMERCE no hay caso directo -- ninguno de los 5 tenía stock ahí -- pero
+# tampoco trae isInventory=1, así que se trata igual.)
+#
+# FALTA 1 UNIDAD por explicar: un GRB en PRODUCTO TERMINADO de SNTV007867 que
+# BM no cuenta y nosotros sí. El filtro guardado de BM aplica 7 criterios que
+# todavía no hemos leído; el OKF además menciona que "la versión del SKU puede
+# mandar sobre la condición si existe regla por versión". Cerrar esto ANTES de
+# escribir a ML/Amazon -- de más es sobreventa.
 #
 # Quedan FUERA a propósito, y cada uno por una razón distinta:
 #   TRANSITO           -> está aquí pero apartado para transferir a otro almacén
@@ -120,7 +138,6 @@ def _get_sem() -> asyncio.Semaphore:
 _BINTYPES_VENDIBLES = frozenset({
     "PRODUCTO TERMINADO", "PRODUCTO INCOMPLETO", "Finished Good", "WAREHOSE",
     "Accesorios WIP", "Accesorios FG", "BTSFBA01",
-    "ECOMMERCE", "Released",
 })
 
 # CONDICIONES vendibles en línea. NO se amplía sin aprobación de Jovan.
