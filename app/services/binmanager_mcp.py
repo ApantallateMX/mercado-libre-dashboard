@@ -106,27 +106,26 @@ def _get_sem() -> asyncio.Semaphore:
 # con isInventory=1 son: PRODUCTO TERMINADO, PRODUCTO INCOMPLETO, Finished
 # Good, WAREHOSE, Accesorios WIP, Accesorios FG, BTSFBA01.
 #
-# ECOMMERCE y Released estuvieron aquí un rato: venían de una lista que
-# armé por ingeniería inversa y se conservaron al principio por la regla de
-# complementar en vez de reemplazar (feedback_complementar_no_eliminar).
-# SALIERON el mismo día con evidencia dura, contrastando contra BinManager en
-# vivo (filtro guardado "BOUGHTS Teles Celestica Monterrey CDMX Apantallate"):
+# ECOMMERCE y Released NO se quitan, aunque no traigan isInventory=1.
 #
-#   SNTV007889 -> BM dice 434. PRODUCTO TERMINADO GRB 429 + ICB 4 + GRC 1 =
-#                 434 exacto. La unidad que sobraba era un bin `Released`.
-#   SNTV007867 -> BM dice 265. PRODUCTO TERMINADO NEW = 265 exacto. De las 3
-#                 que sobraban, 2 eran bins `Released`.
+# Ya se intentó quitarlos una vez (2026-09-17) y Jovan lo revirtió en el acto:
+# "ya te dije solo agregamos no quitamos, deja tal cual lo tienes, los filtros
+# de bm pueden estar mal". Es la regla permanente del proyecto -- ver
+# feedback_complementar_no_eliminar.
 #
-# Con `isInventory` sola: 4 de 5 SKUs exactos y +1 unidad sobre 2,058 (0.05%).
-# Con ECOMMERCE/Released: 3 de 5 y +4 (0.2%). La bandera de la tabla manda.
-# (De ECOMMERCE no hay caso directo -- ninguno de los 5 tenía stock ahí -- pero
-# tampoco trae isInventory=1, así que se trata igual.)
+# El argumento para quitarlos parecía bueno y por eso hay que dejarlo escrito,
+# para que la próxima sesión no lo redescubra y lo repita: contra el filtro
+# guardado de BM ("BOUGHTS Teles Celestica Monterrey CDMX Apantallate",
+# definido como isInventory + LOC 47,62,68 + GRA,GRB,GRC,ICB,ICC,NEW), sacar
+# estos dos daba 4 de 5 SKUs exactos en vez de 3, y +1 unidad sobre 2,058 en
+# vez de +4.
 #
-# FALTA 1 UNIDAD por explicar: un GRB en PRODUCTO TERMINADO de SNTV007867 que
-# BM no cuenta y nosotros sí. El filtro guardado de BM aplica 7 criterios que
-# todavía no hemos leído; el OKF además menciona que "la versión del SKU puede
-# mandar sobre la condición si existe regla por versión". Cerrar esto ANTES de
-# escribir a ML/Amazon -- de más es sobreventa.
+# Por qué NO alcanza: ese filtro es UNA fuente, no la verdad. Puede estar mal
+# configurado, y el costo de los dos errores no es simétrico. Contar de más en
+# un bin ECOMMERCE arriesga una sobreventa aislada; contar de menos apaga
+# publicaciones con stock real, que es EXACTAMENTE el problema que este módulo
+# existe para arreglar (507 SKUs y 7,771 unidades apagadas). Ante la duda, se
+# conserva.
 #
 # Quedan FUERA a propósito, y cada uno por una razón distinta:
 #   TRANSITO           -> está aquí pero apartado para transferir a otro almacén
@@ -136,8 +135,11 @@ def _get_sem() -> asyncio.Semaphore:
 #   Wholesale          -> apartado para B2B, no para venta en línea
 #   FBA / FULL         -> ya está en bodega de Amazon/ML, no en la nuestra
 _BINTYPES_VENDIBLES = frozenset({
+    # Los 7 con isInventory=1 en BM.BinTypes
     "PRODUCTO TERMINADO", "PRODUCTO INCOMPLETO", "Finished Good", "WAREHOSE",
     "Accesorios WIP", "Accesorios FG", "BTSFBA01",
+    # + los 2 que ya teníamos. NO QUITAR -- ver el bloque de arriba.
+    "ECOMMERCE", "Released",
 })
 
 # CONDICIONES vendibles en línea. NO se amplía sin aprobación de Jovan.
