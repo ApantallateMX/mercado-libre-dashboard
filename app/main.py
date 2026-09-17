@@ -17553,12 +17553,16 @@ async def _alertas_marketplace_instant_ack_loop():
                     continue                    # joins del canal, adjuntos sin texto
                 if _ALERTAS_TRIVIAL_RX.match(texto):
                     continue                    # ya es un acuse, no acusar el acuse
-                # responder EN EL HILO donde escribió (si es post raíz, abre hilo)
+                # Intentar RESOLVER la pregunta con datos reales. Si no cae en un
+                # intent con fuente exacta, alertas_agent devuelve el acuse
+                # honesto -- nunca inventa una cifra (ver su docstring).
+                from app.services import alertas_agent as _ag
+                respuesta, resuelta = await _ag.responder(texto)
                 root = post.get("root_id") or pid
-                if await mattermost_bot.post_message(_ALERTAS_CHANNEL, _ALERTAS_ACK_TEXT, root_id=root):
-                    logger.info(f"[ALERTAS-ACK] Acuse enviado -- post={pid} hilo={root}")
+                if await mattermost_bot.post_message(_ALERTAS_CHANNEL, respuesta, root_id=root):
+                    logger.info(f"[ALERTAS-ACK] {'RESUELTA' if resuelta else 'acuse'} -- post={pid} hilo={root}")
                 else:
-                    logger.warning(f"[ALERTAS-ACK] Fallo enviando acuse -- post={pid}")
+                    logger.warning(f"[ALERTAS-ACK] Fallo enviando respuesta -- post={pid}")
             _alertas_seeded = True
             if len(_alertas_seen_ids) > 500:
                 _alertas_seen_ids.clear()
