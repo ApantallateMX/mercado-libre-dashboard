@@ -971,6 +971,7 @@ async def lifespan(app: FastAPI):
     start_token_refresh()
     start_supplier_debt_sync()
     start_requerimientos_dashboard_instant_ack()
+    start_alertas_marketplace_instant_ack()
     start_realtime_alerts_reconcile()
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
@@ -17492,6 +17493,84 @@ async def _requerimientos_dashboard_instant_ack_loop():
 def start_requerimientos_dashboard_instant_ack():
     """Inicia el loop de 'enterado' instantáneo en #requerimientos-dashboard."""
     asyncio.create_task(_requerimientos_dashboard_instant_ack_loop())
+
+
+# ── Acuse instantáneo en #alertas-marketplace ───────────────────────────────
+# FEATURE 2026-09-17 (pedido de Jovan, con razón): le estábamos exigiendo al
+# equipo que acusara recibo de las alertas, y cuando Alejandro contestó con una
+# pregunta real NUESTRO bot no le dijo nada. Hacíamos exactamente lo que les
+# reclamamos.
+#
+# Diferencia clave con el loop de #requerimientos-dashboard: aquel IGNORA las
+# respuestas dentro de un hilo (`if post.get("root_id"): continue`). Aquí no
+# sirve — Vanessa y Said escribieron DENTRO del hilo de la corrida, y con esa
+# regla tampoco habrían recibido acuse. Este loop sí responde en hilo.
+#
+# Lo que NO acusa, para no hacer ping-pong: los mensajes que ya son un acuse
+# ("enterado", "ok", "gracias", un emoji suelto). Contestarle "enterado" a un
+# "enterado" es ruido.
+_ALERTAS_CHANNEL = "alertas-marketplace"
+_ALERTAS_ACK_INTERVAL = 90          # segundos
+_ALERTAS_ACK_TEXT = (
+    "👀 Enterado — lo estamos revisando y te respondemos en este mismo hilo con el detalle."
+)
+_alertas_seen_ids: set = set()
+_alertas_seeded = False
+_ALERTAS_TRIVIAL_RX = _re.compile(
+    r"^\s*(enterado|entendido|ok|okey|okay|listo|visto|va|vale|gracias|de acuerdo|👍|✅|🙏|👌)"
+    r"[\s.,!¡👍✅🙏👌]*$",
+    _re.IGNORECASE,
+)
+
+
+async def _alertas_marketplace_instant_ack_loop():
+    """Acusa recibo de lo que escriben las personas en #alertas-marketplace,
+    en el hilo donde escribieron, mientras se prepara la respuesta real.
+
+    Misma higiene que el loop hermano: primera pasada solo siembra (no saluda
+    historial viejo tras un redeploy), nunca responde a sus propios posts, y
+    poda el set en memoria."""
+    global _alertas_seeded
+    await asyncio.sleep(25)   # dejar que termine el arranque
+    while True:
+        try:
+            bot_uid = await mattermost_bot.get_my_user_id()
+            posts = await mattermost_bot.get_channel_posts(_ALERTAS_CHANNEL, limit=30)
+            if not posts:
+                await asyncio.sleep(_ALERTAS_ACK_INTERVAL)
+                continue
+            for post in reversed(posts):        # cronológico
+                pid = post.get("id", "")
+                if not pid or pid in _alertas_seen_ids:
+                    continue
+                _alertas_seen_ids.add(pid)
+                if not _alertas_seeded:
+                    continue                    # siembra, no responder al historial
+                if bot_uid and post.get("user_id") == bot_uid:
+                    continue                    # anti-loop: nunca a sí mismo
+                texto = (post.get("message") or "").strip()
+                if not texto:
+                    continue                    # joins del canal, adjuntos sin texto
+                if _ALERTAS_TRIVIAL_RX.match(texto):
+                    continue                    # ya es un acuse, no acusar el acuse
+                # responder EN EL HILO donde escribió (si es post raíz, abre hilo)
+                root = post.get("root_id") or pid
+                if await mattermost_bot.post_message(_ALERTAS_CHANNEL, _ALERTAS_ACK_TEXT, root_id=root):
+                    logger.info(f"[ALERTAS-ACK] Acuse enviado -- post={pid} hilo={root}")
+                else:
+                    logger.warning(f"[ALERTAS-ACK] Fallo enviando acuse -- post={pid}")
+            _alertas_seeded = True
+            if len(_alertas_seen_ids) > 500:
+                _alertas_seen_ids.clear()
+                _alertas_seeded = False
+        except Exception as e:
+            logger.warning(f"[ALERTAS-ACK] Error: {e}")
+        await asyncio.sleep(_ALERTAS_ACK_INTERVAL)
+
+
+def start_alertas_marketplace_instant_ack():
+    """Inicia el acuse instantáneo en #alertas-marketplace."""
+    asyncio.create_task(_alertas_marketplace_instant_ack_loop())
 
 
 # ── Reconciliación de Alertas de Stock — no depende solo de notificaciones ──
