@@ -24179,6 +24179,39 @@ async def diag_bm_master_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/bm-sku-changes")
+async def diag_bm_sku_changes(token: str = "", days: int = 7, sku: str = "",
+                              field: str = "available_qty", limit: int = 200):
+    """Historial de transiciones de stock en bm_sku_master (tabla bm_sku_changes).
+
+    2026-09-17: ecomops-stack comparó su espejo del 16-sep contra el maestro de
+    hoy y encontró que SKUs como SNTV004197 tenían available_qty=559 el 16 y
+    llegaron a 0 antes de la corrida del MCP. Las dos lecturas son correctas,
+    o sea que ALGO zereó el maestro en medio. Esta tabla ya registraba esas
+    transiciones con su `source` desde siempre -- nunca hubo forma de leerla
+    sin abrir el archivo. Este endpoint la abre, solo lectura.
+
+    Es el mismo patrón del incidente 2026-08-21 (sesión de BM colgada que
+    devolvía HTTP 200 vacío y zereó ~2,590 SKUs reales). Saber QUÉ escritor lo
+    hizo es la diferencia entre "la capa de lectura miente" y "tenemos un
+    proceso destruyendo datos buenos cada tantos días"."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    filas = await token_store.get_bm_sku_changes(days=days, field=field, sku=sku, limit=limit)
+    a_cero = [f for f in filas if (f.get("new_value") or 0) <= 0 < (f.get("old_value") or 0)]
+    por_fuente: dict[str, int] = {}
+    for f in a_cero:
+        s = f.get("source") or "?"
+        por_fuente[s] = por_fuente.get(s, 0) + 1
+    return JSONResponse({
+        "dias": days, "field": field, "sku": sku or "(todos)",
+        "total": len(filas),
+        "transiciones_a_cero": len(a_cero),
+        "quien_las_hizo": por_fuente,
+        "cambios": filas[:limit],
+    })
+
+
 @app.get("/api/diag/bm-mcp-sync")
 async def diag_bm_mcp_sync(token: str = ""):
     """Dispara UN ciclo de escritura del vendible al maestro, a mano.
