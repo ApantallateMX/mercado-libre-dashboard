@@ -24269,11 +24269,16 @@ async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, platafor
             "disponible": f["available_qty"], "mty": f.get("mty_qty"),
             "cdmx": f.get("cdmx_qty"), "publicaciones": 0,
             "precio_max": 0.0, "cuentas": set(), "plataformas": set(),
+            "fulfillment": set(), "bloqueadas": 0,
         })
         e["publicaciones"] += 1
         e["precio_max"] = max(e["precio_max"], float(f.get("price") or 0))
         e["cuentas"].add(f.get("cuenta") or "")
         e["plataformas"].add(f["plataforma"])
+        if f.get("fulfillment"):
+            e["fulfillment"].add(f["fulfillment"])
+        if f["plataforma"] == "amazon" and not f.get("can_update"):
+            e["bloqueadas"] += 1
 
     total_valor = 0.0
     salida = []
@@ -24282,6 +24287,7 @@ async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, platafor
         total_valor += valor
         salida.append({**e, "cuentas": sorted(x for x in e["cuentas"] if x),
                        "plataformas": sorted(e["plataformas"]),
+                       "fulfillment": sorted(e["fulfillment"]),
                        "valor_potencial": round(valor, 2)})
     salida.sort(key=lambda x: -x["valor_potencial"])
 
