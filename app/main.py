@@ -1413,6 +1413,58 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Si debe cambiar contraseña, redirigir a set-password (excepto si ya está allí)
         if du.get("must_change_pw") and path != "/set-password":
             return RedirectResponse("/set-password", status_code=302)
+        # ── LOS ROLES ACOTADOS TAMBIÉN SE RESPETAN (2026-09-18) ──────────
+        #
+        # Hay 6 roles y hasta hoy solo 2 existían de verdad (admin y, desde
+        # este mismo día, viewer). "Editor MeLi", "Editor Amazon" y "Editor
+        # Facturación" eran nombres sin efecto: los tres podían escribir en
+        # todo, igual que un Editor completo. El nombre decía una cosa y el
+        # sistema hacía otra.
+        #
+        # Regla, aprobada por Jovan:
+        #   editor_meli        -> no escribe en Amazon
+        #   editor_amazon      -> no escribe en ML
+        #   editor_facturacion -> solo escribe en Facturación y Deuda
+        #
+        # Las rutas de Amazon SÍ se pueden identificar por su prefijo; las de
+        # ML son "todo lo demás". Por eso la regla se expresa asimétrica: para
+        # el editor de Amazon se bloquea lo que NO es Amazon, y para el de ML
+        # se bloquea lo que SÍ lo es. Ante una ruta ambigua, el editor de ML
+        # pasa (fail-open acotado) -- prefiero que alguien pueda hacer de más
+        # en su propia plataforma a tumbarle el trabajo por una ruta que no
+        # supimos clasificar. El bloqueo se loguea siempre, así que si algo
+        # legítimo se cierra, aparece en el log con nombre y ruta.
+        _rol = du.get("role")
+        if (_rol in ("editor_meli", "editor_amazon", "editor_facturacion")
+                and request.method in ("POST", "PUT", "PATCH", "DELETE")):
+            _es_amazon = (path.startswith("/amazon") or path.startswith("/api/amazon")
+                          or path.startswith("/api/amz") or "/amazon/" in path)
+            _es_facturacion = ("factura" in path or "deuda" in path)
+            _neutro = (path.startswith("/auth/") or path == "/set-password")
+            if _neutro:
+                _prohibido = False
+            elif _rol == "editor_meli":
+                _prohibido = _es_amazon
+            elif _rol == "editor_amazon":
+                _prohibido = not _es_amazon
+            else:  # editor_facturacion
+                _prohibido = not _es_facturacion
+            if _prohibido:
+                logger.warning(
+                    f"[ROL-ACOTADO] Bloqueado {request.method} {path} para "
+                    f"'{du.get('username')}' (rol {_rol})"
+                )
+                _quien = {"editor_meli": "Mercado Libre", "editor_amazon": "Amazon",
+                          "editor_facturacion": "Facturación"}[_rol]
+                if path.startswith("/api/") or path.startswith("/partials/"):
+                    return JSONResponse(
+                        {"error": f"Tu cuenta solo puede modificar {_quien}.",
+                         "rol": _rol}, status_code=403)
+                return HTMLResponse(
+                    "<div style='font-family:sans-serif;padding:60px 20px;"
+                    f"text-align:center;color:#555'>Tu cuenta solo puede modificar "
+                    f"<b>{_quien}</b>.<br>Puedes consultar el resto, pero no "
+                    "cambiarlo.</div>", status_code=403)
         # ── SOLO LECTURA ES SOLO LECTURA (2026-09-18) ────────────────────
         #
         # Hasta hoy el rol "viewer" era DECORATIVO: pintaba un chip gris en
