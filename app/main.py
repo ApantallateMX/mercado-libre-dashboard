@@ -24278,13 +24278,24 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         cand = {r["base_sku"]: dict(r) for r in await cur.fetchall()}
 
         cur = await db.execute("""
-            SELECT sku, platform,
+            SELECT sku, platform, status AS estado,
                    SUM(quantity) AS uds,
                    SUM(ganancia_neta) AS ganancia,
                    AVG(margen_pct) AS margen
               FROM order_history
-             WHERE order_date >= ? AND sku != '' AND status IN ('paid','delivered','shipped')
-             GROUP BY sku, platform
+             WHERE order_date >= ? AND sku != ''
+               -- BUG 2026-09-18: antes decia status IN ('paid','delivered',
+               -- 'shipped') en minusculas. Amazon devuelve 'Shipped' y
+               -- 'Unshipped' CON MAYUSCULA y SQLite compara respetando
+               -- mayusculas, asi que esta consulta devolvia CERO ventas de
+               -- Amazon y me hizo concluir que no registrabamos ninguna.
+               -- Falso: hay 31,417 lineas de Amazon en la tabla.
+               -- Ahora se excluyen los estados que NO son venta, en vez de
+               -- enumerar los que si: una lista blanca se queda corta en
+               -- silencio cada vez que aparece un estado nuevo.
+               AND LOWER(COALESCE(status,'')) NOT IN
+                   ('cancelled','canceled','refunded','invalid','pending_cancel','')
+             GROUP BY sku, platform, status
         """, (desde,))
         # El sku de order_history viene como lo manda el marketplace, o sea con
         # sufijo de condición y a veces con variantes ("SNTV007410-GRB",
@@ -24295,8 +24306,10 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         ventas: dict[str, dict] = {}
         crudos = {"amazon": set(), "ml": set()}
         plataformas: dict[str, int] = {}
+        estados: dict[str, dict] = {}
         for r in await cur.fetchall():
             plataformas[r["platform"]] = plataformas.get(r["platform"], 0) + int(r["uds"] or 0)
+            estados.setdefault(r["platform"], {})[r["estado"]] =                 estados[r["platform"]].get(r["estado"], 0) + int(r["uds"] or 0)
             base = _extract_base_sku((r["sku"] or "").upper().strip())
             if not base:
                 continue
@@ -24366,6 +24379,7 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
             # no estamos registrando esas ventas -- y entonces CUALQUIER
             # analisis de margen que use order_history es ciego a Amazon.
             "plataformas_en_order_history": plataformas,
+            "estados_por_plataforma": estados,
         },
         "pilotos": aptos[:limit],
         "nota": "Solo lectura. 'sugerido_enviar' es la mitad del stock, punto de partida "
