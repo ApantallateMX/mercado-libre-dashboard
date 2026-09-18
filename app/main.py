@@ -32428,6 +32428,67 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
     }
 
 
+@app.get("/api/diag/maestro-imposibles")
+async def diag_maestro_imposibles(token: str = "", limit: int = 20):
+    """Filas de bm_sku_master que violan la aritmética de BinManager.
+
+    2026-09-18, hallazgo de ecomops-stack. La doc de BM define
+    `Disponible = Total - Reservado`, con piso en 0, en dos fuentes
+    independientes (operations_guide y la descripción de inventory_by_sku).
+    De ahí salen dos combinaciones que NO pueden existir:
+
+        available > total                     -> imposible siempre
+        available = 0 con total > 0 y reserve = 0
+                                              -> si reserve es 0, available ES total
+
+    No hace falta preguntarle nada a BM para saber que están mal: la
+    aritmética ya lo dice. Sirve para medir cuánto daño dejó el escritor viejo
+    (el loop de ConfColumns) y para confirmar que el camino del MCP no las
+    produce.
+
+    Se separa lo que YA cubre el MCP de lo que no: el MCP escribe ~16,000 de
+    las ~37,800 filas, así que una fila corrupta fuera de su universo sigue
+    corrupta y eso no es culpa del cálculo nuevo. Mezclarlas escondería si el
+    arreglo funciona.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_mi
+    corte = _time.time() - 7200   # tocada por un ciclo reciente del MCP
+    async with _aio_mi.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_mi.Row
+        cur = await db.execute("""
+            SELECT sku, available_qty, reserve_qty, total_qty, stock_updated_at, verified,
+                   CASE WHEN available_qty > total_qty THEN 'avail>total'
+                        ELSE 'avail=0 con total>0 y reserve=0' END AS tipo
+              FROM bm_sku_master
+             WHERE (available_qty > total_qty)
+                OR (available_qty = 0 AND total_qty > 0 AND reserve_qty = 0)
+        """)
+        filas = [dict(r) for r in await cur.fetchall()]
+        total_tabla = (await (await db.execute("SELECT COUNT(*) FROM bm_sku_master")).fetchone())[0]
+    frescas = [f for f in filas if (f.get("stock_updated_at") or 0) >= corte]
+    viejas = [f for f in filas if (f.get("stock_updated_at") or 0) < corte]
+    def _uds(rs):
+        return sum(max((r.get("total_qty") or 0) - (r.get("available_qty") or 0), 0) for r in rs)
+    return JSONResponse({
+        "filas_en_el_maestro": total_tabla,
+        "imposibles_total": len(filas),
+        "por_tipo": {t: sum(1 for f in filas if f["tipo"] == t)
+                     for t in ("avail>total", "avail=0 con total>0 y reserve=0")},
+        "cubiertas_por_el_mcp_hoy": {
+            "filas": len(frescas), "unidades_en_disputa": _uds(frescas),
+            "nota": "Si esto NO es 0, el cálculo nuevo también las produce y hay que revisarlo.",
+        },
+        "fuera_del_ciclo_del_mcp": {
+            "filas": len(viejas), "unidades_en_disputa": _uds(viejas),
+            "nota": "Corrupción heredada del escritor viejo. El MCP no las toca "
+                    "porque no están publicadas ni tienen stock; siguen mal.",
+        },
+        "muestra": filas[:limit],
+    })
+
+
 @app.get("/api/diag/retornos-por-marca")
 async def diag_retornos_por_marca(token: str = "", days: int = 90, marca: str = "",
                                   platform: str = "", limit: int = 15,
