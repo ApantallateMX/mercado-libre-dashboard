@@ -22761,6 +22761,300 @@ async def diag_amazon_onsite_report_probe(token: str = "", seller_id: str = ""):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SONDA DE SOLO LECTURA (2026-09-18): ¿Amazon nos entrega recomendaciones de
+# reabastecimiento en NUESTRAS cuentas?
+#
+# Contexto: la doc oficial de SP-API NO declara disponibilidad por marketplace
+# para los reportes FBA -- ni confirma ni excluye México (las únicas exclusiones
+# documentadas son europeas: NL/PL/SE/BE). Preguntarle a la doc no responde
+# "¿aplica en MX?". La respuesta real es el código y el mensaje EXACTO que
+# devuelve Amazon al pedir el reporte, y eso solo se obtiene pidiéndolo.
+#
+# Se prueban 3 reportes por cuenta:
+#   1. GET_RESTOCK_INVENTORY_RECOMMENDATIONS_REPORT -- el que trae
+#      "Recommended replenishment qty" / "Recommended ship date" (lo que
+#      queremos de verdad).
+#   2. GET_FBA_INVENTORY_PLANNING_DATA -- plan B: trae days-of-supply,
+#      weeks-of-cover, sell-through y "Recommended ship-in quantity/date".
+#   3. GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA -- CONTROL. Ya sabemos que este
+#      funciona (lo corre _onsite_periodic_sync_loop cada 3h desde 2026-08-22).
+#      Si el control pasa y los otros dos fallan, el problema es el reportType
+#      y no nuestras credenciales/roles/harness -- sin el control, un fallo es
+#      ambiguo y volveríamos a adivinar.
+#
+# Reglas que respeta:
+#   - SOLO LECTURA. Ningún write a Amazon, ningún inbound, ninguna escritura
+#     en nuestra DB. Los resultados viven en memoria hasta el próximo deploy.
+#   - Cuentas y reportes EN SERIE con 45s de separación -- mismo espaciado que
+#     _onsite_periodic_sync_loop y _save_amazon_orders_bg (el límite real de
+#     createReport es 0.0167 req/s = 1/min, burst 15).
+#   - Corrida ÚNICA disparada a mano (start=true), nunca un loop de fondo.
+#   - Cero llamadas a BinManager.
+#   - Cada cuenta usa SUS credenciales vía get_amazon_client(seller_id) -- no
+#     se mezcla client_id/secret entre cuentas, y NADA de credenciales sale en
+#     la respuesta.
+#   - NUNCA devuelve vacío como éxito: `outcome` distingue ok / create_rejected
+#     / fatal / timeout / error, y `rows` es None (no 0) cuando no se pudo
+#     saber. Es exactamente el bug de amazon_client.py:1156 (el MYI hace
+#     `return {}` en timeout y el caller lo cachea como dato bueno) -- esta
+#     sonda no lo repite.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_AMZ_RESTOCK_PROBE_REPORTS = (
+    "GET_RESTOCK_INVENTORY_RECOMMENDATIONS_REPORT",
+    "GET_FBA_INVENTORY_PLANNING_DATA",
+    "GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA",  # control: sabemos que este sí corre
+)
+
+_amz_restock_probe_state: dict = {
+    "running": False,
+    "started_at": 0.0,
+    "finished_at": 0.0,
+    "results": {},
+}
+
+
+async def _probe_amazon_report_once(client, report_type: str, max_wait_secs: int = 180) -> dict:
+    """Pide UN reporte a UNA cuenta y reporta qué pasó realmente.
+
+    No normaliza ni interpreta: guarda el status HTTP y el cuerpo crudo del
+    error de Amazon, que es justamente el dato que responde "¿este reporte
+    existe para este marketplace?". Nunca convierte un fallo en un resultado
+    vacío que parezca bueno."""
+    import csv as _csv_p, io as _io_p
+    import httpx as _httpx_p
+
+    t0 = _time_module.time()
+    out = {
+        "report_type":    report_type,
+        "seller_id":      client.seller_id,
+        "marketplace_id": client.marketplace_id,
+        "create_accepted": False,
+        "report_id":      "",
+        "processing_status": "",
+        "outcome":        "",     # ok | create_rejected | fatal | timeout | error
+        "http_status":    None,
+        "amazon_error":   "",
+        "rows":           None,   # None = no se pudo saber. 0 solo es real con outcome='ok'
+        "columns":        [],
+        "sample_rows":    [],
+        "elapsed_s":      0.0,
+    }
+
+    def _done(outcome: str) -> dict:
+        out["outcome"] = outcome
+        out["elapsed_s"] = round(_time_module.time() - t0, 1)
+        return out
+
+    # ── 1. createReport ──────────────────────────────────────────────────────
+    # Si Amazon rechaza aquí, es la respuesta que buscamos y no hay que esperar
+    # nada: se devuelve el cuerpo tal cual lo mandó Amazon.
+    try:
+        res = await client._request(
+            "POST",
+            "/reports/2021-06-30/reports",
+            json_body={"reportType": report_type, "marketplaceIds": [client.marketplace_id]},
+        )
+    except _httpx_p.HTTPStatusError as e:
+        out["http_status"]  = e.response.status_code
+        out["amazon_error"] = (e.response.text or "")[:1200]
+        logger.warning(
+            "[RestockProbe] %s / %s: createReport rechazado HTTP %s -- %s",
+            client.seller_id, report_type, e.response.status_code, out["amazon_error"][:300],
+        )
+        return _done("create_rejected")
+    except Exception as e:
+        out["amazon_error"] = f"{type(e).__name__}: {e}"[:1200]
+        logger.warning("[RestockProbe] %s / %s: error creando reporte: %s",
+                       client.seller_id, report_type, out["amazon_error"][:300])
+        return _done("error")
+
+    out["create_accepted"] = True
+    out["report_id"] = res.get("reportId", "")
+    if not out["report_id"]:
+        out["amazon_error"] = f"createReport devolvió 200 sin reportId: {str(res)[:400]}"
+        return _done("error")
+
+    # ── 2. Poll hasta DONE / FATAL / CANCELLED ───────────────────────────────
+    # Poll cada 5s (getReport permite 2 req/s, sobra) para detectar DONE pronto
+    # y no gastar la ventana entera en reportes que Amazon genera rápido.
+    doc_id = ""
+    deadline = t0 + max_wait_secs
+    while _time_module.time() < deadline:
+        await asyncio.sleep(5)
+        try:
+            st = await client.get_report_status(out["report_id"])
+        except Exception as e:
+            # Un poll suelto puede fallar por red/429; se registra y se sigue
+            # intentando hasta el deadline en vez de abortar la sonda entera.
+            logger.info("[RestockProbe] %s / %s: poll falló (%s), reintentando",
+                        client.seller_id, report_type, type(e).__name__)
+            continue
+        out["processing_status"] = st.get("processingStatus", "")
+        if out["processing_status"] == "DONE":
+            doc_id = st.get("reportDocumentId", "")
+            break
+        if out["processing_status"] in ("FATAL", "CANCELLED"):
+            doc_id = st.get("reportDocumentId", "")  # FATAL a veces trae doc con el motivo
+            break
+
+    if out["processing_status"] not in ("DONE", "FATAL", "CANCELLED"):
+        out["amazon_error"] = (
+            f"sin estado terminal en {max_wait_secs}s "
+            f"(último: {out['processing_status'] or 'sin respuesta'})"
+        )
+        return _done("timeout")
+
+    # ── 3. Descargar el documento ────────────────────────────────────────────
+    # También para FATAL: en varios reportTypes Amazon deja ahí el motivo real
+    # del fallo, y ese texto es más útil que el propio "FATAL".
+    if not doc_id:
+        out["amazon_error"] = f"{out['processing_status']} sin reportDocumentId"
+        return _done("ok" if out["processing_status"] == "DONE" else "fatal")
+
+    try:
+        doc = await client.get_report_document_url(doc_id)
+        content = await client.download_report_document(
+            doc.get("url", ""), doc.get("compressionAlgorithm", "") == "GZIP"
+        )
+    except Exception as e:
+        out["amazon_error"] = f"descarga falló: {type(e).__name__}: {e}"[:600]
+        return _done("error")
+
+    stripped = content.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        # Reporte JSON (o payload de error). Se guarda un recorte crudo en vez
+        # de forzar un parseo TSV que devolvería 0 filas y parecería "vacío".
+        out["columns"] = ["<json>"]
+        out["sample_rows"] = [stripped[:1500]]
+        out["rows"] = None
+        out["amazon_error"] = "" if out["processing_status"] == "DONE" else stripped[:1200]
+        return _done("ok" if out["processing_status"] == "DONE" else "fatal")
+
+    reader = _csv_p.DictReader(_io_p.StringIO(content), delimiter="\t")
+    rows = list(reader)
+    out["columns"] = list(reader.fieldnames or [])
+    out["rows"] = len(rows)
+    out["sample_rows"] = [
+        {k: (str(v)[:120] if v is not None else "") for k, v in r.items()}
+        for r in rows[:3]
+    ]
+    if out["processing_status"] != "DONE":
+        out["amazon_error"] = content[:1200]
+        return _done("fatal")
+    return _done("ok")
+
+
+async def _run_amazon_restock_probe(seller_ids: list, report_types: list, max_wait_secs: int) -> None:
+    """Corre la sonda en serie: cuenta por cuenta, reporte por reporte, con 45s
+    entre creaciones de reporte. Background -- puede tardar decenas de minutos
+    en el peor caso, por eso nunca corre dentro de un request."""
+    from app.services.amazon_client import get_amazon_client as _get_amz_probe
+
+    _amz_restock_probe_state["running"]     = True
+    _amz_restock_probe_state["started_at"]  = _time_module.time()
+    _amz_restock_probe_state["finished_at"] = 0.0
+    _amz_restock_probe_state["results"]     = {}
+    results = _amz_restock_probe_state["results"]
+
+    try:
+        first = True
+        for sid in seller_ids:
+            try:
+                client = await _get_amz_probe(sid)
+            except Exception as e:
+                logger.error("[RestockProbe] %s: no se pudo crear cliente: %s", sid, e)
+                client = None
+            if not client:
+                results[f"{sid}|<sin cliente>"] = {
+                    "seller_id": sid, "outcome": "no_client",
+                    "amazon_error": "get_amazon_client() devolvió None (¿sin refresh_token?)",
+                }
+                continue
+
+            for rt in report_types:
+                if not first:
+                    await asyncio.sleep(45)  # límite real de createReport: ~1/min
+                first = False
+                key = f"{sid}|{rt}"
+                logger.info("[RestockProbe] probando %s en %s (%s)…", rt, sid, client.marketplace_id)
+                try:
+                    results[key] = await _probe_amazon_report_once(client, rt, max_wait_secs)
+                except Exception as e:
+                    logger.exception("[RestockProbe] %s: excepción no controlada", key)
+                    results[key] = {
+                        "report_type": rt, "seller_id": sid, "outcome": "error",
+                        "amazon_error": f"{type(e).__name__}: {e}"[:600],
+                    }
+                logger.info("[RestockProbe] %s → %s (rows=%s)",
+                            key, results[key].get("outcome"), results[key].get("rows"))
+    finally:
+        _amz_restock_probe_state["running"]     = False
+        _amz_restock_probe_state["finished_at"] = _time_module.time()
+        logger.info("[RestockProbe] sonda terminada: %d resultados", len(results))
+
+
+@app.get("/api/diag/amazon-restock-probe")
+async def diag_amazon_restock_probe(
+    token: str = "",
+    start: bool = False,
+    seller_id: str = "",
+    report: str = "",
+    max_wait: int = 180,
+):
+    """SONDA de solo lectura: ¿Amazon nos da recomendaciones de reabastecimiento?
+
+    Sin `start=true` devuelve el estado/resultados de la última corrida.
+    Con `start=true` lanza la sonda en background (las 3 cuentas × 3 reportes,
+    en serie con 45s de separación) y regresa de inmediato.
+
+    Parámetros opcionales: `seller_id` y `report` para acotar a una sola
+    combinación; `max_wait` (segundos) por reporte.
+
+    No escribe nada, ni en Amazon ni en la DB. No toca BinManager."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    if not start:
+        return {
+            "running":     _amz_restock_probe_state["running"],
+            "started_at":  _amz_restock_probe_state["started_at"],
+            "finished_at": _amz_restock_probe_state["finished_at"],
+            "results":     _amz_restock_probe_state["results"],
+            "hint":        "agrega &start=true para lanzar una corrida nueva",
+        }
+
+    if _amz_restock_probe_state["running"]:
+        return JSONResponse(
+            {"error": "ya hay una sonda corriendo",
+             "started_at": _amz_restock_probe_state["started_at"],
+             "parciales": len(_amz_restock_probe_state["results"])},
+            status_code=409,
+        )
+
+    accounts = await token_store.get_all_amazon_accounts()
+    sids = [a.get("seller_id", "") for a in accounts if a.get("seller_id")]
+    if seller_id:
+        sids = [s for s in sids if s == seller_id]
+    if not sids:
+        return JSONResponse({"error": f"sin cuentas Amazon (filtro seller_id={seller_id!r})"},
+                            status_code=404)
+
+    reports = [report] if report else list(_AMZ_RESTOCK_PROBE_REPORTS)
+    asyncio.create_task(_run_amazon_restock_probe(sids, reports, max_wait))
+    return {
+        "started":  True,
+        "accounts": [{"seller_id": a["seller_id"],
+                      "nickname": a.get("nickname", ""),
+                      "marketplace_id": a.get("marketplace_id", "")}
+                     for a in accounts if a.get("seller_id") in sids],
+        "reports":  reports,
+        "eta_secs_max": len(sids) * len(reports) * (max_wait + 45),
+        "hint": "vuelve a llamar este mismo endpoint SIN start=true para ver resultados",
+    }
+
+
 @app.get("/api/diag/seller-flex-lookup")
 async def diag_seller_flex_lookup(token: str = "", sku: str = ""):
     """Lee seller_flex_stock para un SKU -- verificación rápida post-ingesta."""
