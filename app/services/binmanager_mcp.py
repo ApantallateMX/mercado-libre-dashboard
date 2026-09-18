@@ -379,3 +379,60 @@ async def construir_mapa_vendible() -> dict:
     }
     logger.info(f"[BM-MCP] mapa vendible: {meta}")
     return {"skus": skus, "meta": meta}
+
+
+async def sincronizar_a_maestro() -> dict:
+    """Escribe el vendible calculado en bm_sku_master. ES EL QUE SÍ ESCRIBE.
+
+    Solo corre con BM_MCP_ENABLED=true. Mientras esté apagado, el bulk viejo
+    sigue siendo el dueño de esas columnas y esta función no hace nada.
+
+    SOBRE ESCRIBIR CEROS, que es la parte delicada: el universo que se escribe
+    es (SKUs publicados en ML/Amazon) ∪ (SKUs con stock según el MCP), y a un
+    SKU publicado que NO aparece en el mapa se le escribe 0. Tiene que ser
+    así: si solo escribiéramos los positivos, el stock nunca bajaría y
+    acabaríamos vendiendo lo que ya no existe. Lo que hace seguro escribir ese
+    0 es que construir_mapa_vendible() lanza McpIncompleto ante datos
+    parciales en vez de devolver un mapa corto -- sin esa garantía, "ausente
+    del mapa" no podría interpretarse como "no hay". Es la misma lógica de
+    ausencia-en-bulk-es-cero que ya usa el camino viejo, pero con un guard de
+    completitud que aquel nunca tuvo (incidente 2026-08-21, ~2,590 SKUs
+    zereados por una sesión colgada que devolvía HTTP 200 vacío).
+    """
+    from app.services import token_store
+
+    if not MCP_ENABLED:
+        return {"escrito": 0, "motivo": "BM_MCP_ENABLED apagado"}
+
+    resultado = await construir_mapa_vendible()   # lanza si viene incompleto
+    mapa = resultado["skus"]
+
+    publicados = set(await token_store.get_all_known_base_skus())
+    universo = publicados | set(mapa)
+
+    filas = []
+    for sku in universo:
+        d = mapa.get(sku)
+        filas.append({
+            "sku": sku,
+            "available_qty": (d or {}).get("available_qty", 0),
+            "reserve_qty": (d or {}).get("reserve_qty", 0),
+            "total_qty": (d or {}).get("total_qty", 0),
+            "mty_qty": (d or {}).get("mty_qty", 0),
+            "cdmx_qty": (d or {}).get("cdmx_qty", 0),
+            "tj_qty": (d or {}).get("tj_qty", 0),
+            # no_vendible_qty no se calcula por esta vía todavía: requeriría
+            # inventory_no_vendible, que es 1 llamada POR SKU. Se deja en 0 en
+            # vez de inventar un número -- la columna hoy solo alimenta
+            # paneles informativos, nunca una decisión de publicar.
+            "no_vendible_qty": 0,
+            "verified": True,
+            "best_condition_sku": (d or {}).get("best_condition_sku", ""),
+            "best_condition_qty": (d or {}).get("best_condition_qty", 0),
+        })
+
+    escrito = await token_store.upsert_bm_stock_full_batch(filas, source="mcp")
+    meta = {**resultado["meta"], "escrito": escrito,
+            "publicados": len(publicados), "universo": len(universo)}
+    logger.info(f"[BM-MCP] maestro actualizado: {meta}")
+    return meta

@@ -2540,15 +2540,20 @@ async def get_bm_catalog_last_sync() -> float:
 # aqui para no dejar 2 pares con el mismo nombre en el codigo.
 
 
-async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
+async def upsert_bm_stock_snapshot_batch(rows: list[dict], source: str = "bulk") -> int:
     """Guarda el stock actual en el maestro bm_sku_master (antes escribía en
     bm_stock_snapshot, ahora fusionada) — NO es una llamada nueva a BM, solo
     persiste lo que el prewarm ya trajo. Loguea en bm_sku_changes SOLO
     transiciones de available_qty que cruzan cero (se quedó en 0 / se
     resurtió) — evita llenar el historial de micro-fluctuaciones cada ~10 min.
     rows: list of {sku, available_qty, reserve_qty, total_qty}
+
+    source: quién escribe. Con BM_MCP_ENABLED=true solo "mcp" pasa -- ver
+    _stock_writer_bloqueado().
     """
     if not rows:
+        return 0
+    if _stock_writer_bloqueado(source):
         return 0
     now = __import__("time").time()
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
@@ -2595,7 +2600,32 @@ async def upsert_bm_stock_snapshot_batch(rows: list[dict]) -> int:
     return len(rows)
 
 
-async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
+def _stock_writer_bloqueado(source: str) -> bool:
+    """¿Este escritor tiene permiso de tocar las columnas de stock del maestro?
+
+    2026-09-17. Hasta hoy había UN solo escritor (el bulk contra la app web),
+    así que la pregunta no existía. Ahora hay dos, y NO pueden convivir
+    escribiendo el mismo campo: el bulk pone available_qty=0 cada ~10 min en
+    SKUs donde sí hay stock (96% de sus filas llegan en cero, verificado
+    contra BinManager en vivo). Si los dos escriben, el número bueno aparece
+    y desaparece en ciclos, y el stock de ML/Amazon parpadea -- peor que el
+    problema actual, porque además genera ruido en bm_sku_changes.
+
+    Con BM_MCP_ENABLED=true el dueño de esas columnas es el MCP y el bulk
+    viejo deja de escribirlas (sigue escribiendo catálogo: título, categoría,
+    upc, imagen, precios). Con la variable apagada, todo vuelve exactamente a
+    como estaba -- esa es la reversa, un solo deploy.
+    """
+    if source == "mcp":
+        return False
+    try:
+        from app.services.binmanager_mcp import MCP_ENABLED
+    except Exception:
+        return False
+    return bool(MCP_ENABLED)
+
+
+async def upsert_bm_stock_full_batch(rows: list[dict], source: str = "bulk") -> int:
     """FIX 2026-08-10 — Fase B del rediseño "bm_sku_master como fuente unica"
     (pedido por Jovan: 1 sola sincronizacion de BM en vez de 4 por-cuenta
     redundantes, ver project_bm_sku_master.md y la auditoria del mismo dia).
@@ -2614,6 +2644,8 @@ async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
     para no perder el dato, o lo omite -- ver guard "bulk parece caido" en
     el caller, mismo criterio que el pipeline viejo)."""
     if not rows:
+        return 0
+    if _stock_writer_bloqueado(source):
         return 0
     now = __import__("time").time()
     async with aiosqlite.connect(DATABASE_PATH, timeout=15) as db:
@@ -2638,7 +2670,7 @@ async def upsert_bm_stock_full_batch(rows: list[dict]) -> int:
             crossed_out = old_avail > 0 and new_avail <= 0
             crossed_in = old_avail <= 0 and new_avail > 0
             if crossed_out or crossed_in:
-                changes.append((sku, "available_qty", old_avail, new_avail, now, "bm_master_sync"))
+                changes.append((sku, "available_qty", old_avail, new_avail, now, source))
 
         await db.executemany(
             """INSERT INTO bm_sku_master

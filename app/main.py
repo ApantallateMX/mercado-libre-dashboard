@@ -1082,6 +1082,14 @@ async def lifespan(app: FastAPI):
     if not _BM_DISABLED:
         asyncio.create_task(_conf_columns_top_categories_loop())
         asyncio.create_task(_conf_columns_longtail_loop())
+    # Vendible real desde el MCP de BinManager (2026-09-17, autorizado por
+    # Jovan tras verificar 5 SKUs contra BM en vivo). Se auto-apaga si
+    # BM_MCP_ENABLED no está en true, así que es seguro registrarlo siempre.
+    # Cuando está prendido, es el DUEÑO de available_qty/reserve/total y el
+    # prewarm viejo deja de escribir esas columnas -- ver
+    # token_store._stock_writer_bloqueado().
+    if not _BM_DISABLED:
+        asyncio.create_task(_bm_mcp_stock_loop())
     # Red de seguridad de "Alertas de Stock" (2026-08-14) — re-evalúa órdenes
     # pagadas recientes que el webhook ya no vuelve a tocar por su cuenta.
     asyncio.create_task(_realtime_stock_reconcile_loop())
@@ -8395,6 +8403,45 @@ async def _bm_master_sync_loop():
         except Exception as e:
             logger.error(f"[BM-MASTER-SYNC] Error inesperado: {e}")
         await asyncio.sleep(120)
+
+
+_BM_MCP_INTERVALO_S = 900   # 15 min
+
+
+async def _bm_mcp_stock_loop():
+    """Alimenta bm_sku_master con el vendible real calculado desde el MCP.
+
+    2026-09-17, autorizado por Jovan tras verificar 5 SKUs contra BinManager
+    en vivo. Reemplaza al bulk viejo como fuente de available_qty porque aquel
+    devuelve 0 en el 96% de sus filas: 507 SKUs publicados en ML/Amazon tenían
+    7,771 unidades vendibles reales y estaban publicados en cero.
+
+    Apagado si BM_MCP_ENABLED no está en true -- esa variable es la reversa
+    completa, sin deploy de código.
+
+    Cadencia de 15 min, no menos: un ciclo son ~38 llamadas al MCP y ~2.5 min
+    de transferencia. El MCP permite 90 tools/call por minuto y corre en el
+    mismo app pool y la misma SQL Server que el picking de planta, así que
+    apurar esto le quita CPU a la operación real del almacén. Además desde hoy
+    ecomops-stack también consume ese MCP, o sea que la cuota se comparte.
+    """
+    from app.services import binmanager_mcp as _mcp
+    if not _mcp.MCP_ENABLED:
+        logger.info("[BM-MCP] BM_MCP_ENABLED apagado -- el maestro lo sigue escribiendo el bulk viejo")
+        return
+    await asyncio.sleep(240)   # deja arrancar el resto del proceso
+    while True:
+        try:
+            meta = await _mcp.sincronizar_a_maestro()
+            logger.info(f"[BM-MCP] ciclo ok: {meta}")
+        except _mcp.McpIncompleto as e:
+            # Datos parciales NO se escriben. Preferimos quedarnos con el
+            # dato anterior (viejo pero completo) que zerear SKUs reales --
+            # ver el incidente de 2026-08-21.
+            logger.error(f"[BM-MCP] ciclo abortado sin escribir, datos incompletos: {e}")
+        except Exception as e:
+            logger.error(f"[BM-MCP] error inesperado: {type(e).__name__}: {e}")
+        await asyncio.sleep(_BM_MCP_INTERVALO_S)
 
 
 # FEATURE 2026-08-19 (pedido explícito de BinManager, vía Jovan): migración
@@ -24130,6 +24177,26 @@ async def diag_bm_master_status(token: str = ""):
         "last_sync_age_s": round(now - meta["last_sync_ts"]) if meta["last_sync_ts"] else None,
         "known_skus_ml_amazon": len(await token_store.get_all_known_base_skus()),
     })
+
+
+@app.get("/api/diag/bm-mcp-sync")
+async def diag_bm_mcp_sync(token: str = ""):
+    """Dispara UN ciclo de escritura del vendible al maestro, a mano.
+
+    ESTE SÍ ESCRIBE. Existe para poder hacer la primera corrida de forma
+    controlada y mirar el resultado, en vez de esperar a que el loop de 15 min
+    lo haga solo cuando nadie está viendo. Requiere BM_MCP_ENABLED=true; con
+    la variable apagada no hace nada y lo dice."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services import binmanager_mcp as _mcp
+    try:
+        return JSONResponse(await _mcp.sincronizar_a_maestro())
+    except _mcp.McpIncompleto as e:
+        return JSONResponse({"error": "datos incompletos, no se escribió nada",
+                             "detalle": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
 
 
 @app.get("/api/diag/bm-mcp-compare")
