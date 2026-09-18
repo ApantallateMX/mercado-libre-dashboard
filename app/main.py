@@ -8408,6 +8408,27 @@ async def _bm_master_sync_loop():
 _BM_MCP_INTERVALO_S = 900   # 15 min
 
 
+def _mcp_es_dueno_del_stock() -> bool:
+    """¿El MCP manda sobre available_qty y los demás campos de stock?
+
+    Se lee en caliente (no se cachea) a propósito: la variable BM_MCP_ENABLED
+    es el apagador de emergencia de todo esto, y tiene que poder cambiar el
+    comportamiento en el siguiente ciclo sin depender de un estado guardado en
+    memoria en el arranque.
+
+    Gemela de token_store._stock_writer_bloqueado(). Existen las dos porque los
+    escritores del maestro están en dos capas: los que pasan por
+    upsert_bm_stock_*() y los que escriben SQL directo desde main.py. El
+    segundo grupo fue justo el que causó el problema -- ver el guard del
+    zereo en el loop de ConfColumns.
+    """
+    try:
+        from app.services.binmanager_mcp import MCP_ENABLED
+        return bool(MCP_ENABLED)
+    except Exception:
+        return False
+
+
 async def _bm_mcp_stock_loop():
     """Alimenta bm_sku_master con el vendible real calculado desde el MCP.
 
@@ -25299,6 +25320,9 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                 **{k: v for k, v in u.items() if k not in ("conditions", "best_condition_sku", "best_condition_qty")},
                 "best_condition_sku": _final_best_sku, "best_condition_qty": _final_best_qty,
                 "conditions_json": _conds_json, "stock_updated_at": _now_ts,
+                # 1 = el MCP es el dueño de las columnas de stock y este
+                # escritor no las debe pisar. Ver _mcp_es_dueno_del_stock().
+                "mcp_owns": 1 if _mcp_es_dueno_del_stock() else 0,
             })
             # Mantener el espejo en memoria (_bm_master_mem) sincronizado en el
             # mismo instante -- así las 3 funciones que leen de ahí (alertas en
@@ -25330,12 +25354,12 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        :verified, :stock_updated_at
                    )
                    ON CONFLICT(sku) DO UPDATE SET
-                       available_qty=excluded.available_qty,
-                       reserve_qty=excluded.reserve_qty,
-                       total_qty=excluded.total_qty,
-                       tj_qty=excluded.tj_qty,
-                       mty_qty=excluded.mty_qty,
-                       cdmx_qty=excluded.cdmx_qty,
+                       available_qty=CASE WHEN :mcp_owns THEN bm_sku_master.available_qty ELSE excluded.available_qty END,
+                       reserve_qty=CASE WHEN :mcp_owns THEN bm_sku_master.reserve_qty ELSE excluded.reserve_qty END,
+                       total_qty=CASE WHEN :mcp_owns THEN bm_sku_master.total_qty ELSE excluded.total_qty END,
+                       tj_qty=CASE WHEN :mcp_owns THEN bm_sku_master.tj_qty ELSE excluded.tj_qty END,
+                       mty_qty=CASE WHEN :mcp_owns THEN bm_sku_master.mty_qty ELSE excluded.mty_qty END,
+                       cdmx_qty=CASE WHEN :mcp_owns THEN bm_sku_master.cdmx_qty ELSE excluded.cdmx_qty END,
                        mty_cdmx_verified=excluded.mty_cdmx_verified,
                        pnp_mty_available=excluded.pnp_mty_available,
                        pnp_mty_novendible=excluded.pnp_mty_novendible,
@@ -25347,11 +25371,11 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
                        model=COALESCE(NULLIF(excluded.model, ''), bm_sku_master.model),
                        image_url=COALESCE(NULLIF(excluded.image_url, ''), bm_sku_master.image_url),
                        retail_ph=CASE WHEN excluded.retail_ph > 0 THEN excluded.retail_ph ELSE bm_sku_master.retail_ph END,
-                       best_condition_sku=excluded.best_condition_sku,
-                       best_condition_qty=excluded.best_condition_qty,
+                       best_condition_sku=CASE WHEN :mcp_owns THEN bm_sku_master.best_condition_sku ELSE excluded.best_condition_sku END,
+                       best_condition_qty=CASE WHEN :mcp_owns THEN bm_sku_master.best_condition_qty ELSE excluded.best_condition_qty END,
                        conditions_json=excluded.conditions_json,
-                       verified=excluded.verified,
-                       stock_updated_at=excluded.stock_updated_at""",
+                       verified=CASE WHEN :mcp_owns THEN bm_sku_master.verified ELSE excluded.verified END,
+                       stock_updated_at=CASE WHEN :mcp_owns THEN bm_sku_master.stock_updated_at ELSE excluded.stock_updated_at END""",
                 _insert_params,
             )
         # SKUs YA en bm_sku_master de ESTA categoría que no aparecieron --
@@ -25364,12 +25388,35 @@ async def _update_bm_master_for_category(bm_cli, category_id: str) -> dict:
         _existing_in_category = {r[0] for r in await cur.fetchall()}
         _now_zero = _existing_in_category - seen_skus_in_response
         _zero_params = []
-        for _z in _now_zero:
+        for _z in (() if _mcp_es_dueno_del_stock() else _now_zero):
             _zero_params.append((_now_ts, _z))
+            # El espejo en memoria se zerea junto con la DB a propósito (las
+            # alertas en tiempo real y el modal de Sustituir leen de aquí). Por
+            # eso el guard tiene que estar en el for y no solo en el UPDATE:
+            # si no, la DB quedaría bien y la memoria zereada, que es peor --
+            # el dashboard mostraría 0 con el maestro en positivo.
             _bm_master_mem[_z] = {
                 "available_qty": 0, "reserve_qty": 0, "best_condition_sku": "",
                 "conditions": [], "verified": True, "stock_updated_at": _now_ts,
             }
+        if _now_zero and _mcp_es_dueno_del_stock():
+            # ESTE ERA EL BUG (encontrado 2026-09-17 gracias a ecomops-stack).
+            #
+            # Este UPDATE zereaba available_qty de todo SKU de la categoría que
+            # no viniera en la respuesta, y lo hacía por SQL directo: NO pasa
+            # por upsert_bm_stock_*(), así que (a) no dejaba rastro en
+            # bm_sku_changes y (b) no lo frenaba el candado de token_store.
+            #
+            # Las dos consecuencias se vieron en datos reales: SNTV008071 pasó
+            # de 202 a 260 entre dos snapshots del maestro y
+            # /api/diag/bm-sku-changes reportaba "0 cambios en 10 días" para
+            # ese SKU. Y SKUs con cientos de unidades reales (SNTV004197 con
+            # 559) aparecían en 0 sin ninguna transición registrada.
+            #
+            # Sin este guard, el ciclo de categorías habría deshecho el
+            # trabajo del MCP en su siguiente vuelta -- 15 minutos.
+            logger.info(f"[CONFCOLUMNS] cat {category_id}: {len(_now_zero)} SKUs NO se zerean, "
+                        f"el MCP es dueño de available_qty")
         if _zero_params:
             # mty_qty/cdmx_qty también a 0 aquí (con mty_cdmx_verified=1): ambos
             # son subconjuntos de la MISMA consulta combinada (LOCATIONID=
