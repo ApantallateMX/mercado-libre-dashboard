@@ -32118,7 +32118,8 @@ async def _fetch_live_ml_sales_by_sku(date_from: str, date_to: str, account_id: 
 
 
 async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
-                              account_id: str = "", limit: int = 30) -> dict:
+                              account_id: str = "", limit: int = 30,
+                              min_ventas: int = 30) -> dict:
     """Retornos agrupados por MARCA, con tasa y dinero. Todo SQL local.
 
     FEATURE 2026-09-18 (pedido de Jovan: "ver los retornos que tenemos de TCL
@@ -32174,7 +32175,28 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
         ventas_raw = [dict(r) for r in await (await db.execute(vq, vp)).fetchall()]
 
         cur = await db.execute("SELECT sku, brand, title FROM bm_sku_master WHERE brand != ''")
-        marca_de = {r["sku"]: (r["brand"], r["title"]) for r in await cur.fetchall()}
+        _filas_marca = [(r["sku"], r["brand"], r["title"]) for r in await cur.fetchall()]
+
+    # NORMALIZACION DE MARCA (2026-09-18). El maestro trae la marca tal como la
+    # manda BinManager, sin normalizar: "Hisense" y "HISENSE" llegaban como dos
+    # marcas distintas, con 437 y 51 retornos por separado. Eso parte las cifras
+    # y hace que TODAS las marcas afectadas se vean mejor de lo que son -- una
+    # tasa calculada sobre la mitad de los datos no es una tasa.
+    #
+    # Se agrupa por la forma en MAYUSCULAS y se muestra la grafia mas frecuente
+    # del maestro, para no inventar un nombre bonito que nadie reconozca.
+    _variantes: dict[str, dict[str, int]] = {}
+    for _sk, _br, _ti in _filas_marca:
+        _clave = (_br or "").strip().upper()
+        if not _clave:
+            continue
+        _variantes.setdefault(_clave, {})
+        _variantes[_clave][(_br or "").strip()] = _variantes[_clave].get((_br or "").strip(), 0) + 1
+    _canonica = {k: max(v.items(), key=lambda x: x[1])[0] for k, v in _variantes.items()}
+    marca_de = {}
+    for _sk, _br, _ti in _filas_marca:
+        _clave = (_br or "").strip().upper()
+        marca_de[_sk] = (_canonica.get(_clave, (_br or "").strip()), _ti)
 
     vendidas: dict[str, int] = {}
     for v in ventas_raw:
@@ -32220,12 +32242,19 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
         # puede calcular", y presentarlo como 0% haría ver sana a una marca
         # de la que solo tenemos devoluciones.
         tasa = round(m["uds_retornadas"] / vend * 100, 2) if vend > 0 else None
+        # MUESTRA MINIMA. Sony salio con 53.57% sobre 28 unidades vendidas: con
+        # ese volumen un solo cliente mueve la tasa 4 puntos, asi que el numero
+        # es cierto y a la vez inservible para decidir. No se oculta -- se marca,
+        # porque esconderlo seria otra forma de mentir.
+        confiable = vend >= min_ventas
         skus = sorted(m["skus"].values(), key=lambda x: -x["monto_mxn"])
         for s in skus:
             s["tasa_pct"] = (round(s["uds_retornadas"] / s["uds_vendidas"] * 100, 2)
                              if s["uds_vendidas"] > 0 else None)
+            s["confiable"] = s["uds_vendidas"] >= min_ventas
             s["monto_mxn"] = round(s["monto_mxn"], 2)
         salida.append({**m, "uds_vendidas": vend, "tasa_pct": tasa,
+                       "confiable": confiable, "min_ventas": min_ventas,
                        "monto_mxn": round(m["monto_mxn"], 2),
                        "skus_afectados": len(m["skus"]),
                        "skus": skus[:limit]})
@@ -32235,10 +32264,14 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
         salida = [x for x in salida if mm in (x["marca"] or "").lower()]
     salida.sort(key=lambda x: -x["monto_mxn"])
 
+    _conf = [x for x in salida if x["confiable"] and x["tasa_pct"] is not None]
     return {
         "ventana_dias": days,
+        "min_ventas_para_confiar": min_ventas,
+        "peor_tasa": (max(_conf, key=lambda x: x["tasa_pct"])["marca"] if _conf else ""),
         "resumen": {
             "marcas": len(salida),
+            "marcas_con_muestra_suficiente": len(_conf),
             "retornos_total": sum(x["retornos"] for x in salida),
             "monto_total_mxn": round(sum(x["monto_mxn"] for x in salida), 2),
         },
@@ -32255,12 +32288,38 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
 
 @app.get("/api/diag/retornos-por-marca")
 async def diag_retornos_por_marca(token: str = "", days: int = 90, marca: str = "",
-                                  platform: str = "", limit: int = 15):
+                                  platform: str = "", limit: int = 15,
+                                  min_ventas: int = 30):
     """Verificación contra producción del análisis de retornos por marca."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     return JSONResponse(await _retornos_por_marca(days=days, marca=marca,
-                                                  platform=platform, limit=limit))
+                                                  platform=platform, limit=limit,
+                                                  min_ventas=min_ventas))
+
+
+@app.get("/api/returns/por-marca")
+async def returns_por_marca(
+    request: Request,
+    days: int = Query(180, ge=7, le=730),
+    marca: str = Query("", description="Filtra a una marca; vacío = todas"),
+    platform: str = Query("", description="'ml' | 'amazon' | vacío = ambas"),
+    account_id: str = Query("", description="Vacío = Global (todas las cuentas)"),
+    limit: int = Query(30, ge=1, le=100),
+    min_ventas: int = Query(30, ge=1, description="Ventas mínimas para considerar la tasa confiable"),
+):
+    """Retornos por MARCA con tasa real y dinero perdido — ML y Amazon.
+
+    FEATURE 2026-09-18 (pedido de Jovan). `account_id` vacío = vista Global de
+    todas las cuentas; con valor = solo esa cuenta (regla #4 de CLAUDE.md, el
+    Global es la excepción explícita, igual que /api/returns/global-top).
+    """
+    _u = await _require_session(request)
+    if isinstance(_u, RedirectResponse):
+        return _u
+    return JSONResponse(await _retornos_por_marca(
+        days=days, marca=marca, platform=platform,
+        account_id=account_id, limit=limit, min_ventas=min_ventas))
 
 
 @app.get("/api/returns/sku-claim-rate")
