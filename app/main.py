@@ -32428,6 +32428,66 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
     }
 
 
+@app.get("/api/diag/retail-centinelas")
+async def diag_retail_centinelas(token: str = "", min_skus: int = 40, limit: int = 20):
+    """Valores de retail_ph compartidos por cientos de SKUs = centinelas, no precios.
+
+    2026-09-18, hallazgo de ecomops-stack: 1,104 SKUs de la familia RMTC* tienen
+    retail_ph = 299.99 EXACTO. Ningún catálogo real tiene mil productos distintos
+    al mismo precio al centavo. Y el contraste lo confirma: esos controles se
+    venden en ML a $400-500 MXN (~25 USD), o sea 12-25x por debajo de lo que
+    dice el maestro.
+
+    Por qué importa y no es cosmético: el retail es la base de costo del negocio
+    (confirmado por Jovan). Ese número alimenta el margen, la fórmula de precio
+    sugerido (retail_usd x 24 daría $7,200 MXN para un control de $475) y la
+    clasificación de riesgo de precio. Es la misma bomba que AvgCostQTY >= 9000,
+    en otra columna y sin documentar.
+
+    Esto barre TODAS las familias, no solo RMTC, y contrasta contra el precio
+    real de venta de order_history -- que es un hecho observado, no un dato de
+    catálogo. Solo lectura.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_rc
+    async with _aio_rc.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_rc.Row
+        cur = await db.execute(
+            "SELECT retail_ph, COUNT(*) n, COUNT(DISTINCT substr(sku,1,4)) familias "
+            "FROM bm_sku_master WHERE retail_ph > 0 "
+            "GROUP BY retail_ph HAVING n >= ? ORDER BY n DESC LIMIT ?",
+            (min_skus, limit))
+        sospechosos = [dict(r) for r in await cur.fetchall()]
+        for s_ in sospechosos:
+            cur = await db.execute(
+                "SELECT substr(sku,1,4) fam, COUNT(*) n FROM bm_sku_master "
+                "WHERE retail_ph = ? GROUP BY fam ORDER BY n DESC LIMIT 3", (s_["retail_ph"],))
+            s_["top_familias"] = {r["fam"]: r["n"] for r in await cur.fetchall()}
+            # Precio REAL de venta de esos SKUs, para contrastar
+            cur = await db.execute(
+                "SELECT AVG(oh.unit_price) precio_real, COUNT(*) ordenes "
+                "FROM order_history oh JOIN bm_sku_master b "
+                "  ON substr(oh.sku,1,10) = b.sku "
+                "WHERE b.retail_ph = ? AND oh.unit_price > 0 "
+                "  AND LOWER(COALESCE(oh.status,'')) NOT IN "
+                "      ('cancelled','canceled','refunded','invalid','')", (s_["retail_ph"],))
+            r = await cur.fetchone()
+            s_["precio_real_venta_mxn"] = round(r["precio_real"], 2) if r["precio_real"] else None
+            s_["ordenes_observadas"] = r["ordenes"]
+        cur = await db.execute("SELECT COUNT(*) n FROM bm_sku_master WHERE retail_ph > 0")
+        con_retail = (await cur.fetchone())["n"]
+    return JSONResponse({
+        "skus_con_retail": con_retail,
+        "umbral_sospecha": f"{min_skus}+ SKUs compartiendo el MISMO retail_ph",
+        "valores_sospechosos": sospechosos,
+        "como_leerlo": "Si precio_real_venta_mxn es MUCHO menor que retail_ph x 17, "
+                       "ese retail_ph no es un precio: es un relleno. Compararlo "
+                       "contra venta observada es la única prueba que no depende "
+                       "del mismo catálogo que se está cuestionando.",
+    })
+
+
 @app.get("/api/diag/tj-transfer-check")
 async def diag_tj_transfer_check(token: str = "", limit: int = 15):
     """¿Las Transferencias Sugeridas están viendo el stock de Tijuana?
