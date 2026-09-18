@@ -327,6 +327,10 @@ async def construir_mapa_vendible() -> dict:
     # sugerencias de sustituto muestran un SKU sin sufijo que en el almacén
     # nadie puede tomar (ver FEATURE 2026-08-17 en main.py).
     por_condicion: dict[str, dict[str, int]] = {}
+    # SKUs que aparecieron en el contenido crudo de ALGÚN bin nuestro, sea
+    # vendible o no. Es lo que permite que `verified` signifique algo: ver
+    # sincronizar_a_maestro().
+    vistos: set[str] = set()
 
     for loc, filas in por_loc.items():
         es_tj = loc in _LOC_TJ
@@ -335,6 +339,7 @@ async def construir_mapa_vendible() -> dict:
             cond = (r.get("SKUCondition") or "").upper().strip()
             if not base:
                 continue
+            vistos.add(base)
             if not _es_vendible(base, cond, tipos.get(r.get("BinID"))):
                 continue
             qty = int(r.get("Qty") or 0)
@@ -372,13 +377,14 @@ async def construir_mapa_vendible() -> dict:
 
     meta = {
         "skus_con_stock": len(skus),
+        "skus_vistos_en_bins": len(vistos),
         "filas_leidas": sum(len(v) for v in por_loc.values()),
         "bins_mapeados": len(tipos),
         "segundos": round(time.time() - t0, 1),
         "generado_ts": time.time(),
     }
     logger.info(f"[BM-MCP] mapa vendible: {meta}")
-    return {"skus": skus, "meta": meta}
+    return {"skus": skus, "vistos": vistos, "meta": meta}
 
 
 async def sincronizar_a_maestro() -> dict:
@@ -406,13 +412,30 @@ async def sincronizar_a_maestro() -> dict:
 
     resultado = await construir_mapa_vendible()   # lanza si viene incompleto
     mapa = resultado["skus"]
+    vistos = resultado["vistos"]
 
     publicados = set(await token_store.get_all_known_base_skus())
     universo = publicados | set(mapa)
 
     filas = []
+    sin_confirmar = 0
     for sku in universo:
         d = mapa.get(sku)
+        # `verified` con significado real (petición de ecomops-stack, que hoy
+        # tiene que INFERIRLO con heurísticas en lib/bmStatus.ts porque el
+        # camino viejo lo pone en true en las 37,841 filas -- incluidas 26,658
+        # fichas de catálogo vacías y 2,470 que nunca se leyeron. Un flag que
+        # no separa nada es peor que no tenerlo, porque invita a confiar).
+        #
+        # Aquí sí separa: true = este SKU apareció en el contenido de algún bin
+        # nuestro en este ciclo, así que su vendible (sea 5 o sea 0) es una
+        # lectura real. false = nunca apareció en ninguna locación, ni siquiera
+        # en bins no vendibles -- puede ser una ficha de catálogo, un SKU que
+        # solo vive en GDL, o un SKU mal escrito. En ese caso escribimos 0
+        # pero avisamos que no lo confirmamos, y el consumidor decide.
+        confirmado = sku in vistos
+        if not confirmado:
+            sin_confirmar += 1
         filas.append({
             "sku": sku,
             "available_qty": (d or {}).get("available_qty", 0),
@@ -426,13 +449,19 @@ async def sincronizar_a_maestro() -> dict:
             # vez de inventar un número -- la columna hoy solo alimenta
             # paneles informativos, nunca una decisión de publicar.
             "no_vendible_qty": 0,
-            "verified": True,
+            "verified": confirmado,
             "best_condition_sku": (d or {}).get("best_condition_sku", ""),
             "best_condition_qty": (d or {}).get("best_condition_qty", 0),
         })
 
+    # stock_updated_at se mueve SIEMPRE, aunque el número no cambie (lo pone
+    # upsert_bm_stock_full_batch con el `now` de cada corrida). Es la única
+    # señal de frescura que tiene ecomops-stack del otro lado del espejo: un
+    # timestamp congelado les haría creer que el dato está viejo cuando en
+    # realidad está recalculado e igual.
     escrito = await token_store.upsert_bm_stock_full_batch(filas, source="mcp")
     meta = {**resultado["meta"], "escrito": escrito,
-            "publicados": len(publicados), "universo": len(universo)}
+            "publicados": len(publicados), "universo": len(universo),
+            "sin_confirmar_en_bins": sin_confirmar}
     logger.info(f"[BM-MCP] maestro actualizado: {meta}")
     return meta
