@@ -8526,6 +8526,22 @@ _CONF_COLUMNS_HISTORY_MAX = 15
 
 
 async def _conf_columns_top_categories_loop():
+    # PARADA 2026-09-18 (Alberto reporto que le estabamos pegando otra vez).
+    #
+    # Este loop recorre categoria por categoria contra la app web de BM. Desde
+    # que el MCP es dueno del stock, lo que trae se DESCARTA -- el candado de
+    # abajo ya no deja que escriba available_qty. O sea que seguia generando
+    # todo el trafico y cero valor: exactamente lo que nos bloquearon en
+    # agosto. Yo cerre las escrituras y me olvide del trafico.
+    #
+    # Lo unico que este loop seguia aportando es catalogo (titulo, marca,
+    # imagen, retail, categoria, upc). Eso NO necesita correr cada 15 min --
+    # queda pendiente reponerlo como una pasada diaria.
+    from app.services.binmanager_mcp import MCP_ENABLED as _MCP_ON
+    if _MCP_ON:
+        logger.info("[%s] NO ARRANCA: el MCP es dueno del stock y este loop solo "
+                    "generaria trafico hacia BM sin poder escribir nada." % 'CONFCOL-TOP')
+        return
     global _bm_category_loop_halt_reason
     await asyncio.sleep(600)  # dejar que el arranque normal termine primero
     while True:
@@ -8580,6 +8596,22 @@ async def _conf_columns_top_categories_loop():
 
 
 async def _conf_columns_longtail_loop():
+    # PARADA 2026-09-18 (Alberto reporto que le estabamos pegando otra vez).
+    #
+    # Este loop recorre categoria por categoria contra la app web de BM. Desde
+    # que el MCP es dueno del stock, lo que trae se DESCARTA -- el candado de
+    # abajo ya no deja que escriba available_qty. O sea que seguia generando
+    # todo el trafico y cero valor: exactamente lo que nos bloquearon en
+    # agosto. Yo cerre las escrituras y me olvide del trafico.
+    #
+    # Lo unico que este loop seguia aportando es catalogo (titulo, marca,
+    # imagen, retail, categoria, upc). Eso NO necesita correr cada 15 min --
+    # queda pendiente reponerlo como una pasada diaria.
+    from app.services.binmanager_mcp import MCP_ENABLED as _MCP_ON
+    if _MCP_ON:
+        logger.info("[%s] NO ARRANCA: el MCP es dueno del stock y este loop solo "
+                    "generaria trafico hacia BM sin poder escribir nada." % 'CONFCOL-LONGTAIL')
+        return
     await asyncio.sleep(1800)  # arranca después del loop top, no compite con él al inicio
     while True:
         try:
