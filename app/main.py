@@ -32428,6 +32428,64 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
     }
 
 
+@app.get("/api/diag/tj-transfer-check")
+async def diag_tj_transfer_check(token: str = "", limit: int = 15):
+    """¿Las Transferencias Sugeridas están viendo el stock de Tijuana?
+
+    2026-09-18. Jovan confirmó que Tijuana existe SOLO para rellenar CDMX y
+    MTY. Entonces todo SKU con stock en TJ y cero vendible debería aparecer en
+    /api/planning/tj-only-transfer para que alguien lo mueva. Aparecieron 821
+    unidades en 3 SKUs encontrados de casualidad, así que hay que confirmar que
+    el indicador los ve.
+
+    Revisa además el JOIN de ventas de esa consulta: cruza
+    order_history.sku (viene con sufijo de condición) contra bm_sku_master.sku
+    (base de 10 chars). Si no normaliza, units_12m sale en 0 para casi todo y
+    la priorización por ventas -- que es LO que Jovan pidió para saber qué
+    mover primero -- estaría rota en silencio."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_tj
+    async with _aio_tj.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_tj.Row
+        cur = await db.execute(
+            "SELECT COUNT(*) n, SUM(tj_qty) uds FROM bm_sku_master "
+            "WHERE tj_qty > 0 AND available_qty = 0")
+        r = await cur.fetchone()
+        candidatos, unidades = r["n"], r["uds"] or 0
+        cur = await db.execute(
+            "SELECT sku, tj_qty, available_qty, retail_ph FROM bm_sku_master "
+            "WHERE tj_qty > 0 AND available_qty = 0 ORDER BY tj_qty DESC LIMIT ?", (limit,))
+        top = [dict(x) for x in await cur.fetchall()]
+        # ¿el JOIN de ventas encuentra algo?
+        cur = await db.execute(
+            "SELECT COUNT(*) n FROM bm_sku_master bsm "
+            "WHERE bsm.tj_qty > 0 AND bsm.available_qty = 0 "
+            "  AND EXISTS (SELECT 1 FROM order_history oh WHERE oh.sku = bsm.sku)")
+        cruce_directo = (await cur.fetchone())["n"]
+        cur = await db.execute(
+            "SELECT COUNT(*) n FROM bm_sku_master bsm "
+            "WHERE bsm.tj_qty > 0 AND bsm.available_qty = 0 "
+            "  AND EXISTS (SELECT 1 FROM order_history oh "
+            "              WHERE substr(oh.sku,1,10) = bsm.sku)")
+        cruce_normalizado = (await cur.fetchone())["n"]
+        cur = await db.execute("SELECT sku, tj_qty FROM bm_sku_master WHERE sku IN "
+                               "('SNHG000074','SNHS000101','SNHS000005')")
+        los_tres = [dict(x) for x in await cur.fetchall()]
+    return JSONResponse({
+        "candidatos_a_transferir": candidatos,
+        "unidades_paradas_en_tijuana": unidades,
+        "los_3_que_encontramos": los_tres,
+        "cruce_de_ventas": {
+            "con_el_join_actual": cruce_directo,
+            "normalizando_a_10_chars": cruce_normalizado,
+            "nota": "Si el actual es mucho menor, la priorización por ventas "
+                    "está rota y el indicador ordena mal qué mover primero.",
+        },
+        "top_por_unidades": top,
+    })
+
+
 @app.get("/api/diag/maestro-imposibles")
 async def diag_maestro_imposibles(token: str = "", limit: int = 20):
     """Filas de bm_sku_master que violan la aritmética de BinManager.
