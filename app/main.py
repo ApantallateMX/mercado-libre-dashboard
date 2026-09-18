@@ -20281,6 +20281,22 @@ async def diag_user_permissions(username: str = "", token: str = ""):
     checkbox no estaba tomando efecto para Said/Alex."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not username.strip():
+        # Sin username: censo de roles. Sirve para saber a QUIÉN le cambiaría
+        # algo un cambio de reglas antes de aplicarlo, en vez de enterarse
+        # porque alguien deja de poder trabajar (2026-09-18).
+        _todos = await user_store.list_users()
+        return JSONResponse({
+            "total": len(_todos),
+            "por_rol": {r: sum(1 for u in _todos if u.get("role") == r)
+                        for r in user_store.ROLES},
+            "usuarios": [
+                {"username": u.get("username"), "rol": u.get("role"),
+                 "activo": u.get("active"),
+                 "secciones": user_store._parse_allowed_sections(u.get("allowed_sections")) or "(todas las de su rol)"}
+                for u in _todos
+            ],
+        })
     row = await user_store.get_user_by_username(username.strip().lower())
     if not row:
         return JSONResponse({"error": "usuario no encontrado"}, status_code=404)
