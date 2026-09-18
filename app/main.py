@@ -22814,8 +22814,112 @@ _amz_restock_probe_state: dict = {
     "results": {},
 }
 
+# SKU base de BinManager: 4 letras + 6 dígitos = 10 chars (SNTV003287, RMTC008072,
+# SHIL000523). El gate existe por un caso real: los SKUs de ExclusiveBulbs son
+# tipo "p-987423" y normalize_to_bm_sku() corta en el primer guión devolviendo
+# "P" -- sin este filtro, miles de filas colisionarían bajo la misma llave
+# basura y el cruce con bm_sku_master daría un número inventado.
+_BM_SKU_RE = _re.compile(r"^[A-Z]{4}\d{6}$")
 
-async def _probe_amazon_report_once(client, report_type: str, max_wait_secs: int = 180) -> dict:
+
+async def _bm_cross_check_actionable(rows: list, sku_col: str, fresh_secs: float) -> dict:
+    """¿Cuántas de las recomendaciones de Amazon podemos surtir de verdad?
+
+    Amazon no sabe cuánto tenemos en bodega -- recomienda sobre su propia
+    demanda. El número que sirve para decidir no es "Amazon pide X" sino
+    "Amazon pide X y lo tenemos". Esto mide esa intersección.
+
+    Disciplina clave: una fila de bm_sku_master con stock_updated_at viejo o en
+    0 NO es "sin stock", es "no sabemos" -- bm_sku_master lo alimenta un loop
+    parcial que no cubre todas las filas en cada vuelta. Confundir "fuera del
+    ciclo" con "cero" es el mismo error que ya zereó ~2,590 SKUs reales antes
+    (ver project_bm_session_stuck_false_zero_incident). Por eso hay cubetas
+    separadas para desconocido y para cero confirmado.
+
+    Solo lectura sobre bm_sku_master. CERO llamadas a BinManager."""
+    import aiosqlite as _aio_bx
+
+    out = {
+        "sku_col":           sku_col,
+        "actionable":        len(rows),
+        "base_sku_invalid":  0,   # no pasa el formato BM (ej. "p-987423" -> "P")
+        "not_in_master":     0,   # SKU válido pero no existe en bm_sku_master
+        "unverified":        0,   # existe pero stock_updated_at == 0 -> nunca verificado
+        "stale":             0,   # existe, verificado alguna vez, pero fuera del ciclo reciente
+        "fresh_with_stock":  0,   # <<< tamaño real de la feature
+        "fresh_zero_stock":  0,   # cero CONFIRMADO y fresco
+        "fresh_threshold_s": fresh_secs,
+        "sample_surtible":   [],
+    }
+    if not rows or not sku_col:
+        return out
+
+    # base_sku -> [(sku_marketplace, rec_qty)]
+    wanted: dict = {}
+    for r in rows:
+        raw_sku = (r.get(sku_col) or "").strip()
+        base = normalize_to_bm_sku(raw_sku)
+        if not base or not _BM_SKU_RE.match(base):
+            out["base_sku_invalid"] += 1
+            continue
+        wanted.setdefault(base, []).append(raw_sku)
+
+    if not wanted:
+        return out
+
+    keys = list(wanted.keys())
+    master: dict = {}
+    try:
+        async with _aio_bx.connect(DATABASE_PATH, timeout=15) as db:
+            db.row_factory = _aio_bx.Row
+            # Chunks de 500 para no pasarse del límite de parámetros de SQLite.
+            for i in range(0, len(keys), 500):
+                chunk = keys[i:i + 500]
+                ph = ",".join("?" * len(chunk))
+                cur = await db.execute(
+                    f"SELECT sku, available_qty, stock_updated_at, verified "
+                    f"FROM bm_sku_master WHERE sku IN ({ph})",
+                    chunk,
+                )
+                for row in await cur.fetchall():
+                    master[row["sku"]] = dict(row)
+    except Exception as e:
+        # No se traga el error: sin DB no hay cruce, y decirlo es mejor que
+        # devolver ceros que parecerían "no tenemos nada".
+        out["error"] = f"{type(e).__name__}: {e}"[:300]
+        return out
+
+    now = _time_module.time()
+    for base, marketplace_skus in wanted.items():
+        m = master.get(base)
+        if not m:
+            out["not_in_master"] += 1
+            continue
+        upd = float(m.get("stock_updated_at") or 0)
+        if upd <= 0:
+            out["unverified"] += 1          # placeholder, NO "BM confirmó 0"
+            continue
+        if (now - upd) > fresh_secs:
+            out["stale"] += 1               # fuera del ciclo, tampoco es 0
+            continue
+        qty = int(m.get("available_qty") or 0)
+        if qty > 0:
+            out["fresh_with_stock"] += 1
+            if len(out["sample_surtible"]) < 8:
+                out["sample_surtible"].append({
+                    "base_sku":   base,
+                    "sku_amazon": marketplace_skus[0],
+                    "bm_avail":   qty,
+                    "verified":   m.get("verified"),
+                    "edad_horas": round((now - upd) / 3600, 1),
+                })
+        else:
+            out["fresh_zero_stock"] += 1
+    return out
+
+
+async def _probe_amazon_report_once(client, report_type: str, max_wait_secs: int = 180,
+                                    fresh_secs: float = 86400.0) -> dict:
     """Pide UN reporte a UNA cuenta y reporta qué pasó realmente.
 
     No normaliza ni interpreta: guarda el status HTTP y el cuerpo crudo del
@@ -22969,6 +23073,15 @@ async def _probe_amazon_report_once(client, report_type: str, max_wait_secs: int
         ]
         if out.get("rec_unparsed"):
             out["rec_unparsed"] = sorted(set(out["rec_unparsed"]))[:10]
+
+        # De lo que Amazon pide, ¿qué podemos surtir hoy? (ver docstring de
+        # _bm_cross_check_actionable). Solo lectura de bm_sku_master, sin BM.
+        _sku_col = next((c for c in ("Merchant SKU", "sku") if c in (out["columns"] or [])), "")
+        try:
+            out["bm_cross"] = await _bm_cross_check_actionable(actionable, _sku_col, fresh_secs)
+        except Exception as e:
+            logger.exception("[RestockProbe] cruce BM falló para %s", report_type)
+            out["bm_cross"] = {"error": f"{type(e).__name__}: {e}"[:300]}
     else:
         # None (no 0): el reporte no trae columna de recomendación conocida.
         out["rows_with_rec"] = None
@@ -22987,7 +23100,8 @@ async def _probe_amazon_report_once(client, report_type: str, max_wait_secs: int
     return _done("ok")
 
 
-async def _run_amazon_restock_probe(seller_ids: list, report_types: list, max_wait_secs: int) -> None:
+async def _run_amazon_restock_probe(seller_ids: list, report_types: list, max_wait_secs: int,
+                                    fresh_secs: float = 86400.0) -> None:
     """Corre la sonda en serie: cuenta por cuenta, reporte por reporte, con 45s
     entre creaciones de reporte. Background -- puede tardar decenas de minutos
     en el peor caso, por eso nunca corre dentro de un request."""
@@ -23021,7 +23135,7 @@ async def _run_amazon_restock_probe(seller_ids: list, report_types: list, max_wa
                 key = f"{sid}|{rt}"
                 logger.info("[RestockProbe] probando %s en %s (%s)…", rt, sid, client.marketplace_id)
                 try:
-                    results[key] = await _probe_amazon_report_once(client, rt, max_wait_secs)
+                    results[key] = await _probe_amazon_report_once(client, rt, max_wait_secs, fresh_secs)
                 except Exception as e:
                     logger.exception("[RestockProbe] %s: excepción no controlada", key)
                     results[key] = {
@@ -23043,6 +23157,7 @@ async def diag_amazon_restock_probe(
     seller_id: str = "",
     report: str = "",
     max_wait: int = 180,
+    fresh_hours: float = 24.0,
 ):
     """SONDA de solo lectura: ¿Amazon nos da recomendaciones de reabastecimiento?
 
@@ -23083,7 +23198,7 @@ async def diag_amazon_restock_probe(
                             status_code=404)
 
     reports = [report] if report else list(_AMZ_RESTOCK_PROBE_REPORTS)
-    asyncio.create_task(_run_amazon_restock_probe(sids, reports, max_wait))
+    asyncio.create_task(_run_amazon_restock_probe(sids, reports, max_wait, fresh_hours * 3600))
     return {
         "started":  True,
         "accounts": [{"seller_id": a["seller_id"],
