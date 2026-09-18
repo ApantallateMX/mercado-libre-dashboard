@@ -22814,6 +22814,41 @@ _amz_restock_probe_state: dict = {
     "results": {},
 }
 
+# El estado vivía solo en memoria del proceso. Railway reinició la app 3 veces
+# durante las corridas de hoy (deploys y reinicios del contenedor) y cada
+# reinicio borró resultados que costaron minutos de espera y llamadas reales a
+# Amazon. Se persiste a disco junto a la DB -- en Railway ese directorio es el
+# Volume, que sí sobrevive redeploys (es la misma razón por la que existen los
+# warm-start del resto del proyecto). Así un reinicio a media corrida solo
+# pierde el reporte en vuelo, no los que ya terminaron.
+_PROBE_STATE_FILE = _os_path_probe = __import__("os").path.join(
+    __import__("os").path.dirname(DATABASE_PATH) or ".", "restock_probe_state.json"
+)
+
+
+def _probe_state_save() -> None:
+    """Vuelca el estado de la sonda a disco. Best-effort: si falla, se loguea y
+    la sonda sigue -- perder la persistencia no debe abortar la medición."""
+    try:
+        with open(_PROBE_STATE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(_amz_restock_probe_state, fh, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("[RestockProbe] no se pudo guardar estado en disco: %s", e)
+
+
+def _probe_state_load() -> dict:
+    """Lee el estado persistido. Devuelve {} si no hay archivo o está corrupto
+    -- nunca revienta la lectura del endpoint por esto."""
+    try:
+        with open(_PROBE_STATE_FILE, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning("[RestockProbe] estado en disco ilegible: %s", e)
+        return {}
+
+
 # SKU base de BinManager: 4 letras + 6 dígitos = 10 chars (SNTV003287, RMTC008072,
 # SHIL000523). El gate existe por un caso real: los SKUs de ExclusiveBulbs son
 # tipo "p-987423" y normalize_to_bm_sku() corta en el primer guión devolviendo
@@ -23144,9 +23179,11 @@ async def _run_amazon_restock_probe(seller_ids: list, report_types: list, max_wa
                     }
                 logger.info("[RestockProbe] %s → %s (rows=%s)",
                             key, results[key].get("outcome"), results[key].get("rows"))
+                _probe_state_save()   # cada reporte terminado queda a salvo de un reinicio
     finally:
         _amz_restock_probe_state["running"]     = False
         _amz_restock_probe_state["finished_at"] = _time_module.time()
+        _probe_state_save()
         logger.info("[RestockProbe] sonda terminada: %d resultados", len(results))
 
 
@@ -23173,11 +23210,20 @@ async def diag_amazon_restock_probe(
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
     if not start:
+        # Tras un reinicio la memoria arranca vacía; el disco conserva lo ya
+        # medido. `from_disk` deja claro de dónde viene el dato -- no se
+        # disfraza un resultado viejo como si fuera de la corrida actual.
+        if not _amz_restock_probe_state["results"]:
+            disk = _probe_state_load()
+            if disk.get("results"):
+                return {**disk, "from_disk": True,
+                        "hint": "resultados recuperados de disco tras un reinicio del proceso"}
         return {
             "running":     _amz_restock_probe_state["running"],
             "started_at":  _amz_restock_probe_state["started_at"],
             "finished_at": _amz_restock_probe_state["finished_at"],
             "results":     _amz_restock_probe_state["results"],
+            "from_disk":   False,
             "hint":        "agrega &start=true para lanzar una corrida nueva",
         }
 
