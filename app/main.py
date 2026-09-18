@@ -24254,9 +24254,27 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
              WHERE order_date >= ? AND sku != '' AND status IN ('paid','delivered','shipped')
              GROUP BY sku, platform
         """, (desde,))
+        # El sku de order_history viene como lo manda el marketplace, o sea con
+        # sufijo de condición y a veces con variantes ("SNTV007410-GRB",
+        # "SNMC000433-NEW-V"). El maestro y amazon_listings.base_sku usan el
+        # SKU BASE de 10 chars. Cruzar en crudo daba 0 coincidencias y me hizo
+        # concluir "no vendemos nada en Amazon", que era falso -- mismo error
+        # de todo el día: una consulta que calla en vez de fallar.
         ventas: dict[str, dict] = {}
+        crudos = {"amazon": set(), "ml": set()}
         for r in await cur.fetchall():
-            ventas.setdefault(r["sku"], {})[r["platform"]] = dict(r)
+            base = _extract_base_sku((r["sku"] or "").upper().strip())
+            if not base:
+                continue
+            if r["platform"] in crudos and len(crudos[r["platform"]]) < 5:
+                crudos[r["platform"]].add(r["sku"])
+            e = ventas.setdefault(base, {}).setdefault(r["platform"], {
+                "uds": 0, "ganancia": 0.0, "margen": 0.0, "n": 0})
+            e["uds"] += int(r["uds"] or 0)
+            e["ganancia"] += float(r["ganancia"] or 0)
+            # promedio ponderado por unidades, no promedio de promedios
+            e["margen"] = ((e["margen"] * e["n"]) + float(r["margen"] or 0)) / (e["n"] + 1)
+            e["n"] += 1
 
     filas = []
     for sku, c in cand.items():
@@ -24301,6 +24319,16 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         },
         "criterios": "vendió en Amazon en la ventana + margen Amazon > margen ML + "
                      "a ML le quedan >=3 meses de inventario tras enviar la mitad",
+        # Si "con_venta_probada" sale en 0, esto dice si es que de verdad no
+        # vendemos o si el cruce de SKUs está roto. Sin esto, un 0 por bug se
+        # lee igual que un 0 real y se toma la decisión equivocada.
+        "diagnostico_cruce": {
+            "skus_con_ventas_en_ventana": len(ventas),
+            "coincidieron_con_candidatos": sum(1 for s in cand if s in ventas),
+            "ejemplo_sku_crudo_amazon": sorted(crudos["amazon"])[:5],
+            "ejemplo_sku_crudo_ml": sorted(crudos["ml"])[:5],
+            "ejemplo_base_sku_candidato": sorted(cand)[:5],
+        },
         "pilotos": aptos[:limit],
         "nota": "Solo lectura. 'sugerido_enviar' es la mitad del stock, punto de partida "
                 "para el primer envío -- no una orden.",
