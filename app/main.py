@@ -24200,6 +24200,113 @@ async def diag_bm_master_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/fba-candidatos")
+async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
+    """Qué SKUs conviene mandar a FBA primero, con datos y no con intuición.
+
+    2026-09-18. Hay 1,023 SKUs publicados en Amazon bajo FBA con ~89,360
+    unidades en nuestra bodega y CERO piezas en Amazon (verificado contra su
+    propio reporte de inventario).
+
+    Mandar todo sería un error: cuesta envío y almacenaje, y ese mismo
+    inventario ya se está vendiendo en Mercado Libre. Esto es una decisión de
+    dónde conviene vender cada cosa, así que el ranking castiga justo eso:
+
+      margen Amazon    -- de ventas REALES de order_history, no estimado.
+                          Sin ventas en Amazon no hay candidato: no vamos a
+                          mandar mercancía a un listing que nunca ha vendido.
+      demanda probada  -- unidades vendidas en Amazon en la ventana.
+      holgura          -- cuánto stock queda para ML si mandamos la mitad. Si
+                          ML se está llevando ese inventario, mandarlo a
+                          Amazon es moverlo de bolsillo, no ganar.
+      ventaja vs ML    -- margen Amazon menos margen ML del MISMO SKU. Es LA
+                          pregunta: si ML deja más, no hay nada que decidir.
+
+    SOLO LECTURA. No envía nada a Amazon ni cambia inventario.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_fc
+    from datetime import datetime as _dt, timedelta as _tdd
+    desde = (_dt.utcnow() - _tdd(days=30 * meses)).strftime("%Y-%m-%d")
+    corte = _time.time() - 7200
+
+    async with _aio_fc.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_fc.Row
+        cur = await db.execute("""
+            SELECT a.base_sku, MAX(a.price) AS precio_amz, COUNT(*) AS pubs,
+                   MAX(m.available_qty) AS bodega, MAX(m.title) AS titulo
+              FROM amazon_listings a
+              JOIN bm_sku_master m ON m.sku = a.base_sku
+             WHERE a.available_qty <= 0 AND a.status = 'ACTIVE'
+               AND a.fulfillment = 'AMAZON_NA' AND a.base_sku != ''
+               AND m.available_qty > 0 AND m.stock_updated_at >= ? AND m.verified = 1
+             GROUP BY a.base_sku
+        """, (corte,))
+        cand = {r["base_sku"]: dict(r) for r in await cur.fetchall()}
+
+        cur = await db.execute("""
+            SELECT sku, platform,
+                   SUM(quantity) AS uds,
+                   SUM(ganancia_neta) AS ganancia,
+                   AVG(margen_pct) AS margen
+              FROM order_history
+             WHERE order_date >= ? AND sku != '' AND status IN ('paid','delivered','shipped')
+             GROUP BY sku, platform
+        """, (desde,))
+        ventas: dict[str, dict] = {}
+        for r in await cur.fetchall():
+            ventas.setdefault(r["sku"], {})[r["platform"]] = dict(r)
+
+    filas = []
+    for sku, c in cand.items():
+        v = ventas.get(sku) or {}
+        amz = v.get("amazon") or {}
+        ml = v.get("ml") or {}
+        uds_amz = int(amz.get("uds") or 0)
+        if uds_amz <= 0:
+            continue                      # sin demanda probada en Amazon, fuera
+        m_amz = round(float(amz.get("margen") or 0), 1)
+        m_ml = round(float(ml.get("margen") or 0), 1)
+        bodega = int(c["bodega"] or 0)
+        # Mandamos la mitad y vemos qué le queda a ML. Si ML vende más rápido
+        # de lo que le quedaría, la holgura es negativa y el SKU no califica.
+        mitad = bodega // 2
+        uds_ml_mes = (int(ml.get("uds") or 0)) / max(meses, 1)
+        meses_cubiertos_ml = (bodega - mitad) / uds_ml_mes if uds_ml_mes > 0 else 99
+        filas.append({
+            "sku": sku, "titulo": (c.get("titulo") or "")[:52],
+            "en_bodega": bodega, "precio_amazon": round(float(c["precio_amz"] or 0)),
+            "vendidas_amazon": uds_amz, "margen_amazon_pct": m_amz,
+            "vendidas_ml": int(ml.get("uds") or 0), "margen_ml_pct": m_ml,
+            "ventaja_vs_ml_pp": round(m_amz - m_ml, 1),
+            "sugerido_enviar": mitad,
+            "meses_que_le_quedan_a_ml": round(meses_cubiertos_ml, 1),
+        })
+
+    # Prioridad: que Amazon deje más que ML, que haya demanda probada, y que a
+    # ML le queden al menos 3 meses de inventario después del envío.
+    aptos = [f for f in filas
+             if f["ventaja_vs_ml_pp"] > 0 and f["meses_que_le_quedan_a_ml"] >= 3
+             and f["sugerido_enviar"] > 0]
+    aptos.sort(key=lambda f: -(f["ventaja_vs_ml_pp"] * f["vendidas_amazon"]))
+    descartados = len(filas) - len(aptos)
+    return JSONResponse({
+        "resumen": {
+            "skus_sin_stock_en_amazon": len(cand),
+            "con_venta_probada_en_amazon": len(filas),
+            "aptos_para_enviar": len(aptos),
+            "descartados_por_criterio": descartados,
+            "ventana_meses": meses,
+        },
+        "criterios": "vendió en Amazon en la ventana + margen Amazon > margen ML + "
+                     "a ML le quedan >=3 meses de inventario tras enviar la mitad",
+        "pilotos": aptos[:limit],
+        "nota": "Solo lectura. 'sugerido_enviar' es la mitad del stock, punto de partida "
+                "para el primer envío -- no una orden.",
+    })
+
+
 @app.get("/api/diag/fba-real-vs-nuestro")
 async def diag_fba_real_vs_nuestro(token: str = "", limit: int = 30):
     """¿El 0 de las publicaciones FBA es real, o es que no lo registramos?
