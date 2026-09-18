@@ -24309,7 +24309,12 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         estados: dict[str, dict] = {}
         for r in await cur.fetchall():
             plataformas[r["platform"]] = plataformas.get(r["platform"], 0) + int(r["uds"] or 0)
-            estados.setdefault(r["platform"], {})[r["estado"]] =                 estados[r["platform"]].get(r["estado"], 0) + int(r["uds"] or 0)
+            # OJO con el orden: Python evalua el lado DERECHO antes de que el
+            # setdefault del izquierdo cree la clave, asi que hacerlo en una
+            # sola linea revienta con KeyError en la primera fila.
+            _est = estados.setdefault(r["platform"], {})
+            _k = r["estado"] or "(sin estado)"
+            _est[_k] = _est.get(_k, 0) + int(r["uds"] or 0)
             base = _extract_base_sku((r["sku"] or "").upper().strip())
             if not base:
                 continue
