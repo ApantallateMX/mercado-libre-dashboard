@@ -93,6 +93,12 @@
                     <a href="https://www.mercadolibre.com.mx/publicaciones/listado/space_management?search={{ ret.item_id }}"
                        target="_blank"
                        class="text-[10px] text-blue-600 hover:underline">Ver en ML ↗</a>
+                    {# 2026-09-18: ocultos para SOLO LECTURA. "Marcar revisión"
+                       escribe una marca interna y "qty=0" pone la publicación
+                       en cero EN MERCADO LIBRE -- es destructivo. Ninguno de
+                       los dos es consulta. "Ver en ML" y "Fotos" se quedan
+                       porque solo muestran información. #}
+                    {% if not solo_lectura %}
                     <button onclick="window.flagItem('{{ ret.item_id }}','review')"
                             class="text-[10px] px-2 py-0.5 bg-yellow-50 border border-yellow-300 text-yellow-700 rounded hover:bg-yellow-100 transition">
                         ⚠️ Marcar revisión
@@ -101,6 +107,7 @@
                             class="text-[10px] px-2 py-0.5 bg-red-50 border border-red-300 text-red-700 rounded hover:bg-red-100 transition">
                         🔻 qty=0
                     </button>
+                    {% endif %}
                     {% endif %}
                     <button onclick="window.loadClaimPhotos('{{ ret.id }}')"
                             id="btn-photos-{{ ret.id }}"

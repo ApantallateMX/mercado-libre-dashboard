@@ -877,6 +877,76 @@ document.addEventListener('click', function(e) {
     {% block content %}{% endblock %}
 </main>
 
+<script>
+// ════════════════════════════════════════════════════════════════════
+// SOLO LECTURA — red de seguridad global (2026-09-18)
+//
+// Jovan: "lectura es solo lectura y debe aplicar para todo: escritura,
+// botones, etc.". El backend ya bloquea toda escritura en AuthMiddleware,
+// y los botones se van ocultando plantilla por plantilla -- pero son
+// decenas de pantallas y esconderlos uno por uno garantiza que se escape
+// alguno, como acaba de pasar en Retornos.
+//
+// Esto ataja CUALQUIER escritura que salga del navegador, en cualquier
+// pantalla, aunque el botón siga visible. El daño real no es que el botón
+// exista: es que alguien escriba una respuesta a un comprador, la envíe, y
+// crea que le contestó. Aquí se entera de inmediato y con claridad.
+//
+// NO sustituye al bloqueo del servidor -- esto es JavaScript y se puede
+// saltar desde la consola. Es la segunda capa, no la única.
+// ════════════════════════════════════════════════════════════════════
+// Se lee del usuario de la SESIÓN, no de una variable que cada página tenga
+// que acordarse de pasar. AuthMiddleware pone dashboard_user en TODAS las
+// peticiones autenticadas, así que esto protege cualquier pantalla, incluso
+// las que no usan _accounts_ctx. Con `solo_lectura` explícito habría páginas
+// desprotegidas en silencio -- justo el tipo de hueco que dejó ver los
+// botones de Retornos.
+window.SOLO_LECTURA = {{ 'true' if (solo_lectura or (request.state.dashboard_user or {}).get('role') == 'viewer') else 'false' }};
+(function () {
+    if (!window.SOLO_LECTURA) return;
+    var ESCRIBE = {POST: 1, PUT: 1, PATCH: 1, DELETE: 1};
+    // Mismas excepciones que el servidor. Si divergen, el usuario ve un
+    // mensaje aquí para algo que allá sí pasaría (o al revés) -- por eso
+    // van escritas igual en los dos lados.
+    var CONSULTAS = ['/api/returns/ai-analysis', '/api/planning/sync-claims',
+                     '/auth/logout', '/auth/switch-account', '/set-password'];
+    function permitido(url) {
+        try {
+            var p = new URL(url, window.location.origin).pathname;
+            return CONSULTAS.some(function (c) { return p === c || p.indexOf(c) === 0; });
+        } catch (e) { return false; }
+    }
+    function aviso() {
+        var d = document.createElement('div');
+        d.textContent = 'Tu cuenta es de solo lectura: puedes consultar, pero no modificar.';
+        d.style.cssText = 'position:fixed;left:50%;top:18px;transform:translateX(-50%);' +
+            'background:#374151;color:#fff;padding:10px 18px;border-radius:8px;z-index:99999;' +
+            'font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+        document.body.appendChild(d);
+        setTimeout(function () { d.remove(); }, 3500);
+    }
+    var _fetch = window.fetch;
+    window.fetch = function (input, init) {
+        var url = (typeof input === 'string') ? input : (input && input.url) || '';
+        var m = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+        if (ESCRIBE[m] && !permitido(url)) {
+            aviso();
+            return Promise.resolve(new Response(
+                JSON.stringify({error: 'Cuenta de solo lectura', rol: 'viewer'}),
+                {status: 403, headers: {'Content-Type': 'application/json'}}));
+        }
+        return _fetch.apply(this, arguments);
+    };
+    document.addEventListener('submit', function (ev) {
+        var f = ev.target;
+        if (!f || !f.method) return;
+        if (ESCRIBE[f.method.toUpperCase()] && !permitido(f.action || '')) {
+            ev.preventDefault();
+            aviso();
+        }
+    }, true);
+})();
+</script>
 {% block scripts %}{% endblock %}
 
 <script src="/static/js/notifications.js"></script>
