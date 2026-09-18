@@ -381,6 +381,12 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
+// Rol del usuario, para ocultar todo lo que modifica. La decisión se toma en
+// el servidor (_accounts_ctx) y aquí solo se lee -- el navegador nunca decide
+// quién puede escribir. Aunque alguien la cambie desde la consola, el backend
+// bloquea igual en AuthMiddleware; esto es para no mostrar botones que fallan.
+window.SOLO_LECTURA = {{ 'true' if solo_lectura else 'false' }};
+
 (function() {
 // ============================================================
 // State
@@ -1054,6 +1060,13 @@ function _renderTopProducts(data) {
                     p.count_a + ',\'' + _encFrom + '\',\'' + _encTo + '\',' + _encSaleAmt + ',\'' + _encReasons + '\')" ' +
                     'class="flex items-center gap-1 px-3 py-1 text-xs bg-purple-50 border border-purple-300 text-purple-800 rounded-lg hover:bg-purple-100 transition font-medium">' +
                     '🤖 Analizar IA</button>';
+            // 2026-09-18: de aquí para abajo son acciones que MODIFICAN
+            // (compartir un reporte hacia afuera, marcar para revisión, y
+            // poner la publicación en qty=0 en ML). Un usuario de solo lectura
+            // no las ve. El backend además las bloquea en AuthMiddleware --
+            // esto es para que no aparezcan botones que solo dan error.
+            // "Ver en ML" y "Analizar IA" SÍ se quedan: son informativos.
+            if (!window.SOLO_LECTURA) {
             // Share Report
             html += '<button onclick="window.shareReport(\'' + _encItem + '\',\'' + _encSku + '\',\'' + _encTitle + '\',' +
                     p.count_a + ',\'' + _encFrom + '\',\'' + _encTo + '\',' + _encSaleAmt + ',\'' + _encReasons + '\')" ' +
@@ -1067,6 +1080,7 @@ function _renderTopProducts(data) {
             html += '<button onclick="window.flagItem(\'' + _encItem + '\',\'qty_zero\')" ' +
                     'class="flex items-center gap-1 px-3 py-1 text-xs bg-red-50 border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition font-medium">' +
                     '🔻 qty=0</button>';
+            }  // fin bloque oculto para solo lectura
             html += '</div>';
         }
 

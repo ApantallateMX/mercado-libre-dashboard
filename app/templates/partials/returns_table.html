@@ -203,7 +203,12 @@
         {% endif %}
 
         <!-- Response form (opened only) -->
-        {% if ret.status == 'opened' %}
+        {# 2026-09-18: un usuario de SOLO LECTURA no ve este formulario. El
+           backend ya bloquea el POST en AuthMiddleware, pero dejar la caja de
+           texto y el botón a la vista es peor que inútil: la persona escribe
+           una respuesta al comprador, le da Responder, y recibe un error --
+           habiendo creído que le contestó a un cliente. #}
+        {% if ret.status == 'opened' and not solo_lectura %}
         <div class="border-t pt-3 mt-2">
             <div class="flex gap-2 mb-2">
                 <select id="ret-action-{{ ret.id }}" class="border rounded px-2 py-1 text-sm text-gray-700">

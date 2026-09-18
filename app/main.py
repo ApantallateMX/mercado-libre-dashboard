@@ -1413,6 +1413,66 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Si debe cambiar contraseña, redirigir a set-password (excepto si ya está allí)
         if du.get("must_change_pw") and path != "/set-password":
             return RedirectResponse("/set-password", status_code=302)
+        # ── SOLO LECTURA ES SOLO LECTURA (2026-09-18) ────────────────────
+        #
+        # Hasta hoy el rol "viewer" era DECORATIVO: pintaba un chip gris en
+        # /usuarios y nada más. Ni un solo endpoint verificaba el rol antes de
+        # escribir -- las guardas existentes (_require_subtab,
+        # _require_subtab_api) solo miran A QUÉ SECCIÓN tiene acceso, nunca si
+        # su rol puede modificar algo.
+        #
+        # Lo detectó Jovan viendo la pantalla de Retornos con un usuario de
+        # solo lectura: tenía el botón "Responder" al comprador, "Marcar
+        # revisión" y "qty=0" (que pone una publicación en cero en ML). O sea
+        # que alguien de solo lectura podía contestarle a un cliente en nombre
+        # de la empresa y tumbar el stock de una publicación.
+        #
+        # Son 236 endpoints de escritura en el proyecto. Poner el chequeo en
+        # cada uno garantiza olvidar alguno hoy y muchos más mañana, así que va
+        # AQUÍ, en el único punto por el que pasan todas las peticiones. Un
+        # endpoint nuevo queda protegido sin que su autor tenga que acordarse.
+        #
+        # Se bloquea por MÉTODO, no por ruta: cualquier POST/PUT/PATCH/DELETE.
+        # La lista de abajo son las únicas escrituras que un lector sí necesita
+        # y que no tocan ninguna plataforma ni dato de negocio.
+        if du.get("role") == "viewer" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            # Estas usan POST pero NO modifican nada de negocio: son consultas
+            # que por su tamaño o forma no caben en un GET. Jovan lo definió
+            # así: "solo búsqueda o informativo". Verificadas una por una:
+            #   ai-analysis   -> genera un análisis para LEER, no guarda nada
+            #                    que el comprador o la plataforma vean
+            #   sync-claims   -> JALA reclamos de ML hacia nuestra base; no
+            #                    escribe en ML. Además ya corre solo cada 3h,
+            #                    así que el botón solo adelanta lo inevitable
+            # Todo lo demás se bloquea. Si aparece otra consulta legítima que
+            # use POST, se agrega AQUÍ con su razón -- nunca se abre por método
+            # ni por prefijo amplio.
+            _permitido = (
+                path.startswith("/auth/logout")             # cerrar sesión
+                or path.startswith("/auth/switch-account")  # cambiar qué cuenta MIRA
+                or path == "/set-password"                  # su propia contraseña
+                or path == "/api/returns/ai-analysis"
+                or path == "/api/planning/sync-claims"
+            )
+            if not _permitido:
+                logger.warning(
+                    f"[SOLO-LECTURA] Bloqueado {request.method} {path} "
+                    f"para '{du.get('username')}' (rol viewer)"
+                )
+                if path.startswith("/api/") or path.startswith("/partials/"):
+                    return JSONResponse(
+                        {"error": "Tu cuenta es de solo lectura. No puedes "
+                                  "responder, modificar ni enviar nada.",
+                         "rol": "viewer"},
+                        status_code=403,
+                    )
+                return HTMLResponse(
+                    "<div style='font-family:sans-serif;padding:60px 20px;"
+                    "text-align:center;color:#555'>Tu cuenta es de <b>solo "
+                    "lectura</b>.<br>Puedes consultar información, pero no "
+                    "modificarla.</div>",
+                    status_code=403,
+                )
         # Control de acceso por sección (solo para usuarios no-admin con secciones restringidas)
         allowed_sections = du.get("allowed_sections") or []
         if allowed_sections and du.get("role") != "admin":
@@ -1978,6 +2038,15 @@ async def _accounts_ctx(request: Request) -> dict:
         "active_platform": last_platform,
         "amazon_account": amazon_account,
         "dashboard_user": dashboard_user,
+        # Bandera única para que las plantillas oculten TODO lo que interactúa
+        # con una plataforma o modifica datos. El backend ya bloquea esas
+        # peticiones en AuthMiddleware (2026-09-18), pero dejar los botones a
+        # la vista es malo igual: la persona los aprieta, recibe un error y no
+        # entiende por qué -- y peor, cree que el sistema falló.
+        #
+        # Se calcula aquí, una vez, y no en cada plantilla, para que no haya
+        # dos criterios distintos de "¿es de solo lectura?" conviviendo.
+        "solo_lectura": (dashboard_user or {}).get("role") == "viewer",
         "nav_tabs": _build_nav_tabs(last_platform, dashboard_user),
         # UI-gating para los botones de Concentrar/Fijar ganador/Sync manual
         # (ver _require_stock_action) -- mismo par de chequeos que el backend,
@@ -28460,6 +28529,11 @@ async def returns_table_partial(
             "offset": offset,
             "limit": limit,
             "status": status,
+            # Este partial se sirve solo, sin pasar por _accounts_ctx, así que
+            # la bandera hay que dársela explícitamente. Sin esto Jinja la
+            # trataría como Undefined (falsy) y el formulario de respuesta
+            # volvería a aparecer para los usuarios de solo lectura.
+            "solo_lectura": (getattr(request.state, "dashboard_user", None) or {}).get("role") == "viewer",
         })
     except Exception as e:
         return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando retornos: {e}</p>')
