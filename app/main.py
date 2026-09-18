@@ -24262,7 +24262,9 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         # de todo el día: una consulta que calla en vez de fallar.
         ventas: dict[str, dict] = {}
         crudos = {"amazon": set(), "ml": set()}
+        plataformas: dict[str, int] = {}
         for r in await cur.fetchall():
+            plataformas[r["platform"]] = plataformas.get(r["platform"], 0) + int(r["uds"] or 0)
             base = _extract_base_sku((r["sku"] or "").upper().strip())
             if not base:
                 continue
@@ -24328,6 +24330,10 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
             "ejemplo_sku_crudo_amazon": sorted(crudos["amazon"])[:5],
             "ejemplo_sku_crudo_ml": sorted(crudos["ml"])[:5],
             "ejemplo_base_sku_candidato": sorted(cand)[:5],
+            # Si no hay filas de Amazon, el problema no es el cruce sino que
+            # no estamos registrando esas ventas -- y entonces CUALQUIER
+            # analisis de margen que use order_history es ciego a Amazon.
+            "plataformas_en_order_history": plataformas,
         },
         "pilotos": aptos[:limit],
         "nota": "Solo lectura. 'sugerido_enviar' es la mitad del stock, punto de partida "
