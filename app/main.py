@@ -24223,12 +24223,24 @@ async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, platafor
     async with _aio_pa.connect(DATABASE_PATH, timeout=30) as db:
         db.row_factory = _aio_pa.Row
         if plataforma != "ml":
+            # OJO: NO se filtra por can_update. La primera versión de este
+            # endpoint sí lo hacía y reportó 5 publicaciones apagadas cuando en
+            # realidad eran cientos -- el filtro escondía justo el caso que
+            # había que ver. Verificado a mano: SNTV007410 (540 vendibles)
+            # tiene sus 2 publicaciones de Amazon en 0, y SNTV008105 (202
+            # vendibles, ~$1.4M MXN) tiene 7 en 0, todas ACTIVE. En ML esos
+            # mismos SKUs sí recibieron stock (176, 178, 45...).
+            #
+            # can_update se reporta como COLUMNA, no como filtro: si vale 0 es
+            # precisamente la explicación de por qué esa publicación nunca
+            # recibe stock, y ocultarla convierte la causa en invisible.
             cur = await db.execute("""
                 SELECT 'amazon' AS plataforma, a.seller_id AS cuenta, a.sku, a.base_sku,
-                       a.title, a.price, a.fulfillment, m.available_qty, m.mty_qty, m.cdmx_qty
+                       a.title, a.price, a.fulfillment, a.can_update,
+                       m.available_qty, m.mty_qty, m.cdmx_qty
                   FROM amazon_listings a
                   JOIN bm_sku_master m ON m.sku = a.base_sku
-                 WHERE a.available_qty <= 0 AND a.status = 'ACTIVE' AND a.can_update = 1
+                 WHERE a.available_qty <= 0 AND a.status = 'ACTIVE'
                    AND a.base_sku != '' AND m.available_qty > 0
                    AND m.stock_updated_at >= ? AND m.verified = 1
             """, (corte,))
@@ -24236,7 +24248,8 @@ async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, platafor
         if plataforma != "amazon":
             cur = await db.execute("""
                 SELECT 'ml' AS plataforma, l.account_id AS cuenta, l.sku, l.base_sku,
-                       l.title, l.price, '' AS fulfillment, m.available_qty, m.mty_qty, m.cdmx_qty
+                       l.title, l.price, '' AS fulfillment, 1 AS can_update,
+                       m.available_qty, m.mty_qty, m.cdmx_qty
                   FROM ml_listings l
                   JOIN bm_sku_master m ON m.sku = l.base_sku
                  WHERE l.available_qty <= 0 AND l.status = 'active'
@@ -24283,6 +24296,13 @@ async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, platafor
         "por_plataforma": {
             p: sum(1 for f in filas if f["plataforma"] == p) for p in ("amazon", "ml")
         },
+        # Esto es lo que dice POR QUÉ siguen apagadas. bloqueadas = el sistema
+        # tiene prohibido escribirles cantidad, así que ninguna corrida de
+        # stock las va a encender por sí sola; hay que resolver el bloqueo.
+        "amazon_bloqueadas_can_update_0": sum(
+            1 for f in filas if f["plataforma"] == "amazon" and not f.get("can_update")),
+        "amazon_actualizables": sum(
+            1 for f in filas if f["plataforma"] == "amazon" and f.get("can_update")),
         "top": salida[:limit],
         "nota": "Solo lectura. Valor potencial = unidades disponibles x precio más alto "
                 "publicado, agrupado POR SKU para no contar el mismo inventario dos veces.",
