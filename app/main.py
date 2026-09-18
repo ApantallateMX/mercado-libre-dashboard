@@ -25758,15 +25758,25 @@ async def diag_cache_health(token: str = ""):
     expired = 0
     verified_zeros = 0
     suspicious = []
-    # Usar GR bulk como fuente para detectar discrepancias (cubre la mayoría de SKUs)
-    bulk_rows_map = {}
-    if _bm_bulk_gr_cache:
-        _, _gr_rows_health = _bm_bulk_gr_cache
-        for _r in (_gr_rows_health or []):
-            _rsk = (_r.get("SKU") or "").upper().strip()
-            if _rsk:
-                bulk_rows_map[_rsk] = _r
-                bulk_rows_map[_extract_base_sku(_rsk)] = _r  # también por base
+    # FIX 2026-09-18: antes esta comparación usaba _bm_bulk_gr_cache, que está
+    # MUERTO desde el 2026-08-20 (nadie lo repuebla -- lo dice el propio
+    # comentario de abajo). O sea que "sospechoso" significaba "la caché dice 0
+    # y un dato de hace 29 días decía que había" -- una falsa alarma
+    # garantizada, que además envejece sola hasta volverse absurda.
+    #
+    # Caso real que lo destapó: SNTV007517 salía como sospechoso con
+    # cache_avail=0 contra bulk_avail=813. Verificado contra el maestro fresco
+    # (349s de antigüedad, verified=true): el SKU está genuinamente en 0. Las
+    # 813 eran de agosto.
+    #
+    # Una alerta que grita con datos viejos es peor que no tenerla: manda a
+    # investigar humo. Es el mismo problema que bm_sku_changes tuvo ayer, en
+    # otra capa. Ahora se compara contra bm_sku_master, que es la fuente real
+    # desde que el MCP lo alimenta, y se reporta su antigüedad para que el que
+    # lea pueda juzgar el dato en vez de confiar a ciegas.
+    _master_rows = await token_store.get_bm_master_rows_for_skus(
+        [k.upper() for k in _bm_stock_cache.keys()]
+    )
 
     for bm_key, (ts, data) in _bm_stock_cache.items():
         age = now - ts
@@ -25774,16 +25784,21 @@ async def diag_cache_health(token: str = ""):
             expired += 1
         if data.get("avail_total", 0) == 0 and data.get("_v") and age < _BM_CACHE_TTL:
             verified_zeros += 1
-            bulk_match = bulk_rows_map.get(bm_key.upper())
-            if bulk_match and int(bulk_match.get("AvailableQTY") or 0) > 0:
+            _m = _master_rows.get(bm_key.upper()) or {}
+            _m_avail = int(_m.get("available_qty") or 0)
+            # Solo es sospechoso si el maestro dice que SÍ hay y además ese
+            # dato es reciente. Un maestro viejo no acusa a nadie.
+            _m_age = now - (_m.get("stock_updated_at") or 0)
+            if _m_avail > 0 and _m_age < 3600:
                 suspicious.append({
                     "sku": bm_key,
                     "cache_avail": 0,
-                    "bulk_avail": int(bulk_match.get("AvailableQTY") or 0),
+                    "master_avail": _m_avail,
+                    "master_age_s": round(_m_age),
                     "age_s": round(age),
                 })
 
-    suspicious.sort(key=lambda x: x["bulk_avail"], reverse=True)
+    suspicious.sort(key=lambda x: x["master_avail"], reverse=True)
     gr_age_s  = round(now - _bm_bulk_gr_cache[0])  if _bm_bulk_gr_cache  else None
     all_age_s = round(now - _bm_bulk_all_cache[0]) if _bm_bulk_all_cache else None
 
@@ -25811,11 +25826,19 @@ async def diag_cache_health(token: str = ""):
         "cache_verified_zeros": verified_zeros,
         "suspicious_zeros": len(suspicious),
         "top_suspicious": suspicious[:20],
+        # Estos 4 son de un caché MUERTO (nadie lo repuebla desde 2026-08-20).
+        # Se dejan porque sirven para confirmar que sigue muerto, pero van
+        # marcados: el 2026-09-18 yo mismo leí "29 días de antigüedad" como si
+        # fuera un problema de frescura y levanté una falsa alarma. Un número
+        # que envejece solo y que nadie va a refrescar NUNCA debe presentarse
+        # al lado de métricas vivas sin decir qué es.
         "bulk_gr_age_s":   gr_age_s,
         "bulk_gr_rows":    len(_bm_bulk_gr_cache[1])  if _bm_bulk_gr_cache  else 0,
         "bulk_all_age_s":  all_age_s,
         "bulk_all_rows":   len(_bm_bulk_all_cache[1]) if _bm_bulk_all_cache else 0,
-        "bulk_gr_all_deprecated_note": "bulk_gr_age_s/bulk_all_age_s son de un caché en desuso desde 2026-08-20 (ver comentario) -- no reflejan el sync de costo/margen. Usar catalog_sync_last_age_h para eso.",
+        "bulk_cache_muerto": True,
+        "bulk_gr_all_deprecated_note": "OJO: bulk_gr_*/bulk_all_* son de un caché EN DESUSO desde 2026-08-20 -- nadie lo repuebla, así que su antigüedad crece sola para siempre y NO indica ningún problema. No los uses para juzgar frescura. El stock real vive en bm_sku_master (lo alimenta el MCP cada 15 min, ver stock_updated_at) y el sync de costo/margen en catalog_sync_last_age_h.",
+        "fuente_real_de_stock": "bm_sku_master, alimentado por binmanager_mcp cada 15 min",
         "catalog_sync_last_age_h": _catalog_sync_age_h,
         "catalog_sync_running": _catalog_sync_running,
     })
