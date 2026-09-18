@@ -24200,6 +24200,106 @@ async def diag_bm_master_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/fba-real-vs-nuestro")
+async def diag_fba_real_vs_nuestro(token: str = "", limit: int = 30):
+    """¿El 0 de las publicaciones FBA es real, o es que no lo registramos?
+
+    2026-09-18. Salieron 2,050 publicaciones de Amazon en cantidad 0 cuyo SKU
+    SÍ tiene stock vendible en nuestra bodega. Las 2,049 son `AMAZON_NA` (FBA),
+    o sea que ese inventario lo gestiona Amazon y nosotros no le escribimos la
+    cantidad -- por eso `can_update=0`. Pero eso deja una pregunta abierta que
+    cambia por completo qué hacer:
+
+        si Amazon de verdad tiene 0  -> hay inventario nuestro que podría estar
+                                        vendiéndose y no le hemos enviado nada
+        si Amazon tiene stock y no lo
+        registramos                  -> no hay oportunidad, es ruido nuestro
+
+    Esto la cierra preguntándole a Amazon directo (`get_fba_inventory_all`,
+    `fulfillableQuantity`) en vez de deducirlo de nuestra base.
+
+    SOLO LECTURA. No publica ni modifica nada en Amazon.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_fba
+    from app.services.amazon_client import get_amazon_client as _get_amz
+
+    corte = _time.time() - 7200
+    async with _aio_fba.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_fba.Row
+        cur = await db.execute("""
+            SELECT a.seller_id, a.sku, a.base_sku, a.title, a.price,
+                   m.available_qty AS nuestra_bodega
+              FROM amazon_listings a
+              JOIN bm_sku_master m ON m.sku = a.base_sku
+             WHERE a.available_qty <= 0 AND a.status = 'ACTIVE'
+               AND a.fulfillment = 'AMAZON_NA' AND a.base_sku != ''
+               AND m.available_qty > 0 AND m.stock_updated_at >= ? AND m.verified = 1
+        """, (corte,))
+        pubs = [dict(r) for r in await cur.fetchall()]
+
+    # Inventario real en Amazon, por cuenta. Una llamada por seller, no por SKU.
+    fba: dict[str, dict[str, int]] = {}
+    errores: dict[str, str] = {}
+    for seller in sorted({p["seller_id"] for p in pubs}):
+        try:
+            cli = await _get_amz(seller)
+            if not cli:
+                errores[seller] = "sin cliente/credenciales"
+                continue
+            fba[seller] = {
+                (it.get("sellerSku") or "").upper(): int(
+                    (it.get("inventoryDetails") or {}).get("fulfillableQuantity") or 0)
+                for it in (await cli.get_fba_inventory_all() or [])
+            }
+        except Exception as e:
+            errores[seller] = f"{type(e).__name__}: {e}"
+
+    sin_stock_en_amazon, con_stock_en_amazon, sin_dato = [], [], []
+    for p in pubs:
+        mapa = fba.get(p["seller_id"])
+        if mapa is None:
+            sin_dato.append(p); continue
+        qty = mapa.get((p["sku"] or "").upper())
+        if qty is None:
+            # No aparece en el reporte de Amazon: nunca se le envió inventario.
+            p["fba_qty"] = 0; p["motivo"] = "no aparece en el reporte FBA"
+            sin_stock_en_amazon.append(p)
+        elif qty <= 0:
+            p["fba_qty"] = 0; p["motivo"] = "Amazon reporta 0 disponible"
+            sin_stock_en_amazon.append(p)
+        else:
+            p["fba_qty"] = qty
+            con_stock_en_amazon.append(p)
+
+    sin_stock_en_amazon.sort(key=lambda x: -(x["nuestra_bodega"] * (x.get("price") or 0)))
+    return JSONResponse({
+        "resumen": {
+            "publicaciones_fba_revisadas": len(pubs),
+            "amazon_SIN_stock": len(sin_stock_en_amazon),
+            "amazon_CON_stock_que_no_registramos": len(con_stock_en_amazon),
+            "sin_dato_de_amazon": len(sin_dato),
+            "unidades_en_bodega_de_las_sin_stock": sum(
+                x["nuestra_bodega"] for x in sin_stock_en_amazon),
+        },
+        "errores_por_cuenta": errores,
+        "oportunidad_real": [
+            {"sku": x["sku"], "base_sku": x["base_sku"], "cuenta": x["seller_id"],
+             "en_nuestra_bodega": x["nuestra_bodega"], "en_amazon": x["fba_qty"],
+             "precio": x.get("price"), "motivo": x["motivo"],
+             "titulo": (x.get("title") or "")[:60]}
+            for x in sin_stock_en_amazon[:limit]
+        ],
+        "revisar_nuestro_registro": [
+            {"sku": x["sku"], "en_amazon": x["fba_qty"], "nosotros_decimos": 0}
+            for x in con_stock_en_amazon[:limit]
+        ],
+        "nota": "Solo lectura. 'oportunidad_real' = inventario nuestro cuyo listing FBA "
+                "no tiene stock en Amazon; la acción sería enviar mercancía, no publicar.",
+    })
+
+
 @app.get("/api/diag/publicaciones-apagadas")
 async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, plataforma: str = ""):
     """Publicaciones en cantidad 0 cuyo SKU SÍ tiene stock vendible en el maestro.
