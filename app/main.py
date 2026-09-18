@@ -32300,7 +32300,6 @@ async def diag_retornos_por_marca(token: str = "", days: int = 90, marca: str = 
 
 @app.get("/api/returns/por-marca")
 async def returns_por_marca(
-    request: Request,
     days: int = Query(180, ge=7, le=730),
     marca: str = Query("", description="Filtra a una marca; vacío = todas"),
     platform: str = Query("", description="'ml' | 'amazon' | vacío = ambas"),
@@ -32313,10 +32312,10 @@ async def returns_por_marca(
     FEATURE 2026-09-18 (pedido de Jovan). `account_id` vacío = vista Global de
     todas las cuentas; con valor = solo esa cuenta (regla #4 de CLAUDE.md, el
     Global es la excepción explícita, igual que /api/returns/global-top).
+
+    La sesión la exige el middleware, igual que el resto de /api/returns/* --
+    no lleva chequeo propio para no duplicar (y divergir de) esa política.
     """
-    _u = await _require_session(request)
-    if isinstance(_u, RedirectResponse):
-        return _u
     return JSONResponse(await _retornos_por_marca(
         days=days, marca=marca, platform=platform,
         account_id=account_id, limit=limit, min_ventas=min_ventas))
