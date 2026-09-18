@@ -24280,8 +24280,15 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         cur = await db.execute("""
             SELECT sku, platform, status AS estado,
                    SUM(quantity) AS uds,
-                   SUM(ganancia_neta) AS ganancia,
-                   AVG(margen_pct) AS margen
+                   SUM(neto_plat) AS neto,
+                   -- NO se usa margen_pct: el equipo lo puso en 0 A PROPOSITO
+                   -- el 2026-09-10, en ML y en Amazon, porque AvgCostQTY de BM
+                   -- no es confiable (Jovan 2026-08-13). El indicador honesto
+                   -- de salud de precio es recup_retail_pct = cuanto del retail
+                   -- se recupera despues de TODOS los gastos reales. Usar
+                   -- margen_pct daba Amazon en 0 contra ML en -127%, o sea un
+                   -- campo vacio contra basura vieja anterior a ese cambio.
+                   AVG(recup_retail_pct) AS recup
               FROM order_history
              WHERE order_date >= ? AND sku != ''
                -- BUG 2026-09-18: antes decia status IN ('paid','delivered',
@@ -24321,11 +24328,10 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
             if r["platform"] in crudos and len(crudos[r["platform"]]) < 5:
                 crudos[r["platform"]].add(r["sku"])
             e = ventas.setdefault(base, {}).setdefault(r["platform"], {
-                "uds": 0, "ganancia": 0.0, "margen": 0.0, "n": 0})
+                "uds": 0, "neto": 0.0, "recup": 0.0, "n": 0})
             e["uds"] += int(r["uds"] or 0)
-            e["ganancia"] += float(r["ganancia"] or 0)
-            # promedio ponderado por unidades, no promedio de promedios
-            e["margen"] = ((e["margen"] * e["n"]) + float(r["margen"] or 0)) / (e["n"] + 1)
+            e["neto"] += float(r["neto"] or 0)
+            e["recup"] = ((e["recup"] * e["n"]) + float(r["recup"] or 0)) / (e["n"] + 1)
             e["n"] += 1
 
     filas = []
@@ -24336,8 +24342,8 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         uds_amz = int(amz.get("uds") or 0)
         if uds_amz <= 0:
             continue                      # sin demanda probada en Amazon, fuera
-        m_amz = round(float(amz.get("margen") or 0), 1)
-        m_ml = round(float(ml.get("margen") or 0), 1)
+        m_amz = round(float(amz.get("recup") or 0), 1)
+        m_ml = round(float(ml.get("recup") or 0), 1)
         bodega = int(c["bodega"] or 0)
         # Mandamos la mitad y vemos qué le queda a ML. Si ML vende más rápido
         # de lo que le quedaría, la holgura es negativa y el SKU no califica.
@@ -24347,8 +24353,8 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
         filas.append({
             "sku": sku, "titulo": (c.get("titulo") or "")[:52],
             "en_bodega": bodega, "precio_amazon": round(float(c["precio_amz"] or 0)),
-            "vendidas_amazon": uds_amz, "margen_amazon_pct": m_amz,
-            "vendidas_ml": int(ml.get("uds") or 0), "margen_ml_pct": m_ml,
+            "vendidas_amazon": uds_amz, "recupera_amazon_pct": m_amz,
+            "vendidas_ml": int(ml.get("uds") or 0), "recupera_ml_pct": m_ml,
             "ventaja_vs_ml_pp": round(m_amz - m_ml, 1),
             "sugerido_enviar": mitad,
             "meses_que_le_quedan_a_ml": round(meses_cubiertos_ml, 1),
@@ -24369,7 +24375,7 @@ async def diag_fba_candidatos(token: str = "", limit: int = 15, meses: int = 6):
             "descartados_por_criterio": descartados,
             "ventana_meses": meses,
         },
-        "criterios": "vendió en Amazon en la ventana + margen Amazon > margen ML + "
+        "criterios": "vendió en Amazon en la ventana + recupera más retail en Amazon que en ML + "
                      "a ML le quedan >=3 meses de inventario tras enviar la mitad",
         # Si "con_venta_probada" sale en 0, esto dice si es que de verdad no
         # vendemos o si el cruce de SKUs está roto. Sin esto, un 0 por bug se
