@@ -32117,6 +32117,152 @@ async def _fetch_live_ml_sales_by_sku(date_from: str, date_to: str, account_id: 
     return sales
 
 
+async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
+                              account_id: str = "", limit: int = 30) -> dict:
+    """Retornos agrupados por MARCA, con tasa y dinero. Todo SQL local.
+
+    FEATURE 2026-09-18 (pedido de Jovan: "ver los retornos que tenemos de TCL
+    por sku"). En vez de solo filtrar por marca, agrupa por marca y ordena por
+    lo que duele: **dinero perdido en devoluciones**. Un conteo suelto engaña
+    -- 50 retornos sobre 5,000 ventas es 1% y está bien; sobre 200 es 25% y es
+    una conversación con el proveedor.
+
+    POR QUÉ USA order_history, cuando su hermano `/api/returns/sku-claim-rate`
+    lo evita a propósito: ese comentario ("muy poco poblado") es de antes del
+    backfill. Hoy la tabla tiene ~30,800 unidades de ML y ~23,200 de Amazon en
+    6 meses, verificado. Consultar ventas EN VIVO por SKU es viable para un
+    puñado de SKUs, pero no para agrupar el catálogo entero por marca -- serían
+    miles de llamadas. Con la tabla ya poblada, esto es SQL local y no toca
+    ninguna API externa.
+
+    La marca vive en bm_sku_master, que alimenta el MCP de BinManager. Cero
+    llamadas nuevas a BM: es un SELECT.
+    """
+    import aiosqlite as _aio_rm
+    from datetime import datetime as _dt_rm, timedelta as _td_rm
+    desde = (_dt_rm.utcnow() - _td_rm(days=days)).strftime("%Y-%m-%d")
+
+    def _base(s: str) -> str:
+        """SKU base de 10 chars, o '' si no valida. Ver el caso `p-987423` de
+        ExclusiveBulbs: normalizar a ciegas colapsa miles de SKUs en una letra."""
+        b = normalize_to_bm_sku((s or "").upper().strip())
+        return b if (len(b) == 10 and b[:4].isalpha() and b[4:].isdigit()) else ""
+
+    async with _aio_rm.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_rm.Row
+        q = ("SELECT sku, platform, account_id, COUNT(*) n, SUM(quantity) uds, "
+             "SUM(amount_mxn) monto FROM claims_history "
+             "WHERE date_created >= ? AND sku != ''")
+        p = [desde]
+        if platform:
+            q += " AND platform = ?"; p.append(platform)
+        if account_id:
+            q += " AND account_id = ?"; p.append(account_id)
+        q += " GROUP BY sku, platform, account_id"
+        claims = [dict(r) for r in await (await db.execute(q, p)).fetchall()]
+
+        vq = ("SELECT sku, SUM(quantity) uds FROM order_history "
+              "WHERE order_date >= ? AND sku != '' "
+              "AND LOWER(COALESCE(status,'')) NOT IN "
+              "('cancelled','canceled','refunded','invalid','pending_cancel','')")
+        vp = [desde]
+        if platform:
+            vq += " AND platform = ?"; vp.append(platform)
+        if account_id:
+            vq += " AND account_id = ?"; vp.append(account_id)
+        vq += " GROUP BY sku"
+        ventas_raw = [dict(r) for r in await (await db.execute(vq, vp)).fetchall()]
+
+        cur = await db.execute("SELECT sku, brand, title FROM bm_sku_master WHERE brand != ''")
+        marca_de = {r["sku"]: (r["brand"], r["title"]) for r in await cur.fetchall()}
+
+    vendidas: dict[str, int] = {}
+    for v in ventas_raw:
+        b = _base(v["sku"])
+        if b:
+            vendidas[b] = vendidas.get(b, 0) + int(v["uds"] or 0)
+
+    marcas: dict[str, dict] = {}
+    sin_marca = {"retornos": 0, "uds": 0, "monto": 0.0, "skus": set()}
+    for c in claims:
+        b = _base(c["sku"])
+        if not b:
+            continue
+        nombre, titulo = marca_de.get(b, ("", ""))
+        destino = marcas.setdefault(nombre, {
+            "marca": nombre, "retornos": 0, "uds_retornadas": 0,
+            "monto_mxn": 0.0, "skus": {},
+        }) if nombre else None
+        if destino is None:
+            # Sin marca en el maestro. NO se descarta en silencio: se reporta
+            # aparte para que nadie lea "TCL no tiene retornos" cuando lo que
+            # falta es el dato de marca.
+            sin_marca["retornos"] += int(c["n"] or 0)
+            sin_marca["uds"] += int(c["uds"] or 0)
+            sin_marca["monto"] += float(c["monto"] or 0)
+            sin_marca["skus"].add(b)
+            continue
+        destino["retornos"] += int(c["n"] or 0)
+        destino["uds_retornadas"] += int(c["uds"] or 0)
+        destino["monto_mxn"] += float(c["monto"] or 0)
+        s = destino["skus"].setdefault(b, {
+            "sku": b, "titulo": (titulo or "")[:60], "retornos": 0,
+            "uds_retornadas": 0, "monto_mxn": 0.0, "uds_vendidas": vendidas.get(b, 0),
+        })
+        s["retornos"] += int(c["n"] or 0)
+        s["uds_retornadas"] += int(c["uds"] or 0)
+        s["monto_mxn"] += float(c["monto"] or 0)
+
+    salida = []
+    for m in marcas.values():
+        vend = sum(vendidas.get(k, 0) for k in m["skus"])
+        # tasa = NULL cuando no hay ventas registradas. No es 0% -- es "no se
+        # puede calcular", y presentarlo como 0% haría ver sana a una marca
+        # de la que solo tenemos devoluciones.
+        tasa = round(m["uds_retornadas"] / vend * 100, 2) if vend > 0 else None
+        skus = sorted(m["skus"].values(), key=lambda x: -x["monto_mxn"])
+        for s in skus:
+            s["tasa_pct"] = (round(s["uds_retornadas"] / s["uds_vendidas"] * 100, 2)
+                             if s["uds_vendidas"] > 0 else None)
+            s["monto_mxn"] = round(s["monto_mxn"], 2)
+        salida.append({**m, "uds_vendidas": vend, "tasa_pct": tasa,
+                       "monto_mxn": round(m["monto_mxn"], 2),
+                       "skus_afectados": len(m["skus"]),
+                       "skus": skus[:limit]})
+
+    if marca:
+        mm = marca.strip().lower()
+        salida = [x for x in salida if mm in (x["marca"] or "").lower()]
+    salida.sort(key=lambda x: -x["monto_mxn"])
+
+    return {
+        "ventana_dias": days,
+        "resumen": {
+            "marcas": len(salida),
+            "retornos_total": sum(x["retornos"] for x in salida),
+            "monto_total_mxn": round(sum(x["monto_mxn"] for x in salida), 2),
+        },
+        "sin_marca_en_maestro": {
+            "retornos": sin_marca["retornos"], "uds": sin_marca["uds"],
+            "monto_mxn": round(sin_marca["monto"], 2), "skus": len(sin_marca["skus"]),
+            "nota": "Retornos cuyo SKU no tiene marca en bm_sku_master. Se muestran "
+                    "aparte a propósito: si se descartaran, una marca podría verse "
+                    "más limpia de lo que es.",
+        },
+        "marcas": salida[:limit],
+    }
+
+
+@app.get("/api/diag/retornos-por-marca")
+async def diag_retornos_por_marca(token: str = "", days: int = 90, marca: str = "",
+                                  platform: str = "", limit: int = 15):
+    """Verificación contra producción del análisis de retornos por marca."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return JSONResponse(await _retornos_por_marca(days=days, marca=marca,
+                                                  platform=platform, limit=limit))
+
+
 @app.get("/api/returns/sku-claim-rate")
 async def returns_sku_claim_rate(
     date_from: str = Query(..., description="YYYY-MM-DD"),
