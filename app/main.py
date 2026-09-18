@@ -24200,6 +24200,95 @@ async def diag_bm_master_status(token: str = ""):
     })
 
 
+@app.get("/api/diag/publicaciones-apagadas")
+async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, plataforma: str = ""):
+    """Publicaciones en cantidad 0 cuyo SKU SÍ tiene stock vendible en el maestro.
+
+    2026-09-18. La sesión hermana midió 1,932 publicaciones de Amazon (972
+    SKUs) en esta situación sobre un espejo del maestro. Esto lo mide en vivo,
+    en ML y Amazon a la vez, y le pone precio para poder priorizar.
+
+    SOLO LECTURA. No toca ML ni Amazon -- publicar stock es una decisión de
+    negocio y además hay que poder surtirlo.
+
+    Se exige `stock_updated_at` reciente (< 2h) para no acusar con un maestro
+    viejo, mismo criterio que se aplicó al arreglar la salud de caché. Y solo
+    cuenta publicaciones que de verdad pueden vender: activas y actualizables.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_pa
+    corte = _time.time() - 7200
+    filas = []
+    async with _aio_pa.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_pa.Row
+        if plataforma != "ml":
+            cur = await db.execute("""
+                SELECT 'amazon' AS plataforma, a.seller_id AS cuenta, a.sku, a.base_sku,
+                       a.title, a.price, a.fulfillment, m.available_qty, m.mty_qty, m.cdmx_qty
+                  FROM amazon_listings a
+                  JOIN bm_sku_master m ON m.sku = a.base_sku
+                 WHERE a.available_qty <= 0 AND a.status = 'ACTIVE' AND a.can_update = 1
+                   AND a.base_sku != '' AND m.available_qty > 0
+                   AND m.stock_updated_at >= ? AND m.verified = 1
+            """, (corte,))
+            filas += [dict(r) for r in await cur.fetchall()]
+        if plataforma != "amazon":
+            cur = await db.execute("""
+                SELECT 'ml' AS plataforma, l.account_id AS cuenta, l.sku, l.base_sku,
+                       l.title, l.price, '' AS fulfillment, m.available_qty, m.mty_qty, m.cdmx_qty
+                  FROM ml_listings l
+                  JOIN bm_sku_master m ON m.sku = l.base_sku
+                 WHERE l.available_qty <= 0 AND l.status = 'active'
+                   AND l.base_sku != '' AND m.available_qty > 0
+                   AND m.stock_updated_at >= ? AND m.verified = 1
+            """, (corte,))
+            filas += [dict(r) for r in await cur.fetchall()]
+
+    # Una publicación no puede vender más de lo que hay del SKU, y varios
+    # listings comparten el mismo SKU. Valuar cada publicación por el stock
+    # completo contaría el mismo inventario muchas veces, así que el potencial
+    # se calcula POR SKU, con el precio más alto al que se ofrece.
+    por_sku: dict[str, dict] = {}
+    for f in filas:
+        e = por_sku.setdefault(f["base_sku"], {
+            "sku": f["base_sku"], "title": f.get("title") or "",
+            "disponible": f["available_qty"], "mty": f.get("mty_qty"),
+            "cdmx": f.get("cdmx_qty"), "publicaciones": 0,
+            "precio_max": 0.0, "cuentas": set(), "plataformas": set(),
+        })
+        e["publicaciones"] += 1
+        e["precio_max"] = max(e["precio_max"], float(f.get("price") or 0))
+        e["cuentas"].add(f.get("cuenta") or "")
+        e["plataformas"].add(f["plataforma"])
+
+    total_valor = 0.0
+    salida = []
+    for e in por_sku.values():
+        valor = e["disponible"] * e["precio_max"]
+        total_valor += valor
+        salida.append({**e, "cuentas": sorted(x for x in e["cuentas"] if x),
+                       "plataformas": sorted(e["plataformas"]),
+                       "valor_potencial": round(valor, 2)})
+    salida.sort(key=lambda x: -x["valor_potencial"])
+
+    return JSONResponse({
+        "resumen": {
+            "publicaciones_apagadas": len(filas),
+            "skus_distintos": len(por_sku),
+            "unidades_disponibles": sum(e["disponible"] for e in por_sku.values()),
+            "valor_potencial_mxn": round(total_valor, 2),
+            "sin_precio": sum(1 for e in por_sku.values() if e["precio_max"] <= 0),
+        },
+        "por_plataforma": {
+            p: sum(1 for f in filas if f["plataforma"] == p) for p in ("amazon", "ml")
+        },
+        "top": salida[:limit],
+        "nota": "Solo lectura. Valor potencial = unidades disponibles x precio más alto "
+                "publicado, agrupado POR SKU para no contar el mismo inventario dos veces.",
+    })
+
+
 @app.get("/api/diag/bm-sku-changes")
 async def diag_bm_sku_changes(token: str = "", days: int = 7, sku: str = "",
                               field: str = "available_qty", limit: int = 200):
