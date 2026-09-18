@@ -22940,6 +22940,47 @@ async def _probe_amazon_report_once(client, report_type: str, max_wait_secs: int
         {k: (str(v)[:120] if v is not None else "") for k, v in r.items()}
         for r in rows[:3]
     ]
+
+    # ── Cuántas filas traen recomendación DE VERDAD ──────────────────────────
+    # El total de filas no dice nada útil por sí solo: el reporte lista todo el
+    # catálogo FBA, y las primeras filas de la muestra salieron todas en 0 /
+    # out_of_stock. Lo que decide si la feature vale la pena es cuántos SKUs
+    # traen una cantidad recomendada > 0. Se cuenta aquí en vez de asumirlo.
+    _rec_cols = ("Recommended replenishment qty", "Recommended ship-in quantity")
+    rec_col = next((c for c in _rec_cols if c in (out["columns"] or [])), "")
+    out["rec_col"] = rec_col
+    if rec_col:
+        actionable = []
+        for r in rows:
+            raw = (r.get(rec_col) or "").strip()
+            if not raw:
+                continue
+            try:
+                if float(raw) > 0:
+                    actionable.append(r)
+            except ValueError:
+                # Valor no numérico ('none', texto): no se cuenta como accionable,
+                # pero se registra para no tragarnos un formato inesperado.
+                out.setdefault("rec_unparsed", []).append(raw[:40])
+        out["rows_with_rec"] = len(actionable)
+        out["sample_actionable"] = [
+            {k: (str(v)[:120] if v is not None else "") for k, v in r.items()}
+            for r in actionable[:3]
+        ]
+        if out.get("rec_unparsed"):
+            out["rec_unparsed"] = sorted(set(out["rec_unparsed"]))[:10]
+    else:
+        # None (no 0): el reporte no trae columna de recomendación conocida.
+        out["rows_with_rec"] = None
+
+    _alert_col = next((c for c in ("Alert", "alert") if c in (out["columns"] or [])), "")
+    if _alert_col:
+        counts: dict = {}
+        for r in rows:
+            counts[(r.get(_alert_col) or "").strip() or "<vacío>"] = \
+                counts.get((r.get(_alert_col) or "").strip() or "<vacío>", 0) + 1
+        out["alert_counts"] = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:12])
+
     if out["processing_status"] != "DONE":
         out["amazon_error"] = content[:1200]
         return _done("fatal")
