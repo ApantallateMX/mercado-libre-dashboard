@@ -83,7 +83,12 @@ ALL_SECTIONS = [
 # panel de usuarios y gating de partials/endpoints de subtabs.
 PERMISSION_TREE = {
     "ml": {
-        "dashboard":    {"label": "Dashboard",    "subtabs": None},
+        # OJO: esta UNA clave gobierna DOS pestañas del menú, "Dashboard" e
+        # "Inv.Global" (las dos llevan ml_tab="dashboard" en NAV_TABS). Se
+        # nombra así para que quien asigna sepa que está dando las dos y no
+        # solo la que leyó. Detectado 2026-09-18 auditando los desalineados
+        # entre el menú y la pantalla de permisos.
+        "dashboard":    {"label": "Dashboard e Inv.Global", "subtabs": None},
         # "Gral" (/multi-dashboard) tenía la MISMA clave que "Dashboard" (arriba) e
         # "Inv.Global" — compartían "ml.dashboard", así que no había forma de dar
         # acceso a Retornos de Gral sin dar también el Dashboard de una cuenta.
@@ -124,8 +129,25 @@ PERMISSION_TREE = {
             "reputation": "Reputación", "vigilancia": "Vigilancia", "scores": "Score",
             "feedback": "Feedback",
         }},
-        "devoluciones": {"label": "Devoluciones",  "subtabs": None},
-        "planning":     {"label": "Planning",      "subtabs": None},
+        # La CLAVE sigue siendo "devoluciones" -- cambiarla invalidaría los
+        # permisos ya guardados de todos los usuarios. Lo que se corrige es la
+        # ETIQUETA: el menú de ML llama a esta pestaña "Retornos" (ver
+        # NAV_TABS en main.py, id="returns", label="Retornos") y apunta a
+        # /returns, pero aquí se mostraba "Devoluciones".
+        #
+        # Eso causó un error real el 2026-09-18: Jovan buscó "Retornos" en la
+        # columna de ML para dárselo a Álvaro, no lo encontró, y terminó
+        # marcando "Retornos" de la columna de AMAZON. Álvaro quedó con
+        # `amz.returns` y sin acceso al de ML, y desde la pantalla parecía
+        # correcto porque el chip decía "Retornos".
+        #
+        # Regla que deja esto: el nombre en la pantalla de permisos tiene que
+        # ser EL MISMO que ve el usuario en el menú. Si no coinciden, quien
+        # asigna accesos no puede saber qué está dando.
+        "devoluciones": {"label": "Retornos",  "subtabs": None},
+        # El menú dice "Planeación", no "Planning" -- mismo desalineado que
+        # causó el error con Retornos el 2026-09-18. La clave no cambia.
+        "planning":     {"label": "Planeación",    "subtabs": None},
         "facturacion":  {"label": "Facturación",   "subtabs": None},
         "sync":         {"label": "Sync Stock",    "subtabs": {
             "ejecutar": "Ejecutar", "configurar": "Configurar",
