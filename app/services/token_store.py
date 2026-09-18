@@ -1580,6 +1580,43 @@ async def init_db():
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_bsc_sku ON bm_sku_changes(sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_bsc_changed_at ON bm_sku_changes(changed_at)")
+        # ─────────────────────────────────────────────────────────────────
+        # TRIGGER: red de seguridad del historial (2026-09-17, aprobado por
+        # Jovan tras el incidente de hoy; la idea es de ecomops-stack).
+        #
+        # POR QUÉ EXISTE. Hasta hoy este historial se llenaba SOLO desde el
+        # código, o sea que dependía de que cada escritor se acordara de
+        # llamarlo. El loop de categorías de main.py no se acordaba: zereaba
+        # available_qty con un UPDATE directo y no dejaba rastro. Resultado:
+        # SKUs con cientos de unidades reales (SNTV004197 con 559) aparecían
+        # en 0 y el historial decía "0 cambios en 10 días". Una investigación
+        # entera partió de esa premisa falsa y casi concluye que el problema
+        # estaba en otro lado.
+        #
+        # Un trigger de base no se puede esquivar: da igual qué código escriba,
+        # por dónde, o quién lo agregue dentro de seis meses.
+        #
+        # Es ADITIVO a propósito. El logging del código se queda, porque él sí
+        # sabe QUIÉN escribió (source='bm_master_sync', 'mcp', 'stock_prewarm')
+        # y el trigger no puede saberlo. Cuando los dos registran el mismo
+        # cambio, get_bm_sku_changes() colapsa el par y conserva el que trae
+        # el nombre del escritor -- así el trigger solo aporta las filas que
+        # de otro modo se habrían perdido.
+        #
+        # Solo transiciones que cruzan cero, mismo criterio que el código: sin
+        # eso el historial se llenaría de micro-fluctuaciones cada 15 min.
+        await db.execute("""
+            CREATE TRIGGER IF NOT EXISTS trg_bsm_avail_cruza_cero
+            AFTER UPDATE OF available_qty ON bm_sku_master
+            FOR EACH ROW
+            WHEN (COALESCE(OLD.available_qty,0) > 0 AND COALESCE(NEW.available_qty,0) <= 0)
+              OR (COALESCE(OLD.available_qty,0) <= 0 AND COALESCE(NEW.available_qty,0) > 0)
+            BEGIN
+                INSERT INTO bm_sku_changes (sku, field, old_value, new_value, changed_at, source)
+                VALUES (NEW.sku, 'available_qty', OLD.available_qty, NEW.available_qty,
+                        strftime('%s','now') + 0.0, 'trigger');
+            END
+        """)
         # Migración única bm_product_catalog/bm_stock_snapshot -> bm_sku_master
         # ya completada y esas 2 tablas DROP-eadas 2026-08-13 (respaldo en
         # backups/bm_frozen_tables/) -- eliminada de aquí, referenciaba tablas
@@ -3353,7 +3390,47 @@ async def get_bm_sku_changes(days: int = 7, field: str = "", sku: str = "", limi
         db.row_factory = aiosqlite.Row
         cur = await db.execute(query, params)
         rows = [dict(r) for r in await cur.fetchall()]
-    return rows
+    return _colapsar_duplicados_de_trigger(rows)
+
+
+# Ventana para considerar que dos filas describen el MISMO cambio. El trigger
+# usa la hora del motor y el código el `now` de su lote, así que el mismo
+# evento puede quedar registrado con unos segundos de diferencia.
+_VENTANA_DEDUPE_S = 120
+
+
+def _colapsar_duplicados_de_trigger(rows: list[dict]) -> list[dict]:
+    """Junta la fila del trigger con la del código cuando describen lo mismo.
+
+    Desde 2026-09-17 el historial se llena por dos vías: el código (que sabe
+    QUIÉN escribió) y un trigger de base (que no se puede esquivar). Para un
+    cambio hecho por un escritor bien portado se registran las dos, y mostrar
+    el par duplicado haría dudar de la tabla justo cuando por fin es confiable.
+
+    Se conserva la del código porque trae el nombre del escritor; la del
+    trigger solo sobrevive cuando es la única, que es precisamente el caso que
+    antes se perdía por completo.
+    """
+    if not rows:
+        return rows
+    del_trigger = [r for r in rows if (r.get("source") or "") == "trigger"]
+    if not del_trigger:
+        return rows
+    con_nombre = [r for r in rows if (r.get("source") or "") != "trigger"]
+    claves = [(r.get("sku"), r.get("field"), r.get("new_value"), r.get("changed_at") or 0)
+              for r in con_nombre]
+    salida = list(con_nombre)
+    for r in del_trigger:
+        ts = r.get("changed_at") or 0
+        gemela = any(
+            k[0] == r.get("sku") and k[1] == r.get("field") and k[2] == r.get("new_value")
+            and abs((k[3] or 0) - ts) <= _VENTANA_DEDUPE_S
+            for k in claves
+        )
+        if not gemela:
+            salida.append(r)
+    salida.sort(key=lambda x: x.get("changed_at") or 0, reverse=True)
+    return salida
 
 
 async def get_orders_without_stock(days: int = 14) -> dict:
