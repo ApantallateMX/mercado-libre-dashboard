@@ -871,8 +871,26 @@ async def _get_onsite_stock_cached(client) -> dict:
         try:
             data = await client.get_onsite_inventory_report()
         except Exception as e:
-            logger.warning(f"[Onsite Stock] Error obteniendo reporte: {e}")
-            data = {}
+            # FIX 2026-09-18. Antes esto ponía data={} y LO CACHEABA con
+            # timestamp fresco, así que un fallo de Amazon dejaba la cuenta
+            # sirviendo "cero inventario" durante todo el TTL y bloqueaba el
+            # refresh por-SKU de respaldo. Un error no es un inventario vacío.
+            #
+            # Ahora el fallo NO escribe caché: si hay un dato viejo se devuelve
+            # ese (viejo pero real, y el caller puede juzgarlo por su
+            # timestamp), y si no hay nada se devuelve vacío SIN guardarlo,
+            # para que el siguiente intento vuelva a preguntar en vez de
+            # esperar media hora a que expire una mentira.
+            #
+            # El sondeo del 2026-09-18 mostró que este reporte falla seguido
+            # (3 de 3 cuentas en una corrida), así que no es un caso raro.
+            logger.warning(f"[Onsite Stock] Error obteniendo reporte, NO se cachea: {e}")
+            previo = _onsite_stock_cache.get(key)
+            if previo:
+                _edad = round(now - previo[0])
+                logger.warning(f"[Onsite Stock] Se devuelve el dato anterior ({_edad}s de antigüedad)")
+                return previo[1]
+            return {}
         _onsite_stock_cache[key] = (_time.time(), data)
         return data
 

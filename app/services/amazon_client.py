@@ -1154,8 +1154,28 @@ class AmazonClient:
                 raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
 
         # Timeout
+        #
+        # FIX 2026-09-18. Antes esto hacía `return {}` y ahí estaba el problema:
+        # un diccionario vacío es indistinguible de "el reporte salió bien y no
+        # hay SKUs". El wrapper con reintentos solo atrapa RuntimeError, así que
+        # trataba el timeout como ÉXITO; el caller lo cacheaba con timestamp
+        # fresco, _flx_cache_valid() devolvía True durante 30 min y además eso
+        # BLOQUEA el refresh por-SKU de respaldo. O sea: un timeout dejaba la
+        # cuenta ciega media hora creyendo que tenía datos buenos.
+        #
+        # Encontrado al sondear los reportes de reabasto (2026-09-18): MYI falló
+        # en las 3 cuentas con las mismas credenciales que minutos antes habían
+        # hecho funcionar otros dos reportes. El FATAL de arriba sí lanza y se
+        # maneja bien; el timeout era el que mentía.
+        #
+        # Ahora lanza igual que FATAL, para que el reintento del wrapper sí
+        # ocurra y, si tampoco alcanza, el caller se entere en vez de servir
+        # vacío. Un dato ausente tiene que verse distinto de un cero real --
+        # es la misma lección de bm_sku_master y del maestro zereado.
         logger.warning(f"[Amazon Reports] Timeout esperando reporte {report_id} ({max_wait_secs}s)")
-        return {}
+        raise RuntimeError(
+            f"Reporte {report_id} no terminó en {max_wait_secs}s (timeout) -- "
+            f"sin datos, NO confundir con inventario vacío")
 
     async def get_returns_report(self, date_from: str, date_to: str, max_wait_secs: int = 180) -> list:
         """
