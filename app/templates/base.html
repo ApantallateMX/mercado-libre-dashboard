@@ -937,6 +937,69 @@ window.SOLO_LECTURA = {{ 'true' if (solo_lectura or (request.state.dashboard_use
         }
         return _fetch.apply(this, arguments);
     };
+    // ── Apagar los controles de escritura, en TODA pantalla ──────────
+    //
+    // Son 204 botones repartidos en 44 plantillas, y la mayoría se generan en
+    // JavaScript. Taparlos uno por uno es garantía de que se escape alguno --
+    // ya pasó con "Marcar revisión" y "qty=0" en Retornos. Así que se detectan
+    // por lo que HACEN (el verbo de su onclick) y se apagan solos, incluidos
+    // los que aparecen después por una recarga parcial.
+    //
+    // La lista de verbos es CORTA a propósito. Quedan fuera "cerrar", "close",
+    // "actualizar", "update" y "sync": casi siempre son cerrar un modal o
+    // refrescar una tabla, y apagarlos le rompería la navegación a alguien que
+    // solo quiere consultar. Ante la duda, no se apaga -- la escritura real ya
+    // la corta el interceptor de fetch de arriba y, antes que eso, el servidor.
+    var VERBOS = /(respond|responder|flag|delete|borrar|eliminar|save|guardar|enviar|send|publicar|publish|aplicar|apply|zero|pausar|crear|create|emitir|pagar|resolve|asignar|assign)/i;
+    // Manipulación pura del DOM: cerrar un modal, mostrar/ocultar algo. No
+    // escribe nada aunque su texto contenga un verbo. Sin esta excepción, los
+    // botones de cerrar el modal de facturación (id "modal-create") quedaban
+    // apagados y el usuario no podía ni salir de la ventana.
+    var SOLO_DOM = /(classList|style\.|\.hidden|toggle|scrollIntoView|focus\(\))/;
+    function esEscritura(el) {
+        var h = el.getAttribute && el.getAttribute('onclick');
+        if (!h || !VERBOS.test(h)) return false;
+        if (SOLO_DOM.test(h) && !/fetch|ajax|submit/i.test(h)) return false;
+        return true;
+    }
+    function apagar(raiz) {
+        var nodos = (raiz || document).querySelectorAll('button[onclick], a[onclick], input[type=submit]');
+        for (var i = 0; i < nodos.length; i++) {
+            var el = nodos[i];
+            if (el.dataset.soloLecturaOff || !esEscritura(el)) continue;
+            el.dataset.soloLecturaOff = '1';
+            el.disabled = true;
+            el.style.opacity = '0.4';
+            el.style.cursor = 'not-allowed';
+            el.title = 'Tu cuenta es de solo lectura';
+        }
+    }
+    function arranca() {
+        apagar(document);
+        // Las tablas se repintan con htmx/fetch, así que hay que volver a
+        // pasar sobre lo nuevo. Sin esto, un botón recién pintado queda vivo.
+        new MutationObserver(function (muts) {
+            for (var i = 0; i < muts.length; i++) {
+                for (var j = 0; j < muts[i].addedNodes.length; j++) {
+                    var n = muts[i].addedNodes[j];
+                    if (n.nodeType === 1) { apagar(n); if (esEscritura(n)) apagar(n.parentNode); }
+                }
+            }
+        }).observe(document.body, {childList: true, subtree: true});
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', arranca);
+    } else { arranca(); }
+    // Último cerrojo: aunque un botón se escape de la detección, el clic no
+    // ejecuta nada si su handler dispara una escritura.
+    document.addEventListener('click', function (ev) {
+        var el = ev.target;
+        while (el && el !== document.body) {
+            if (esEscritura(el)) { ev.preventDefault(); ev.stopPropagation(); aviso(); return; }
+            el = el.parentNode;
+        }
+    }, true);
+
     document.addEventListener('submit', function (ev) {
         var f = ev.target;
         if (!f || !f.method) return;
