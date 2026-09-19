@@ -32514,6 +32514,72 @@ async def _retail_a_corregir(min_skus: int = 40, min_ordenes: int = 3,
     }
 
 
+@app.post("/api/diag/retail-aplicar-correccion")
+async def diag_retail_aplicar_correccion(token: str = "", dry_run: bool = True,
+                                         min_skus: int = 40, min_ordenes: int = 3):
+    """Corrige los precios base de relleno. ESTE SÍ ESCRIBE.
+
+    FEATURE 2026-09-18, aprobado por Jovan ("debemos dar solución a todo"):
+
+      105 con ventas observadas -> retail_ph = precio real de venta / FX
+      4,987 sin ventas          -> retail_ph = 0
+
+    Sobre el 0: la columna es REAL NOT NULL, así que no admite NULL -- el 0 ES
+    la convención de "sin dato" de este esquema, y los consumidores ya la
+    respetan (ver profit_pct en el reporte de ventas: `if retail_ph_total > 0
+    else None`). No es el falso-cero del stock, donde 0 significaba "no hay":
+    aquí significa "no sabemos cuánto vale", que es la verdad.
+
+    dry_run=true por default: reporta qué cambiaría sin tocar nada.
+
+    Respalda bm_sku_master ANTES de escribir, en una tabla con fecha. Son 5,092
+    filas de un dato que alimenta márgenes y precios sugeridos; si el criterio
+    resulta malo, hay que poder volver sin depender de un backup externo.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    plan = await _retail_a_corregir(min_skus=min_skus, min_ordenes=min_ordenes,
+                                    limit=1000000)
+    corregibles = plan["corregibles"]
+    sin_ev = plan["sin_evidencia"]
+    if dry_run:
+        return JSONResponse({
+            "dry_run": True,
+            "se_corregirian": len(corregibles),
+            "se_dejarian_sin_dato": len(sin_ev),
+            "muestra_correccion": corregibles[:10],
+            "nota": "No se tocó nada. Repetir con dry_run=false para aplicar.",
+        })
+    import aiosqlite as _aio_ap
+    _tabla = "bm_sku_master_backup_" + _time.strftime("%Y%m%d_%H%M%S")
+    async with _aio_ap.connect(DATABASE_PATH, timeout=60) as db:
+        await db.execute(f"CREATE TABLE {_tabla} AS SELECT * FROM bm_sku_master")
+        await db.commit()
+        # Los que SÍ tienen evidencia: se escribe el precio observado.
+        await db.executemany(
+            "UPDATE bm_sku_master SET retail_ph = ? WHERE sku = ?",
+            [(c["retail_sugerido_usd"], c["sku"]) for c in corregibles])
+        # Los que no: 0 = sin dato. Mejor no saber que saber mal.
+        await db.executemany(
+            "UPDATE bm_sku_master SET retail_ph = 0 WHERE sku = ?",
+            [(x["sku"],) for x in sin_ev])
+        await db.commit()
+        cur = await db.execute(
+            "SELECT COUNT(*) n FROM bm_sku_master WHERE retail_ph > 0 "
+            "GROUP BY retail_ph HAVING n >= ?", (min_skus,))
+        quedan = [r[0] for r in await cur.fetchall()]
+    logger.warning(f"[RETAIL-FIX] {len(corregibles)} corregidos, {len(sin_ev)} a sin-dato. "
+                   f"Respaldo en {_tabla}")
+    return JSONResponse({
+        "dry_run": False,
+        "corregidos": len(corregibles),
+        "dejados_sin_dato": len(sin_ev),
+        "respaldo": _tabla,
+        "centinelas_que_quedan": len(quedan),
+        "nota": f"Para revertir: /api/diag/bm-master-restore con backup_table={_tabla}",
+    })
+
+
 @app.get("/api/diag/retail-a-corregir")
 async def diag_retail_a_corregir(token: str = "", min_skus: int = 40,
                                  min_ordenes: int = 3, limit: int = 25):
