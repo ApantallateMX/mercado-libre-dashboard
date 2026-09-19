@@ -138,9 +138,31 @@ _BINTYPES_VENDIBLES = frozenset({
     # Los 7 con isInventory=1 en BM.BinTypes
     "PRODUCTO TERMINADO", "PRODUCTO INCOMPLETO", "Finished Good", "WAREHOSE",
     "Accesorios WIP", "Accesorios FG", "BTSFBA01",
-    # + los 2 que ya teníamos. NO QUITAR -- ver el bloque de arriba.
-    "ECOMMERCE", "Released",
+    # ECOMMERCE se queda. No hay evidencia de campo en su contra todavía, y la
+    # regla del proyecto es no quitar sin ella.
+    "ECOMMERCE",
 })
+
+# "Released" SALIÓ el 2026-09-19, y vale la pena el detalle porque el día
+# anterior se había decidido lo contrario.
+#
+# El 18 lo quité apoyándome en que no trae isInventory=1 y en que cuadraba
+# mejor contra un filtro guardado de BM. Jovan lo revirtió con un argumento
+# correcto: "solo agregamos no quitamos, los filtros de bm pueden estar mal".
+# Un filtro no es evidencia suficiente para apagar inventario.
+#
+# Lo que cambió hoy no es el argumento, es la evidencia. Vanessa reportó desde
+# operación que el sistema ofrecía activar 7 piezas de SNTV002236 que ella no
+# encuentra en BinManager. Al desglosarlo por bin: 1 sola está en PRODUCTO
+# TERMINADO y las otras 6 están en bins `Released`. O sea que la persona que
+# surte dice que esa mercancía no está donde el sistema cree, y ofrecer 7
+# cuando hay 1 es sobreventa esperando a pasar.
+#
+# Eso sí es evidencia de campo, no un filtro. Jovan aprobó quitarlo con ese
+# dato enfrente.
+#
+# Si algún día aparece evidencia de que `Released` SÍ es surtible, se regresa
+# -- pero que venga de alguien que fue al almacén, no de una tabla.
 
 # CONDICIONES vendibles en línea. NO se amplía sin aprobación de Jovan.
 # El OKF de BinManager dice que ICB/ICC son vendibles online para TODA
