@@ -22221,6 +22221,67 @@ async def _collect_digest_account(acc: dict, slot: str, today_mx: str) -> dict |
     return entry
 
 
+async def _bloque_inventario_pendiente() -> str:
+    """Dos pendientes de inventario para el digest de la mañana.
+
+    Los dos ya son visibles en el dashboard. El problema no es que falte el
+    dato, es que hay que acordarse de ir a verlo -- y 326,458 unidades llevan
+    paradas en Tijuana con la pantalla diciéndolo.
+
+    Cada bloque dice QUÉ hacer y DÓNDE, no solo el número: un número sin acción
+    se lee una vez y se ignora la siguiente.
+    """
+    import aiosqlite as _aio_bi
+    partes = []
+    async with _aio_bi.connect(DATABASE_PATH, timeout=20) as db:
+        db.row_factory = _aio_bi.Row
+        # 1) Tijuana esperando transferencia. Solo lo que TIENE venta en 12
+        #    meses -- mover algo que no se vende no ayuda a nadie, y meter los
+        #    3,922 sin filtrar convertiría la alerta en ruido.
+        cur = await db.execute("""
+            SELECT COUNT(*) n, SUM(b.tj_qty) uds FROM bm_sku_master b
+             WHERE b.tj_qty > 0 AND b.available_qty = 0
+               AND EXISTS (SELECT 1 FROM order_history o
+                            WHERE substr(o.sku,1,10) = b.sku
+                              AND o.order_date >= date('now','-365 day'))""")
+        r = await cur.fetchone()
+        con_venta, uds_venta = r["n"] or 0, r["uds"] or 0
+        cur = await db.execute("""
+            SELECT b.sku, b.title, b.tj_qty FROM bm_sku_master b
+             WHERE b.tj_qty > 0 AND b.available_qty = 0
+               AND EXISTS (SELECT 1 FROM order_history o
+                            WHERE substr(o.sku,1,10) = b.sku
+                              AND o.order_date >= date('now','-365 day'))
+             ORDER BY b.tj_qty DESC LIMIT 3""")
+        top_tj = [dict(x) for x in await cur.fetchall()]
+        # 2) Precios base sin dato
+        cur = await db.execute(
+            "SELECT COUNT(*) n FROM bm_sku_master WHERE retail_ph = 0 AND available_qty > 0")
+        sin_precio = (await cur.fetchone())["n"] or 0
+
+    _nl = chr(10)
+    if con_venta:
+        _t = []
+        _t.append(_nl + _nl + "📦 **" + str(con_venta) +
+                  " productos esperando transferencia desde Tijuana** (" +
+                  format(uds_venta, ",") + " unidades)" + _nl)
+        _t.append("Tienen venta comprobada y cero stock en CDMX/MTY, así que hoy "
+                  "no se pueden vender. Tijuana solo surte a los almacenes que sí venden.")
+        for t in top_tj:
+            _t.append(_nl + "• `" + t["sku"] + "` — **" +
+                      format(t["tj_qty"], ",") + " uds** · " + (t["title"] or "")[:42])
+        _t.append(_nl + "→ Planeación · Transferencias Sugeridas Entre Almacenes")
+        partes.append("".join(_t))
+    if sin_precio:
+        partes.append(
+            _nl + _nl + "💰 **" + format(sin_precio, ",") +
+            " productos con stock y sin precio de referencia**" + _nl +
+            "Traían un valor de relleno (cientos de SKUs con el mismo precio al "
+            "centavo) y se pasaron a *sin dato* para que dejaran de calcular "
+            "márgenes con un número inventado. Hay que conseguir el valor real.")
+    return "".join(partes)
+
+
 async def _run_marketplace_digest(slot: str, dry_run: bool = False) -> dict:
     """Arma el digest de una corrida ('am'/'pm') y lo manda. Con dry_run solo
     regresa el texto, sin mandar y sin registrar la corrida (preview)."""
@@ -22256,6 +22317,25 @@ async def _run_marketplace_digest(slot: str, dry_run: bool = False) -> dict:
     else:
         am_run = await token_store.get_digest_run(today_mx, "am")
         text = _ma.build_afternoon_digest(entries, now_mx, am_run=am_run)
+
+    # BLOQUES DE INVENTARIO (2026-09-19, pedido de Jovan: "debe ser como una
+    # alerta o planeación" y "poner una alerta para que sean atendidos").
+    #
+    # Las dos cosas ya se ven en el dashboard, y ese es justo el problema: hay
+    # que acordarse de entrar. 326,458 unidades llevan paradas en Tijuana con
+    # la pantalla diciéndolo, y nadie las movió. Una alerta que llega sola es
+    # la diferencia entre un dato disponible y un dato atendido.
+    #
+    # Van SOLO en la corrida de la mañana: son pendientes de trabajo, no
+    # urgencias del día. En la de la tarde solo estorbarían al resumen de qué
+    # se movió.
+    if slot == "am":
+        try:
+            text += await _bloque_inventario_pendiente()
+        except Exception as _e_inv:
+            # Nunca tumbar el digest de reputación por esto -- ese es el que
+            # no puede faltar.
+            logger.warning(f"[DIGEST] No se pudo armar el bloque de inventario: {_e_inv}")
 
     if dry_run:
         return {"ok": True, "slot": slot, "accounts": len(entries), "preview": text}
