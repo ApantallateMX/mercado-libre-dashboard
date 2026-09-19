@@ -32521,8 +32521,7 @@ async def diag_retail_aplicar_correccion(token: str = "", dry_run: bool = True,
 
     FEATURE 2026-09-18, aprobado por Jovan ("debemos dar solución a todo"):
 
-      105 con ventas observadas -> retail_ph = precio real de venta / FX
-      4,987 sin ventas          -> retail_ph = 0
+      los 5,092 -> retail_ph = 0 (sin dato), con o sin ventas observadas
 
     Sobre el 0: la columna es REAL NOT NULL, así que no admite NULL -- el 0 ES
     la convención de "sin dato" de este esquema, y los consumidores ya la
@@ -32545,8 +32544,8 @@ async def diag_retail_aplicar_correccion(token: str = "", dry_run: bool = True,
     if dry_run:
         return JSONResponse({
             "dry_run": True,
-            "se_corregirian": len(corregibles),
-            "se_dejarian_sin_dato": len(sin_ev),
+            "se_dejarian_sin_dato": len(corregibles) + len(sin_ev),
+            "de_esos_con_precio_de_venta_conocido": len(corregibles),
             "muestra_correccion": corregibles[:10],
             "nota": "No se tocó nada. Repetir con dry_run=false para aplicar.",
         })
@@ -32555,14 +32554,32 @@ async def diag_retail_aplicar_correccion(token: str = "", dry_run: bool = True,
     async with _aio_ap.connect(DATABASE_PATH, timeout=60) as db:
         await db.execute(f"CREATE TABLE {_tabla} AS SELECT * FROM bm_sku_master")
         await db.commit()
-        # Los que SÍ tienen evidencia: se escribe el precio observado.
+        # TODOS a 0 = sin dato, incluidos los 105 que tienen ventas.
+        #
+        # La primera versión escribía el precio de venta observado en esos 105.
+        # Se veía impecable -- el desvío era real, la evidencia sólida, la tabla
+        # convincente -- y estaba MAL, porque confundía dos cosas distintas.
+        #
+        # La fórmula del negocio es precio_venta / (retail x 24), con meta de
+        # 80% en TVs y 60% en el resto (ver _RECOVERY_TARGET_*). O sea que el
+        # retail es una REFERENCIA DE MERCADO contra la que se mide si el
+        # precio está sano, y por definición está por encima de lo que
+        # vendemos. Si se escribe nuestro propio precio de venta ahí, esa
+        # división da siempre lo mismo y el indicador deja de medir: todo
+        # saldría "excelente" pase lo que pase.
+        #
+        # Habría cambiado un número equivocado por otro equivocado, pero
+        # silencioso -- de los que nadie vuelve a cuestionar porque "ya se
+        # arregló". El dato que falta no es a cuánto lo vendemos (eso ya lo
+        # sabemos), es cuánto vale ese producto en el mercado, y eso no lo
+        # tenemos para ningún control remoto.
+        #
+        # El precio real de venta SÍ se conserva, pero en el reporte
+        # (/api/diag/retail-a-corregir), no en esta columna. Ahí sirve para
+        # priorizar cuáles conseguir primero; aquí rompería la medición.
+        _todos = [(x["sku"],) for x in corregibles] + [(x["sku"],) for x in sin_ev]
         await db.executemany(
-            "UPDATE bm_sku_master SET retail_ph = ? WHERE sku = ?",
-            [(c["retail_sugerido_usd"], c["sku"]) for c in corregibles])
-        # Los que no: 0 = sin dato. Mejor no saber que saber mal.
-        await db.executemany(
-            "UPDATE bm_sku_master SET retail_ph = 0 WHERE sku = ?",
-            [(x["sku"],) for x in sin_ev])
+            "UPDATE bm_sku_master SET retail_ph = 0 WHERE sku = ?", _todos)
         await db.commit()
         cur = await db.execute(
             "SELECT COUNT(*) n FROM bm_sku_master WHERE retail_ph > 0 "
@@ -32572,8 +32589,8 @@ async def diag_retail_aplicar_correccion(token: str = "", dry_run: bool = True,
                    f"Respaldo en {_tabla}")
     return JSONResponse({
         "dry_run": False,
-        "corregidos": len(corregibles),
-        "dejados_sin_dato": len(sin_ev),
+        "dejados_sin_dato": len(corregibles) + len(sin_ev),
+        "de_esos_con_precio_de_venta_conocido": len(corregibles),
         "respaldo": _tabla,
         "centinelas_que_quedan": len(quedan),
         "nota": f"Para revertir: /api/diag/bm-master-restore con backup_table={_tabla}",
