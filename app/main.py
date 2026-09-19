@@ -25189,6 +25189,34 @@ async def diag_publicaciones_apagadas(token: str = "", limit: int = 40, platafor
             """, (corte,))
             filas += [dict(r) for r in await cur.fetchall()]
 
+    # FALSO POSITIVO CORREGIDO (2026-09-19). Antes esto marcaba como "apagada"
+    # cualquier publicación en 0 cuyo SKU tuviera stock, sin mirar si ese stock
+    # YA está publicado en las publicaciones hermanas. Y casi siempre lo está:
+    # SHEL000081 tiene 114 unidades y aparecía como apagado en APANTALLATEMX
+    # estando publicado con 9 en LUTEMA y 15 en AUTOBOT. Eso no es una falla --
+    # es la protección contra sobreventa haciendo su trabajo: las mismas 114
+    # unidades físicas no se pueden ofrecer tres veces.
+    #
+    # Ahora se descuenta lo ya publicado en TODAS las publicaciones del mismo
+    # SKU base. Solo queda como apagado lo que de verdad no está ofertado en
+    # ningún lado. Importa porque sobre esta medición se van a construir
+    # alertas, y una alerta que grita por algo que está bien deja de leerse.
+    _ya_publicado: dict[str, int] = {}
+    async with _aio_pa.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_pa.Row
+        cur = await db.execute(
+            "SELECT base_sku, SUM(available_qty) q FROM ml_listings "
+            "WHERE base_sku != '' AND status = 'active' GROUP BY base_sku")
+        for r in await cur.fetchall():
+            _ya_publicado[r["base_sku"]] = _ya_publicado.get(r["base_sku"], 0) + int(r["q"] or 0)
+        cur = await db.execute(
+            "SELECT base_sku, SUM(available_qty) q FROM amazon_listings "
+            "WHERE base_sku != '' AND status = 'ACTIVE' GROUP BY base_sku")
+        for r in await cur.fetchall():
+            _ya_publicado[r["base_sku"]] = _ya_publicado.get(r["base_sku"], 0) + int(r["q"] or 0)
+    filas = [f for f in filas
+             if _ya_publicado.get(f["base_sku"], 0) < (f.get("available_qty") or 0)]
+
     # Una publicación no puede vender más de lo que hay del SKU, y varios
     # listings comparten el mismo SKU. Valuar cada publicación por el stock
     # completo contaría el mismo inventario muchas veces, así que el potencial
