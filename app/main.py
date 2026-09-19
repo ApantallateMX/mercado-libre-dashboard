@@ -32735,7 +32735,20 @@ async def diag_reputation_history(token: str = "", account_id: str = "", days: i
             (account_id,))
         por_estado = {r["status"]: r["n"] for r in await cur.fetchall()}
     digest_runs = await token_store.get_recent_digest_runs(account_id, limit=days)
+    async with _aio_rh.connect(DATABASE_PATH, timeout=20) as db:
+        db.row_factory = _aio_rh.Row
+        cur = await db.execute(
+            "SELECT date_created dia, COUNT(*) nuevos FROM claims_history "
+            "WHERE account_id = ? AND date_created >= ? GROUP BY dia ORDER BY dia",
+            (account_id, desde))
+        nuevos_por_dia = {r["dia"]: r["nuevos"] for r in await cur.fetchall()}
+        cur = await db.execute(
+            "SELECT closed_date dia, COUNT(*) cerrados FROM claims_history "
+            "WHERE account_id = ? AND closed_date >= ? GROUP BY dia ORDER BY dia",
+            (account_id, desde))
+        cerrados_por_dia = {r["dia"]: r["cerrados"] for r in await cur.fetchall()}
     return JSONResponse({
+        "nuevos_por_dia": nuevos_por_dia, "cerrados_por_dia": cerrados_por_dia,
         "account_id": account_id,
         "serie_diaria_reputation_snapshots": snaps,
         "serie_diaria_digest_runs": digest_runs,
