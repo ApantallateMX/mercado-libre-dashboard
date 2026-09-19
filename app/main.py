@@ -32705,6 +32705,42 @@ async def diag_retail_aplicar_correccion(token: str = "", dry_run: bool = True,
     })
 
 
+@app.get("/api/diag/reputation-history")
+async def diag_reputation_history(token: str = "", account_id: str = "", days: int = 15):
+    """Historial diario de reputation_snapshots para UNA cuenta. Solo lectura.
+
+    2026-09-19. Alejandro preguntó el 17-sep por qué la reputación de AUTOBOT
+    no bajaba tras lograr una exclusión, y quedó sin responder con datos --
+    hace falta ver la serie diaria real, no solo el número de hoy."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_rh
+    from datetime import datetime as _dt_rh, timedelta as _td_rh
+    desde = (_dt_rh.utcnow() - _td_rh(days=days)).strftime("%Y-%m-%d")
+    async with _aio_rh.connect(DATABASE_PATH, timeout=20) as db:
+        db.row_factory = _aio_rh.Row
+        cur = await db.execute(
+            "SELECT captured_date, claims_rate, cancel_rate, delay_rate, level_id "
+            "FROM reputation_snapshots WHERE account_id = ? AND captured_date >= ? "
+            "ORDER BY captured_date ASC", (account_id, desde))
+        snaps = [dict(r) for r in await cur.fetchall()]
+        cur = await db.execute(
+            "SELECT COUNT(*) n, MIN(date_created) primero, MAX(date_created) ultimo "
+            "FROM claims_history WHERE account_id = ? AND date_created >= date('now','-60 day')",
+            (account_id,))
+        r60 = dict(await cur.fetchone())
+        cur = await db.execute(
+            "SELECT status, COUNT(*) n FROM claims_history "
+            "WHERE account_id = ? AND date_created >= date('now','-60 day') GROUP BY status",
+            (account_id,))
+        por_estado = {r["status"]: r["n"] for r in await cur.fetchall()}
+    return JSONResponse({
+        "account_id": account_id, "serie_diaria": snaps,
+        "reclamos_ventana_60d": r60,
+        "reclamos_por_estado_60d": por_estado,
+    })
+
+
 @app.get("/api/diag/retail-a-corregir")
 async def diag_retail_a_corregir(token: str = "", min_skus: int = 40,
                                  min_ordenes: int = 3, limit: int = 25):
