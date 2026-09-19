@@ -32734,8 +32734,11 @@ async def diag_reputation_history(token: str = "", account_id: str = "", days: i
             "WHERE account_id = ? AND date_created >= date('now','-60 day') GROUP BY status",
             (account_id,))
         por_estado = {r["status"]: r["n"] for r in await cur.fetchall()}
+    digest_runs = await token_store.get_recent_digest_runs(account_id, limit=days)
     return JSONResponse({
-        "account_id": account_id, "serie_diaria": snaps,
+        "account_id": account_id,
+        "serie_diaria_reputation_snapshots": snaps,
+        "serie_diaria_digest_runs": digest_runs,
         "reclamos_ventana_60d": r60,
         "reclamos_por_estado_60d": por_estado,
     })
