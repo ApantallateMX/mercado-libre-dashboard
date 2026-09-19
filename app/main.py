@@ -32428,6 +32428,102 @@ async def _retornos_por_marca(days: int, marca: str = "", platform: str = "",
     }
 
 
+async def _retail_a_corregir(min_skus: int = 40, min_ordenes: int = 3,
+                             limit: int = 50) -> dict:
+    """SKUs cuyo retail_ph es un relleno, con su precio REAL de venta al lado.
+
+    FEATURE 2026-09-18 (Jovan). Él preguntó si convenía poner 0. NO: un 0 se
+    lee como "este producto vale cero pesos", que es un dato, y se usa. El
+    indicador de salud de precio hace neto/retail -- con retail en 0 devuelve
+    "recuperaste 0%" y marcaría en rojo miles de productos sanos. Es el mismo
+    falso-cero que nos costó el día entero en el stock.
+
+    Vacío (NULL) sí: significa "no sé" y obliga a decidir a quien lo consuma.
+
+    Pero lo que de verdad arregla es su segunda idea: una lista para
+    CORREGIRLOS. Y son corregibles, porque el precio real no es un misterio --
+    ya lo sabemos, lo vendemos. Sale de order_history, que es un hecho
+    observado y no el mismo catálogo que se está cuestionando.
+
+    Separa los que tienen ventas (corregibles con evidencia) de los que no
+    (imposibles de verificar hoy). Mezclarlos haría parecer que sabemos el
+    precio de todos.
+    """
+    import aiosqlite as _aio_rp
+    async with _aio_rp.connect(DATABASE_PATH, timeout=30) as db:
+        db.row_factory = _aio_rp.Row
+        cur = await db.execute(
+            "SELECT retail_ph FROM bm_sku_master WHERE retail_ph > 0 "
+            "GROUP BY retail_ph HAVING COUNT(*) >= ?", (min_skus,))
+        centinelas = [r["retail_ph"] for r in await cur.fetchall()]
+        if not centinelas:
+            return {"centinelas": [], "corregibles": [], "sin_evidencia": []}
+        ph = ",".join("?" * len(centinelas))
+        cur = await db.execute(
+            f"""SELECT b.sku, b.title, b.brand, b.retail_ph, b.available_qty, b.tj_qty,
+                       AVG(oh.unit_price) precio_real, COUNT(oh.id) ordenes,
+                       SUM(oh.quantity) uds_vendidas
+                  FROM bm_sku_master b
+                  LEFT JOIN order_history oh
+                    ON substr(oh.sku,1,10) = b.sku
+                   AND LOWER(COALESCE(oh.status,'')) NOT IN
+                       ('cancelled','canceled','refunded','invalid','')
+                   AND oh.unit_price > 0
+                 WHERE b.retail_ph IN ({ph})
+                 GROUP BY b.sku""", centinelas)
+        filas = [dict(r) for r in await cur.fetchall()]
+
+    FX = 17.0   # aproximación para comparar; el retail del maestro está en USD
+    corregibles, sin_evidencia = [], []
+    for f in filas:
+        ordenes = int(f.get("ordenes") or 0)
+        real = f.get("precio_real")
+        item = {
+            "sku": f["sku"], "titulo": (f.get("title") or "")[:55],
+            "marca": f.get("brand") or "",
+            "retail_actual_usd": f["retail_ph"],
+            "retail_actual_mxn_aprox": round((f["retail_ph"] or 0) * FX),
+            "en_bodega": f.get("available_qty") or 0,
+            "en_tijuana": f.get("tj_qty") or 0,
+            "ordenes": ordenes,
+        }
+        if ordenes >= min_ordenes and real:
+            item["precio_real_venta_mxn"] = round(real, 2)
+            item["retail_sugerido_usd"] = round(real / FX, 2)
+            # Cuántas veces está inflado (o desinflado) el dato actual
+            item["veces_desviado"] = round((f["retail_ph"] * FX) / real, 1) if real else None
+            item["uds_vendidas"] = int(f.get("uds_vendidas") or 0)
+            corregibles.append(item)
+        else:
+            sin_evidencia.append(item)
+    # El impacto real es cuánto inventario toca ese precio malo, no el desvío suelto
+    corregibles.sort(key=lambda x: -((x["en_bodega"] + x["en_tijuana"]) * abs((x.get("veces_desviado") or 1) - 1)))
+    sin_evidencia.sort(key=lambda x: -(x["en_bodega"] + x["en_tijuana"]))
+    return {
+        "valores_centinela_detectados": sorted(centinelas, reverse=True),
+        "resumen": {
+            "skus_afectados": len(filas),
+            "corregibles_con_evidencia": len(corregibles),
+            "sin_ventas_para_verificar": len(sin_evidencia),
+            "unidades_afectadas": sum((f.get("available_qty") or 0) + (f.get("tj_qty") or 0) for f in filas),
+        },
+        "corregibles": corregibles[:limit],
+        "sin_evidencia": sin_evidencia[:limit],
+        "nota": "SOLO LECTURA. No se ha modificado ningún precio. 'retail_sugerido_usd' "
+                "sale del precio real de venta observado, no de una estimación.",
+    }
+
+
+@app.get("/api/diag/retail-a-corregir")
+async def diag_retail_a_corregir(token: str = "", min_skus: int = 40,
+                                 min_ordenes: int = 3, limit: int = 25):
+    """Lista de precios base sospechosos con su precio real de venta al lado."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    return JSONResponse(await _retail_a_corregir(min_skus=min_skus,
+                                                 min_ordenes=min_ordenes, limit=limit))
+
+
 @app.get("/api/diag/retail-centinelas")
 async def diag_retail_centinelas(token: str = "", min_skus: int = 40, limit: int = 20):
     """Valores de retail_ph compartidos por cientos de SKUs = centinelas, no precios.
